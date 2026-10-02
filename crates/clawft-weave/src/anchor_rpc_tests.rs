@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use clawft_kernel::chain::ChainManager;
-use clawft_kernel::chain_anchor::{ParentAnchor, ParentAnchorConfig, ParentTransport};
+use clawft_kernel::chain_anchor::{AnchorSubmitError, ParentAnchor, ParentAnchorConfig, ParentTransport};
 use clawft_kernel::project_identity::{self as ident, is_reserved_source};
 use clawft_types::project::adopt_or_init;
 use clawft_types::project::cert::{PopOp, ts};
@@ -101,7 +101,7 @@ fn accepts_a_valid_first_statement_and_records_it_twice() {
     assert_eq!(ev.sequence, a.user_seq);
     assert_eq!(ident::hex(&ev.hash), a.user_event_hash);
     assert_eq!(ev.payload.unwrap()["statement"]["head_seq"], 10);
-    assert_eq!(last_accepted(&f.env, &f.id), Some(a));
+    assert_eq!(last_accepted(&f.env, &f.id).unwrap(), Some(a));
     assert!(is_reserved_source(ANCHOR_SOURCE));
     #[cfg(unix)]
     {
@@ -136,7 +136,7 @@ fn refuses_a_replayed_seq_but_answers_an_identical_resend() {
     let other = stmt(&f, 1, None, 12, later(6));
     let e = submit(&f.env, &other, later(12)).unwrap_err();
     assert_eq!(e.kind(), "anchor_seq");
-    assert_eq!(e.last().unwrap().statement, first);
+    assert_eq!(e.resync().unwrap().last.statement, first);
     assert_eq!(user_events(&f), 1);
 }
 
@@ -248,7 +248,7 @@ fn accepted_anchor_survives_a_user_chain_lost_in_a_crash() {
         user_key: user_key(),
         manifests_dir: f.env.manifests_dir.clone(),
     };
-    assert_eq!(last_accepted(&env2, &f.id), Some(a.clone()));
+    assert_eq!(last_accepted(&env2, &f.id).unwrap(), Some(a.clone()));
     assert_eq!(submit(&env2, &first, later(11)).unwrap(), a);
     let next = stmt(&f, 2, Some(first.hash()), 20, later(6));
     submit(&env2, &next, later(12)).unwrap();
@@ -323,7 +323,7 @@ fn project_to_user_daemon_end_to_end_with_an_outage() {
     anchor.retry_pending_at(later(5_000)).unwrap().expect("replayed");
     assert_eq!(direct.submits.lock().unwrap().len(), 1);
     assert_eq!(user_events(&f), 2);
-    let last = last_accepted(&f.env, &f.id).unwrap();
+    let last = last_accepted(&f.env, &f.id).unwrap().unwrap();
     assert_eq!(last.statement.seq, 2);
     assert_eq!(last.statement.head_seq, pchain.tail(0).iter().rev().nth(1).unwrap().sequence);
     assert!(anchor.pending().is_none());
@@ -333,4 +333,158 @@ fn project_to_user_daemon_end_to_end_with_an_outage() {
             .iter()
             .any(|e| e.kind == "project.anchored" && e.payload.as_ref().unwrap()["user_seq"] == last.user_seq)
     );
+}
+
+fn rekey_to(f: &Fx, key: &SigningKey) {
+    let n = issue_challenge(&f.id).unwrap();
+    let uk = clawft_types::project::cert::key_id(&user_key().verifying_key().to_bytes());
+    rekey(
+        &f.env,
+        &json!({
+            "id": f.id,
+            "new_pubkey": ident::hex(&key.verifying_key().to_bytes()),
+            "nonce": n,
+            "pop_sig": ident::hex(&ident::pop_sign(key, PopOp::Rekey, &uk, &n, &f.id).unwrap()),
+        }),
+        t0(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn key_history_has_rekeyed_out_keys_but_never_compromised_ones() {
+    let f = fixture();
+    let k2 = SigningKey::from_bytes(&[4u8; 32]);
+    rekey_to(&f, &k2);
+    let view = current_view(&f.env).unwrap();
+    let hist = history_keys(&view, &f.id);
+    assert_eq!(hist.len(), 2, "current and rekeyed-out");
+    assert!(hist.contains(&ident::hex(&project_key().verifying_key().to_bytes())));
+
+    let g = fixture();
+    revoke(&g.env, &json!({ "id": g.id })).unwrap();
+    let view = current_view(&g.env).unwrap();
+    assert!(history_keys(&view, &g.id).is_empty(), "a compromise-revoked key is not history");
+    assert_eq!(view.all_certs(&g.id).len(), 1, "but the daemon can still re-verify its own records");
+}
+
+fn direct(f: &Fx) -> Arc<Direct> {
+    Arc::new(Direct {
+        env: CertEnv {
+            chain: f.env.chain.clone(),
+            user_key: user_key(),
+            manifests_dir: f.env.manifests_dir.clone(),
+        },
+        down: Mutex::new(false),
+        now: Mutex::new(later(0)),
+        submits: Mutex::default(),
+    })
+}
+
+fn pa(f: &Fx, d: &Arc<Direct>, pchain: &Arc<ChainManager>, key: SigningKey, serial: u64, dir: &Path) -> ParentAnchor {
+    ParentAnchor::new(
+        pchain.clone(),
+        key,
+        f.id.clone(),
+        serial,
+        d.clone(),
+        dir.join("anchor.pending.jsonl"),
+        ParentAnchorConfig::default(),
+    )
+}
+
+#[test]
+fn rekey_then_restart_continues_the_anchor_chain_at_n_plus_one() {
+    let f = fixture();
+    let d = direct(&f);
+    let pchain = Arc::new(ChainManager::new(0, 100_000));
+    pchain.append("kernel", "boot", None);
+    let run = tempfile::tempdir().unwrap();
+    let k1 = pa(&f, &d, &pchain, project_key(), 1, run.path());
+    k1.anchor_head_at(later(1), true).unwrap();
+    for _ in 0..5 {
+        pchain.append("kernel", "work", None);
+    }
+    k1.anchor_head_at(later(2), true).unwrap();
+    drop(k1);
+    for _ in 0..150 {
+        pchain.append("kernel", "work", None);
+    }
+
+    let k2_key = SigningKey::from_bytes(&[4u8; 32]);
+    rekey_to(&f, &k2_key);
+    let k2 = pa(&f, &d, &pchain, k2_key.clone(), 2, run.path());
+    k2.anchor_head_at(later(3), true).unwrap();
+    assert_eq!(k2.last_accepted().unwrap().0, 3);
+    let last = last_accepted(&f.env, &f.id).unwrap().unwrap();
+    assert_eq!(last.statement.seq, 3);
+    assert_eq!(last.statement.cert_serial, 2);
+    assert_eq!(user_events(&f), 3);
+}
+
+#[test]
+fn a_file_ahead_of_the_chain_is_re_appended_at_startup() {
+    let f = fixture();
+    let first = stmt(&f, 1, None, 10, later(5));
+    let a = submit(&f.env, &first, later(10)).unwrap();
+    // A crash: the chain is back to what was saved (nothing), the file stays.
+    let env2 = CertEnv {
+        chain: Arc::new(ChainManager::new(0, 100_000)),
+        user_key: user_key(),
+        manifests_dir: f.env.manifests_dir.clone(),
+    };
+    // Post-crash events reuse sequence numbers: the old user_seq now names another event.
+    for _ in 0..=a.user_seq {
+        env2.chain.append("kernel", "other", None);
+    }
+    // Replay the identity events so the view still sees the project (journal + cert file do).
+    let fixed = reconcile(&env2).unwrap();
+    assert_eq!(fixed, vec![f.id.clone()]);
+    let ev = env2.chain.tail(0).into_iter().find(|e| e.source == ANCHOR_SOURCE).unwrap();
+    assert_eq!(ev.payload.as_ref().unwrap()["recovered"], true);
+    assert_eq!(ev.payload.as_ref().unwrap()["original_user_seq"], a.user_seq);
+    let now_last = last_accepted(&env2, &f.id).unwrap().unwrap();
+    assert_eq!(now_last.statement, first);
+    assert_eq!(now_last.user_seq, ev.sequence);
+    // The record now names the re-appended event, and a second pass changes nothing.
+    assert!(reconcile(&env2).unwrap().is_empty());
+    assert_eq!(env2.chain.tail(0).iter().filter(|e| e.source == ANCHOR_SOURCE).count(), 1);
+}
+
+#[test]
+fn a_tampered_anchor_record_is_ignored() {
+    let f = fixture();
+    let first = stmt(&f, 1, None, 10, later(5));
+    submit(&f.env, &first, later(10)).unwrap();
+    let path = anchor_file(&f.env.manifests_dir, &f.id);
+    let mut rec: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    rec["statement"]["head_seq"] = json!(999_999);
+    std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    let env2 = CertEnv {
+        chain: Arc::new(ChainManager::new(0, 100_000)),
+        user_key: user_key(),
+        manifests_dir: f.env.manifests_dir.clone(),
+    };
+    assert_eq!(last_accepted(&env2, &f.id).unwrap(), None, "a forged record does not set the baseline");
+}
+
+#[test]
+fn authenticated_refusals_back_off_but_garbage_does_not() {
+    let f = fixture();
+    // Unsigned or badly signed garbage never counts.
+    for i in 0..10 {
+        let mut g = stmt(&f, 1, None, 10, later(5));
+        g.head_seq = 11 + i;
+        let _ = submit(&f.env, &g, later(10)).unwrap_err();
+    }
+    submit(&f.env, &stmt(&f, 1, None, 10, later(5)), later(10)).unwrap();
+    // Three signed refusals in a row, then the honest next statement waits.
+    for _ in 0..3 {
+        let e = submit(&f.env, &stmt(&f, 9, None, 20, later(6)), later(11)).unwrap_err();
+        assert_eq!(e.kind(), "anchor_seq");
+    }
+    let first_hash = last_accepted(&f.env, &f.id).unwrap().unwrap().statement.hash();
+    let next = stmt(&f, 2, Some(first_hash), 20, later(6));
+    assert_eq!(submit(&f.env, &next, later(11)).unwrap_err().kind(), "anchor_backoff");
+    submit(&f.env, &next, later(13)).unwrap();
 }

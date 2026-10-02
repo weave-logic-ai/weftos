@@ -27,6 +27,9 @@ pub enum Registration {
 struct ProjectIdentity {
     certs: Vec<ProjectCert>,
     revoked: HashSet<String>,
+    /// Keys replaced by a `project.rekey`: revoked as signers, but not
+    /// compromised (the owner replaced them on purpose).
+    retired: HashSet<String>,
 }
 
 /// Which keys of which projects are certified or revoked, merged from the
@@ -62,6 +65,7 @@ impl RevocationView {
                 JournalRecord::Register { cert } => v.ingest_cert(cert),
                 JournalRecord::Rekey { old_key_id, cert } => {
                     v.ingest_revoke(&cert.project_id, old_key_id);
+                    v.ingest_retire(&cert.project_id, old_key_id);
                     v.ingest_cert(cert);
                 }
                 JournalRecord::Revoke { project_id, key_id } => v.ingest_revoke(project_id, key_id),
@@ -96,6 +100,7 @@ impl RevocationView {
             KIND_REKEY => {
                 if let (Some(id), Some(old)) = (text("project_id"), text("old_key_id")) {
                     self.ingest_revoke(id, old);
+                    self.ingest_retire(id, old);
                 }
                 if let Some(c) = cert_of("new_cert") {
                     self.ingest_cert(&c);
@@ -133,6 +138,36 @@ impl RevocationView {
             .or_default()
             .revoked
             .insert(key_id.to_owned());
+    }
+
+    fn ingest_retire(&mut self, project_id: &str, key_id: &str) {
+        self.projects
+            .entry(project_id.to_owned())
+            .or_default()
+            .retired
+            .insert(key_id.to_owned());
+    }
+
+    /// Every certificate ever issued for `project_id` whose key was not
+    /// revoked for compromise: the current key and keys replaced by a
+    /// rekey. A key removed by `project.revoke` is excluded. Statements the
+    /// project signed with these keys are history, not forgeries.
+    pub fn key_history(&self, project_id: &str) -> Vec<&ProjectCert> {
+        self.projects.get(project_id).map_or_else(Vec::new, |st| {
+            st.certs
+                .iter()
+                .filter(|c| {
+                    !st.revoked.contains(&c.project_key_id) || st.retired.contains(&c.project_key_id)
+                })
+                .collect()
+        })
+    }
+
+    /// Every certificate ever issued for `project_id`, compromised keys
+    /// included. For re-verifying records the daemon itself accepted while
+    /// the key was valid.
+    pub fn all_certs(&self, project_id: &str) -> Vec<&ProjectCert> {
+        self.projects.get(project_id).map_or_else(Vec::new, |st| st.certs.iter().collect())
     }
 
     /// The state as journal records, for rebuilding a lost journal: every

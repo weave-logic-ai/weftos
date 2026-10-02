@@ -25,6 +25,8 @@ struct StubParent {
     lose_ack: AtomicBool,
     calls: Mutex<Vec<ProjectAnchorStmt>>,
     last: Mutex<Option<(ProjectAnchorStmt, AnchorAck)>>,
+    /// Public keys the parent reports as the project's certificate history.
+    history: Mutex<Vec<[u8; 32]>>,
 }
 
 impl StubParent {
@@ -55,6 +57,7 @@ impl ParentTransport for StubParent {
                 kind: "anchor_seq".into(),
                 message: "not the next statement".into(),
                 last: last.clone().map(Box::new),
+                key_history: self.history.lock().unwrap().clone(),
             });
         }
         let ack = AnchorAck { user_seq: 100 + stmt.seq, user_event_hash: format!("{:064x}", stmt.seq) };
@@ -84,9 +87,13 @@ impl Fx {
     }
 
     fn anchor(&self) -> ParentAnchor {
+        self.anchor_with(key())
+    }
+
+    fn anchor_with(&self, key: SigningKey) -> ParentAnchor {
         ParentAnchor::new(
             self.chain.clone(),
-            key(),
+            key,
             ID,
             1,
             self.parent.clone(),
@@ -315,6 +322,7 @@ fn rejection_without_a_usable_last_statement_backs_off() {
                 kind: "anchor_key_revoked".into(),
                 message: "revoked".into(),
                 last: None,
+                key_history: vec![],
             })
         }
     }
@@ -334,4 +342,116 @@ fn chain_anchor_trait_anchors_a_given_event() {
     assert_eq!(a.backend_name(), "parent");
     assert!(ChainAnchor::verify(&a, &r).unwrap());
     assert!(ChainAnchor::anchor(&a, &[7u8; 32]).is_err());
+}
+
+#[test]
+fn rekey_then_restart_continues_at_n_plus_one() {
+    let f = Fx::new();
+    let k1 = key();
+    let k2 = SigningKey::from_bytes(&[10u8; 32]);
+    let a1 = f.anchor_with(k1.clone());
+    a1.anchor_head_at(at(0), true).unwrap();
+    f.grow(3);
+    a1.anchor_head_at(at(1), true).unwrap();
+    assert_eq!(a1.last_accepted().unwrap().0, 2);
+    drop(a1);
+    f.grow(200);
+
+    // Restart under the new key: the old statements do not verify, so
+    // nothing is recovered, the parent refuses seq 1 and sends its last
+    // statement plus the certificate history; that is adopted.
+    *f.parent.history.lock().unwrap() = vec![k1.verifying_key().to_bytes()];
+    let a2 = f.anchor_with(k2.clone());
+    assert_eq!(a2.last_accepted(), None);
+    let r = a2.anchor_head_at(at(100), true).unwrap();
+    assert_eq!(a2.last_accepted().unwrap().0, 3, "continues at N + 1");
+    let calls = f.parent.calls();
+    let last = calls.last().unwrap();
+    assert_eq!(last.seq, 3);
+    last.verify(&k2.verifying_key().to_bytes()).unwrap();
+    assert!(a2.verify(&r).unwrap());
+
+    // And a further restart recovers the K2 statement directly.
+    f.grow(3);
+    drop(a2);
+    let a3 = f.anchor_with(k2);
+    assert_eq!(a3.last_accepted().unwrap().0, 3);
+    a3.anchor_head_at(at(200), true).unwrap();
+    assert_eq!(f.parent.calls().last().unwrap().seq, 4);
+}
+
+#[test]
+fn a_statement_from_an_unreported_key_is_never_adopted() {
+    let f = Fx::new();
+    let k1 = key();
+    let k2 = SigningKey::from_bytes(&[10u8; 32]);
+    f.anchor_with(k1).anchor_head_at(at(0), true).unwrap();
+    f.grow(150);
+    // The parent does not list K1 (compromise-revoked): history is not trusted.
+    let a2 = f.anchor_with(k2);
+    let e = a2.anchor_head_at(at(100), true).unwrap_err();
+    assert!(e.contains("not adopted") && e.contains("does not verify"), "{e}");
+    assert_eq!(a2.last_accepted(), None);
+}
+
+#[test]
+fn adoption_requires_our_chain_to_hold_the_head() {
+    let f = Fx::new();
+    let a = f.anchor();
+    // The parent claims a head we never produced.
+    let foreign = ProjectAnchorStmt {
+        project_id: ID.into(),
+        project_key_id: String::new(),
+        cert_serial: 1,
+        seq: 1,
+        chain_id: 0,
+        head_hash: "ee".repeat(32),
+        head_seq: 2,
+        rule_hash: "00".repeat(32),
+        at: ts(at(0)),
+        prev_anchor: None,
+        sig: String::new(),
+    }
+    .sign(&key());
+    *f.parent.last.lock().unwrap() =
+        Some((foreign, AnchorAck { user_seq: 1, user_event_hash: "00".repeat(32) }));
+    f.grow(5);
+    let e = a.anchor_head_at(at(1), true).unwrap_err();
+    assert!(e.contains("did not produce"), "{e}");
+    assert!(anchored_events(&f.chain).is_empty());
+    assert_eq!(a.last_accepted(), None);
+}
+
+#[test]
+fn a_hung_transport_times_out_without_blocking_readers() {
+    use std::sync::mpsc;
+    struct Hang(mpsc::Sender<()>);
+    impl ParentTransport for Hang {
+        fn submit(&self, _: &ProjectAnchorStmt) -> Result<AnchorAck, AnchorSubmitError> {
+            let _ = self.0.send(());
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            Err(AnchorSubmitError::Unreachable("late".into()))
+        }
+    }
+    let f = Fx::new();
+    let (tx, entered) = mpsc::channel();
+    let cfg = ParentAnchorConfig { submit_timeout_secs: 1, ..Default::default() };
+    let a = Arc::new(ParentAnchor::new(f.chain.clone(), key(), ID, 1, Arc::new(Hang(tx)), &f.pending, cfg));
+    let worker = {
+        let a = a.clone();
+        std::thread::spawn(move || a.anchor_head_at(at(0), true))
+    };
+    entered.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    // The submission is in flight: readers must not wait for it.
+    let (rtx, rrx) = mpsc::channel();
+    let reader = a.clone();
+    std::thread::spawn(move || {
+        let _ = rtx.send((reader.last_accepted(), reader.last_error(), reader.pending()));
+    });
+    let (last, _err, pending) = rrx.recv_timeout(std::time::Duration::from_millis(500)).expect("readers are not blocked");
+    assert_eq!(last, None);
+    assert!(pending.is_some(), "write-ahead statement is visible");
+    let e = worker.join().unwrap().unwrap_err();
+    assert!(e.contains("no answer within 1 s"), "{e}");
+    assert!(a.pending().is_some());
 }

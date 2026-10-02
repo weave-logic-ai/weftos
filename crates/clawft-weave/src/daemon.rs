@@ -1097,6 +1097,7 @@ pub async fn run(
     let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
     if crate::user_daemon::is_active() {
         seed_user_projects();
+        crate::anchor_rpc::reconcile_startup(&kernel).await;
     }
 
     // WEFT-494: seed live MCP registry + remember best-effort config path

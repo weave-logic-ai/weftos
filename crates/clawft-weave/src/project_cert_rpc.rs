@@ -386,12 +386,17 @@ fn sig_param(p: &Value, k: &str) -> Result<[u8; 64], IssueError> {
 /// Build the environment from the daemon: only the user daemon, which
 /// signs with the user key and keeps the manifests.
 pub(crate) async fn env_from(ctx: &ExtCtx) -> Result<CertEnv, IssueError> {
+    env_from_kernel(&ctx.kernel).await
+}
+
+/// [`env_from`] for a caller that has the kernel but no request context.
+pub(crate) async fn env_from_kernel(kernel: &crate::rpc_ext::KernelRef) -> Result<CertEnv, IssueError> {
     if !crate::user_daemon::is_active() {
         return Err(IssueError::Unavailable(
             "project certificates are issued by the user daemon only".into(),
         ));
     }
-    let k = ctx.kernel.read().await;
+    let k = kernel.read().await;
     let chain = k.chain_manager().cloned();
     let user_key = chain.as_ref().and_then(|c| c.signing_key_clone());
     let (Some(chain), Some(user_key)) = (chain, user_key) else {
