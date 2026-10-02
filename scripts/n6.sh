@@ -10,6 +10,7 @@
 #   scripts/n6.sh probe         list probes and read the core CPUID
 #   scripts/n6.sh smoke         end-to-end check (probe, CPUID, RAM, code runs)
 #   scripts/n6.sh clock [secs]  measure the CPU clock on HSI and HSE against host time
+#   scripts/n6.sh dw3000-id     read the DEV_ID of a DWM3000EVB shield on the Arduino header
 #   scripts/n6.sh run <elf>     load a RAM-linked ELF into AXISRAM and start it
 #   scripts/n6.sh shell         interactive shell with probe-rs available
 set -euo pipefail
@@ -122,6 +123,12 @@ python /work/n6/clock.py "$N6_SECS" 2> >(grep -v -i "disk devices by id" >&2)
 EOF
 }
 
+cmd_dw3000_id() {
+  in_container <<'EOF'
+python /work/n6/dw3000_id.py 2> >(grep -v -i "disk devices by id" >&2)
+EOF
+}
+
 cmd_run() {
   local elf="${1:-}"
   [[ -f "$elf" ]] || die "usage: n6.sh run <ram-linked.elf>"
@@ -145,7 +152,8 @@ case "${1:-}" in
   probe)  cmd_probe ;;
   smoke)  cmd_smoke ;;
   clock)  shift; cmd_clock "$@" ;;
+  dw3000-id) cmd_dw3000_id ;;
   run)    shift; cmd_run "$@" ;;
   shell)  cmd_shell ;;
-  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
