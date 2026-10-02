@@ -309,6 +309,10 @@ pub mod mesh_artifact_types;
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod mesh_artifact_wire;
 #[cfg(feature = "mesh")]
+pub mod mesh_admit;
+#[cfg(feature = "mesh")]
+pub mod mesh_admit_gate;
+#[cfg(feature = "mesh")]
 pub mod mesh_assess;
 #[cfg(feature = "mesh")]
 pub mod mesh_bootstrap;

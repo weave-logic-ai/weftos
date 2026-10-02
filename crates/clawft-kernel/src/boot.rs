@@ -461,6 +461,17 @@ impl<P: Platform> Kernel<P> {
             ));
         }
 
+        // Host revocation list: loaded here (not at step 6b) so the mesh
+        // listener's admission gate and the kernel share one instance.
+        let revocation_list = Arc::new(crate::revocation::RevocationList::load(
+            runtime_paths.revoked_hosts(),
+        ));
+
+        // Collapsed-mode verdict source for mesh admission; bound to the
+        // governance gate once that exists (step 9, below the mesh block).
+        #[cfg(all(feature = "native", feature = "mesh", feature = "exochain"))]
+        let mesh_verdicts = Arc::new(crate::mesh_admit::GateVerdictSource::late());
+
         // 5d. Initialize mesh transport (K6) if configured.
         //     Must happen before cluster (step 7) because cluster needs mesh
         //     to reach peer nodes.
@@ -592,6 +603,50 @@ impl<P: Platform> Kernel<P> {
                     ))
                 })?;
 
+                // Admission (P3-K1): AllowAll unless a genesis hash is pinned
+                // (observe) or enforcement is requested (needs the pin).
+                let admission_gate: Arc<dyn crate::mesh_admit::AdmissionGate> = {
+                    use clawft_types::config::MeshAdmissionMode as Adm;
+                    let pinned = mesh_config
+                        .genesis_hash
+                        .as_deref()
+                        .map(|h| {
+                            crate::mesh_admit::hex_decode(h)
+                                .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                                .ok_or_else(|| {
+                                    KernelError::Boot(
+                                        "kernel.mesh.genesis_hash must be 64 hex characters".into(),
+                                    )
+                                })
+                        })
+                        .transpose()?;
+                    match (mesh_config.admission, pinned) {
+                        (Adm::Off, _) | (Adm::Observe, None) => {
+                            Arc::new(crate::mesh_admit::AllowAll)
+                        }
+                        (Adm::Enforce, None) => {
+                            return Err(KernelError::Boot(
+                                "kernel.mesh.admission = \"enforce\" requires kernel.mesh.genesis_hash"
+                                    .into(),
+                            ));
+                        }
+                        (mode, Some(genesis)) => {
+                            #[cfg(feature = "exochain")]
+                            let verdicts: Arc<dyn crate::mesh_admit::VerdictSource> =
+                                mesh_verdicts.clone();
+                            #[cfg(not(feature = "exochain"))]
+                            let verdicts: Arc<dyn crate::mesh_admit::VerdictSource> =
+                                Arc::new(crate::mesh_admit::OpenVerdicts);
+                            Arc::new(crate::mesh_admit::CryptoGate::new(
+                                genesis,
+                                Arc::clone(&revocation_list),
+                                verdicts,
+                                mode,
+                            ))
+                        }
+                    }
+                };
+
                 let rt = Arc::clone(&runtime);
                 tokio::spawn(async move {
                     crate::mesh_serve::serve_listener(
@@ -600,6 +655,7 @@ impl<P: Platform> Kernel<P> {
                         noise_config,
                         transport.name(),
                         &listen_addr,
+                        admission_gate,
                     )
                     .await;
                 });
@@ -693,9 +749,8 @@ impl<P: Platform> Kernel<P> {
             ),
         ));
 
-        // 6b. Load host revocation list (persistent ban list)
-        let revocation_path = runtime_paths.revoked_hosts();
-        let revocation_list = Arc::new(crate::revocation::RevocationList::load(revocation_path));
+        // 6b. Host revocation list (persistent ban list), loaded before the
+        //     mesh block (5d) so the listener's admission gate shares it.
         {
             let count = revocation_list.len();
             if count > 0 {
@@ -1671,6 +1726,12 @@ impl<P: Platform> Kernel<P> {
             }
         };
 
+        #[cfg(all(feature = "native", feature = "mesh", feature = "exochain"))]
+        match &governance_gate {
+            Some(g) => mesh_verdicts.bind(Arc::clone(g)),
+            None => mesh_verdicts.bind_open(),
+        }
+
         // Wire governance gate into A2A router for dual-layer enforcement.
         // The A2ARouter is already behind Arc, so we use set_gate() which
         // relies on OnceLock interior mutability.
@@ -2588,6 +2649,7 @@ mod tests {
             seed_peers: vec![],
             noise: false,
             noise_key_path: None,
+            ..MeshConfig::default()
         });
 
         let mut kernel = Kernel::boot(test_config(), kconfig, platform)

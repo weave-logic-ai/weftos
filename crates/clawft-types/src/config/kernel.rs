@@ -877,6 +877,32 @@ pub struct MeshConfig {
     /// If absent, a ephemeral key is generated at boot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub noise_key_path: Option<String>,
+
+    /// Peer admission policy on the mesh listener (ADR-103, P3-K1).
+    /// `observe` (default) admits every peer and records would-be
+    /// refusals; `enforce` refuses unsigned, plaintext, wrong-genesis and
+    /// revoked peers; `off` skips admission entirely. Observe only takes
+    /// effect once `genesis_hash` is pinned.
+    #[serde(default)]
+    pub admission: MeshAdmissionMode,
+
+    /// Cluster genesis hash (64 hex chars) peers must present in their
+    /// `AdmitHello`. Required for `admission = "enforce"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genesis_hash: Option<String>,
+}
+
+/// Mesh admission policy (see [`MeshConfig::admission`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeshAdmissionMode {
+    /// No admission checks.
+    Off,
+    /// Check and record, never refuse.
+    #[default]
+    Observe,
+    /// Refuse peers that fail admission.
+    Enforce,
 }
 
 fn default_mesh_transport() -> String {
@@ -900,6 +926,8 @@ impl Default for MeshConfig {
             seed_peers: vec![],
             noise: false,
             noise_key_path: None,
+            admission: MeshAdmissionMode::default(),
+            genesis_hash: None,
         }
     }
 }

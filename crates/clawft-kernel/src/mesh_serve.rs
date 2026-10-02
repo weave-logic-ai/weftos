@@ -7,7 +7,15 @@
 
 use std::sync::Arc;
 
+use crate::ipc::MessageTarget;
 use crate::mesh::{MeshTransport, TransportListener};
+use crate::mesh_admit::{
+    AdmitContext, AdmitHello, Admission, AdmissionGate, ChannelBinding, ChannelKind, HelloFailure,
+    PeerClass, PeerLimits, Refusal,
+};
+use crate::mesh_assess::{AssessmentEnvelope, AssessmentTransport};
+use crate::mesh_delivery::PeerCtx;
+use crate::mesh_ipc::MeshIpcEnvelope;
 use crate::mesh_noise::{EncryptedChannel, NoiseChannel, NoiseConfig, PassthroughChannel};
 use crate::mesh_runtime::MeshRuntime;
 
@@ -44,13 +52,17 @@ pub fn transport_for(name: &str, seed_peer: Option<&str>) -> Box<dyn MeshTranspo
 /// `runtime`. Spawn this on a task; it never returns.
 ///
 /// `listen_addr` is only the fallback for the "listener started" log when
-/// the listener cannot report its bound address.
+/// the listener cannot report its bound address. `gate` decides, on each
+/// connection's first frame, whether the peer is admitted (P3-K1);
+/// [`AllowAll`](crate::mesh_admit::AllowAll) keeps the pre-admission
+/// behaviour.
 pub async fn serve_listener(
     runtime: Arc<MeshRuntime>,
     mut listener: Box<dyn TransportListener>,
     noise: Option<Arc<NoiseConfig>>,
     transport_name: &str,
     listen_addr: &str,
+    gate: Arc<dyn AdmissionGate>,
 ) {
     let bind = listener
         .local_addr()
@@ -63,13 +75,26 @@ pub async fn serve_listener(
         "mesh listener started"
     );
 
+    // Connection tasks live in a JoinSet so aborting this future (dropping
+    // the set) also stops every connection it spawned, and a semaphore caps
+    // concurrent connections.
+    let mut conns = tokio::task::JoinSet::new();
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     loop {
+        while conns.try_join_next().is_some() {}
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
+                let Ok(permit) = Arc::clone(&slots).try_acquire_owned() else {
+                    tracing::warn!(peer = %peer_addr, max = MAX_CONNECTIONS,
+                        "mesh connection cap reached, dropping");
+                    continue;
+                };
                 let rt = Arc::clone(&runtime);
                 let nc = noise.clone();
-                tokio::spawn(async move {
-                    serve_connection(rt, stream, peer_addr, nc).await;
+                let gate = Arc::clone(&gate);
+                conns.spawn(async move {
+                    serve_connection(rt, stream, peer_addr, nc, gate).await;
+                    drop(permit);
                 });
             }
             Err(e) => {
@@ -79,13 +104,145 @@ pub async fn serve_listener(
     }
 }
 
-/// One accepted connection: optional Noise responder handshake, then the
-/// bidirectional pump until either side closes.
+/// Most concurrent inbound connections served at once.
+pub const MAX_CONNECTIONS: usize = 1024;
+/// Time a peer gets to finish the Noise handshake.
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What admission granted this connection.
+pub(crate) struct Active {
+    /// Verified node id; later envelopes must carry it as `source_node`.
+    pub(crate) bound: Option<String>,
+    pub(crate) limits: PeerLimits,
+    pub(crate) trust_scope: bool,
+    pub(crate) class: PeerClass,
+    pub(crate) remote_static: Option<Vec<u8>>,
+}
+
+impl Active {
+    /// The connection identity handed to the runtime and to delivery.
+    fn peer_ctx(&self) -> PeerCtx {
+        PeerCtx {
+            peer_id: self.bound.clone().unwrap_or_default(),
+            node_verified: self.bound.is_some(),
+            class: self.class,
+            remote_static: self.remote_static.clone(),
+            src_scope: None,
+        }
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Run admission on a connection's first frame. Returns the terms and the
+/// frame to process normally (`None` when the frame was the hello).
+async fn admit_first_frame(
+    channel: &dyn EncryptedChannel,
+    kind: ChannelKind,
+    gate: &dyn AdmissionGate,
+    data: Vec<u8>,
+) -> Result<(Active, Option<Vec<u8>>), Refusal> {
+    let legacy = AdmitContext { class: PeerClass::Legacy, channel: kind };
+    let binding = channel.handshake_hash().map(|h| ChannelBinding {
+        handshake_hash: h,
+        remote_static: channel.remote_static_key(),
+    });
+    let (decision, bound, rest, class) = match AdmitHello::parse_frame(&data) {
+        None => (
+            gate.admit_unverified(&HelloFailure::Missing, &legacy).await,
+            None,
+            Some(data),
+            PeerClass::Legacy,
+        ),
+        Some(Err(f)) => (gate.admit_unverified(&f, &legacy).await, None, None, PeerClass::Legacy),
+        Some(Ok(hello)) => match hello.verify(binding.as_ref(), unix_now()) {
+            Ok(v) => {
+                let ctx = AdmitContext { class: v.class(), channel: kind };
+                (gate.admit(&v, &ctx).await, Some(v.node_id), None, ctx.class)
+            }
+            Err(f) => (gate.admit_unverified(&f, &legacy).await, None, None, PeerClass::Legacy),
+        },
+    };
+    match decision {
+        Admission::Refuse(r) => Err(r),
+        Admission::Admit(g) => Ok((
+            Active {
+                trust_scope: g.trust_scope && bound.is_some(),
+                limits: g.limits,
+                bound,
+                class,
+                remote_static: channel.remote_static_key().map(<[u8]>::to_vec),
+            },
+            rest,
+        )),
+    }
+}
+
+/// Apply post-admission rules to one frame. `None` drops it.
+///
+/// - `source_node` must equal the verified node id (envelopes and
+///   assessment frames alike).
+/// - Leaf limits: only `substrate/<own-id>/...` topics and `mesh.subscribe`.
+/// - `src_scope` is stripped unless admission verified the peer.
+pub(crate) fn screen_frame(data: Vec<u8>, act: &Active) -> Option<Vec<u8>> {
+    match MeshIpcEnvelope::from_bytes(&data) {
+        Ok(mut env) => {
+            if let Some(id) = &act.bound {
+                if &env.source_node != id {
+                    tracing::warn!(claimed = %env.source_node, verified = %id,
+                        "dropping envelope: source_node differs from admitted node id");
+                    return None;
+                }
+            }
+            if act.limits == PeerLimits::Leaf {
+                let id = act.bound.as_deref().unwrap_or_default();
+                let ok = matches!(&env.message.target, MessageTarget::Topic(t)
+                    if t == "mesh.subscribe" || t.starts_with(&format!("substrate/{id}/")));
+                if !ok {
+                    tracing::warn!(node = id, "dropping leaf envelope outside substrate/<id>/");
+                    return None;
+                }
+            }
+            if env.src_scope.is_some() && !act.trust_scope {
+                env.src_scope = None;
+                return env.to_bytes().ok();
+            }
+            Some(data)
+        }
+        Err(_) => {
+            if act.limits == PeerLimits::Leaf {
+                return None;
+            }
+            if let Some(id) = &act.bound {
+                let src = AssessmentTransport::try_extract_payload(&data)
+                    .ok()
+                    .flatten()
+                    .and_then(|p| AssessmentEnvelope::from_bytes(&p).ok())
+                    .map(|e| e.source_node);
+                if src.is_some_and(|s| &s != id) {
+                    tracing::warn!(verified = %id, "dropping assessment frame: source_node mismatch");
+                    return None;
+                }
+            }
+            Some(data)
+        }
+    }
+}
+
+/// One accepted connection: optional Noise responder handshake, admission
+/// on the first frame, then the bidirectional pump until either side
+/// closes.
 async fn serve_connection(
     rt: Arc<MeshRuntime>,
     stream: Box<dyn crate::mesh::MeshStream>,
     peer_addr: std::net::SocketAddr,
     nc: Option<Arc<NoiseConfig>>,
+    gate: Arc<dyn AdmissionGate>,
 ) {
     tracing::info!(
         peer = %peer_addr,
@@ -95,7 +252,13 @@ async fn serve_connection(
 
     // Optionally wrap in Noise encryption.
     let mut channel: Box<dyn EncryptedChannel> = match &nc {
-        Some(cfg) => match NoiseChannel::respond(stream, cfg).await {
+        Some(cfg) => match tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            NoiseChannel::respond(stream, cfg),
+        )
+        .await
+        .unwrap_or_else(|_| Err(crate::mesh::MeshError::Handshake("handshake timed out".into())))
+        {
             Ok(ch) => {
                 tracing::info!(peer = %peer_addr, "noise handshake complete");
                 Box::new(ch)
@@ -107,6 +270,7 @@ async fn serve_connection(
         },
         None => Box::new(PassthroughChannel::new(stream)),
     };
+    let kind = if nc.is_some() { ChannelKind::Noise } else { ChannelKind::Passthrough };
 
     // Outbound channel: the kernel pushes frames into `out_tx` (via
     // `MeshRuntime::send_to_peer`) and this task drains `out_rx` back
@@ -114,6 +278,10 @@ async fn serve_connection(
     // in `A2ARouter` deliver pushes to inbound leaf peers that subscribed
     // via `mesh.subscribe`.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+
+    // Admission state. Nothing from the peer reaches the runtime until the
+    // first frame has been through `admit_first_frame`.
+    let mut active: Option<Active> = None;
 
     // Bidirectional loop. `handle_incoming_from` auto-registers the peer
     // by `envelope.source_node` on first arrival so the kernel can route
@@ -127,12 +295,35 @@ async fn serve_connection(
     //   partial progress).
     // Losing either race must not drop a complete message already removed
     // from its source, and must not desync the TCP length-prefix stream.
+    // Admission runs in the handler of a completed `recv`, never inside a
+    // raced future.
     loop {
         tokio::select! {
             inbound = channel.recv_encrypted() => match inbound {
                 Ok(data) => {
-                    if let Err(e) = rt.handle_incoming_from(&data, out_tx.clone()).await {
-                        tracing::debug!(error = %e, "mesh message handling error");
+                    let frame = match active {
+                        Some(_) => Some(data),
+                        None => match admit_first_frame(&*channel, kind, &*gate, data).await {
+                            Ok((act, rest)) => {
+                                tracing::info!(peer = %peer_addr,
+                                    node = act.bound.as_deref().unwrap_or("-"), "mesh peer admitted");
+                                active = Some(act);
+                                rest
+                            }
+                            Err(r) => {
+                                tracing::warn!(peer = %peer_addr, code = r.code, detail = %r.detail,
+                                    "mesh peer refused, dropping");
+                                break;
+                            }
+                        },
+                    };
+                    let Some(frame) = frame else { continue };
+                    let Some(act) = active.as_ref() else { break };
+                    if let Some(frame) = screen_frame(frame, act) {
+                        let ctx = act.peer_ctx();
+                        if let Err(e) = rt.handle_incoming_peer(&frame, out_tx.clone(), Some(&ctx)).await {
+                            tracing::debug!(error = %e, "mesh message handling error");
+                        }
                     }
                 }
                 Err(_) => break,
@@ -209,7 +400,7 @@ mod tests {
     use super::*;
     use crate::error::KernelResult;
     use crate::ipc::{KernelMessage, MessagePayload, MessageTarget};
-    use crate::mesh_delivery::LocalDelivery;
+    use crate::mesh_delivery::{LocalDelivery, PeerCtx};
     use crate::mesh_ipc::{MeshIpcEnvelope, Scope};
     use std::sync::Mutex;
 
@@ -220,7 +411,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LocalDelivery for Recorder {
-        async fn deliver(&self, scope: Option<&Scope>, msg: KernelMessage) -> KernelResult<()> {
+        async fn deliver(
+            &self,
+            _from: &PeerCtx,
+            scope: Option<&Scope>,
+            msg: KernelMessage,
+        ) -> KernelResult<()> {
             self.got.lock().unwrap().push((scope.cloned(), msg));
             Ok(())
         }
@@ -242,6 +438,7 @@ mod tests {
             None,
             "tcp",
             "127.0.0.1:0",
+            Arc::new(crate::mesh_admit::AllowAll),
         ));
 
         let mut client = transport.connect(&addr.to_string()).await.unwrap();
