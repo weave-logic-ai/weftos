@@ -29,8 +29,7 @@ verifies the daemon's handshake. The runtime root is the first match of:
    `kernel.sock` or `kernel.lock` exists
 5. the Phase 0 default: the project's `.weftos/runtime`, otherwise `~/.clawft`
 
-`weft doctor` and the unreachable-daemon error list every level tried, in
-order. When the daemon cannot be reached or is the wrong one, the error names
+The unreachable-daemon error lists every level tried, in order. When the daemon cannot be reached or is the wrong one, the error names
 the socket tried and the exact next command. A daemon that answers but is the
 wrong one (another project, another node, an incompatible protocol) is always
 an error: commands never fall back to local state changes against it. The user

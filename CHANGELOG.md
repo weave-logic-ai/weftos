@@ -71,8 +71,8 @@ steps are in `docs/guides/kernel.md` (User daemon, "Owner migration").
   from `--runtime`, then `WEFTOS_RUNTIME_DIR`, then the project manifest
   (`[serve] runtime_dir`, or `via = "user-daemon"`, which selects
   `~/.weftos/run`), then `~/.weftos/run` when no project is known and a user
-  daemon has run there, then the Phase 0 default. `weft doctor` and the
-  unreachable-daemon error list every level tried.
+  daemon has run there, then the Phase 0 default. The unreachable-daemon
+  error lists every level tried.
 - **User chain migration.** `weaver migrate user-chain [--dry-run]` copies the
   legacy chain from `~/.clawft` to `~/.weftos/chain`, verifies it (hashes,
   head, signature) and writes `MIGRATED-TO-WEFTOS.txt` beside the original,
@@ -93,8 +93,10 @@ steps are in `docs/guides/kernel.md` (User daemon, "Owner migration").
   not modified). A token's `project` is recorded but not yet enforced.
 - **Literal `auth` scopes are same-uid only.** `admin`, `write`, `chat` and
   `read` as an `auth` value work only from a unix-socket peer with the daemon's
-  uid; from another uid or over the TCP relay the request fails with
-  `peer_uid_mismatch`. Use a `wft_` token instead.
+  uid. From another uid on the unix socket the request fails with
+  `peer_uid_mismatch`; over the TCP relay the literal is stripped, so the call
+  is anonymous and a mutating method fails with "permission denied: requires
+  capability". Use a `wft_` token instead.
 - **Scope gate (D12).** On the user daemon, `kernel.governance.outside_project`
   defaults to `read_only`: outside a project only a reviewed allow-list of read
   methods works and everything else returns `project_required`. Other modes:
