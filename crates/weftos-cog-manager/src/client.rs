@@ -3,11 +3,12 @@
 //! results dropped into shared state. The host and the registries send `Access-Control-Allow-Origin:
 //! *`, so a browser build calls them directly.
 
+use base64::Engine as _;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use web_time::{Duration, Instant};
-use weftos_cog_market::{Catalog, CognitumRegistry};
+use weftos_cog_market::{Catalog, CognitumRegistry, Source};
 use weftos_cog_repo::Registry as WlRegistry;
 
 const STATUS_EVERY: Duration = Duration::from_millis(1500);
@@ -210,6 +211,94 @@ impl Client {
         });
         // force a status refresh on the next tick
         self.status_busy.store(false, Ordering::Release);
+    }
+}
+
+impl Client {
+    /// Install a catalog item onto the host: fetch the binary (TLS here, in the browser/native),
+    /// then upload it to the host's `/install`, which verifies (Ed25519 for signed, sha256 for
+    /// Cognitum) before writing. Progress/result lands in `last_action`.
+    pub fn install(&self, id: &str, source: Source, version: String, ctx: &eframe::egui::Context) {
+        // Resolve the binary URL + integrity material from the raw registries.
+        let detail: Option<(String, String, Option<String>, bool)> = {
+            let sh = self.shared.lock().unwrap();
+            match source {
+                Source::WeaveLogic => {
+                    let b = registry_base(&self.s.our_registry);
+                    sh.our_reg
+                        .as_ref()
+                        .and_then(|r| r.as_ref().ok())
+                        .and_then(|r| r.cogs.iter().find(|c| c.id == id).cloned())
+                        .and_then(|c| c.artifacts.get("arm").or_else(|| c.artifacts.values().next()).cloned())
+                        .map(|a| (format!("{b}/{}", a.path), a.sha256, Some(a.sig), true))
+                }
+                Source::Cognitum => sh.cognitum_reg.as_ref().and_then(|r| r.as_ref().ok()).and_then(|r| {
+                    let url = r.arm_binary_url(id)?;
+                    let sha = r.cogs.iter().find(|c| c.id == id).and_then(|c| c.sha256.clone())?;
+                    Some((url, sha, None, false))
+                }),
+            }
+        };
+        let Some((url, sha, sig, signed)) = detail else {
+            self.set_action(format!("install {id}: no binary URL (is the registry configured/loaded?)"), ctx);
+            return;
+        };
+
+        self.set_action(format!("fetching {id}…"), ctx);
+        let shared = Arc::clone(&self.shared);
+        let host = base(&self.s.host);
+        let busy = Arc::clone(&self.status_busy);
+        let id = id.to_string();
+        let ctx = ctx.clone();
+        ehttp::fetch(ehttp::Request::get(url), move |res| {
+            let bytes = match &res {
+                Ok(r) if r.ok => r.bytes.clone(),
+                Ok(r) => return set(&shared, &ctx, format!("fetch {id}: HTTP {}", r.status)),
+                Err(e) => return set(&shared, &ctx, format!("fetch {id}: {e} (CORS? use the native console for this source)")),
+            };
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let body = serde_json::json!({
+                "id": id, "version": version,
+                "source": if signed { "weavelogic" } else { "cognitum" },
+                "signed": signed, "sha256": sha, "sig": sig,
+                "binary_b64": b64, "enable": false,
+            })
+            .to_string();
+            let mut req = ehttp::Request::post(format!("{host}/install"), body.into_bytes());
+            req.headers.insert("content-type", "application/json");
+            let shared2 = Arc::clone(&shared);
+            let busy2 = Arc::clone(&busy);
+            let ctx2 = ctx.clone();
+            let id2 = id.clone();
+            ehttp::fetch(req, move |r2| {
+                let msg = match &r2 {
+                    Ok(x) if x.ok => format!("installed {id2} ✓ ({} KB, verified)", bytes.len() / 1024),
+                    Ok(x) => format!("install {id2}: {}", String::from_utf8_lossy(&x.bytes).chars().take(160).collect::<String>()),
+                    Err(e) => format!("install {id2}: {e}"),
+                };
+                busy2.store(false, Ordering::Release); // prompt a status refresh so it shows up
+                set(&shared2, &ctx2, msg);
+            });
+        });
+    }
+
+    fn set_action(&self, msg: String, ctx: &eframe::egui::Context) {
+        self.shared.lock().unwrap().last_action = Some(msg);
+        ctx.request_repaint();
+    }
+}
+
+fn set(shared: &Arc<Mutex<Shared>>, ctx: &eframe::egui::Context, msg: String) {
+    shared.lock().unwrap().last_action = Some(msg);
+    ctx.request_repaint();
+}
+
+/// The directory a `registry.json` URL lives in, used as the base for relative artifact paths.
+fn registry_base(url: &str) -> String {
+    let u = url.trim().trim_end_matches('/');
+    match u.rsplit_once('/') {
+        Some((base, _file)) => base.to_string(),
+        None => u.to_string(),
     }
 }
 

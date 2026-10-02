@@ -148,7 +148,7 @@ impl Manager {
         ui.label(RichText::new("WeaveLogic (signed) + a mirror of Cognitum's registry — one catalog").color(GREY).small());
         ui.add_space(4.0);
         match &catalog {
-            Some(cat) => self.marketplace(ui, cat, host.as_ref().and_then(|r| r.as_ref().ok())),
+            Some(cat) => self.marketplace(ui, ctx, cat, host.as_ref().and_then(|r| r.as_ref().ok())),
             None => {
                 ui.label("Loading the marketplace…");
             }
@@ -209,7 +209,7 @@ impl Manager {
         });
     }
 
-    fn marketplace(&self, ui: &mut egui::Ui, cat: &Catalog, host: Option<&HostStatus>) {
+    fn marketplace(&self, ui: &mut egui::Ui, ctx: &egui::Context, cat: &Catalog, host: Option<&HostStatus>) {
         let installed = |id: &str| host.is_some_and(|h| h.cogs.iter().any(|c| c.id == id));
         egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
             let mut cat_name = String::new();
@@ -219,12 +219,12 @@ impl Manager {
                     ui.add_space(6.0);
                     ui.label(RichText::new(if cat_name.is_empty() { "other" } else { &cat_name }).strong().color(AMBER));
                 }
-                self.market_row(ui, item, installed(&item.id));
+                self.market_row(ui, ctx, item, installed(&item.id));
             }
         });
     }
 
-    fn market_row(&self, ui: &mut egui::Ui, item: &CatalogItem, installed: bool) {
+    fn market_row(&self, ui: &mut egui::Ui, ctx: &egui::Context, item: &CatalogItem, installed: bool) {
         ui.horizontal(|ui| {
             if item.signed {
                 ui.label(RichText::new("🛡").color(WL)).on_hover_text("Ed25519-signed; verified before install");
@@ -239,9 +239,15 @@ impl Manager {
                 if installed {
                     ui.label(RichText::new("installed").color(GREEN).small());
                 } else {
-                    // Install-from-marketplace (verified upload to the host) lands in the next slice.
-                    ui.add_enabled(false, egui::Button::new("Install").small())
-                        .on_disabled_hover_text("Installing from the marketplace arrives in the next build;\nfor now stage cogs with `weft-cog-host add`.");
+                    let resp = ui.add(egui::Button::new("Install").small());
+                    let resp = if item.signed {
+                        resp.on_hover_text("Fetch + Ed25519-verify against the pinned WeaveLogic key, then install on the host")
+                    } else {
+                        resp.on_hover_text("Cognitum cog (unsigned): fetched and sha256-checked on the host before it lands")
+                    };
+                    if resp.clicked() {
+                        self.client.install(&item.id, item.source, item.version.clone(), ctx);
+                    }
                 }
                 ui.label(RichText::new(item.arches.join("/")).color(GREY).small());
             });

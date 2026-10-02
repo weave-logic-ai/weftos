@@ -10706,14 +10706,17 @@ dependencies = [
 name = "weftos-cog-host"
 version = "0.8.1"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
+ "weftos-cog-repo",
 ]
 
 [[package]]
 name = "weftos-cog-manager"
 version = "0.8.1"
 dependencies = [
+ "base64 0.22.1",
  "console_error_panic_hook",
  "eframe",
  "ehttp",
