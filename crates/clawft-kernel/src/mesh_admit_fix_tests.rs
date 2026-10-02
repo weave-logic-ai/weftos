@@ -172,28 +172,64 @@ fn short(first: u64, per_ip: usize) -> Limits {
     }
 }
 
-#[tokio::test]
-async fn silent_connection_is_dropped_under_enforce_only() {
-    let strict = server_with(crypto(MeshAdmissionMode::Enforce), short(300, 64)).await;
-    let mut c = Client::connect(&strict.addr, false).await;
-    assert!(c.closed().await, "strict gate must drop a silent peer");
+fn every_mode() -> Vec<(&'static str, Arc<dyn AdmissionGate>)> {
+    vec![
+        ("allow-all", Arc::new(AllowAll) as Arc<dyn AdmissionGate>),
+        ("observe", crypto(MeshAdmissionMode::Observe)),
+        ("enforce", crypto(MeshAdmissionMode::Enforce)),
+    ]
+}
 
-    for g in [Arc::new(AllowAll) as Arc<dyn AdmissionGate>, crypto(MeshAdmissionMode::Observe)] {
-        let lenient = server_with(g, short(300, 64)).await;
-        let mut c = Client::connect(&lenient.addr, false).await;
-        let r = tokio::time::timeout(Duration::from_millis(900), c.ch.recv_encrypted()).await;
-        assert!(r.is_err(), "AllowAll and observe keep the old no-timeout behaviour");
+#[tokio::test]
+async fn silent_connection_is_dropped_under_every_mode() {
+    for (name, g) in every_mode() {
+        let srv = server_with(g, short(300, 64)).await;
+        let mut c = Client::connect(&srv.addr, false).await;
+        assert!(c.closed().await, "{name}: a peer silent before its first frame must be dropped");
     }
 }
 
 #[tokio::test]
-async fn per_ip_cap_refuses_the_extra_connection() {
-    let srv = server_with(crypto(MeshAdmissionMode::Enforce), short(30_000, 2)).await;
-    let _a = Client::connect(&srv.addr, false).await;
-    let _b = Client::connect(&srv.addr, false).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let mut third = Client::connect(&srv.addr, false).await;
-    assert!(third.closed().await, "third connection from one IP must be dropped");
+async fn lenient_gates_keep_no_idle_limit_once_a_frame_arrived() {
+    for g in [Arc::new(AllowAll) as Arc<dyn AdmissionGate>, crypto(MeshAdmissionMode::Observe)] {
+        let srv = server_with(g, short(300, 64)).await;
+        let mut c = Client::connect(&srv.addr, false).await;
+        c.publish("legacy-leaf", "t.hello").await;
+        assert!(wait_for(&srv.rec, "t.hello").await);
+        let r = tokio::time::timeout(Duration::from_millis(900), c.ch.recv_encrypted()).await;
+        assert!(r.is_err(), "a quiet legacy peer is not cut off after its first frame");
+    }
+}
+
+#[tokio::test]
+async fn per_ip_cap_refuses_the_extra_connection_in_every_mode() {
+    for (name, g) in every_mode() {
+        let srv = server_with(g, short(30_000, 2)).await;
+        let _a = Client::connect(&srv.addr, false).await;
+        let _b = Client::connect(&srv.addr, false).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut third = Client::connect(&srv.addr, false).await;
+        assert!(third.closed().await, "{name}: third connection from one IP must be dropped");
+    }
+}
+
+// ── responder join on handshake ──────────────────────────────────
+
+#[tokio::test]
+async fn responder_registers_an_admitted_peer_without_any_app_traffic() {
+    let srv = server(crypto(MeshAdmissionMode::Enforce), true).await;
+    let mut events = srv.rt.subscribe_peer_events();
+    let k = key(1);
+    let mut c = Client::connect(&srv.addr, true).await;
+    // Hello only: no envelope follows.
+    c.send(&c.hello(&k, &GENESIS, vec![]).to_bytes()).await;
+    let ev = tokio::time::timeout(Duration::from_secs(3), events.recv())
+        .await
+        .expect("join event")
+        .unwrap();
+    assert!(matches!(&ev, crate::mesh_discovery::MeshPeerEvent::Joined { node_id, .. } if *node_id == id_of(&k)), "{ev:?}");
+    assert_eq!(srv.rt.peer_ids(), vec![id_of(&k)]);
+    let _ = c.ch.close().await;
 }
 
 // ── 7: signed fields ─────────────────────────────────────────────

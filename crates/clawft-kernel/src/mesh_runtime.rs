@@ -33,6 +33,39 @@ pub struct PeerConnection {
     /// admission verified. A verified route cannot be taken over by an
     /// unverified connection claiming the same id.
     pub verified: bool,
+    /// Live-route accounting for the serving connection (None for routes
+    /// added without one). Dropping the route, by removal or replacement,
+    /// decrements it.
+    _tally: Option<RouteGuard>,
+}
+
+/// Count of live routes registered by one serving connection. Lets the
+/// connection learn in O(1), instead of scanning the peer map, that its
+/// routes were removed (`disconnect_peer`, revocation) or replaced.
+#[derive(Clone, Default)]
+pub struct RouteTally(Arc<std::sync::atomic::AtomicUsize>);
+
+impl RouteTally {
+    /// Routes currently pointing at this connection.
+    pub fn live(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+/// Held by a `PeerConnection`; decrements its tally when the route drops.
+struct RouteGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl RouteGuard {
+    fn new(t: &RouteTally) -> Self {
+        t.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self(Arc::clone(&t.0))
+    }
+}
+
+impl Drop for RouteGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 /// Discovery state for mesh peer lookup and health tracking.
@@ -281,7 +314,38 @@ impl MeshRuntime {
     /// has completed. Higher-level helpers like `connect_peer` build
     /// on top of this.
     pub fn add_peer(&self, node_id: String, sender: tokio::sync::mpsc::Sender<Vec<u8>>) {
-        self.register_peer(node_id, sender, false);
+        self.register_peer(node_id, sender, false, None);
+    }
+
+    /// True when `node_id` is routed through some channel other than `tx`.
+    pub fn route_is_foreign(&self, node_id: &str, tx: &tokio::sync::mpsc::Sender<Vec<u8>>) -> bool {
+        self.peers.get(node_id).is_some_and(|p| !p.sender.same_channel(tx))
+    }
+
+    /// [`add_peer`](Self::add_peer) that counts the route in `tally`, so the
+    /// owning connection can tell in O(1) when it is removed or replaced.
+    pub fn add_peer_tallied(
+        &self,
+        node_id: String,
+        sender: tokio::sync::mpsc::Sender<Vec<u8>>,
+        tally: &RouteTally,
+    ) {
+        self.register_peer(node_id, sender, false, Some(tally));
+    }
+
+    /// Register the route of a connection whose node id admission just
+    /// authenticated, before any envelope arrives, so the peer joins the
+    /// cluster when its handshake completes rather than on its first
+    /// application frame. `verified` is the admission verdict (enforce);
+    /// returns false when refused (see [`register_peer`](Self::register_peer)).
+    pub fn register_authenticated(
+        &self,
+        node_id: String,
+        sender: tokio::sync::mpsc::Sender<Vec<u8>>,
+        verified: bool,
+        tally: &RouteTally,
+    ) -> bool {
+        self.register_peer(node_id, sender, verified, Some(tally))
     }
 
     /// Register or refresh a route. Returns false when refused: an
@@ -295,6 +359,7 @@ impl MeshRuntime {
         node_id: String,
         sender: tokio::sync::mpsc::Sender<Vec<u8>>,
         verified: bool,
+        tally: Option<&RouteTally>,
     ) -> bool {
         use dashmap::mapref::entry::Entry;
         debug!(peer = %node_id, "adding peer connection");
@@ -307,6 +372,7 @@ impl MeshRuntime {
             connected_at: chrono::Utc::now(),
             sender,
             verified,
+            _tally: tally.map(RouteGuard::new),
         };
         // Decide and write under the entry (shard) lock so an unverified
         // registration can never overwrite a verified one in a race.
@@ -318,6 +384,14 @@ impl MeshRuntime {
                 if o.get().verified && !verified {
                     warn!(peer = %node_id, "refusing route takeover of an admitted peer by an unverified connection");
                     return false;
+                }
+                if !verified {
+                    // Unauthenticated claims can displace each other; a
+                    // legitimate reconnect looks identical, so this is
+                    // logged, not refused (ADR-103 A10: observe is not
+                    // protection).
+                    warn!(peer = %node_id,
+                        "unverified connection replaced an unverified route; the previous connection will be closed");
                 }
                 o.insert(conn);
                 true
@@ -348,6 +422,7 @@ impl MeshRuntime {
     /// left alone; `Left` is emitted only for routes actually removed.
     /// Returns the number removed.
     /// True when some route currently sends through `tx`'s channel.
+    /// O(peers): diagnostics and tests only; connections use [`RouteTally`].
     pub fn routes_via(&self, tx: &tokio::sync::mpsc::Sender<Vec<u8>>) -> bool {
         self.peers.iter().any(|e| e.sender.same_channel(tx))
     }
@@ -463,6 +538,19 @@ impl MeshRuntime {
         outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
         peer: Option<&PeerCtx>,
     ) -> KernelResult<()> {
+        self.handle_incoming_tallied(data, outbound, peer, None).await
+    }
+
+    /// [`handle_incoming_peer`](Self::handle_incoming_peer) that also counts
+    /// the routes it registers in `tally` (the serving connection's O(1)
+    /// "is my route still there" signal).
+    pub async fn handle_incoming_tallied(
+        &self,
+        data: &[u8],
+        outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
+        peer: Option<&PeerCtx>,
+        tally: Option<&RouteTally>,
+    ) -> KernelResult<()> {
         // AssessmentSync frames do not carry MeshIpcEnvelope source_node
         // for auto-registration. Demux first; reply (if any) goes on the
         // same outbound channel. Peer registration for assessment-only
@@ -504,7 +592,7 @@ impl MeshRuntime {
         // entry must be replaced or `send_to_peer` delivers into the
         // dead channel of the dropped connection and the peer never
         // receives anything again.
-        if !self.register_peer(ctx.peer_id.clone(), outbound, ctx.node_verified) {
+        if !self.register_peer(ctx.peer_id.clone(), outbound, ctx.node_verified, tally) {
             return Err(KernelError::Mesh(format!(
                 "route for {} belongs to an admitted peer",
                 ctx.peer_id

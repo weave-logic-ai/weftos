@@ -20,7 +20,7 @@ use crate::mesh_limits::{IpSlot, Limits, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS, ROU
 use crate::mesh_noise::{
     noise_static_public, EncryptedChannel, NoiseChannel, NoiseConfig, PassthroughChannel,
 };
-use crate::mesh_runtime::MeshRuntime;
+use crate::mesh_runtime::{MeshRuntime, RouteTally};
 
 /// Build the transport for a `kernel.mesh.transport` name.
 ///
@@ -106,7 +106,6 @@ pub async fn serve_listener_with(
     let mut conns = tokio::task::JoinSet::new();
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let per_ip = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let strict = gate.strict();
     loop {
         while conns.try_join_next().is_some() {}
         match listener.accept().await {
@@ -116,15 +115,12 @@ pub async fn serve_listener_with(
                         "mesh connection cap reached, dropping");
                     continue;
                 };
-                let ip_slot = if strict {
-                    let Some(slot) = IpSlot::acquire(&per_ip, peer_addr.ip(), limits.per_ip) else {
-                        tracing::warn!(peer = %peer_addr, max = limits.per_ip,
-                            "mesh per-IP connection cap reached, dropping");
-                        continue;
-                    };
-                    Some(slot)
-                } else {
-                    None
+                // The per-IP cap applies under every admission mode: the
+                // global cap alone lets one host starve the rest.
+                let Some(ip_slot) = IpSlot::acquire(&per_ip, peer_addr.ip(), limits.per_ip) else {
+                    tracing::warn!(peer = %peer_addr, max = limits.per_ip,
+                        "mesh per-IP connection cap reached, dropping");
+                    continue;
                 };
                 let rt = Arc::clone(&runtime);
                 let nc = noise.clone();
@@ -308,18 +304,37 @@ async fn serve_connection(
         None => Box::new(PassthroughChannel::new(stream)),
     };
     let kind = if nc.is_some() { ChannelKind::Noise } else { ChannelKind::Passthrough };
+    let (out_tx, out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    pump(&rt, channel, kind, &peer_addr.to_string(), &*gate, limits, out_tx, out_rx, None, RouteTally::default(), false).await;
+}
 
-    // Outbound channel: the kernel pushes frames into `out_tx` (via
-    // `MeshRuntime::send_to_peer`) and this task drains `out_rx` back
-    // through the encrypted stream. This is what lets the topic forwarder
-    // in `A2ARouter` deliver pushes to inbound leaf peers that subscribed
-    // via `mesh.subscribe`.
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
-
-    // Admission state. Nothing from the peer reaches the runtime until the
-    // first frame has been through `admit_first_frame`.
-    let mut active: Option<Active> = None;
-
+/// The bidirectional pump shared by accepted and dialled connections.
+///
+/// The kernel pushes frames into `out_tx` (via `MeshRuntime::send_to_peer`)
+/// and this task drains `out_rx` back through the encrypted stream. This is
+/// what lets the topic forwarder in `A2ARouter` deliver pushes to inbound
+/// leaf peers that subscribed via `mesh.subscribe`. `active` is `None` until
+/// the first frame has been through admission; a dialled connection starts
+/// with `active` set (we chose the peer, so there is no admission step; it is
+/// not *admitted* in the membership sense) and its route already counted in
+/// `tally`.
+#[allow(clippy::too_many_arguments)]
+async fn pump(
+    rt: &Arc<MeshRuntime>,
+    mut channel: Box<dyn EncryptedChannel>,
+    kind: ChannelKind,
+    peer_addr: &str,
+    gate: &dyn AdmissionGate,
+    limits: Limits,
+    out_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    mut out_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    mut active: Option<Active>,
+    tally: RouteTally,
+    dialled: bool,
+) {
+    // Removes this connection's routes however the pump ends, including
+    // when the task is aborted mid-await.
+    let _routes = ConnRoutes { rt: Arc::clone(rt), tx: out_tx.clone() };
     // Bidirectional loop. `handle_incoming_from` auto-registers the peer
     // by `envelope.source_node` on first arrival so the kernel can route
     // back.
@@ -339,18 +354,24 @@ async fn serve_connection(
     // from under it (`disconnect_peer`, e.g. `weaver mesh peer revoke`, or a
     // replacement connection), the connection is closed instead of lingering
     // and re-registering on its next frame.
-    let mut routed = false;
+    let mut routed = tally.live() > 0;
     let mut route_check = tokio::time::interval(ROUTE_CHECK);
     route_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // The silence timers run from the last frame in either direction; the
     // route check's own ticks must not reset them.
     let mut last_activity = tokio::time::Instant::now();
     loop {
-        // Strict gates bound how long a peer may stay silent: briefly before
-        // the first frame, longer once admitted. Lenient gates keep the
-        // pre-admission behaviour (no limit) so slow legacy leaves still work.
-        let limit = strict
-            .then(|| if active.is_none() { limits.first_frame } else { limits.idle });
+        // Every mode bounds the silence before the first frame; strict gates
+        // also bound how long an admitted peer may stay silent. Lenient gates
+        // keep the pre-admission behaviour (no idle limit) so slow legacy
+        // leaves still work.
+        // A dialled connection (which starts with `active` set) bounds
+        // inbound silence so a half-open seed is detected and redialled.
+        let limit = if active.is_none() {
+            Some(limits.first_frame)
+        } else {
+            (strict || dialled).then_some(limits.idle)
+        };
         let timer = async {
             match limit {
                 Some(d) => tokio::time::sleep_until(last_activity + d).await,
@@ -363,7 +384,7 @@ async fn serve_connection(
                 break;
             }
             _ = route_check.tick() => {
-                if routed && !rt.routes_via(&out_tx) {
+                if routed && tally.live() == 0 {
                     tracing::info!(peer = %peer_addr, "mesh route removed (disconnect or revocation), closing");
                     break;
                 }
@@ -379,10 +400,24 @@ async fn serve_connection(
                     last_activity = tokio::time::Instant::now();
                     let frame = match active {
                         Some(_) => Some(data),
-                        None => match admit_first_frame(&*channel, kind, &*gate, data).await {
+                        None => match admit_first_frame(&*channel, kind, gate, data).await {
                             Ok((act, rest)) => {
                                 tracing::info!(peer = %peer_addr,
                                     node = act.bound.as_deref().unwrap_or("-"), "mesh peer admitted");
+                                // Key-authenticated: join now, keyed by the
+                                // verified id, not on the first envelope.
+                                // Admitted peers only: a key-valid peer under
+                                // off/observe is not a member, so it keeps the
+                                // first-envelope path.
+                                if act.admitted
+                                    && let Some(id) = act.bound.as_deref()
+                                    && !rt.register_authenticated(
+                                        id.to_owned(), out_tx.clone(), true, &tally)
+                                {
+                                    tracing::warn!(peer = %peer_addr, node = id,
+                                        "route refused for admitted peer, closing");
+                                    break;
+                                }
                                 active = Some(act);
                                 rest
                             }
@@ -394,6 +429,21 @@ async fn serve_connection(
                         },
                     };
                     let Some(frame) = frame else { continue };
+                    if dialled
+                        && let Some(act) = active.as_mut()
+                        && act.bound.is_none()
+                        && let Ok(env) = MeshIpcEnvelope::from_bytes(&frame)
+                    {
+                        // The seed's id is not authenticated, so bind the
+                        // connection to the first id it claims and never let
+                        // it claim an id another connection already routes.
+                        if rt.route_is_foreign(&env.source_node, &out_tx) {
+                            tracing::warn!(peer = %peer_addr, claimed = %env.source_node,
+                                "dialled peer claims an id routed elsewhere, dropping frame");
+                            continue;
+                        }
+                        act.bound = Some(env.source_node);
+                    }
                     let Some(act) = active.as_ref() else { break };
                     // A revocation after admission: the next frame must not
                     // re-register the route.
@@ -405,17 +455,19 @@ async fn serve_connection(
                     }
                     if let Some(frame) = screen_frame(frame, act) {
                         let ctx = act.peer_ctx();
-                        if let Err(e) = rt.handle_incoming_peer(&frame, out_tx.clone(), Some(&ctx)).await {
+                        if let Err(e) = rt.handle_incoming_tallied(&frame, out_tx.clone(), Some(&ctx), Some(&tally)).await {
                             tracing::debug!(error = %e, "mesh message handling error");
                         }
-                        routed = routed || rt.routes_via(&out_tx);
+                        routed = routed || tally.live() > 0;
                     }
                 }
                 Err(_) => break,
             },
             outbound = out_rx.recv() => match outbound {
                 Some(data) => {
-                    last_activity = tokio::time::Instant::now();
+                    if !dialled {
+                        last_activity = tokio::time::Instant::now();
+                    }
                     if channel.send_encrypted(&data).await.is_err() {
                         break;
                     }
@@ -424,85 +476,189 @@ async fn serve_connection(
             },
         }
     }
-    // Drop our route if it still points at this connection (a verified
-    // route must not outlive its connection).
-    rt.disconnect_channel(&out_tx);
+}
+
+/// Drops every route that still points at one connection (a verified route
+/// must not outlive its connection) when the pump ends or is aborted.
+struct ConnRoutes {
+    rt: Arc<MeshRuntime>,
+    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+}
+
+impl Drop for ConnRoutes {
+    fn drop(&mut self) {
+        self.rt.disconnect_channel(&self.tx);
+    }
+}
+
+/// First reconnect delay; doubles per consecutive failure up to
+/// [`SEED_BACKOFF_MAX`]. Each wait is jittered to 50-100% of its nominal
+/// value so a fleet restarted together does not redial in lockstep.
+const SEED_BACKOFF_BASE: std::time::Duration = std::time::Duration::from_secs(1);
+const SEED_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(60);
+/// Inbound silence after which a dialled connection is considered half-open.
+const SEED_IDLE: std::time::Duration = std::time::Duration::from_secs(300);
+/// A connection that stayed up this long resets the backoff.
+const SEED_STABLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Backoff for the `failures`-th consecutive failure (0-based), jittered.
+pub(crate) fn seed_backoff(
+    failures: u32,
+    base: std::time::Duration,
+    max: std::time::Duration,
+) -> std::time::Duration {
+    let nominal = base.saturating_mul(1u32 << failures.min(16)).min(max);
+    let jitter = rand::random::<f64>() * 0.5 + 0.5;
+    nominal.mul_f64(jitter)
+}
+
+/// Retry timing for a seed dial loop (tests shorten it).
+#[derive(Clone, Copy)]
+pub(crate) struct SeedTiming {
+    pub base: std::time::Duration,
+    pub max: std::time::Duration,
+    pub stable: std::time::Duration,
+    /// Inbound silence after which a dialled connection is dropped and redialled.
+    pub idle: std::time::Duration,
+}
+
+impl Default for SeedTiming {
+    fn default() -> Self {
+        Self { base: SEED_BACKOFF_BASE, max: SEED_BACKOFF_MAX, stable: SEED_STABLE, idle: SEED_IDLE }
+    }
 }
 
 /// Dial each seed peer in its own task (Noise initiator when `noise` is
 /// set) and register it with `runtime`. Returns immediately.
+///
+/// Connections are bidirectional (inbound frames from the seed reach the
+/// runtime) and are redialled with jittered exponential backoff when they
+/// drop. The returned handles run until aborted; abort them to stop
+/// dialling and close the connections.
 pub fn connect_seeds(
     runtime: &Arc<MeshRuntime>,
     seed_peers: &[String],
     transport_name: &str,
     noise: Option<Arc<NoiseConfig>>,
     identity: Option<Arc<DialIdentity>>,
-) {
-    for peer_addr in seed_peers {
-        let addr = peer_addr.clone();
-        let rt = Arc::clone(runtime);
-        let transport_name = transport_name.to_owned();
-        let nc = noise.clone();
-        let identity = identity.clone();
-        tokio::spawn(async move {
-            let transport = transport_for(&transport_name, Some(&addr));
+) -> Vec<tokio::task::JoinHandle<()>> {
+    connect_seeds_with(runtime, seed_peers, transport_name, noise, identity, SeedTiming::default())
+}
 
-            match transport.connect(&addr).await {
-                Ok(stream) => {
-                    // Optionally wrap in Noise encryption (as initiator).
-                    let mut channel: Box<dyn EncryptedChannel> = match &nc {
-                        Some(cfg) => match NoiseChannel::initiate(stream, cfg).await {
-                            Ok(ch) => {
-                                tracing::info!(peer = %addr, "noise handshake complete (initiator)");
-                                Box::new(ch)
-                            }
-                            Err(e) => {
-                                tracing::warn!(peer = %addr, error = %e, "noise handshake failed");
-                                return;
-                            }
-                        },
-                        None => Box::new(PassthroughChannel::new(stream)),
-                    };
-
-                    // Introduce ourselves before anything else is sent. Only a
-                    // Noise session has a handshake hash to bind the hello to;
-                    // plaintext dials send nothing (the far side's gate decides
-                    // whether that is acceptable).
-                    if let (Some(id), Some(cfg), Some(hash)) =
-                        (&identity, &nc, channel.handshake_hash().map(<[u8]>::to_vec))
-                    {
-                        match noise_static_public(&cfg.local_private_key) {
-                            Some(stat) => {
-                                let hello = id.hello(&hash, &stat, unix_now());
-                                if channel.send_encrypted(&hello.to_bytes()).await.is_err() {
-                                    tracing::warn!(peer = %addr, "failed to send admission hello");
-                                    return;
-                                }
-                            }
-                            None => tracing::warn!(peer = %addr, "cannot derive noise static key"),
-                        }
+pub(crate) fn connect_seeds_with(
+    runtime: &Arc<MeshRuntime>,
+    seed_peers: &[String],
+    transport_name: &str,
+    noise: Option<Arc<NoiseConfig>>,
+    identity: Option<Arc<DialIdentity>>,
+    timing: SeedTiming,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let mut seen = std::collections::HashSet::new();
+    seed_peers
+        .iter()
+        .filter(|a| seen.insert(a.as_str()))
+        .map(|addr| {
+            let addr = addr.clone();
+            // Weak: an idle dial loop does not keep a dropped runtime alive
+            // (an established connection still holds it until it ends).
+            let rt = Arc::downgrade(runtime);
+            let transport_name = transport_name.to_owned();
+            let nc = noise.clone();
+            let identity = identity.clone();
+            tokio::spawn(async move {
+                let mut failures = 0u32;
+                loop {
+                    let Some(rt) = rt.upgrade() else { return };
+                    let started = tokio::time::Instant::now();
+                    dial_seed_once(&rt, &addr, &transport_name, nc.clone(), identity.clone(), timing.idle).await;
+                    drop(rt);
+                    if started.elapsed() >= timing.stable {
+                        failures = 0;
                     }
-
-                    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-                    let peer_id = addr.clone();
-                    rt.add_peer(peer_id.clone(), tx);
-                    tracing::info!(peer = %addr, noise = nc.is_some(), "connected to seed peer");
-
-                    // Drain outbound queue through encrypted channel.
-                    tokio::spawn(async move {
-                        while let Some(data) = rx.recv().await {
-                            if channel.send_encrypted(&data).await.is_err() {
-                                break;
-                            }
-                        }
-                    });
+                    let wait = seed_backoff(failures, timing.base, timing.max);
+                    failures = failures.saturating_add(1);
+                    tracing::info!(peer = %addr, retry_in_ms = wait.as_millis() as u64,
+                        "seed connection down, will redial");
+                    tokio::time::sleep(wait).await;
                 }
-                Err(e) => {
-                    tracing::warn!(peer = %addr, error = %e, "failed to connect to seed peer");
+            })
+        })
+        .collect()
+}
+
+/// One dial of a seed: connect, handshake, hello, then pump until the
+/// connection ends. Returns when it is over (for any reason).
+async fn dial_seed_once(
+    rt: &Arc<MeshRuntime>,
+    addr: &str,
+    transport_name: &str,
+    nc: Option<Arc<NoiseConfig>>,
+    identity: Option<Arc<DialIdentity>>,
+    idle: std::time::Duration,
+) {
+    let transport = transport_for(transport_name, Some(addr));
+    let stream = match transport.connect(addr).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(peer = %addr, error = %e, "failed to connect to seed peer");
+            return;
+        }
+    };
+    // Optionally wrap in Noise encryption (as initiator).
+    let mut channel: Box<dyn EncryptedChannel> = match &nc {
+        Some(cfg) => match tokio::time::timeout(HANDSHAKE_TIMEOUT, NoiseChannel::initiate(stream, cfg))
+            .await
+            .unwrap_or_else(|_| {
+                Err(crate::mesh::MeshError::Handshake("handshake timed out".into()))
+            }) {
+            Ok(ch) => {
+                tracing::info!(peer = %addr, "noise handshake complete (initiator)");
+                Box::new(ch)
+            }
+            Err(e) => {
+                tracing::warn!(peer = %addr, error = %e, "noise handshake failed");
+                return;
+            }
+        },
+        None => Box::new(PassthroughChannel::new(stream)),
+    };
+    let kind = if nc.is_some() { ChannelKind::Noise } else { ChannelKind::Passthrough };
+
+    // Introduce ourselves before anything else is sent. Only a Noise session
+    // has a handshake hash to bind the hello to; plaintext dials send nothing
+    // (the far side's gate decides whether that is acceptable).
+    if let (Some(id), Some(cfg), Some(hash)) =
+        (&identity, &nc, channel.handshake_hash().map(<[u8]>::to_vec))
+    {
+        match noise_static_public(&cfg.local_private_key) {
+            Some(stat) => {
+                let hello = id.hello(&hash, &stat, unix_now());
+                if channel.send_encrypted(&hello.to_bytes()).await.is_err() {
+                    tracing::warn!(peer = %addr, "failed to send admission hello");
+                    return;
                 }
             }
-        });
+            None => tracing::warn!(peer = %addr, "cannot derive noise static key"),
+        }
     }
+
+    let (out_tx, out_rx) = tokio::sync::mpsc::channel(256);
+    let tally = RouteTally::default();
+    rt.add_peer_tallied(addr.to_owned(), out_tx.clone(), &tally);
+    tracing::info!(peer = %addr, noise = nc.is_some(), "connected to seed peer");
+    // No hello comes back from a seed, so `bound` stays unset until its first
+    // envelope names an id (see the pump); frames then go through
+    // `screen_frame` and the runtime's identity rules like any other.
+    let active = Active {
+        bound: None,
+        limits: PeerLimits::None,
+        trust_scope: false,
+        admitted: false,
+        class: PeerClass::Legacy,
+        remote_static: channel.remote_static_key().map(<[u8]>::to_vec),
+    };
+    let limits = Limits { idle, ..Limits::default() };
+    pump(rt, channel, kind, addr, &crate::mesh_admit::AllowAll, limits, out_tx, out_rx, Some(active), tally, true).await;
 }
 
 #[cfg(test)]
@@ -576,3 +732,7 @@ mod tests {
         assert!(rt.peer_ids().contains(&"node-a".to_string()));
     }
 }
+
+#[cfg(test)]
+#[path = "mesh_serve_tests.rs"]
+mod serve_tests;

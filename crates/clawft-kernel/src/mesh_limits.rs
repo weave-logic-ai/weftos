@@ -1,5 +1,6 @@
-//! Connection limits for the mesh listener (P3-K1): caps and timeouts
-//! applied under a strict admission gate.
+//! Connection limits for the mesh listener (P3-K1): caps and timeouts. The
+//! per-IP cap and first-frame timeout apply in every admission mode; the idle
+//! timeout only under a strict gate.
 
 use std::sync::Arc;
 
@@ -11,9 +12,11 @@ pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// not revoked (review S1: a revoked or disconnected peer is closed within this).
 pub const ROUTE_CHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Per-IP concurrent connection cap (only under a strict gate).
+/// Default per-IP concurrent connection cap (every admission mode;
+/// `kernel.mesh.max_connections_per_ip`).
 pub const MAX_CONNECTIONS_PER_IP: usize = 64;
-/// Time a peer gets to send its first frame (strict gates only).
+/// Default time a peer gets to send its first frame (every admission mode;
+/// `kernel.mesh.first_frame_timeout_secs`).
 pub const FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Close an admitted connection idle this long (strict gates only).
 pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
@@ -68,12 +71,15 @@ impl Drop for IpSlot {
 }
 
 
-/// Connection limits applied by a strict gate (see [`AdmissionGate::strict`]).
+/// Connection limits. `first_frame` and `per_ip` apply under every gate;
+/// `idle` only under a strict one (see [`AdmissionGate::strict`]) and on
+/// dialled connections (inbound silence).
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     /// Silence allowed before the first frame.
     pub first_frame: std::time::Duration,
-    /// Silence allowed on an admitted connection.
+    /// Silence allowed on an admitted connection (strict gates; dialled
+    /// connections count inbound silence only).
     pub idle: std::time::Duration,
     /// Concurrent connections per source IP.
     pub per_ip: usize,

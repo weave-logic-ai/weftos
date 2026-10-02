@@ -960,6 +960,17 @@ pub struct MeshConfig {
     #[serde(default)]
     pub admission_open_membership: bool,
 
+    /// Most concurrent inbound mesh connections from one source IP
+    /// (IPv6 is counted per /64). Applies under every `admission` mode.
+    /// Default: 64.
+    #[serde(default = "default_mesh_max_connections_per_ip")]
+    pub max_connections_per_ip: usize,
+
+    /// Seconds an inbound connection may stay silent before its first
+    /// frame. Applies under every `admission` mode. Default: 10.
+    #[serde(default = "default_mesh_first_frame_timeout_secs")]
+    pub first_frame_timeout_secs: u64,
+
     /// Whether this daemon uses the machine mesh service (ADR-103 D2,
     /// P3-U). See [`MeshServicePolicy`].
     #[serde(default)]
@@ -1012,6 +1023,14 @@ fn default_mesh_transport() -> String {
 /// Default mesh listener port ("the weave", ADR-103 D1).
 pub const DEFAULT_MESH_PORT: u16 = 9489;
 
+fn default_mesh_max_connections_per_ip() -> usize {
+    64
+}
+
+fn default_mesh_first_frame_timeout_secs() -> u64 {
+    10
+}
+
 fn default_mesh_listen_addr() -> String {
     format!("0.0.0.0:{DEFAULT_MESH_PORT}")
 }
@@ -1029,6 +1048,8 @@ impl Default for MeshConfig {
             admission: MeshAdmissionMode::default(),
             genesis_hash: None,
             admission_open_membership: false,
+            max_connections_per_ip: default_mesh_max_connections_per_ip(),
+            first_frame_timeout_secs: default_mesh_first_frame_timeout_secs(),
             service: MeshServicePolicy::default(),
             service_socket: None,
         }
