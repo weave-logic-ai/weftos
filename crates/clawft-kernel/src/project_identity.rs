@@ -163,6 +163,22 @@ pub fn load_or_create_project_key(path: &Path) -> Result<SigningKey, IdentityErr
     Err(key_file_err(path, "kept appearing and disappearing during load"))
 }
 
+/// The chain signing key of a project kernel: the project key `pre_boot`
+/// already loaded and certified (`seed`, the node key seed), confirmed
+/// against the 0600 `project.key` at `path` with the strict reader (no
+/// symlink, no creation, no chmod). A missing seed, a missing file or a file
+/// that no longer holds that key refuses the boot (ADR-103 A7, one key).
+pub fn project_chain_key(path: &Path, seed: Option<[u8; 32]>) -> Result<SigningKey, IdentityError> {
+    let seed = seed.ok_or_else(|| {
+        key_file_err(path, "a project kernel boots with its project key as the node key; none was given")
+    })?;
+    let on_disk = read_key_file(path)?.ok_or_else(|| key_file_err(path, "does not exist"))?;
+    if on_disk.to_bytes() != seed {
+        return Err(key_file_err(path, "no longer holds the key this kernel was started with"));
+    }
+    Ok(SigningKey::from_bytes(&seed))
+}
+
 fn check_parent(path: &Path) -> Result<(), IdentityError> {
     #[cfg(unix)]
     {

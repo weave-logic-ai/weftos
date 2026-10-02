@@ -995,18 +995,27 @@ impl<P: Platform> Kernel<P> {
             let chain_config = kernel_config.chain.clone().unwrap_or_default();
             if chain_config.enabled {
                 // Load or generate Ed25519 signing key for chain integrity.
-                let signing_key = if let Some(ref ckpt_path) =
+                // ADR-103 A7, one project key: a project kernel's chain is
+                // signed by the project key `pre_boot` loaded (the node key
+                // seed), confirmed against `project.key`; never a
+                // `chain.key` beside the checkpoint. Anything else refuses.
+                let signing_key = if project_profile {
+                    let child = crate::overlay_runtime::child_paths(&runtime_paths)
+                        .map_err(|e| KernelError::BootRefused(e.boot_message()))?;
+                    let path = child.project_key().ok_or_else(|| {
+                        KernelError::BootRefused("profile `project` has no project key path".into())
+                    })?;
+                    let key = crate::project_identity::project_chain_key(&path, node_key_seed)
+                        .map_err(|e| KernelError::BootRefused(e.to_string()))?;
+                    boot_log.push(BootEvent::info(
+                        BootPhase::Services,
+                        format!("Ed25519 signing key is the project key: {}", path.display()),
+                    ));
+                    Some(key)
+                } else if let Some(ref ckpt_path) =
                     chain_config.effective_checkpoint_path()
                 {
-                    // ADR-103 A7, one project key: a project kernel's chain
-                    // is signed by `project.key` (`RuntimePaths::chain_key`,
-                    // loaded by `pre_boot` before boot), never by a
-                    // `chain.key` beside the checkpoint.
-                    let key_path = if runtime_paths.child_id().is_some() {
-                        runtime_paths.chain_key()
-                    } else {
-                        std::path::PathBuf::from(ckpt_path).with_extension("key")
-                    };
+                    let key_path = std::path::PathBuf::from(ckpt_path).with_extension("key");
                     match crate::chain::ChainManager::load_or_create_key(&key_path) {
                         Ok(key) => {
                             boot_log.push(BootEvent::info(

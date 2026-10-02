@@ -418,3 +418,34 @@ fn an_unreadable_manifests_dir_fails_closed() {
     std::fs::write(&file, b"x").unwrap();
     assert!(store_read_certs(&file).is_err());
 }
+
+#[test]
+fn the_revoked_marker_fails_closed_with_distinct_reasons() {
+    use super::{MarkerError, write_marker_under};
+    let id = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
+    let no_root = write_marker_under(None, id, "revoked").unwrap_err();
+    assert!(matches!(no_root, MarkerError::NoRunRoot), "{no_root}");
+    let t = tempfile::tempdir().unwrap();
+    let unsafe_id = write_marker_under(Some(t.path()), "../x", "revoked").unwrap_err();
+    assert!(matches!(unsafe_id, MarkerError::UnsafeId(_)), "{unsafe_id}");
+    assert_ne!(no_root.to_string(), unsafe_id.to_string());
+    // A run root that is a file: the run dir cannot be created.
+    let file = t.path().join("not-a-dir");
+    std::fs::write(&file, "").unwrap();
+    let io = write_marker_under(Some(&file), id, "revoked").unwrap_err();
+    assert!(matches!(io, MarkerError::Io { .. }), "{io}");
+    for e in [&no_root, &unsafe_id, &io] {
+        let r = e.response(id);
+        assert!(!r.ok);
+        assert_eq!(r.error_kind.as_deref(), Some(MarkerError::KIND));
+        assert!(r.error.as_deref().unwrap().contains("is revoked"), "{:?}", r.error);
+    }
+    // The happy path writes 0600 at the one derivation.
+    let p = write_marker_under(Some(t.path()), id, "revoked").unwrap();
+    assert_eq!(p, clawft_types::runtime_paths::revoked_marker(t.path(), id).unwrap());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+}

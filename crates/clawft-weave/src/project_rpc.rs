@@ -41,6 +41,11 @@ pub(crate) fn configured_dir() -> Option<PathBuf> {
         .unwrap_or_else(|e| e.into_inner())
         .clone()
         .or_else(|| {
+            // Unit tests never fall back to the real home's store; they pin
+            // it with `init_manifests_dir` (integration tests do too).
+            if cfg!(test) {
+                return None;
+            }
             clawft_types::runtime_paths::home_dir().map(|h| crate::user_daemon::manifests_dir(&h))
         })
 }

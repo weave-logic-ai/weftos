@@ -188,9 +188,9 @@ pub fn init_run_root(dir: PathBuf) {
 /// supervisor's (which `post_boot` takes from here), else the pinned root,
 /// else, in the user daemon, `RuntimePaths::resolve().root()`
 /// (`$WEFTOS_RUNTIME_DIR`, else `~/.weftos/run`). `None` outside the user
-/// daemon (no children, nothing to mark). Integration-test builds
-/// (`test-support`) never fall back to the real `~/.weftos/run`: they must
-/// pin the root or name it with `$WEFTOS_RUNTIME_DIR`.
+/// daemon (no children, nothing to mark). Tests that host the user daemon
+/// in process pin the root ([`init_run_root`],
+/// `user_daemon::enter_at`) so nothing resolves the real `~/.weftos/run`.
 pub fn user_run_root() -> Option<PathBuf> {
     #[cfg(all(unix, feature = "exochain", feature = "placement"))]
     if let Some(sup) = crate::project_supervisor::global() {
@@ -202,7 +202,8 @@ pub fn user_run_root() -> Option<PathBuf> {
     if !clawft_types::runtime_paths::user_profile_active() {
         return None;
     }
-    if cfg!(feature = "test-support") && clawft_types::runtime_paths::runtime_dir_env().is_none() {
+    // Unit tests never resolve the real `~/.weftos/run`; they pin the root.
+    if cfg!(test) && clawft_types::runtime_paths::runtime_dir_env().is_none() {
         return None;
     }
     Some(clawft_types::runtime_paths::RuntimePaths::resolve().root().to_path_buf())
@@ -212,8 +213,51 @@ pub fn user_run_root() -> Option<PathBuf> {
 /// `<run_root>/<id>/revoked` via the one derivation
 /// (`clawft_types::runtime_paths::revoked_marker`) the supervisor and the
 /// child (`RuntimePaths::revoked_marker`) use too.
-pub fn revoked_marker_path(id: &str) -> Option<PathBuf> {
-    clawft_types::runtime_paths::revoked_marker(&user_run_root()?, id)
+pub fn revoked_marker_path(id: &str) -> Result<PathBuf, MarkerError> {
+    marker_path_under(user_run_root().as_deref(), id)
+}
+
+fn marker_path_under(root: Option<&Path>, id: &str) -> Result<PathBuf, MarkerError> {
+    let root = root.ok_or(MarkerError::NoRunRoot)?;
+    clawft_types::runtime_paths::revoked_marker(root, id).ok_or_else(|| MarkerError::UnsafeId(id.to_owned()))
+}
+
+/// Why the terminal `revoked` marker was not written. The revocation itself
+/// (journal, chain, session, child stop) has happened; the marker is what a
+/// child that cannot reach the parent sees, so its absence is reported to
+/// the caller (`revoke_marker_unwritten`), never only logged.
+#[derive(Debug, thiserror::Error)]
+pub enum MarkerError {
+    /// Not the user daemon: no run root to put the marker in.
+    #[error("no user-daemon run root, so the revoked marker was not written")]
+    NoRunRoot,
+    /// The id is not a single safe path component.
+    #[error("project id {0:?} is not a safe path component, so the revoked marker was not written")]
+    UnsafeId(String),
+    /// Creating the run dir or writing the file failed.
+    #[error("could not write the revoked marker {path}: {reason}")]
+    Io {
+        /// The marker path.
+        path: PathBuf,
+        /// The error.
+        reason: String,
+    },
+}
+
+impl MarkerError {
+    /// RPC error kind of every marker failure.
+    pub const KIND: &'static str = "revoke_marker_unwritten";
+
+    /// The refusal a revoke returns when its marker could not be written.
+    pub fn response(&self, id: &str) -> Response {
+        Response::error_with_kind(
+            Self::KIND,
+            format!(
+                "project {id} is revoked (journal, chain, session and child stop are done) but {self}; \
+                 fix the cause and write the marker by hand, or the child can still boot while the user daemon is unreachable"
+            ),
+        )
+    }
 }
 
 /// `project.revoke` is terminal for the id: drop the session (a running
@@ -221,7 +265,8 @@ pub fn revoked_marker_path(id: &str) -> Option<PathBuf> {
 /// and, from [`on_identity_change`], write the marker (atomic, 0600; the run dir is created 0700 when the
 /// child is stopped, so a stopped child is marked too). Nothing here clears
 /// it: delete `<run_root>/<id>/revoked` (`~/.weftos/run/<id>/revoked` by default) by hand after re-enrolling the
-/// project. A marker that cannot be written is logged, not fatal: the
+/// project. A marker that cannot be written fails the RPC
+/// (`revoke_marker_unwritten`) after the revocation itself is done: the
 /// journal is the authority, the marker is what lets a child that cannot
 /// reach the parent still see the revocation.
 fn mark_revoked(_env: &CertEnv, id: &str, _why: &str) {
@@ -231,15 +276,16 @@ fn mark_revoked(_env: &CertEnv, id: &str, _why: &str) {
 }
 
 /// Write the terminal `revoked` marker (atomic, 0600; the run dir is created
-/// 0700 when the child is stopped, so a stopped child is marked too). A
-/// marker that cannot be written is logged, not fatal: the journal is the
-/// authority, the marker is what lets a child that cannot reach the parent
-/// still see the revocation. Called only from [`on_identity_change`].
-fn write_revoked_marker(id: &str, why: &str) {
-    let Some(path) = revoked_marker_path(id) else {
-        tracing::warn!(project = id, "no user-daemon run root: the revoked marker was not written");
-        return;
-    };
+/// 0700 when the child is stopped, so a stopped child is marked too) and
+/// return its path. Fails closed: every reason it was not written is an
+/// error the revoke RPC returns. Called only from [`on_identity_change`].
+fn write_revoked_marker(id: &str, why: &str) -> Result<PathBuf, MarkerError> {
+    write_marker_under(user_run_root().as_deref(), id, why)
+}
+
+fn write_marker_under(root: Option<&Path>, id: &str, why: &str) -> Result<PathBuf, MarkerError> {
+    let path = marker_path_under(root, id)?;
+    let io = |reason: String| MarkerError::Io { path: path.clone(), reason };
     if let Some(dir) = path.parent() {
         let mut b = std::fs::DirBuilder::new();
         b.recursive(true);
@@ -248,14 +294,10 @@ fn write_revoked_marker(id: &str, why: &str) {
             use std::os::unix::fs::DirBuilderExt;
             b.mode(0o700);
         }
-        if let Err(e) = b.create(dir) {
-            tracing::warn!(dir = %dir.display(), error = %e, "could not create the run dir for the revoked marker");
-            return;
-        }
+        b.create(dir).map_err(|e| io(format!("run dir {}: {e}", dir.display())))?;
     }
-    if let Err(e) = ident::write_private_atomic(&path, format!("{why}\n").as_bytes(), false) {
-        tracing::warn!(path = %path.display(), error = %e, "could not write the revoked marker");
-    }
+    ident::write_private_atomic(&path, format!("{why}\n").as_bytes(), false).map_err(|e| io(e.to_string()))?;
+    Ok(path)
 }
 
 /// `project.rekey` replaces the key: the old key's session is dropped (its
@@ -519,13 +561,12 @@ pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Is
 
 /// A project's key was revoked (writes the terminal marker; the child is
 /// stopped and its credentials killed) or replaced (child stopped, no
-/// marker). Without a supervisor (not the user
-/// daemon) there is nothing to do.
+/// marker). The child is stopped whether or not the marker could be written;
+/// a marker failure is returned. Without a supervisor (not the user daemon)
+/// there is no child to stop.
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
-pub async fn on_identity_change(id: &str, method: &str) {
-    if method == "project.revoke" {
-        write_revoked_marker(id, "revoked");
-    }
+pub async fn on_identity_change(id: &str, method: &str) -> Result<(), MarkerError> {
+    let marker = (method == "project.revoke").then(|| write_revoked_marker(id, "revoked"));
     if let Some(sup) = crate::project_supervisor::global() {
         if method == "project.revoke" {
             sup.revoked(id, method).await;
@@ -533,14 +574,16 @@ pub async fn on_identity_change(id: &str, method: &str) {
             sup.rekeyed(id).await;
         }
     }
+    marker.transpose().map(|_| ())
 }
 
 /// See the supervised variant; without placement there is no supervisor.
 #[cfg(not(all(unix, feature = "exochain", feature = "placement")))]
-pub async fn on_identity_change(id: &str, method: &str) {
+pub async fn on_identity_change(id: &str, method: &str) -> Result<(), MarkerError> {
     if method == "project.revoke" {
-        write_revoked_marker(id, "revoked");
+        write_revoked_marker(id, "revoked")?;
     }
+    Ok(())
 }
 
 /// Handler for `project.cert.show`, `project.cert.challenge`,
@@ -615,17 +658,24 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         .await;
         match out {
             Ok(Ok(v)) => {
-                if let Some((method, Some(id))) = after {
-                    crate::project_cert_rpc::on_identity_change(&id, &method).await;
+                let mut unwritten: Option<Response> = None;
+                if let Some((method, Some(id))) = after
+                    && let Err(e) = crate::project_cert_rpc::on_identity_change(&id, &method).await
+                {
+                    tracing::error!(project = %id, error = %e, "revoked marker not written");
+                    unwritten.get_or_insert(e.response(&id));
                 }
                 if is_repair {
                     for c in v.get("key_changes").and_then(Value::as_array).into_iter().flatten() {
                         let Some(id) = c.get("id").and_then(Value::as_str) else { continue };
                         let m = if c["revoked"] == true { "project.revoke" } else { "project.rekey" };
-                        crate::project_cert_rpc::on_identity_change(id, m).await;
+                        if let Err(e) = crate::project_cert_rpc::on_identity_change(id, m).await {
+                            tracing::error!(project = %id, error = %e, "revoked marker not written");
+                            unwritten.get_or_insert(e.response(id));
+                        }
                     }
                 }
-                Response::success(v)
+                unwritten.unwrap_or_else(|| Response::success(v))
             }
             Ok(Err(e)) => e.response(),
             Err(e) => Response::error(format!("project cert task failed: {e}")),

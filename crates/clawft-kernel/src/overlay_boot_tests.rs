@@ -13,7 +13,7 @@ use crate::error::KernelError;
 use crate::gate::GateDecision;
 use crate::governance_overlay_tests::{base_parent, parent_with};
 use crate::overlay_runtime::TEST_CHILD_PATHS;
-use crate::overlay_runtime_tests::{Fixture, fixture};
+use crate::overlay_runtime_tests::{Fixture, fixture, project_key};
 
 fn kernel_config(dir: &std::path::Path, profile: Option<KernelProfile>) -> KernelConfig {
     KernelConfig {
@@ -31,12 +31,22 @@ fn kernel_config(dir: &std::path::Path, profile: Option<KernelProfile>) -> Kerne
     }
 }
 
+/// Boot as the daemon does: a child boots with its project key as the node
+/// key seed (what `pre_boot` loaded).
 async fn boot(
     f: Option<&Fixture>,
     kc: KernelConfig,
 ) -> Result<Kernel<NativePlatform>, KernelError> {
+    boot_seeded(f, kc, f.map(|_| project_key().to_bytes())).await
+}
+
+async fn boot_seeded(
+    f: Option<&Fixture>,
+    kc: KernelConfig,
+    seed: Option<[u8; 32]>,
+) -> Result<Kernel<NativePlatform>, KernelError> {
     TEST_CHILD_PATHS.with(|c| *c.borrow_mut() = f.map(|f| f.paths.clone()));
-    let r = Kernel::boot(Config::default(), kc, Arc::new(NativePlatform::new())).await;
+    let r = Kernel::boot_with_node_key(Config::default(), kc, Arc::new(NativePlatform::new()), seed).await;
     TEST_CHILD_PATHS.with(|c| *c.borrow_mut() = None);
     r
 }
@@ -148,4 +158,48 @@ async fn a_kernel_without_the_profile_is_unchanged() {
     assert!(k.governance_overlay().is_none());
     assert_eq!(k.process_table().max_processes(), 128);
     assert!(k.chain_manager().unwrap().tail(0).iter().all(|e| e.rule_hash.is_none()));
+}
+
+#[tokio::test]
+async fn a_project_chain_is_signed_by_the_project_key_and_nothing_else() {
+    let f = fixture(&base_parent(), None);
+    let t = tempfile::tempdir().unwrap();
+    let k = boot(Some(&f), kernel_config(t.path(), Some(KernelProfile::Project)))
+        .await
+        .map_err(|e| e.to_string())
+        .expect("boot");
+    let cm = k.chain_manager().unwrap();
+    assert_eq!(
+        cm.verifying_key().map(|v| v.to_bytes()),
+        Some(project_key().verifying_key().to_bytes())
+    );
+    assert!(!t.path().join("chain.key").exists(), "no chain.key beside the checkpoint");
+}
+
+#[tokio::test]
+async fn a_project_kernel_without_its_key_or_with_a_swapped_key_is_refused() {
+    let kc = |t: &tempfile::TempDir| kernel_config(t.path(), Some(KernelProfile::Project));
+    // No node key seed: pre_boot's key never reached boot.
+    let f = fixture(&base_parent(), None);
+    let t = tempfile::tempdir().unwrap();
+    let m = refusal(boot_seeded(Some(&f), kc(&t), None).await);
+    assert!(m.contains("project key"), "{m}");
+    assert!(!t.path().join("chain.key").exists());
+    // project.key removed between pre_boot and boot: refused, not created.
+    std::fs::remove_file(f.paths.project_key().unwrap()).unwrap();
+    let t = tempfile::tempdir().unwrap();
+    let m = refusal(boot(Some(&f), kc(&t)).await);
+    assert!(m.contains("does not exist"), "{m}");
+    assert!(!f.paths.project_key().unwrap().exists(), "boot must not create a key");
+    // project.key swapped for another key: refused (the certificate check or
+    // the chain-key check, whichever runs first).
+    let f = fixture(&base_parent(), None);
+    crate::parent_policy::write_atomic_0600(&f.paths.project_key().unwrap(), &[9u8; 32]).unwrap();
+    let t = tempfile::tempdir().unwrap();
+    refusal(boot(Some(&f), kc(&t)).await);
+    // A seed that is not the certified key (file intact): refused.
+    let f = fixture(&base_parent(), None);
+    let t = tempfile::tempdir().unwrap();
+    let m = refusal(boot_seeded(Some(&f), kc(&t), Some([9u8; 32])).await);
+    assert!(m.contains("no longer holds"), "{m}");
 }

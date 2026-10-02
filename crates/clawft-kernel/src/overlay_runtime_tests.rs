@@ -28,7 +28,7 @@ pub(crate) struct Fixture {
     pub paths: RuntimePaths,
 }
 
-fn project_key() -> SigningKey {
+pub(crate) fn project_key() -> SigningKey {
     SigningKey::from_bytes(&[3u8; 32])
 }
 
@@ -54,7 +54,8 @@ pub(crate) fn fixture(parent: &ParentPolicy, overlay: Option<&str>) -> Fixture {
         },
     );
     std::fs::write(paths.project_cert().unwrap(), serde_json::to_vec(&cert).unwrap()).unwrap();
-    std::fs::write(paths.project_key().unwrap(), project_key().to_bytes()).unwrap();
+    // 0600, as `load_or_create_project_key` writes it (boot reads it strictly).
+    crate::parent_policy::write_atomic_0600(&paths.project_key().unwrap(), &project_key().to_bytes()).unwrap();
     write_parent(&paths, parent);
     if let Some(o) = overlay {
         std::fs::write(paths.overlay().unwrap(), o).unwrap();

@@ -48,6 +48,18 @@ pub fn run_dir(run_root: &Path, id: &str) -> Result<std::path::PathBuf, String> 
     Ok(run_root.join(id))
 }
 
+/// The user daemon's run root, or the refusal when there is none (not the
+/// user daemon). No fallback: a policy written anywhere else is a file no
+/// child reads.
+pub fn require_run_root(root: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, Response> {
+    root.ok_or_else(|| {
+        Response::error_with_kind(
+            "no_run_root",
+            "no user-daemon run root: governance.parent.push runs only on the user daemon",
+        )
+    })
+}
+
 #[cfg(feature = "exochain")]
 pub use imp::{handle_push, handle_reload, handle_update, push_policy};
 
@@ -201,8 +213,10 @@ mod imp {
                 );
             };
             // The supervisor's run root, where the child reads its policy.
-            let run_root = crate::project_cert_rpc::user_run_root()
-                .unwrap_or_else(|| RuntimePaths::resolve().root().to_path_buf());
+            let run_root = match super::require_run_root(crate::project_cert_rpc::user_run_root()) {
+                Ok(r) => r,
+                Err(r) => return r,
+            };
             match push_policy(&run_root, id, snapshot, &limits, &key).await {
                 Ok(v) => Response::success(v),
                 Err(r) => r,
@@ -258,6 +272,13 @@ mod tests {
         let other = clawft_types::project::new_id();
         let r = registered(&mdir, &other).unwrap_err();
         assert_eq!(r.error_kind.as_deref(), Some("project_not_found"));
+    }
+
+    #[test]
+    fn push_without_a_run_root_is_refused_not_redirected() {
+        let r = require_run_root(None).unwrap_err();
+        assert_eq!(r.error_kind.as_deref(), Some("no_run_root"));
+        assert_eq!(require_run_root(Some("/r".into())).unwrap(), Path::new("/r"));
     }
 
     #[test]

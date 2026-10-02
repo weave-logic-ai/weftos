@@ -122,9 +122,9 @@ async fn marker_paths_agree_without_supervisor(dirs: &Dirs) -> String {
     assert!(clawft_weave::project_supervisor::global().is_none());
     let id = clawft_types::project::new_id();
     let expected = revoked_marker(&dirs.run_root, &id).unwrap();
-    assert_eq!(revoked_marker_path(&id), Some(expected.clone()));
+    assert_eq!(revoked_marker_path(&id).unwrap(), expected);
     assert_ne!(expected, legacy_marker(dirs, &id));
-    on_identity_change(&id, "project.revoke").await;
+    on_identity_change(&id, "project.revoke").await.unwrap();
     assert!(expected.is_file(), "writer wrote {}", expected.display());
     assert!(!legacy_marker(dirs, &id).exists(), "nothing under the manifest store");
     use std::os::unix::fs::PermissionsExt as _;
@@ -146,9 +146,13 @@ async fn register(w: &World) -> (String, PathBuf) {
         s.via = ServeVia::ChildKernel;
         s.restart_max = Some(2);
         s.restart_window_secs = Some(600);
-        // Long, so only the explicit idle pass below can stop it (the 30 s
-        // idle loop never does within this test).
-        s.idle_stop_secs = Some(3600);
+        // Longer than this test (about 10 s), so only the explicit idle pass
+        // below stops it; short enough that a child of a hung run is stopped
+        // by the supervisor's idle loop within a few minutes. (A runner that
+        // is SIGKILLed takes its supervisor with it; its children keep
+        // running by design and the Reaper cannot help. Their pids are in
+        // `<run>/<id>/kernel.pid` under the kept tempdir.)
+        s.idle_stop_secs = Some(120);
     })
     .unwrap()
     .unwrap();
@@ -209,6 +213,13 @@ async fn idle_stop_and_anchor(w: &World, id: &str, pid: u32, paths: &RuntimePath
         w.log_tail(id)
     );
 
+    // Signed by the certified project key, and by nothing else.
+    let cert = ok(&w.call("project.cert.show", json!({"id": id})).await, "cert.show");
+    let pk: [u8; 32] = hex::decode(cert["cert"]["project_pubkey"].as_str().unwrap()).unwrap().try_into().unwrap();
+    let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk).unwrap();
+    assert!(ChainManager::verify_rvf_signature(&paths.chain_rvf(), &vk).unwrap(), "chain signed by the project key");
+    assert!(!paths.chain_dir().join("chain.key").exists(), "no separate chain.key");
+    assert_eq!(clawft_types::project::cert::key_id(&pk), cert["cert"]["project_key_id"].as_str().unwrap());
     let chain = ChainManager::load_from_rvf(&paths.chain_rvf(), 1000).expect("project chain saved on clean shutdown");
     assert!(chain.verify_integrity().valid);
     let events = chain.tail_from(0);
@@ -227,6 +238,11 @@ async fn idle_stop_and_anchor(w: &World, id: &str, pid: u32, paths: &RuntimePath
     let denied = decided("governance.deny");
     assert_eq!(denied.len(), 1, "the denied install was chained");
     assert!(denied[0].payload.as_ref().unwrap().to_string().contains(DENY_RULE));
+    // Governance on a child is attributed to its project (verified, bound).
+    for e in kinds(&events, "governance.deny").into_iter().chain(kinds(&events, "governance.permit")) {
+        let p = e.payload.as_ref().unwrap();
+        assert_eq!(p["principal"]["project_id"], id, "{p}");
+    }
     let stamped = denied[0].rule_hash.map(hex::encode);
     assert_eq!(stamped.as_deref(), Some(boot_hash.as_str()), "the denial carries the overlay's rule hash");
     let permitted = decided("governance.permit");

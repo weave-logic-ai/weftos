@@ -181,6 +181,10 @@ pub(crate) fn manifests_dir() -> Option<PathBuf> {
     if let Some(d) = MANIFESTS_DIR.read().unwrap_or_else(|e| e.into_inner()).clone() {
         return Some(d);
     }
+    // Unit tests never read the real home's store; they call `init`.
+    if cfg!(test) {
+        return None;
+    }
     clawft_types::runtime_paths::home_dir().map(|h| clawft_rpc::resolve::manifests_dir(&h))
 }
 

@@ -112,7 +112,10 @@ async fn project_profile_boots_with_no_heavy_services_and_no_provider_keys() {
     clawft_kernel::overlay_runtime::test_support::install_child_fixture(run.path());
 
     // Boot the kernel from the adjusted kernel config and look at it over RPC.
-    let kernel = Kernel::boot(config, kc, Arc::new(NativePlatform::new())).await.expect("boot");
+    // The fixture's project key (seed [3; 32]) is the node key, as `pre_boot` hands it over.
+    let kernel = Kernel::boot_with_node_key(config, kc, Arc::new(NativePlatform::new()), Some([3u8; 32]))
+        .await
+        .expect("boot");
     let kernel = Arc::new(RwLock::new(kernel));
     let sock = run.path().join("kernel.sock");
     let listener = UnixListener::bind(&sock).unwrap();

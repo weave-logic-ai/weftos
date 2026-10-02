@@ -33,7 +33,10 @@ pub struct Dirs {
 }
 
 impl Dirs {
-    /// Under `/tmp` and short: `<run>/<ULID>/kernel.sock` must fit `sun_path`.
+    /// Under `/tmp`, not `$TMPDIR`: on macOS `$TMPDIR` is a ~50-byte
+    /// `/var/folders/...` path, and `<run>/<26-char ULID>/kernel.sock` must
+    /// fit the 104-byte `sun_path` (the supervisor refuses a longer one,
+    /// `MAX_SOCKET_PATH`). A fresh `tempdir_in` per run, never a shared dir.
     pub fn create() -> Self {
         let base = tempfile::Builder::new()
             .prefix("wk2e")
@@ -139,15 +142,34 @@ pub struct Reaper(pub PathBuf);
 
 impl Drop for Reaper {
     fn drop(&mut self) {
-        let Ok(rd) = std::fs::read_dir(&self.0) else { return };
-        for e in rd.flatten() {
-            let Ok(s) = std::fs::read_to_string(e.path().join("kernel.pid")) else { continue };
-            let Ok(pid) = s.trim().parse::<u32>() else { continue };
+        // Every kernel the in-process supervisor started is our direct child,
+        // pid file or not (one that died before writing it, or is still
+        // booting); the pid files catch any that were re-parented.
+        let mut pids = direct_children();
+        if let Ok(rd) = std::fs::read_dir(&self.0) {
+            for e in rd.flatten() {
+                if let Ok(s) = std::fs::read_to_string(e.path().join("kernel.pid"))
+                    && let Ok(pid) = s.trim().parse::<u32>()
+                {
+                    pids.push(pid);
+                }
+            }
+        }
+        for pid in pids {
             if pid != std::process::id() && is_ours(pid) {
                 kill9(pid);
             }
         }
     }
+}
+
+/// Pids whose parent is this process (`pgrep -P`).
+fn direct_children() -> Vec<u32> {
+    std::process::Command::new("pgrep")
+        .args(["-P", &std::process::id().to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect())
+        .unwrap_or_default()
 }
 
 /// SIGKILL `pid`, which the caller has checked is one of our kernels.
