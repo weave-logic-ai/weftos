@@ -218,6 +218,14 @@ impl RevocationView {
             .is_some_and(|s| s.revoked.contains(key_id))
     }
 
+    /// True when `project.revoke` revoked a key of this project (a key only
+    /// replaced by `project.rekey` does not count).
+    pub fn was_revoked(&self, project_id: &str) -> bool {
+        self.projects
+            .get(project_id)
+            .is_some_and(|s| s.revoked.iter().any(|k| !s.retired.contains(k)))
+    }
+
     /// The certificate in force: the highest-serial one whose key is not
     /// revoked.
     pub fn current_cert(&self, project_id: &str) -> Option<&ProjectCert> {
@@ -287,6 +295,13 @@ impl RevocationView {
                 project_id: project_id.to_owned(),
                 key_id: kid,
             });
+        }
+        // Review S1: a revoked project never re-enrols, whatever the marker
+        // says (a revoke whose marker could not be written must not be
+        // undone by the next `ensure_running`). A key replaced by `rekey` is
+        // retired, not revoked in this sense.
+        if self.current_cert(project_id).is_none() && self.was_revoked(project_id) {
+            return Err(IdentityError::ProjectRevoked(project_id.to_owned()));
         }
         match self.current_cert(project_id) {
             Some(c) if c.project_key_id == kid => Ok(Registration::Existing(Box::new(c.clone()))),

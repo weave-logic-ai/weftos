@@ -275,7 +275,7 @@ fn tofu_rekey_then_old_cert_fails_the_revocation_view() {
 }
 
 #[test]
-fn revoke_unbinds_and_next_registration_gets_the_next_serial() {
+fn revoke_unbinds_and_is_terminal_for_the_id() {
     let old = cert();
     let v = view(
         &chain_with(&[
@@ -287,8 +287,10 @@ fn revoke_unbinds_and_next_registration_gets_the_next_serial() {
     );
     assert_eq!(v.bound_key_id(PID), None);
     assert!(v.plan_rekey(PID, &[5u8; 32]).is_err());
+    // Review S1: no fresh key re-enrols a revoked project.
     let npk = SigningKey::from_bytes(&[3u8; 32]).verifying_key().to_bytes();
-    assert_eq!(v.plan_registration(PID, &npk).unwrap(), Registration::New { serial: 2 });
+    assert!(matches!(v.plan_registration(PID, &npk), Err(IdentityError::ProjectRevoked(_))));
+    assert!(v.was_revoked(PID));
 }
 
 #[test]

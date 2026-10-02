@@ -6499,10 +6499,11 @@ async fn dispatch(
                 if append_params.record.kind.trim().is_empty() {
                     return Response::error("chain.append: record.kind must be non-empty");
                 }
-                if clawft_kernel::project_identity::is_reserved_source(&append_params.source) {
+                if clawft_kernel::project_identity::is_caller_reserved_source(&append_params.source) {
                     return Response::error_with_kind(
                         "reserved_source",
-                        "chain.append: this source is reserved for the daemon's identity events",
+                        "chain.append: this source is reserved for the daemon's own events \
+                         (identity, anchors, governance, project, supervisor)",
                     );
                 }
                 let k = kernel.read().await;

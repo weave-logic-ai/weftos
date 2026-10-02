@@ -396,12 +396,15 @@ impl ProjectRegistry {
         );
     }
 
-    /// Record the child's pid once the supervisor learns it (a spawn
-    /// expectation filed with pid 0).
+    /// Record the child's pid once the supervisor learns it: on a live
+    /// session, and on the outstanding spawn expectation (filed with pid 0
+    /// before the process existed), so the first registration's claimed
+    /// pid is checked against the one the supervisor started (review S8c).
     pub fn note_pid(&self, project_id: &str, pid: u32) {
         if let Some(s) = self.lock().get_mut(project_id) {
             s.facts.pid = pid;
         }
+        note_spawn_pid(project_id, pid);
     }
 }
 
@@ -450,6 +453,16 @@ fn insert_capped(
     }
     map.insert(e.project_id.clone(), e);
     Ok(())
+}
+
+/// Set the pid of the outstanding expectation for `project_id` when it was
+/// filed without one.
+pub fn note_spawn_pid(project_id: &str, pid: u32) {
+    if let Some(e) = ledger().lock().unwrap_or_else(|x| x.into_inner()).get_mut(project_id)
+        && e.pid == 0
+    {
+        e.pid = pid;
+    }
 }
 
 /// Forget the outstanding expectation for `project_id` (spawn failed).
@@ -643,6 +656,24 @@ mod tests {
         );
         assert!(peek_spawn(id2, Some(&n), 9, 10).is_ok());
         cancel_spawn(id2);
+        // Filed with pid 0, the supervisor's spawned pid is noted afterwards
+        // and then checked (review S8c).
+        let id3 = "01TESTLEDGER0000000000000C";
+        expect_spawn(SpawnExpectation {
+            project_id: id3.into(),
+            nonce: n.clone(),
+            pid: 0,
+            exe_sha: String::new(),
+            root: "/r".into(),
+            expires_unix: 1_000,
+        })
+        .unwrap();
+        registry().note_pid(id3, 4242);
+        assert_eq!(peek_spawn(id3, Some(&n), 7, 10).unwrap_err().kind(), "pid_mismatch");
+        assert!(peek_spawn(id3, Some(&n), 4242, 10).is_ok());
+        note_spawn_pid(id3, 1); // never overwrites a known pid
+        assert!(peek_spawn(id3, Some(&n), 4242, 10).is_ok());
+        cancel_spawn(id3);
     }
 
     #[test]

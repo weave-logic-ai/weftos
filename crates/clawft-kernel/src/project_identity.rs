@@ -67,7 +67,7 @@ pub const KIND_REVOKE: &str = "project.revoke";
 /// Chain sources only the daemon's own code may append under. A caller
 /// that chooses its own source (the `chain.append` RPC) must be refused
 /// these: a forged `user.projects` event would otherwise feed the view.
-pub use crate::chain::{RESERVED_SOURCES, is_reserved_source};
+pub use crate::chain::{KERNEL_SOURCES, RESERVED_SOURCES, is_caller_reserved_source, is_reserved_source};
 
 /// Why an identity operation was refused.
 #[derive(Debug, thiserror::Error)]
@@ -102,6 +102,11 @@ pub enum IdentityError {
     /// The operation needs a certified key and there is none.
     #[error("project {0} has no certified key")]
     NotBound(String),
+    /// The project was revoked (`project.revoke`). Revoke is terminal for
+    /// the id: no key is ever certified for it again. Give the tree a new
+    /// identity (`weft project init --fork --force`) to run it again.
+    #[error("project {0} was revoked; revoke is terminal for its id (re-identify the tree with `weft project init --fork --force`)")]
+    ProjectRevoked(String),
     /// The key id is already used by another project (bound or revoked).
     #[error("key {key_id} belongs to project {other_project}; a key cannot certify two projects")]
     KeyReuse {

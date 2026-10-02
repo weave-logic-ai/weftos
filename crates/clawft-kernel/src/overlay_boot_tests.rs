@@ -203,3 +203,21 @@ async fn a_project_kernel_without_its_key_or_with_a_swapped_key_is_refused() {
     let m = refusal(boot_seeded(Some(&f), kc(&t), Some([9u8; 32])).await);
     assert!(m.contains("no longer holds"), "{m}");
 }
+
+#[tokio::test]
+async fn an_overlay_human_flag_leaves_parent_denies_denied_on_the_tool_gate() {
+    // Review M1, end to end on the child's gate (the agent tool path): a
+    // Defer there is an approvable prompt, so a parent deny must stay Deny.
+    let f = fixture(&base_parent(), Some("[limits]\nhuman_approval_required = true\n"));
+    let t = tempfile::tempdir().unwrap();
+    let k = boot(Some(&f), kernel_config(t.path(), Some(KernelProfile::Project)))
+        .await
+        .map_err(|e| e.to_string())
+        .expect("boot");
+    let gate = k.governance_gate().unwrap();
+    for action in ["workload.place", "workload.start"] {
+        let d = gate.check("agent-1", action, &json!({}));
+        assert!(matches!(d, GateDecision::Deny { .. }), "{action}: {d:?}");
+    }
+    assert!(matches!(gate.check("agent-1", "tool.read_file", &json!({})), GateDecision::Permit { .. }));
+}

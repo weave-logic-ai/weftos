@@ -259,3 +259,38 @@ fn a_swap_keeps_the_per_action_exemptions_of_the_running_gate() {
     let d = gate.check("a", "net.other", &serde_json::json!({}));
     assert!(matches!(d, GateDecision::Deny { .. }), "{d:?}");
 }
+
+#[test]
+fn a_forged_applied_event_cannot_raise_the_rollback_floor() {
+    // Review M3: a `chain.append` caller writes `governance.overlay.applied`
+    // with a huge version under a source of its choosing.
+    let f = fixture(&parent_with(base_parent().rules, base_parent().limits, 5), None);
+    let r = start(&f);
+    for source in ["x", "governance.x", "Governance"] {
+        r.cm.append(
+            source,
+            "governance.overlay.applied",
+            Some(serde_json::json!({"parent_version": u64::MAX, "user_pin": true, "overlay_hash": "ff"})),
+        );
+    }
+    let h = crate::overlay_trust::chain_history(&r.cm);
+    assert_eq!(h.max_parent_version, Some(5), "only the kernel's own record counts");
+    assert!(!h.user_pin_used);
+    // Boot, reload and a newer push all still work.
+    prepare(&f.paths).unwrap().commit(&r.cm).unwrap();
+    r.rt.reload().unwrap();
+    r.rt.apply_parent_update(parent_with(base_parent().rules, base_parent().limits, 6)).unwrap();
+}
+
+#[test]
+fn kernel_sources_are_reserved_against_callers_but_replicate() {
+    use crate::chain::{is_caller_reserved_source, is_reserved_source};
+    for s in ["governance", "project", "project.supervisor", " governance ", "user.projects", "project.anchor"] {
+        assert!(is_caller_reserved_source(s), "{s}");
+    }
+    for s in ["x", "governance.x", "agent", "workload"] {
+        assert!(!is_caller_reserved_source(s), "{s}");
+    }
+    // Replication still accepts governance events (every chain has them).
+    assert!(!is_reserved_source("governance"));
+}

@@ -1282,6 +1282,7 @@ impl GovernanceEngine {
                 if let Some(reason) = apply_browser_policy_rule(rule, request) {
                     has_blocking = true;
                     other_blocking = true;
+                    hard_deny |= rule.sop_category.as_deref() == Some(OVERLAY_DENY_TAG);
                     blocking_reason = reason;
                     // Keep scanning so evaluated_rules is complete, but the
                     // first denial reason is retained for the decision text.
@@ -1304,6 +1305,7 @@ impl GovernanceEngine {
                         RuleSeverity::Blocking | RuleSeverity::Critical => {
                             has_blocking = true;
                             other_blocking = true;
+                            hard_deny |= rule.sop_category.as_deref() == Some(OVERLAY_DENY_TAG);
                             // Canonical reason wins for the deny path AC
                             // (`Deny { reason: "binding-thread mismatch" }`),
                             // even if a later magnitude rule would overwrite.

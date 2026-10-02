@@ -123,9 +123,21 @@ fn decision_class(d: &GovernanceDecision) -> u8 {
 
 /// The tighten-only invariants for one accepted merge.
 fn assert_tightens(parent: &ParentPolicy, e: &crate::governance_overlay::Effective, r: &mut Rng) {
-    // Every parent rule survives verbatim.
+    // Every parent rule survives verbatim, except that an overlay-raised
+    // `human_approval_required` hardens the parent's blocking rules into
+    // overlay denies (review M1), which never escalate.
     let eff_rules = sorted_rule_values(&e.rules);
-    for pv in sorted_rule_values(&parent.rules) {
+    let raised = e.limits.human_approval_required == Some(true)
+        && parent.limits.human_approval_required != Some(true);
+    for pr in &parent.rules {
+        let mut want = pr.clone();
+        if raised
+            && matches!(want.severity, RuleSeverity::Blocking | RuleSeverity::Critical)
+            && want.sop_category.as_deref() != Some(crate::governance::OVERLAY_APPROVAL_TAG)
+        {
+            want.sop_category = Some(crate::governance::OVERLAY_DENY_TAG.to_owned());
+        }
+        let pv = sorted_rule_values(std::slice::from_ref(&want)).remove(0);
         assert!(eff_rules.contains(&pv), "parent rule lost: {}", canonical_json(&pv));
     }
     // Deny set is a superset.

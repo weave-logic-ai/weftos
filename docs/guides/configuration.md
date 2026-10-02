@@ -1197,3 +1197,41 @@ Independently of this setting, the daemon's in-process voice principal can
 never call the cron mutations (`cron.add`, `cron.remove`, `cron.enable`,
 `cron.disable`): a spoken command must not be able to schedule recurring
 unattended agent jobs (`error_kind = "voice_denied"`).
+
+## Project kernels (`kernel.profile`, `kernel.shared_services`, `[serve]`)
+
+ADR-103 Phase 2. A project kernel is started by the user daemon with
+`--profile project`, which forces the profile; the config setting exists so
+the same value can be read back and checked.
+
+```toml
+[kernel]
+profile = "project"           # only value; absent for every other daemon
+
+[kernel.shared_services]      # read only when profile = "project"
+embeddings = "parent"         # "parent" (the default) is the only mode
+llm = "parent"
+voice = "parent"
+```
+
+`parent` means the service is called on the user daemon and fails closed
+(`parent_unavailable`) when it is down; a project kernel never falls back to
+a local model or a provider key. A project kernel also ignores
+`[kernel.mesh]` (it opens no mesh listener) and runs no voice pipeline.
+
+The per-project manifest `~/.weftos/projects/<id>.toml` has a `[serve]`
+table the resolver and the supervisor read:
+
+| Key | Meaning |
+|-----|---------|
+| `via` | `"user-daemon"` (served by the user daemon) or `"child-kernel"` (a supervised project kernel; set by `weaver project migrate-kernel`) |
+| `runtime_dir` | Explicit runtime root; wins over `via` |
+| `idle_stop_secs` | Stop an idle child after this many seconds; default 1800 for `child-kernel`, `0` never |
+| `restart_max` | Crash restarts allowed inside `restart_window_secs` before the child is `failed`; default 5 |
+| `restart_window_secs` | Default 60 |
+| `kernel_version`, `kernel_sha` | Written by the supervisor: the build it last started. Do not edit |
+
+The project's governance overlay, `<root>/.weftos/overlay.toml`, is described
+in the kernel guide ([Project kernels](kernel.md#project-kernels-phase-2)): it
+may add denies and approvals and lower limits, never loosen the parent's
+rules.

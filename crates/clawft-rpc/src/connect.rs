@@ -98,7 +98,9 @@ pub enum ConnectError {
     /// The project's kernel is a child of the user daemon and could not be
     /// started on demand (`project.ensure_running` failed or the user daemon
     /// is not running).
-    EnsureFailed { project_id: String, detail: String },
+    /// `kind` is the user daemon's `error_kind` (e.g. `project_revoked`,
+    /// `project_failed`) when it refused.
+    EnsureFailed { project_id: String, detail: String, kind: Option<String> },
     /// Transport failure after connecting.
     Transport(anyhow::Error),
 }
@@ -172,10 +174,10 @@ impl fmt::Display for ConnectError {
                 f,
                 format!("wrong daemon: expected node {expected} but the daemon is node {actual}"),
             ),
-            Self::EnsureFailed { project_id, detail } => write!(
-                f,
-                "could not start the kernel for project {project_id}: {detail}"
-            ),
+            Self::EnsureFailed { project_id, detail, kind } => match kind {
+                Some(k) => write!(f, "could not start the kernel for project {project_id} ({k}): {detail}"),
+                None => write!(f, "could not start the kernel for project {project_id}: {detail}"),
+            },
             Self::Transport(e) => write!(f, "daemon connection failed: {e}"),
         }
     }
@@ -307,6 +309,7 @@ async fn ensure_child_running(e: &crate::resolve::EnsureRunning) -> Result<Strin
     let fail = |detail: String| ConnectError::EnsureFailed {
         project_id: e.project_id.clone(),
         detail,
+        kind: None,
     };
     let Some(mut user) = DaemonClient::connect_path(&e.user_socket).await else {
         return Err(fail(
@@ -322,7 +325,12 @@ async fn ensure_child_running(e: &crate::resolve::EnsureRunning) -> Result<Strin
         .map_err(|_| fail(format!("no answer from the user daemon within {ENSURE_TIMEOUT:?}")))?
         .map_err(|err| fail(err.to_string()))?;
     if !resp.ok {
-        return Err(fail(resp.error.unwrap_or_else(|| "refused".into())));
+        // Keep the kind: it is what tells "revoked" from "failed" (review M2).
+        return Err(ConnectError::EnsureFailed {
+            project_id: e.project_id.clone(),
+            detail: resp.error.unwrap_or_else(|| "refused".into()),
+            kind: resp.error_kind,
+        });
     }
     let r = resp.result.unwrap_or_default();
     Ok(format!(

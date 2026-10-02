@@ -206,6 +206,21 @@ pub fn is_reserved_source(source: &str) -> bool {
     RESERVED_SOURCES.contains(&source.trim())
 }
 
+/// Sources the kernel's own code appends under and that a project kernel
+/// trusts when it reads its chain back (review M3): `governance` (the
+/// rollback floor reads `governance.overlay.applied`), `project` (genesis)
+/// and `project.supervisor`. Refused, with [`RESERVED_SOURCES`], from the two
+/// caller doors (the `chain.append` RPC and `chain_bridge`). Not refused
+/// from replication ([`ChainManager::append_signed`]): every chain carries
+/// governance events and a peer's must sync; a project kernel replicates
+/// nothing (its mesh is off).
+pub const KERNEL_SOURCES: &[&str] = &["governance", "project", "project.supervisor"];
+
+/// May a caller (an RPC or a tracing emitter) NOT append under `source`?
+pub fn is_caller_reserved_source(source: &str) -> bool {
+    is_reserved_source(source) || KERNEL_SOURCES.contains(&source.trim())
+}
+
 /// Errors from [`ChainManager::append_signed`] (WEFT-105 / K6.4 replay).
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum AppendSignedError {

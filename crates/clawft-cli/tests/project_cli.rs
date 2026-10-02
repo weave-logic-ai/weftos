@@ -99,7 +99,7 @@ fn init_updates_an_existing_gitignore_only() {
     sb.ok(&with, &["project", "init"]);
     let gi = std::fs::read_to_string(with.join(".gitignore")).unwrap();
     assert!(
-        gi.contains("target/\n.weftos/chain/\n.weftos/project.key\n"),
+        gi.contains("target/\n.weftos/chain/\n.weftos/project.key\n.weftos/project.cert.json\n.weftos/state/\n"),
         "{gi}"
     );
     let without = sb.dir("without");

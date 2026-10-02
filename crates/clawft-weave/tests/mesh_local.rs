@@ -1237,3 +1237,40 @@ async fn a_captured_heartbeat_is_replayable_only_inside_the_proof_window() {
         "bad_session_proof"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revoke_whose_cert_file_cannot_be_removed_still_stops_marks_and_is_terminal() {
+    // Review S1: the journal says revoked, the cert file removal fails.
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    spawn(&w, &p, &nonce('a'));
+    let c = boot(&p).await.unwrap();
+    let cert_file = w.d.manifests.join(format!("{}.cert.json", p.id));
+    std::fs::remove_file(&cert_file).unwrap();
+    std::fs::create_dir(&cert_file).unwrap();
+    std::fs::write(cert_file.join("pin"), "x").unwrap(); // not removable as a file
+    let r = rpc(&w.d.sock, "project.revoke", json!({"id": p.id}), Some("admin"), None).await;
+    assert_eq!(kind(&r), "identity_change_incomplete", "{r}");
+    // The after-hooks ran anyway: marker written, session dropped.
+    assert!(p.run.join("revoked").is_file(), "marker written despite the store failure");
+    let pid = std::process::id();
+    let at = now_unix();
+    let hb = rpc(
+        &w.d.sock,
+        "mesh.heartbeat",
+        json!({"session": c.session, "pid": pid, "at_unix": at,
+        "sig": proof(&c.key, "heartbeat", c.session.as_ref().unwrap(), pid, at, "0:0:0:0")}),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(kind(&hb), "unknown_session", "{hb}");
+    // And the id never re-enrols, even with a fresh key and no marker.
+    std::fs::remove_file(p.run.join("revoked")).unwrap();
+    spawn(&w, &p, &nonce('b'));
+    // `raw_register` presents (and proves) the never-certified key [7; 32].
+    let fresh = SigningKey::from_bytes(&[7u8; 32]);
+    let (r, _) = raw_register(&w, &p, Some(&nonce('b')), &p.root, &fresh, None).await;
+    assert_eq!(kind(&r), "project_revoked", "{r}");
+}

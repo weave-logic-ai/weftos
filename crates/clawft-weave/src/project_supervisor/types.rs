@@ -185,7 +185,12 @@ impl std::fmt::Display for SupError {
                 p.display(),
                 p.as_os_str().len()
             ),
-            Self::Revoked(id) => write!(f, "project {id}'s key was revoked; re-register or rekey it"),
+            Self::Revoked(id) => write!(
+                f,
+                "project {id} was revoked (`project.revoke` is terminal for its id) and is never started again; \
+                 to run the tree again give it a new identity (`weft project init --fork --force`); \
+                 the marker is <run_root>/{id}/revoked"
+            ),
             Self::Identity(m) => write!(f, "{m}"),
             Self::Failed(m) => write!(
                 f,

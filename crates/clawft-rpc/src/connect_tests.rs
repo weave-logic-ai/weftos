@@ -427,9 +427,37 @@ async fn a_child_answering_for_another_project_stays_a_hard_error() {
 async fn no_user_daemon_means_a_clear_ensure_failure() {
     let w = child_world();
     match connect(&w.res).await {
-        Err(ConnectError::EnsureFailed { project_id, detail }) => {
+        Err(ConnectError::EnsureFailed { project_id, detail, .. }) => {
             assert_eq!(project_id, ID_A);
             assert!(detail.contains("weaver kernel start --profile user"), "{detail}");
+        }
+        other => panic!("expected EnsureFailed, got {:?}", other.map(|c| c.handshake.node_id)),
+    }
+}
+
+#[tokio::test]
+async fn a_refused_ensure_keeps_the_user_daemons_error_kind() {
+    let w = child_world();
+    let l = UnixListener::bind(w.run.join("kernel.sock")).unwrap();
+    tokio::spawn(async move {
+        let (s, _) = l.accept().await.unwrap();
+        let (r, mut wr) = s.into_split();
+        let mut lines = BufReader::new(r).lines();
+        if lines.next_line().await.unwrap().is_some() {
+            let mut out = serde_json::to_string(&Response::error_with_kind(
+                "project_revoked",
+                "project was revoked; delete the marker by hand",
+            ))
+            .unwrap();
+            out.push('\n');
+            wr.write_all(out.as_bytes()).await.unwrap();
+        }
+    });
+    match connect(&w.res).await {
+        Err(e @ ConnectError::EnsureFailed { .. }) => {
+            let ConnectError::EnsureFailed { kind, .. } = &e else { unreachable!() };
+            assert_eq!(kind.as_deref(), Some("project_revoked"));
+            assert!(e.to_string().contains("(project_revoked)"), "{e}");
         }
         other => panic!("expected EnsureFailed, got {:?}", other.map(|c| c.handshake.node_id)),
     }

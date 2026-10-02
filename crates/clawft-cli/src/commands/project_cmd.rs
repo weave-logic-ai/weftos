@@ -196,8 +196,10 @@ pub fn init(env: &Env, name: Option<&str>, fork: bool, force: bool) -> anyhow::R
     Ok(out)
 }
 
-/// Append the chain and key paths to an existing `.gitignore` (never creates
-/// one). Returns the lines added.
+/// Append the project-kernel files that must never be committed (chain,
+/// key, certificate mirror, child state) to an existing `.gitignore` (never
+/// creates one). `overlay.toml` is meant to be committed and is not listed.
+/// Returns the lines added.
 fn update_gitignore(root: &Path) -> Result<Vec<String>, String> {
     let path = root.join(".gitignore");
     let text = match std::fs::read_to_string(&path) {
@@ -205,7 +207,12 @@ fn update_gitignore(root: &Path) -> Result<Vec<String>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
-    let missing: Vec<String> = [".weftos/chain/", ".weftos/project.key"]
+    let missing: Vec<String> = [
+        ".weftos/chain/",
+        ".weftos/project.key",
+        ".weftos/project.cert.json",
+        ".weftos/state/",
+    ]
         .into_iter()
         .filter(|l| !text.lines().any(|t| t.trim() == *l))
         .map(String::from)

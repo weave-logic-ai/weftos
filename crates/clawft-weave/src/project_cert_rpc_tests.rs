@@ -186,9 +186,9 @@ fn revocation_and_rekey_survive_a_chain_that_was_not_saved() {
     let view = current_view(&r).unwrap();
     assert!(matches!(view.check_cert(&old), Err(IdentityError::KeyRevoked { .. })));
     assert_eq!(register(&r, request(&f, &project_key(2)), now()).unwrap_err().kind(), "key_revoked");
-    // A new key is certified with the next serial, not serial 1 again.
-    let c = register(&r, request(&f, &project_key(3)), now()).unwrap();
-    assert_eq!(c.cert.serial, 2);
+    // Revoke is terminal for the id (review S1): a new key is refused too,
+    // even when only the journal remembers the revocation.
+    assert_eq!(register(&r, request(&f, &project_key(3)), now()).unwrap_err().kind(), "project_revoked");
     assert_eq!(revoke(&restarted(&f), &json!({"id": "nope"})).unwrap_err().kind(), "invalid_params");
 }
 
@@ -257,10 +257,14 @@ fn a_key_cannot_certify_two_projects() {
     revoke(&f.env, &json!({"id": f.id})).unwrap();
     let e = register(&f.env, request_for(&other.id, &other.root, &project_key(2)), now()).unwrap_err();
     assert_eq!(e.kind(), "key_reuse");
-    // Rekeying onto another project's key is refused too.
+    // Rekeying onto another project's key is refused too (a third project:
+    // the revoked one never re-enrols).
     register(&f.env, request_for(&other.id, &other.root, &project_key(5)), now()).unwrap();
-    register(&f.env, request(&f, &project_key(6)), now()).unwrap();
-    let e = rekey(&f.env, &rekey_params(&f.id, &project_key(5)), now()).unwrap_err();
+    let third_root = f._t.path().join("third");
+    std::fs::create_dir_all(&third_root).unwrap();
+    let third = adopt_or_init(&third_root.canonicalize().unwrap(), &f.env.manifests_dir, None).unwrap();
+    register(&f.env, request_for(&third.id, &third.root, &project_key(6)), now()).unwrap();
+    let e = rekey(&f.env, &rekey_params(&third.id, &project_key(5)), now()).unwrap_err();
     assert_eq!(e.kind(), "key_reuse");
 }
 
@@ -378,7 +382,7 @@ fn revoke_reports_a_cert_file_it_could_not_remove() {
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     let e = revoke(&f.env, &json!({"id": f.id})).unwrap_err();
-    assert_eq!(e.kind(), "project_store_error");
+    assert_eq!(e.kind(), "identity_change_incomplete");
     assert!(e.to_string().contains("is revoked"), "{e}");
     // The revocation itself took effect.
     assert!(current_view(&f.env).unwrap().bound_key_id(&f.id).is_none());
@@ -448,4 +452,32 @@ fn the_revoked_marker_fails_closed_with_distinct_reasons() {
         use std::os::unix::fs::PermissionsExt as _;
         assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
     }
+}
+
+#[test]
+fn a_rekey_whose_cert_file_cannot_be_written_is_in_force_and_reported_incomplete() {
+    // Review S1: the journal took the rekey; the store write fails after.
+    let f = fixture();
+    register(&f.env, request(&f, &project_key(2)), now()).unwrap();
+    let path = cert_path(&f.env.manifests_dir, &f.id);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("x"), "x").unwrap();
+    let e = rekey(&f.env, &rekey_params(&f.id, &project_key(3)), now()).unwrap_err();
+    assert_eq!(e.kind(), "identity_change_incomplete", "{e}");
+    let view = current_view(&f.env).unwrap();
+    assert_eq!(
+        view.bound_key_id(&f.id),
+        Some(clawft_types::project::cert::key_id(&project_key(3).verifying_key().to_bytes()).as_str())
+    );
+}
+
+#[test]
+fn a_revoked_project_never_re_enrols() {
+    let f = fixture();
+    register(&f.env, request(&f, &project_key(2)), now()).unwrap();
+    revoke(&f.env, &json!({"id": f.id})).unwrap();
+    // A key never seen before is still refused: revoke is terminal for the id.
+    assert_eq!(register(&f.env, request(&f, &project_key(9)), now()).unwrap_err().kind(), "project_revoked");
+    assert_eq!(register(&restarted(&f), request(&f, &project_key(9)), now()).unwrap_err().kind(), "project_revoked");
 }

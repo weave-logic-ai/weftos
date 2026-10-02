@@ -67,8 +67,10 @@ will show where.
 If the chain file exists but fails verification, boot stops with
 `chain at <path> failed to restore (...); refusing to start a fresh chain
 over it`. The kernel does not replace it with a new genesis, because the next
-save would overwrite the only copy. (Earlier builds logged "starting fresh"
-and did exactly that.)
+save would overwrite the only copy. Earlier builds logged "starting fresh"
+and did exactly that, and still do: never run a pre-Phase 2 binary against a
+`child-kernel` project's chain (see "Never downgrade a child-kernel project"
+below).
 
 Causes: file corruption, or events written by a newer binary that this build
 cannot verify (events carrying a `rule_hash`, or RVF segments with flag bits
@@ -466,6 +468,117 @@ Rollback:
 
 The `~/.clawft` chain files are byte-identical; that directory only gained
 `chain.lock` (and `MIGRATED-TO-WEFTOS.txt` until you remove it).
+
+### Project kernels (Phase 2)
+
+ADR-103 Phase 2 (amendment A7) runs a project as its own kernel, a child of
+the user daemon. The child has its own key (`<root>/.weftos/project.key`,
+which is its node key and chain key), a certificate signed by your user key,
+its own chain under `<root>/.weftos/chain/`, the parent's signed governance
+plus an optional tighten-only `overlay.toml`, and no mesh listener, voice or
+local embedding model (it uses the user daemon's). The user daemon starts it
+on demand, restarts it when it crashes, stops it when it is idle and keeps
+its ephemeral files in `<run_root>/<id>/` (`~/.weftos/run/<id>/`).
+
+Nothing is converted automatically. A project becomes a child only when you
+opt it in.
+
+#### Owner procedure, per project, in this order
+
+1. **User daemon running, project registered.** `weaver kernel status
+   --profile user` answers and `weft project list` shows the project.
+2. **Stop the project's old daemon** from the project directory with the
+   binary that started it (`weaver kernel stop`). Confirm it is gone: no
+   process in `lsof <root>/.weftos/runtime/kernel.sock`, and
+   `<root>/.weftos/runtime/kernel.pid` names no live process. It is never
+   signalled for you; `migrate-kernel` refuses while it runs.
+3. **Dry run, then migrate.** `weaver project migrate-kernel <id> --dry-run`,
+   read it, then `weaver project migrate-kernel <id>`. It copies (never
+   moves) `<root>/.weftos/runtime/{workloads.json,apps.json}` to
+   `<root>/.weftos/state/`, sets `[serve] via = "child-kernel"` in the
+   manifest and prints the rollback line. Keep that line.
+4. **Ignore the child's files in git.** `weft project init` adds
+   `.weftos/chain/`, `.weftos/project.key`, `.weftos/project.cert.json` and
+   `.weftos/state/` to an existing `.gitignore`; for a tree initialised by an
+   older build, add `.weftos/project.cert.json` and `.weftos/state/` by
+   hand. Commit `.weftos/overlay.toml` if you write one (below).
+5. **Start it.** `weaver kernel start --project <id>`, or just run a `weft`
+   command inside the project (the resolver asks the user daemon to start
+   it). Neither starts the user daemon itself.
+6. **Check it.** `weaver kernel status --profile user` lists the child as
+   running. `weft project show .` prints a handshake whose `node_id` equals
+   the certificate's `project_key_id` (`project.cert.show`). The user chain
+   shows `project.register` at the first start and `project.anchor` at the
+   child's first clean stop (and then at most every five minutes once 100
+   new events have accumulated).
+
+Rollback: `weaver kernel stop --project <id>`, then
+`weaver project migrate-kernel <id> --revert` (or set `[serve] via =
+"user-daemon"` in the manifest), then restart the old daemon in the project
+directory. `<root>/.weftos/runtime/` was never modified.
+
+#### Governance overlay (`<root>/.weftos/overlay.toml`)
+
+The child runs the user daemon's rules, signed and pushed as
+`<run>/<id>/parent-policy.json`, merged with the project's overlay. The
+overlay can only tighten:
+
+```toml
+schema = 1
+
+[[deny]]                        # add denies (globs; a trailing * is a prefix)
+id = "project.no-shell"
+actions = ["tool.shell_exec", "workload.place*"]
+reason = "this project never runs shell tools"
+
+[[require_approval]]            # force human approval for these actions
+actions = ["workload.start*"]
+
+[limits]                        # numbers may only go down, flags only up
+risk_threshold = 0.5            # effective = min(parent, overlay)
+max_processes = 32
+spawn_budget = 4
+human_approval_required = true  # false -> true only
+```
+
+`deny` and `require_approval` are unioned with the parent's; each numeric
+limit is the smaller of the parent's and the overlay's; a flag is on if
+either turns it on. An overlay may not contain `permit` or `deactivate`,
+reuse a parent rule id, or raise a limit. Any of those, or a parse error,
+refuses the boot with the offending key named. `human_approval_required =
+true` in an overlay never turns a parent deny into an approval prompt: the
+parent's blocking rules stay hard denies, and only actions the parent
+permits ask for approval. Editing the file does nothing until the
+`governance.reload` RPC on the child's socket or a restart. `max_processes` and
+`spawn_budget` take effect at boot only.
+
+#### Revoke and rekey
+
+- `project.rekey` replaces the project key. The old child is stopped and the
+  next start runs under the new certificate. No marker is written.
+- `project.revoke` is **terminal for the project id**. The child is stopped,
+  its tokens die, the marker `<run_root>/<id>/revoked` is written, and no
+  key is ever certified for that id again (`project_revoked`). Deleting the
+  marker does not re-enable the id. To run the tree again: stop nothing
+  further (the child is already down), move `<root>/.weftos/chain/` aside,
+  delete `<root>/.weftos/project.key` and `project.cert.json` (the revoked
+  key may never certify another project), run `weft project init --fork
+  --force` in the tree (a new id; the old manifest is archived), then
+  migrate the new id as above.
+- If either RPC answers `revoke_marker_unwritten` or
+  `identity_change_incomplete`, the change is in force and the old child was
+  stopped, but a file could not be written or removed. The message names it;
+  fix the cause (for a missing marker, write `revoked` into that path by
+  hand).
+
+#### Never downgrade a child-kernel project
+
+A pre-Phase 2 `weaver` run against a `child-kernel` project does not refuse
+the project chain: it cannot verify the newer events (`rule_hash`), treats the
+chain as unreadable and **starts a fresh chain over it**, destroying the
+project's history. Before running an older binary on such a project, move
+`<root>/.weftos/chain/` aside (and set `[serve] via` back with
+`migrate-kernel --revert`).
 
 ### Governance (three-branch)
 

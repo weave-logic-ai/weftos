@@ -44,6 +44,25 @@ Staging area for changes after the 0.8.1 cut.
 
 ### Fixed — Weave topology Phase 2 integration (ADR-103 A7)
 
+- **Security:** `human_approval_required = true` in a project's
+  `overlay.toml` can no longer turn the parent's denies into approval prompts.
+  The parent's blocking rules stay hard denies, and only actions the parent
+  permits ask for approval.
+- **Security:** callers can no longer append chain events under the kernel's
+  own sources (`governance`, `project`, `project.supervisor`), and the
+  governance rollback floor reads only the kernel's own records. Before, one
+  forged `chain.append` could stop a project kernel from booting.
+- `project.revoke` is now terminal for the project id: no key is certified for
+  it again (`project_revoked`). Give the tree a new identity with
+  `weft project init --fork --force`. If revoke or rekey fails late (the
+  certificate file), it returns `identity_change_incomplete` and still stops
+  the child and writes the marker.
+- `weft project init` also ignores `.weftos/project.cert.json` and
+  `.weftos/state/` in an existing `.gitignore`.
+- **Read before downgrading:** a pre-Phase 2 `weaver` run against a
+  `child-kernel` project starts a fresh chain over the project chain. Move
+  `<root>/.weftos/chain/` aside first (kernel guide, "Never downgrade a
+  child-kernel project").
 - A project kernel now signs its chain with `project.key`. Before, it created
   a separate `chain.key` beside the checkpoint and its own one-key check then
   stopped it, so no real child could boot.

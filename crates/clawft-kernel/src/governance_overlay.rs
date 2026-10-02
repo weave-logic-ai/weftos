@@ -446,6 +446,21 @@ pub fn merge(parent: &ParentPolicy, overlay: &Overlay) -> Result<Effective, Over
         }
     }
     let mut rules = parent.rules.clone();
+    // Review M1: the engine-wide `human_approval_required` escalates every
+    // blocking verdict that is not a hard deny. Raised by the overlay (not by
+    // the parent), it would turn the parent's denies into approvable
+    // prompts. Keep it tighten-only: the parent's blocking rules become hard
+    // denies (`OVERLAY_DENY_TAG`, which the engine never escalates), so only
+    // actions the parent permits ask for approval. Parent approval rules keep
+    // their tag. The tag replaces the rule's `sop_category` in the child.
+    if limits.human_approval_required == Some(true) && parent.limits.human_approval_required != Some(true) {
+        for r in rules.iter_mut().filter(|r| {
+            matches!(r.severity, RuleSeverity::Blocking | RuleSeverity::Critical)
+                && r.sop_category.as_deref() != Some(OVERLAY_APPROVAL_TAG)
+        }) {
+            r.sop_category = Some(OVERLAY_DENY_TAG.to_owned());
+        }
+    }
     let parent_ids: std::collections::BTreeSet<String> =
         parent.rules.iter().map(|r| norm_id(&r.id)).collect();
     let mut added: Vec<GovernanceRule> = Vec::new();

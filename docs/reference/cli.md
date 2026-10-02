@@ -1076,7 +1076,9 @@ weft project init [--name <NAME>] [--fork [--force]]
 Give the current project root (the nearest ancestor with a `project.toml`, else
 the current directory) an identity and register it. Idempotent. Adopts an id
 already seeded from `workspaces.json`. Refuses `$HOME` itself. Adds
-`.weftos/chain/` and `.weftos/project.key` to an existing `.gitignore`.
+`.weftos/chain/`, `.weftos/project.key`, `.weftos/project.cert.json` and
+`.weftos/state/` to an existing `.gitignore` (`.weftos/overlay.toml` is meant
+to be committed).
 Prints the id, the root, the identity file and the manifest path.
 
 | Option | Description |
@@ -1132,7 +1134,7 @@ weaver kernel stop --project <ID|NAME>
 weaver kernel stop --all-children
 weaver kernel stop --profile user [--keep-children]
 weaver kernel restart --project <ID|NAME>
-weaver kernel status
+weaver kernel status --profile user
 ```
 
 | Command | What it does |
@@ -1142,7 +1144,7 @@ weaver kernel status
 | `stop --all-children` | Stop every project kernel and leave the user daemon running. |
 | `stop --profile user` | Stop the user daemon. Its children are stopped cleanly first unless you pass `--keep-children`, which leaves them for the next daemon to adopt. |
 | `restart --project` | Stop the project's kernel, clear a `failed` state and start it again. |
-| `status` | On the user daemon, also lists the children and any unverifiable leftovers. |
+| `status --profile user` | On the user daemon, also lists the children and any unverifiable leftovers. Without `--profile user`, `status` addresses the daemon the current directory resolves to, which may be a project kernel. |
 
 A crashed child is restarted after a 1 s backoff that doubles up to 30 s.
 After `restart_max` crashes inside `restart_window_secs` (manifest `[serve]`,
@@ -1150,10 +1152,16 @@ defaults 5 and 60 s) the child is marked `failed` and is not started again,
 not even on demand, until `restart --project`. A clean exit (an idle stop or
 an explicit stop) is never restarted. A `child-kernel` project with no
 activity for `idle_stop_secs` (default 1800, `0` disables it) is stopped
-gracefully. After `project.revoke` the project never starts again; the
-terminal marker is `<run_root>/<id>/revoked` (`~/.weftos/run/<id>/revoked`
-unless `WEFTOS_RUNTIME_DIR` names the run root), and nothing removes it. To
-re-enroll the project, delete the marker by hand.
+gracefully. `project.revoke` is terminal for the project's id: the project
+never starts again and no key is ever certified for that id again, so it
+cannot re-enrol (`project_revoked`). The marker is `<run_root>/<id>/revoked`
+(`~/.weftos/run/<id>/revoked` unless `WEFTOS_RUNTIME_DIR` names the run root);
+nothing removes it, and deleting it does not re-enable the id. To run the tree
+again, give it a new identity with `weft project init --fork --force` and
+migrate that id. If the revoke RPC answers `revoke_marker_unwritten` or
+`identity_change_incomplete`, the revocation is in force and the child was
+stopped, but a file could not be written or removed; fix the cause (the
+message names the file).
 
 Inside a project, a plain `weaver kernel start` is refused while a user
 daemon runs on this account. `--legacy-project-daemon` overrides that for one

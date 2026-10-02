@@ -61,6 +61,7 @@ pub const FATAL_KINDS: &[&str] = &[
     "key_conflict",
     "key_reuse",
     "project_not_found",
+    "project_revoked",
 ];
 
 /// Replace what "stop the kernel" does after a fatal refusal (tests). The

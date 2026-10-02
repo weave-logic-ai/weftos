@@ -153,8 +153,10 @@ async fn identity_changes(
     use clawft_weave::project_cert_rpc::{CertEnv, RegisterRequest, SpawnInfo, claim_nonce, issue_challenge, register, root_sha256};
     use clawft_weave::project_supervisor::child::pid_alive;
 
-    // The cert RPCs only run on the user daemon.
-    clawft_types::runtime_paths::set_user_profile(true);
+    // The cert RPCs only run on the user daemon. Enter it with this fixture's
+    // run root, so even without the installed supervisor nothing resolves
+    // the real `~/.weftos/run`.
+    clawft_weave::user_daemon::enter_at(&fx.run_root);
     clawft_weave::project_rpc::init_manifests_dir(fx.mdir.clone());
     let env = CertEnv { chain: Arc::clone(chain), user_key: user_key.clone(), manifests_dir: fx.mdir.clone() };
     let ukid = key_id(&user_key.verifying_key().to_bytes());

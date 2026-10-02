@@ -478,3 +478,45 @@ fn a_parent_without_a_threshold_still_caps_the_overlay_at_the_engine_default() {
     let none = merge(&p, &Overlay::empty()).unwrap();
     assert_eq!(none.limits.risk_threshold, Some(crate::overlay_runtime::DEFAULT_RISK_THRESHOLD));
 }
+
+#[test]
+fn an_overlay_raised_human_flag_never_softens_a_parent_deny() {
+    // Review M1: `[limits] human_approval_required = true` alone.
+    let raise = ov("[limits]\nhuman_approval_required = true\n");
+    let e = merge(&base_parent(), &raise).unwrap();
+    assert_eq!(e.limits.human_approval_required, Some(true));
+    let eng = engine_of(e.rules.clone(), 0.8, true);
+    // The parent's force-matched deny stays a Deny under the flag...
+    for action in ["workload.place", "workload.start"] {
+        assert!(matches!(decide(&eng, action), GovernanceDecision::Deny(_)), "{action}");
+    }
+    // ...and a magnitude-blocked action is denied, not offered for approval.
+    let hot = GovernanceRequest::new("agent", "tool.anything").with_effect(crate::governance::EffectVector {
+        risk: 1.0,
+        security: 1.0,
+        ..Default::default()
+    });
+    assert!(matches!(eng.evaluate(&hot).decision, GovernanceDecision::Deny(_)));
+    // The same rules without the re-tag WOULD have escalated (the hole).
+    let untagged = engine_of(base_parent().rules, 0.8, true);
+    assert!(matches!(decide(&untagged, "workload.place"), GovernanceDecision::EscalateToHuman(_)));
+    // Non-denied actions still pass; the overlay's own approval rules still ask.
+    assert_eq!(decide(&eng, "tool.read_file"), GovernanceDecision::Permit);
+    let e = merge(&base_parent(), &ov("[[require_approval]]\nactions = [\"cron.add\"]\n[limits]\nhuman_approval_required = true\n")).unwrap();
+    let eng = engine_of(e.rules, 0.8, true);
+    assert!(matches!(decide(&eng, "cron.add"), GovernanceDecision::EscalateToHuman(_)));
+    assert!(matches!(decide(&eng, "workload.place"), GovernanceDecision::Deny(_)));
+}
+
+#[test]
+fn a_parent_that_asks_for_human_approval_keeps_its_own_semantics() {
+    // The flag came from the parent: its rules are not re-tagged, so its
+    // blocking verdicts escalate exactly as on the user daemon.
+    let p = parent_with(
+        base_parent().rules,
+        Limits { human_approval_required: Some(true), ..Limits::default() },
+        1,
+    );
+    let e = merge(&p, &Overlay::empty()).unwrap();
+    assert!(e.rules.iter().all(|r| r.sop_category.as_deref() != Some(OVERLAY_DENY_TAG)));
+}

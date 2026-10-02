@@ -23,8 +23,19 @@ struct Daemon {
     _shutdown: watch::Sender<bool>,
 }
 
+/// One run root for the whole binary, pinned before any daemon exists, so no
+/// test (whatever order libtest runs them in) can resolve the real
+/// `~/.weftos/run` for a revoke marker or a child run dir.
+fn run_root() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let dir = DIR.get_or_init(|| tempfile::tempdir().unwrap()).path();
+    clawft_weave::project_cert_rpc::init_run_root(dir.to_path_buf());
+    dir
+}
+
 /// `untrusted`: serve every connection as a peer that is not our uid.
 async fn spawn(untrusted: bool) -> Daemon {
+    run_root();
     let tmp = tempfile::tempdir().unwrap();
     let sock = tmp.path().join("kernel.sock");
     let kcfg = KernelConfig {
@@ -143,7 +154,6 @@ async fn owner_flow_on_the_user_daemon() {
     let home = tempfile::tempdir().unwrap();
     let mdir = home.path().join(".weftos/projects");
     clawft_weave::project_rpc::init_manifests_dir(mdir.clone());
-    clawft_weave::project_cert_rpc::init_run_root(home.path().join(".weftos/run"));
     let root = home.path().join("proj");
     std::fs::create_dir_all(&root).unwrap();
 
@@ -152,7 +162,7 @@ async fn owner_flow_on_the_user_daemon() {
     assert_eq!(r["error_kind"], "cert_unavailable", "{r}");
 
     // An explicit run root: nothing resolves the real `~/.weftos/run`.
-    clawft_weave::user_daemon::enter_at(&home.path().join(".weftos/run"));
+    clawft_weave::user_daemon::enter_at(run_root());
     let reg = call(&d, "project.register", json!({"root": root, "name": "demo"}), Some("admin")).await;
     assert_eq!(reg["ok"], true, "{reg}");
     let id = reg["result"]["project"]["id"].as_str().unwrap().to_owned();
@@ -229,6 +239,19 @@ async fn owner_flow_on_the_user_daemon() {
     )
     .await;
     assert_eq!(forged["error_kind"], "reserved_source", "{forged}");
+    // Review M3: the kernel's own sources too (the rollback floor, genesis
+    // and supervisor events are read back by kind).
+    for source in ["governance", "project", "project.supervisor"] {
+        let forged = call(
+            &d,
+            "chain.append",
+            json!({"source": source, "record": {"kind": "governance.overlay.applied", "entries": [],
+                "hash_before": "", "hash_after": "", "ts": "2026-10-01T00:00:00Z"}}),
+            Some("admin"),
+        )
+        .await;
+        assert_eq!(forged["error_kind"], "reserved_source", "{source}: {forged}");
+    }
     let dump = serde_json::to_string(&events).unwrap();
     assert!(!dump.contains(&"02".repeat(32)) && !dump.contains(&"03".repeat(32)));
     clawft_weave::user_daemon::leave();

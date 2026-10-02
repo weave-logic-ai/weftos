@@ -122,6 +122,11 @@ pub enum IssueError {
     /// Manifest store failure.
     #[error("{0}")]
     Store(String),
+    /// The identity change is journalled and on the chain (it is in force),
+    /// but a later step failed (the cert file). The after-hooks (marker,
+    /// child stop) still run; the caller is told it is incomplete.
+    #[error("{0}")]
+    Incomplete(String),
 }
 
 impl IssueError {
@@ -138,8 +143,10 @@ impl IssueError {
             Self::Identity(IdentityError::KeyReuse { .. }) => "key_reuse",
             Self::Identity(IdentityError::JournalCorrupt { .. }) => "journal_corrupt",
             Self::Identity(IdentityError::NotBound(_)) => "not_certified",
+            Self::Identity(IdentityError::ProjectRevoked(_)) => "project_revoked",
             Self::Identity(_) => "cert_error",
             Self::Store(_) => "project_store_error",
+            Self::Incomplete(_) => "identity_change_incomplete",
         }
     }
 
@@ -444,8 +451,15 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
             "reason": clean_reason(params.get("reason")),
         })),
     );
-    write_cert_file(&env.manifests_dir, &cert)?;
+    // Journalled: the rekey is in force. Drop the old key's session first,
+    // so a store failure below cannot leave it live (review S1).
     drop_session(id);
+    write_cert_file(&env.manifests_dir, &cert).map_err(|e| {
+        IssueError::Incomplete(format!(
+            "project {id} is rekeyed (serial {}), but writing {id}.cert.json failed: {e}",
+            cert.serial
+        ))
+    })?;
     Ok(Issued { cert, new: true })
 }
 
@@ -477,7 +491,7 @@ pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
-            return Err(IssueError::Store(format!(
+            return Err(IssueError::Incomplete(format!(
                 "key {old} is revoked, but removing {id}.cert.json failed: {e}"
             )));
         }
@@ -656,30 +670,33 @@ pub fn handle(call: ExtCall) -> ExtFuture {
             other => Err(IssueError::Invalid(format!("unknown method: {other}"))),
         })
         .await;
-        match out {
-            Ok(Ok(v)) => {
-                let mut unwritten: Option<Response> = None;
-                if let Some((method, Some(id))) = after
-                    && let Err(e) = crate::project_cert_rpc::on_identity_change(&id, &method).await
-                {
-                    tracing::error!(project = %id, error = %e, "revoked marker not written");
-                    unwritten.get_or_insert(e.response(&id));
-                }
-                if is_repair {
-                    for c in v.get("key_changes").and_then(Value::as_array).into_iter().flatten() {
-                        let Some(id) = c.get("id").and_then(Value::as_str) else { continue };
-                        let m = if c["revoked"] == true { "project.revoke" } else { "project.rekey" };
-                        if let Err(e) = crate::project_cert_rpc::on_identity_change(id, m).await {
-                            tracing::error!(project = %id, error = %e, "revoked marker not written");
-                            unwritten.get_or_insert(e.response(id));
-                        }
-                    }
-                }
-                unwritten.unwrap_or_else(|| Response::success(v))
-            }
-            Ok(Err(e)) => e.response(),
-            Err(e) => Response::error(format!("project cert task failed: {e}")),
+        // Review S1: once the change is journalled (success, or a late store
+        // failure) the hooks run, so a revoked project's child is stopped and
+        // marked even when the cert file could not be removed.
+        let (v, incomplete) = match out {
+            Ok(Ok(v)) => (v, None),
+            Ok(Err(e @ IssueError::Incomplete(_))) => (Value::Null, Some(e.response())),
+            Ok(Err(e)) => return e.response(),
+            Err(e) => return Response::error(format!("project cert task failed: {e}")),
+        };
+        let mut unwritten: Option<Response> = None;
+        if let Some((method, Some(id))) = after
+            && let Err(e) = crate::project_cert_rpc::on_identity_change(&id, &method).await
+        {
+            tracing::error!(project = %id, error = %e, "revoked marker not written");
+            unwritten.get_or_insert(e.response(&id));
         }
+        if is_repair {
+            for c in v.get("key_changes").and_then(Value::as_array).into_iter().flatten() {
+                let Some(id) = c.get("id").and_then(Value::as_str) else { continue };
+                let m = if c["revoked"] == true { "project.revoke" } else { "project.rekey" };
+                if let Err(e) = crate::project_cert_rpc::on_identity_change(id, m).await {
+                    tracing::error!(project = %id, error = %e, "revoked marker not written");
+                    unwritten.get_or_insert(e.response(id));
+                }
+            }
+        }
+        unwritten.or(incomplete).unwrap_or_else(|| Response::success(v))
     })
 }
 

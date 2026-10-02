@@ -40,9 +40,20 @@ pub(crate) struct History {
     pub any_applied: bool,
 }
 
+/// Source of the kernel's `governance.overlay.applied` events.
+pub(crate) const OVERLAY_APPLIED_SOURCE: &str = "governance";
+
 pub(crate) fn chain_history(chain: &ChainManager) -> History {
     let mut h = History::default();
-    for e in chain.tail(0).iter().filter(|e| e.kind == "governance.overlay.applied") {
+    // Only the kernel's own records count: the source is reserved against
+    // callers (`chain::KERNEL_SOURCES`), so a forged event under another
+    // source (or this kind under any source a caller can use) is ignored
+    // rather than raising the rollback floor (review M3).
+    for e in chain
+        .tail(0)
+        .iter()
+        .filter(|e| e.kind == "governance.overlay.applied" && e.source == OVERLAY_APPLIED_SOURCE)
+    {
         h.any_applied = true;
         let p = e.payload.as_ref();
         h.last_overlay_hash = Some(
