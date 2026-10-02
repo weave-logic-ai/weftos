@@ -96,10 +96,15 @@ fn flipping_one_rule_hash_byte_fails_verification() {
 fn stripping_rule_hash_fails_verification_like_an_old_binary() {
     // An old binary ignores the unknown field, recomputes without it and
     // must fail loudly. Simulate by removing the key before loading.
+    // `with_rules` installs the provider AFTER the genesis event, so only
+    // events appended below are stamped; genesis carries no rule_hash.
     let cm = with_rules(5);
+    cm.append("s", "k", Some(serde_json::json!({"a": 1})));
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("c.jsonl");
     cm.save_to_file(&p).unwrap();
+    let saved = std::fs::read_to_string(&p).unwrap();
+    assert!(saved.contains("\"rule_hash\""), "stamped event must be saved with rule_hash");
     let mut lines = Vec::new();
     for l in std::fs::read_to_string(&p).unwrap().lines() {
         let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
@@ -108,6 +113,23 @@ fn stripping_rule_hash_fails_verification_like_an_old_binary() {
     }
     std::fs::write(&p, lines.join("\n") + "\n").unwrap();
     assert!(ChainManager::load_from_file(&p, 0).is_err());
+}
+
+/// Load verifies stored hashes (it does not recompute-and-overwrite): an
+/// edited payload byte fails the load.
+#[test]
+fn an_edited_payload_fails_load() {
+    let cm = ChainManager::new(0, 0);
+    cm.append("s", "k", Some(serde_json::json!({"note": "aaaa"})));
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("c.jsonl");
+    cm.save_to_file(&p).unwrap();
+    assert!(ChainManager::load_from_file(&p, 0).is_ok());
+    let text = std::fs::read_to_string(&p).unwrap();
+    assert!(text.contains("aaaa"));
+    std::fs::write(&p, text.replacen("aaaa", "aaab", 1)).unwrap();
+    let err = ChainManager::load_from_file(&p, 0).unwrap_err().to_string();
+    assert!(err.contains("integrity"), "{err}");
 }
 
 #[test]
