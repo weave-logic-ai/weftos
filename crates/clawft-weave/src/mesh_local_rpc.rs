@@ -34,7 +34,7 @@ use clawft_rpc::Response;
 use clawft_rpc::mesh_local::{
     ChallengeReply, ChallengeRequest, HeartbeatRequest, METHOD_CHALLENGE, METHOD_HEARTBEAT,
     METHOD_REGISTER, METHOD_UNREGISTER, PROTO_MESH_LOCAL, PROTOCOL_TAG, ParentHead, RegisterAck,
-    RegisterRequest, UnregisterRequest, ack_signed_bytes, bind_signed_bytes,
+    RegisterRequest, UnregisterRequest, ack_signed_bytes, activity_digest, bind_signed_bytes,
 };
 use clawft_types::project::canon::hex_decode;
 use clawft_types::project::cert::key_id;
@@ -257,9 +257,11 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
         },
     };
     // 4. the challenge nonce
+    // An unknown, expired, used or evicted challenge is "start over with a
+    // fresh one", distinct from a wrong signature.
     let nonce = match claim_nonce(&req.nonce_reply.nonce, &req.project_id) {
         Ok(n) => n,
-        Err(e) => return err(e.kind(), e.to_string()),
+        Err(e) => return err("challenge_unknown", e.to_string()),
     };
     // 5. the certificate (manifest, root, PoP, TOFU, revocation)
     let issued = match issue_for_register(
@@ -345,6 +347,7 @@ fn heartbeat(p: Value) -> Response {
         &req.session,
         req.pid,
         req.at_unix,
+        &activity_digest(&req.activity),
         &req.sig,
         now_unix(),
         Instant::now(),
@@ -367,6 +370,7 @@ fn unregister(p: Value) -> Response {
         &req.session,
         req.pid,
         req.at_unix,
+        "",
         &req.sig,
         now_unix(),
         Instant::now(),

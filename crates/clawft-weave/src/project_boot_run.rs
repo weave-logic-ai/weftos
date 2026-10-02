@@ -82,7 +82,7 @@ fn fatal(run: &Running, why: &str) {
     }
 }
 
-fn session_proof(run: &Running, op: &str, session: &str) -> (u32, u64, String) {
+fn session_proof(run: &Running, op: &str, session: &str, extra: &str) -> (u32, u64, String) {
     use ed25519_dalek::Signer;
     let pid = std::process::id();
     let at = crate::project_boot::now_unix();
@@ -90,7 +90,7 @@ fn session_proof(run: &Running, op: &str, session: &str) -> (u32, u64, String) {
         .boot
         .key
         .sign(&clawft_rpc::mesh_local::session_signed_bytes(
-            op, session, pid, at,
+            op, session, pid, at, extra,
         ));
     (
         pid,
@@ -315,13 +315,19 @@ async fn step(run: &Running, backoff: &mut Duration) -> Duration {
         .clone();
     let id = run.params.project_id.as_str();
     if let Some(session) = session {
-        let (pid, at_unix, sig) = session_proof(run, "heartbeat", &session);
+        let act = activity(&*run.agents);
+        let (pid, at_unix, sig) = session_proof(
+            run,
+            "heartbeat",
+            &session,
+            &clawft_rpc::mesh_local::activity_digest(&act),
+        );
         let req = HeartbeatRequest {
             session,
             pid,
             at_unix,
             sig,
-            activity: activity(&*run.agents),
+            activity: act,
         };
         let res = call_async(
             &run.params.socket,
@@ -515,7 +521,7 @@ pub async fn pre_shutdown() {
         .session
         .clone();
     if let Some(session) = session {
-        let (pid, at_unix, sig) = session_proof(&run, "unregister", &session);
+        let (pid, at_unix, sig) = session_proof(&run, "unregister", &session, "");
         let req = UnregisterRequest {
             session,
             pid,

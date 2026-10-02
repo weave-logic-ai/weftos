@@ -263,6 +263,7 @@ impl ProjectRegistry {
         session: &str,
         pid: u32,
         at_unix: u64,
+        extra: &str,
         sig_hex: &str,
         now_unix: u64,
         now: Instant,
@@ -287,7 +288,7 @@ impl ProjectRegistry {
         let vk = ed25519_dalek::VerifyingKey::from_bytes(&pubkey)
             .map_err(|_| RegistryError::BadProof("registered key is invalid"))?;
         vk.verify_strict(
-            &session_signed_bytes(op, session, pid, at_unix),
+            &session_signed_bytes(op, session, pid, at_unix, extra),
             &ed25519_dalek::Signature::from_bytes(&sig),
         )
         .map_err(|_| {

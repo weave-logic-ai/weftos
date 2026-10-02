@@ -256,6 +256,7 @@ const TRANSIENT_KINDS: &[&str] = &[
     "cert_unavailable",
     "project_store_error",
     "spawn_ledger_full",
+    "challenge_unknown",
 ];
 
 /// Retry policy for transient refusals during the first registration.
@@ -267,6 +268,8 @@ pub struct Retry {
     pub initial: Duration,
     /// Delay cap.
     pub max: Duration,
+    /// Total time to keep retrying; under the 60 s spawn window.
+    pub budget: Duration,
 }
 
 impl Default for Retry {
@@ -275,6 +278,7 @@ impl Default for Retry {
             attempts: 6,
             initial: Duration::from_millis(500),
             max: Duration::from_secs(5),
+            budget: Duration::from_secs(45),
         }
     }
 }
@@ -403,7 +407,9 @@ async fn register_retrying(
         let at = now + started.elapsed().as_secs();
         match register_once(p, key, cached, Some(spawn_nonce), at).await {
             Err(RegError::Refused { kind, message })
-                if attempt < retry.attempts.max(1) && TRANSIENT_KINDS.contains(&kind.as_str()) =>
+                if attempt < retry.attempts.max(1)
+                    && started.elapsed() + delay < retry.budget
+                    && TRANSIENT_KINDS.contains(&kind.as_str()) =>
             {
                 warn!(%kind, %message, attempt, "user daemon cannot register this project yet; retrying");
                 tokio::time::sleep(delay).await;
