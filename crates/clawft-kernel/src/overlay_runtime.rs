@@ -41,10 +41,10 @@ use crate::governance_overlay::{
 };
 pub use crate::overlay_trust::{REVOKED_FILE, USER_PIN_FILE, VERSION_PIN_FILE, write_user_pin};
 use crate::overlay_trust::{
-    check_version, last_applied_overlay_hash, load_user_pubkey, read_pin, write_pin,
+    chain_history, check_version, load_user_pubkey, read_pin, write_pin,
 };
 use crate::parent_policy::{
-    ParentPolicy, load_parent_policy, verify_parent_policy,
+    ParentPolicy, ParentPolicyError, load_parent_policy, verify_parent_policy,
 };
 
 /// Fallback engine threshold when neither parent nor overlay set one.
@@ -81,11 +81,11 @@ impl OverlayGate {
     }
 
     /// Replace the rules and publish `hash` in one step (see module docs).
-    fn swap(&self, gate: GovernanceGate, hash: [u8; 32], cell: &RuleHashCell) {
+    fn swap(&self, mut gate: GovernanceGate, hash: [u8; 32], cell: &RuleHashCell) {
         let mut w = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        // Keep the evaluation rate limit the kernel configured; a fresh gate
-        // would otherwise fall back to the default quota.
-        gate.engine().set_eval_rate_limit(w.engine().eval_rate_limit());
+        // Keep what the kernel configured on the running gate (exemptions,
+        // rate limit, scorer); a fresh gate would fall back to defaults.
+        gate.inherit_config(&w);
         *w = gate;
         cell.set(Some(hash));
     }
@@ -158,6 +158,7 @@ impl Applied {
 pub struct Prepared {
     paths: RuntimePaths,
     user_pubkey: [u8; 32],
+    user_pin: bool,
     parent: ParentPolicy,
     overlay: Overlay,
     overlay_present: bool,
@@ -170,7 +171,7 @@ pub struct Prepared {
 /// child at `paths`. Fails closed.
 pub fn prepare(paths: &RuntimePaths) -> Result<Prepared, OverlayError> {
     let paths = child_paths(paths)?;
-    let user_pubkey = load_user_pubkey(&paths)?;
+    let (user_pubkey, user_pin) = load_user_pubkey(&paths)?;
     let parent = load_parent_policy(&paths.parent_policy())?;
     verify_parent_policy(&parent, &user_pubkey)?;
     let pinned = read_pin(&paths)?;
@@ -186,6 +187,7 @@ pub fn prepare(paths: &RuntimePaths) -> Result<Prepared, OverlayError> {
     Ok(Prepared {
         paths,
         user_pubkey,
+        user_pin,
         parent,
         overlay,
         overlay_present,
@@ -205,14 +207,30 @@ impl Prepared {
     /// * `overlay.toml` is missing but the last applied overlay was not empty:
     ///   deleting the file must not clear the overlay (an empty file does).
     pub fn commit(&self, chain: &ChainManager) -> Result<(), OverlayError> {
-        let last = last_applied_overlay_hash(chain);
-        if self.pinned.is_none() && last.is_some() {
+        let h = chain_history(chain);
+        if self.pinned.is_none() && h.any_applied {
             return Err(OverlayError::PinMissing);
         }
+        // The pin file can be lowered or zeroed; the chain remembers the
+        // highest version ever applied, so neither the file's version nor the
+        // pin may be below it.
+        if let Some(max) = h.max_parent_version {
+            for have in [Some(self.parent.version), self.pinned].into_iter().flatten() {
+                if have < max {
+                    return Err(ParentPolicyError::Rollback { have, pinned: max }.into());
+                }
+            }
+        }
+        // A pin that was in use must not silently disappear.
+        if h.user_pin_used && !self.user_pin {
+            return Err(OverlayError::Cert(
+                "a user.pub pin was in use on an earlier boot but is now absent".into(),
+            ));
+        }
         let empty = hex_encode(&Overlay::empty().hash);
-        if let Some(h) = &last
+        if let Some(last) = &h.last_overlay_hash
             && !self.overlay_present
-            && *h != empty
+            && *last != empty
         {
             return Err(OverlayError::OverlayMissing);
         }
@@ -274,7 +292,7 @@ impl Prepared {
         chain.append(
             "governance",
             "governance.overlay.applied",
-            Some(with_source(applied.to_json(), "boot")),
+            Some(applied_payload(&applied, "boot", self.user_pin, &self.user_pubkey)),
         );
         let rt = Arc::new(OverlayRuntime {
             gate: Arc::clone(&gate),
@@ -282,6 +300,7 @@ impl Prepared {
             chain,
             paths: self.paths,
             user_pubkey: self.user_pubkey,
+            user_pin: self.user_pin,
             boot: self.effective.clone(),
             state: Mutex::new(State {
                 parent: self.parent,
@@ -293,8 +312,18 @@ impl Prepared {
     }
 }
 
-fn with_source(mut v: serde_json::Value, source: &str) -> serde_json::Value {
+/// Chain payload of an applied change: the hashes plus the trust root in use
+/// (`user_pin` says whether a `user.pub` pin backed it).
+fn applied_payload(
+    a: &Applied,
+    source: &str,
+    user_pin: bool,
+    user_pubkey: &[u8; 32],
+) -> serde_json::Value {
+    let mut v = a.to_json();
     v["source"] = json!(source);
+    v["user_pin"] = json!(user_pin);
+    v["user_key_id"] = json!(clawft_types::project::cert::key_id(user_pubkey));
     v
 }
 
@@ -311,6 +340,7 @@ pub struct OverlayRuntime {
     chain: Arc<ChainManager>,
     paths: RuntimePaths,
     user_pubkey: [u8; 32],
+    user_pin: bool,
     boot: Effective,
     state: Mutex<State>,
 }
@@ -330,7 +360,12 @@ impl OverlayRuntime {
     /// Re-check that the trust root is unchanged: certificate, expiry,
     /// revocation and the user-key pin (see [`load_user_pubkey`]).
     fn recheck_trust(&self) -> Result<(), OverlayError> {
-        let pk = load_user_pubkey(&self.paths)?;
+        let (pk, pinned) = load_user_pubkey(&self.paths)?;
+        if self.user_pin && !pinned {
+            return Err(OverlayError::Cert(
+                "the user.pub pin that was in use is gone".into(),
+            ));
+        }
         if pk != self.user_pubkey {
             return Err(OverlayError::Cert(
                 "the trusted user key changed since boot; restart the kernel".into(),
@@ -424,7 +459,7 @@ impl OverlayRuntime {
                 self.chain.append(
                     "governance",
                     "governance.overlay.applied",
-                    Some(with_source(a.to_json(), source)),
+                    Some(applied_payload(a, source, self.user_pin, &self.user_pubkey)),
                 );
             }
             Err(e) => {

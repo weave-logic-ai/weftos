@@ -25,21 +25,38 @@ pub const USER_PIN_FILE: &str = "user.pub";
 /// its presence stops boot, reload and update.
 pub const REVOKED_FILE: &str = "revoked";
 
-/// The overlay hash of the newest `governance.overlay.applied` event, if any.
-pub(crate) fn last_applied_overlay_hash(chain: &ChainManager) -> Option<String> {
-    chain
-        .tail(0)
-        .iter()
-        .rev()
-        .find(|e| e.kind == "governance.overlay.applied")
-        .map(|e| {
-            e.payload
-                .as_ref()
-                .and_then(|p| p.get("overlay_hash"))
-                .and_then(|h| h.as_str())
+/// What the project chain says about earlier governance applications.
+#[derive(Debug, Default)]
+pub(crate) struct History {
+    /// Overlay hash of the newest `governance.overlay.applied` event.
+    pub last_overlay_hash: Option<String>,
+    /// Highest parent policy version any such event records.
+    pub max_parent_version: Option<u64>,
+    /// Some such event says a `user.pub` pin was in use.
+    pub user_pin_used: bool,
+    /// At least one such event exists.
+    pub any_applied: bool,
+}
+
+pub(crate) fn chain_history(chain: &ChainManager) -> History {
+    let mut h = History::default();
+    for e in chain.tail(0).iter().filter(|e| e.kind == "governance.overlay.applied") {
+        h.any_applied = true;
+        let p = e.payload.as_ref();
+        h.last_overlay_hash = Some(
+            p.and_then(|p| p.get("overlay_hash"))
+                .and_then(|v| v.as_str())
                 .unwrap_or_default()
-                .to_owned()
-        })
+                .to_owned(),
+        );
+        if let Some(v) = p.and_then(|p| p.get("parent_version")).and_then(|v| v.as_u64()) {
+            h.max_parent_version = Some(h.max_parent_version.map_or(v, |m| m.max(v)));
+        }
+        if p.and_then(|p| p.get("user_pin")).and_then(|v| v.as_bool()) == Some(true) {
+            h.user_pin_used = true;
+        }
+    }
+    h
 }
 
 /// Write the user-key pin the child reads (supervisor side, package G).
@@ -54,7 +71,8 @@ pub fn write_user_pin(run_dir: &std::path::Path, user_pubkey: &[u8; 32]) -> std:
 /// issuer, expiry, project), the project key beside it, the out-of-tree pin
 /// and the revocation marker. Runs at boot and again on every reload and
 /// update, so an expired or revoked project stops taking policy.
-pub(crate) fn load_user_pubkey(paths: &RuntimePaths) -> Result<[u8; 32], OverlayError> {
+/// Returns the key and whether it came from the `user.pub` pin.
+pub(crate) fn load_user_pubkey(paths: &RuntimePaths) -> Result<([u8; 32], bool), OverlayError> {
     let cert_err = |m: String| OverlayError::Cert(m);
     if paths.root().join(REVOKED_FILE).exists() {
         return Err(OverlayError::Revoked(
@@ -71,8 +89,10 @@ pub(crate) fn load_user_pubkey(paths: &RuntimePaths) -> Result<[u8; 32], Overlay
     let cert_pk: [u8; 32] = hex_decode(&cert.user_pubkey)
         .ok_or_else(|| cert_err("`user_pubkey` is not 64 lowercase hex".into()))?;
     let pin_path = paths.root().join(USER_PIN_FILE);
+    let mut pinned = false;
     let user_pk = match read_capped(&pin_path)? {
         Some(t) => {
+            pinned = true;
             let pin: [u8; 32] = hex_decode(t.trim())
                 .ok_or_else(|| cert_err(format!("{} is not 64 lowercase hex", pin_path.display())))?;
             if pin != cert_pk {
@@ -107,7 +127,7 @@ pub(crate) fn load_user_pubkey(paths: &RuntimePaths) -> Result<[u8; 32], Overlay
             return Err(cert_err("project.key is not the certified project key".into()));
         }
     }
-    Ok(user_pk)
+    Ok((user_pk, pinned))
 }
 
 /// The pinned version: `None` when the file is absent; an unparsable file is

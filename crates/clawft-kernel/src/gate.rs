@@ -362,6 +362,14 @@ impl GovernanceGate {
         self
     }
 
+    /// Take over the runtime configuration of the gate this one replaces:
+    /// per-action exemptions, rate limit and scorer. Rules, threshold and
+    /// chain are the new gate's own.
+    pub(crate) fn inherit_config(&mut self, old: &GovernanceGate) {
+        self.exempt_actions = old.exempt_actions.clone();
+        self.engine.inherit_config(&old.engine);
+    }
+
     /// Attach a chain manager for audit logging.
     pub fn with_chain(mut self, cm: std::sync::Arc<crate::chain::ChainManager>) -> Self {
         self.chain = Some(cm);

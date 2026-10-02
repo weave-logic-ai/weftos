@@ -177,3 +177,85 @@ fn export_only_trusts_a_previous_policy_this_key_signed_and_caps_the_version() {
     let c = export_to(&path, &engine, &Limits::default(), &user_key()).unwrap();
     assert!(c.version <= now + 5);
 }
+
+#[test]
+fn a_lowered_pin_cannot_let_an_older_policy_in() {
+    // The chain remembers version 7 was applied.
+    let f = fixture(&parent_with(base_parent().rules, base_parent().limits, 5), None);
+    let r = start(&f);
+    r.rt.apply_parent_update(parent_with(vec![], Limits::default(), 7)).unwrap();
+
+    // Pin zeroed and an older (validly signed) policy on disk: file below history.
+    std::fs::write(pin_path(&f), "0").unwrap();
+    let again = prepare(&f.paths).unwrap();
+    let e = again.commit(&r.cm).unwrap_err();
+    assert!(matches!(e, OverlayError::Parent(crate::parent_policy::ParentPolicyError::Rollback { have: 5, pinned: 7 })), "{e}");
+
+    // Newest policy on disk but the pin lowered: the pin is below history.
+    write_parent(&f.paths, &parent_with(vec![], Limits::default(), 7));
+    let again = prepare(&f.paths).unwrap();
+    let e = again.commit(&r.cm).unwrap_err();
+    assert!(matches!(e, OverlayError::Parent(crate::parent_policy::ParentPolicyError::Rollback { have: 0, pinned: 7 })), "{e}");
+
+    // With the pin intact it boots.
+    std::fs::write(pin_path(&f), "7").unwrap();
+    prepare(&f.paths).unwrap().commit(&r.cm).unwrap();
+}
+
+#[test]
+fn the_applied_event_records_the_pin_and_a_later_boot_cannot_drop_it() {
+    let f = fixture(&base_parent(), None);
+    let r = start(&f);
+    let applied = |cm: &crate::chain::ChainManager| {
+        cm.tail(0)
+            .into_iter()
+            .rfind(|e| e.kind == "governance.overlay.applied")
+            .unwrap()
+            .payload
+            .unwrap()
+    };
+    assert_eq!(applied(&r.cm)["user_pin"], false);
+    assert_eq!(applied(&r.cm)["user_key_id"].as_str().unwrap().len(), 32);
+
+    let g = fixture(&base_parent(), None);
+    write_user_pin(g.paths.root(), &user_key().verifying_key().to_bytes()).unwrap();
+    let r = start(&g);
+    assert_eq!(applied(&r.cm)["user_pin"], true);
+    // The pin goes away; the dev fallback would accept the cert, the history refuses.
+    std::fs::remove_file(g.paths.root().join(USER_PIN_FILE)).unwrap();
+    let again = prepare(&g.paths).unwrap();
+    assert!(matches!(again.commit(&r.cm).unwrap_err(), OverlayError::Cert(_)));
+    // A running kernel also refuses policy once its pin is gone.
+    let newer = parent_with(base_parent().rules, base_parent().limits, 3);
+    assert!(matches!(r.rt.apply_parent_update(newer).unwrap_err(), OverlayError::Cert(_)));
+}
+
+#[test]
+fn a_swap_keeps_the_per_action_exemptions_of_the_running_gate() {
+    use crate::gate::{GateBackend, GateDecision, GovernanceGate};
+    use crate::governance::RuleSeverity;
+    use crate::governance_overlay_tests::rule;
+    let f = fixture(&base_parent(), None);
+    let prepared = prepare(&f.paths).unwrap();
+    let cm = std::sync::Arc::new(crate::chain::ChainManager::new(0, 1000));
+    prepared.commit(&cm).unwrap();
+    prepared.install_provider(&cm);
+    let (t, h) = prepared.engine_params();
+    let mut gate = GovernanceGate::new(t, h)
+        .with_chain(cm.clone())
+        .with_eval_rate_limit(crate::rate_limit::RateLimitConfig::unlimited())
+        .exempt_action("net.fetch");
+    for r in prepared.rules().iter().cloned() {
+        gate = gate.add_rule(r);
+    }
+    let (gate, rt) = prepared.into_runtime(gate, cm);
+    // Parent update adds a deny on net.fetch; the exemption still applies.
+    let mut rules = base_parent().rules;
+    rules.push(rule("NET", RuleSeverity::Blocking, Some("net.*"), true, true));
+    rt.apply_parent_update(parent_with(rules, base_parent().limits, 2)).unwrap();
+    let d = gate.check("a", "net.fetch", &serde_json::json!({}));
+    assert!(matches!(d, GateDecision::Permit { .. }), "{d:?}");
+    // Other net actions are denied by the new rule.
+    let d = gate.check("a", "net.other", &serde_json::json!({}));
+    assert!(matches!(d, GateDecision::Deny { .. }), "{d:?}");
+}
