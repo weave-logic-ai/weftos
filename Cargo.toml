@@ -63,6 +63,20 @@ members = [
     "crates/eml-core",
     "crates/clawft-app",
     "crates/clawft-gui-egui",
+    "crates/weftos-ecg-scope",
+    "crates/weftos-sensor-guide",
+    "crates/weftos-cog-companion",
+    "crates/weftos-tof-scope",
+    "crates/weftos-bridge-send",
+    # COG-008: off-device WeaveLogic cog repository tooling (sign/verify/install,
+    # signed-only Ed25519 trust model).
+    "crates/weftos-cog-repo",
+    # COG-009: unified cog marketplace catalog (WeaveLogic signed + Cognitum mirror).
+    "crates/weftos-cog-market",
+    # COG-009: on-appliance cog supervisor + lifecycle API (no agent cap).
+    "crates/weftos-cog-host",
+    # COG-009: the WeftOS appliance console (egui native + wasm) over the cog-host.
+    "crates/weftos-cog-manager",
     "crates/clawft-substrate",
     "crates/clawft-surface",
     "crates/clawft-canon",

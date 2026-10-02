@@ -60,7 +60,8 @@ pub enum KernelAction {
         #[arg(long)]
         new_chain: bool,
 
-        /// Adopt the legacy `~/.clawft` chain for the first time. Required
+        /// Adopt the legacy `~/.clawft` chain for the first time (also overrides a
+        /// `weaver migrate user-chain` marker, with a WARN: it forks history). Required
         /// once, after stopping every older weaver daemon, while no
         /// `chain.lock` exists beside that chain.
         #[arg(long, conflicts_with = "new_chain")]

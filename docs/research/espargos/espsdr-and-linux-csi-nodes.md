@@ -27,6 +27,10 @@ ESP-SDR is firmware that gets **raw I/Q samples** out of the Wi-Fi receiver of o
 | Provenance note | "Parts of the firmware code are AI-generated"; IQ sampling is best understood on the ESP32-C61 (the ESPARGOS One chip) | README [V] |
 | ESPARGOS One | An 8-channel phased array; it now does phase-coherent raw I/Q capture over internal SPI with triggering, so it can localize **any** 2.4 GHz ISM signal (Bluetooth, Zigbee, Wi-Fi), not only Wi-Fi CSI | project page [V] |
 
+**Field data point (2026-09-30).** F5OEO (author of rpitx) posted a €15 ESP32 running ESP-WebSDR: centred on 2442 MHz with an 80 MS/s span and 67 MHz analog bandwidth, showing DATV and Wi-Fi. The screenshot's status bar reads 5.6 frames/s, **42.8 kS/s delivered** and 260.8 ms per capture plus transfer, at 8+8-bit I/Q. His stated next steps are continuous I/Q and **TX**. ([post](https://x.com/F5OEOEvariste/status/2105321268643832023)) [V for the screenshot]
+
+That confirms the duty-cycle point below: a full-band snapshot every ~180 ms, not a continuous stream. TX would make an ESP32 a coherent 2.4/5 GHz transmit-and-receive radio on one clock, which matters for the sensing work in [../lora-sdr-sensing.md](../lora-sdr-sensing.md). Sub-GHz (433/915) is outside its useful range, so the RTL-SDR stays the LoRa receiver. [I]
+
 ### What it changes for sensing
 
 - **CSI vs I/Q.** Vendor CSI (ESP-IDF's callback) is one channel estimate per received Wi-Fi frame, over 52-114 subcarriers. ESP-SDR gives the time-domain signal itself. It can see non-Wi-Fi emitters (BLE, Zigbee, microwave ovens, ESP-NOW), measure the channel between frames, and run custom estimators such as a better CFO/SFO correction or super-resolution delay. [I]

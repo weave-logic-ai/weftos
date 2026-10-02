@@ -246,3 +246,113 @@ fn symlinked_home_still_stops_the_walk() {
     };
     assert_eq!(resolve_with(&i).unwrap().project_id, None);
 }
+
+/// Manifest for `ID_A` with `[serve] via = "user-daemon"` and no runtime_dir,
+/// as `weft project init` writes it.
+fn write_user_daemon_manifest(w: &World) {
+    let mdir = manifests_dir(&w.home);
+    fs::create_dir_all(&mdir).unwrap();
+    fs::write(
+        mdir.join(format!("{ID_A}.toml")),
+        format!(
+            "schema = 1\nid = \"{ID_A}\"\nname = \"app\"\nroot = \"{}\"\n\
+             created = 2026-01-01T00:00:00Z\nlast_seen = 2026-01-01T00:00:00Z\n\
+             [serve]\nvia = \"user-daemon\"\n",
+            w.proj.display()
+        ),
+    )
+    .unwrap();
+}
+
+fn make_user_root(w: &World, file: &str) -> PathBuf {
+    let root = user_runtime_root(&w.home);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join(file), b"").unwrap();
+    root
+}
+
+#[test]
+fn manifest_via_user_daemon_resolves_to_the_user_root() {
+    let w = world(None);
+    write_user_daemon_manifest(&w);
+    let r = resolve_with(&inputs(&w)).unwrap();
+    assert_eq!(r.source, ResolveSource::Manifest);
+    assert_eq!(r.runtime_root, user_runtime_root(&w.home));
+    assert_eq!(r.socket, user_runtime_root(&w.home).join(SOCKET_NAME));
+    assert_eq!(r.project_id.as_deref(), Some(ID_A));
+}
+
+#[test]
+fn project_flag_with_user_daemon_manifest_resolves_to_the_user_root() {
+    let w = world(None);
+    write_user_daemon_manifest(&w);
+    let mut i = ResolveInputs {
+        cwd: Some(w.home.clone()),
+        home: Some(w.home.clone()),
+        ..ResolveInputs::default()
+    };
+    i.flags.project = Some(ID_A.into());
+    let r = resolve_with(&i).unwrap();
+    assert_eq!(r.source, ResolveSource::Manifest);
+    assert_eq!(r.runtime_root, user_runtime_root(&w.home));
+}
+
+#[test]
+fn explicit_runtime_runtime_dir_still_beats_user_daemon_manifest() {
+    let w = world(None);
+    write_user_daemon_manifest(&w);
+    let mut i = inputs(&w);
+    i.env_runtime = Some("/rt/env".into());
+    assert_eq!(resolve_with(&i).unwrap().socket, PathBuf::from("/rt/env/kernel.sock"));
+    i.flags.runtime = Some("/rt/flag".into());
+    let r = resolve_with(&i).unwrap();
+    assert_eq!(r.source, ResolveSource::Flag);
+    assert_eq!(r.socket, PathBuf::from("/rt/flag/kernel.sock"));
+}
+
+#[test]
+fn no_project_and_user_root_present_resolves_to_the_user_root() {
+    for file in [SOCKET_NAME, LOCK_FILE_NAME] {
+        let w = world(None);
+        let root = make_user_root(&w, file);
+        let i = ResolveInputs {
+            cwd: Some(w.home.clone()),
+            home: Some(w.home.clone()),
+            ..ResolveInputs::default()
+        };
+        let r = resolve_with(&i).unwrap();
+        assert_eq!(r.project_id, None);
+        assert_eq!(r.source, ResolveSource::Default);
+        assert_eq!(r.runtime_root, root, "{file}");
+        let text = r.tried.last().unwrap().detail.clone();
+        assert!(text.contains("user daemon root"), "{text}");
+        assert!(text.contains("else runtime root"), "{text}");
+    }
+}
+
+#[test]
+fn no_project_and_no_user_root_keeps_the_phase0_default() {
+    let w = world(None);
+    let i = ResolveInputs {
+        cwd: Some(w.home.clone()),
+        home: Some(w.home.clone()),
+        ..ResolveInputs::default()
+    };
+    let r = resolve_with(&i).unwrap();
+    let want = RuntimePaths::resolve_with(None, Some(&w.home), Some(&w.home));
+    assert_eq!(r.runtime_root, want.root());
+    assert_eq!(r.source, ResolveSource::Default);
+    let text = r.tried.last().unwrap().detail.clone();
+    assert!(text.contains("no user daemon at"), "{text}");
+}
+
+#[test]
+fn known_project_without_user_daemon_manifest_ignores_the_user_root() {
+    // A project with no manifest keeps the Phase 0 answer even when a user
+    // root exists: only `via = "user-daemon"` opts in.
+    let w = world(None);
+    make_user_root(&w, SOCKET_NAME);
+    let r = resolve_with(&inputs(&w)).unwrap();
+    let want = RuntimePaths::resolve_with(None, Some(&w.proj), Some(&w.home));
+    assert_eq!(r.runtime_root, want.root());
+}

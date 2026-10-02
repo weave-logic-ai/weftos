@@ -52,6 +52,70 @@ Staging area for changes after the 0.8.1 cut.
   `undici` 7.30.0 and `brace-expansion` 5.0.12; new wasmtime advisories are
   ignored with enforced expiries (see `docs/security/cargo-audit-residual.md`).
 
+### Changed — Weave topology Phase 1 (ADR-103) — read before upgrading
+
+Phase 1 adds the user daemon, projects, tokens and the scope gate. The owner
+steps are in `docs/guides/kernel.md` (User daemon, "Owner migration").
+
+- **The gateway binds to loopback by default.** `gateway.host` changed from
+  `0.0.0.0` to `127.0.0.1`, and loopback binds now check the `Host` header. An
+  install that relied on the implicit LAN bind loses it silently: set
+  `gateway.host = "0.0.0.0"` if you want LAN exposure.
+- **User daemon.** `weaver kernel start --profile user` runs one machine-wide
+  daemon in `~/.weftos/run` (socket, `kernel.lock`, log) with the roles
+  `machine` and `user`, its working directory in `~/.weftos`. It reads
+  `~/.weftos/weave.toml`, which takes precedence over `~/.clawft/config.json`;
+  copy your `[kernel.mesh]` and Noise sections into it or the user daemon runs
+  with the mesh off. It seeds `~/.weftos/projects/` from `workspaces.json`.
+- **`weft` now reaches the user daemon without flags.** The endpoint resolves
+  from `--runtime`, then `WEFTOS_RUNTIME_DIR`, then the project manifest
+  (`[serve] runtime_dir`, or `via = "user-daemon"`, which selects
+  `~/.weftos/run`), then `~/.weftos/run` when no project is known and a user
+  daemon has run there, then the Phase 0 default. The unreachable-daemon
+  error lists every level tried.
+- **User chain migration.** `weaver migrate user-chain [--dry-run]` copies the
+  legacy chain from `~/.clawft` to `~/.weftos/chain`, verifies it (hashes,
+  head, signature) and writes `MIGRATED-TO-WEFTOS.txt` beside the original,
+  which is never modified. After it, any kernel that would still land on the
+  `~/.clawft` chain, including one whose config sets
+  `kernel.chain.checkpoint_path` into that directory, is refused with
+  **exit 78** unless `--adopt-legacy-chain` is passed. `migrate` warns when
+  `~/.clawft/config.json` sets the key.
+- **Projects.** New `weft project init|fork|list|show|seed`; new global flags
+  `--project <ULID>` and `--runtime <DIR>`; new environment variables
+  `WEFTOS_PROJECT` and `WEFTOS_MANIFESTS_DIR`. Manifests live in
+  `~/.weftos/projects/<ULID>.toml` (mode 0600); `project.toml` marks a
+  project directory.
+- **Tokens.** `weft token issue|revoke|list` mint `wft_` secrets (shown once,
+  with a playground link; 24 h maximum). Only hashes go on the chain;
+  revocations are also journaled in `auth-tokens.jsonl`, now in the runtime
+  root (older journals beside the chain or in `~/.clawft` are merged in once,
+  not modified). A token's `project` is recorded but not yet enforced.
+- **Literal `auth` scopes are same-uid only.** `admin`, `write`, `chat` and
+  `read` as an `auth` value work only from a unix-socket peer with the daemon's
+  uid. From another uid on the unix socket the request fails with
+  `peer_uid_mismatch`; over the TCP relay the literal is stripped, so the call
+  is anonymous and a mutating method fails with "permission denied: requires
+  capability". Use a `wft_` token instead.
+- **Scope gate (D12).** On the user daemon, `kernel.governance.outside_project`
+  defaults to `read_only`: outside a project only a reviewed allow-list of read
+  methods works and everything else returns `project_required`. Other modes:
+  `deny_all`, `allow_all` (the pre-Phase 1 behaviour, and the default for
+  project daemons). The allow-list includes the streams and reads first-party
+  clients use without a project (`kernel.logs_stream`, `substrate.read`,
+  `substrate.subscribe`, `cluster.facts`, `voice.trace`), so the egui
+  explorer and `weft voice watch` keep working. `ipc.subscribe_stream` is not
+  on it: it needs a project claim.
+- **Service units.** `weaver service unit --kind launchd|systemd` prints a unit
+  for the user daemon, and `weaver update --restart` restarts it (acting only
+  on the pid-file pid after checking the exe and the handshake). A refused boot
+  exits **78**; the systemd unit lists it in `RestartPreventExitStatus`.
+  launchd cannot filter on exit codes, so it retries a refused boot every 30 s
+  and fills the log until you fix the cause.
+- **Compatibility.** `kernel.status` now carries a `handshake` object. Clients
+  that send no `proto` are accepted for every method this release; they will be
+  refused in Phase 2, so update `weft` and the gateway together.
+
 ### Fixed (0.8.2)
 
 - **Ruflo team bus synced to the fixed ADR-402 store** (upstream `ruvnet/ruflo` PR

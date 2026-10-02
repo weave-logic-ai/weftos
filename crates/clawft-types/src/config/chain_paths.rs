@@ -18,7 +18,10 @@
 
 use std::path::{Path, PathBuf};
 
-pub use crate::runtime_paths::{CHAIN_CHECKPOINT_FILE, RUNTIME_DIR_ENV};
+pub use crate::runtime_paths::{
+    CHAIN_CHECKPOINT_FILE, LEGACY_MIGRATED_MARKER, MIGRATED_FROM_FILE, RUNTIME_DIR_ENV,
+    user_chain_root,
+};
 
 /// File name of the user key under `~/.weftos`.
 pub const USER_KEY_FILE: &str = "user.key";

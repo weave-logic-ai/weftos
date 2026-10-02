@@ -445,6 +445,75 @@ cmd_browser() {
     fi
 }
 
+# Companion apps for sensor cogs (ADR-104): crates/weftos-<name>-scope, binary weft-<name>-scope.
+cmd_scope() {
+    local name="${1:-}"
+    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope <name>  (crates/weftos-<name>-scope; e.g. ecg, tof)"; return 1; }
+    local profile="${PROFILE:-release}"
+    header "Building weft-${name}-scope (native egui companion, profile: $profile)"
+    timer_start
+    run_cmd cargo build -p "weftos-${name}-scope" --bin "weft-${name}-scope" --profile "$profile"
+    timer_end
+    local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
+    report_binary_size "target/${dir}/weft-${name}-scope" "weft-${name}-scope"
+    pass "run: SEED_HOST=169.254.42.1 target/${dir}/weft-${name}-scope"
+}
+
+cmd_scope_web() {
+    local name="${1:-}"
+    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope-web <name>"; return 1; }
+    local profile="${PROFILE:-release-wasm}"
+    header "Building weft-${name}-scope for the browser (wasm32-unknown-unknown, profile: $profile)"
+    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
+    timer_start
+    run_cmd cargo build --target wasm32-unknown-unknown -p "weftos-${name}-scope" --lib --profile "$profile"
+    timer_end
+    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_${name}_scope.wasm"
+    report_binary_size "$wasm_file" "${name}-scope WASM (raw)"
+    local pkg_dir="$ROOT/crates/weftos-${name}-scope/www/pkg"
+    if command -v wasm-bindgen >/dev/null 2>&1; then
+        info "Running wasm-bindgen → $pkg_dir"
+        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
+        report_binary_size "$pkg_dir/weftos_${name}_scope_bg.wasm" "${name}-scope WASM (bindgen)"
+        pass "pkg/ ready — serve crates/weftos-${name}-scope/www over http and open /?seed=<seed-ip>"
+    else
+        skip "wasm-bindgen CLI not found — pkg/ not generated"
+        info "Install with: cargo install wasm-bindgen-cli"
+    fi
+}
+
+cmd_manager() {
+    local profile="${PROFILE:-release}"
+    header "Building weft-cog-manager (WeftOS appliance console, native, profile: $profile)"
+    timer_start
+    run_cmd cargo build -p weftos-cog-manager --bin weft-cog-manager --profile "$profile"
+    timer_end
+    local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
+    report_binary_size "target/${dir}/weft-cog-manager" "weft-cog-manager"
+    pass "run: WEFTOS_HOST=http://<ip>:9480 target/${dir}/weft-cog-manager"
+}
+
+cmd_manager_web() {
+    local profile="${PROFILE:-release-wasm}"
+    header "Building weft-cog-manager for the browser (wasm32-unknown-unknown, profile: $profile)"
+    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
+    timer_start
+    run_cmd cargo build --target wasm32-unknown-unknown -p weftos-cog-manager --lib --profile "$profile"
+    timer_end
+    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_cog_manager.wasm"
+    report_binary_size "$wasm_file" "cog-manager WASM (raw)"
+    local pkg_dir="$ROOT/crates/weftos-cog-manager/www/pkg"
+    if command -v wasm-bindgen >/dev/null 2>&1; then
+        info "Running wasm-bindgen → $pkg_dir"
+        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
+        report_binary_size "$pkg_dir/weftos_cog_manager_bg.wasm" "cog-manager WASM (bindgen)"
+        pass "pkg/ ready — serve crates/weftos-cog-manager/www and open /?host=http://<ip>:9480"
+    else
+        skip "wasm-bindgen CLI not found — pkg/ not generated"
+        info "Install with: cargo install wasm-bindgen-cli"
+    fi
+}
+
 cmd_ui() {
     header "Building React frontend (tsc + vite)"
     if [ ! -d "$ROOT/clawft-ui" ] || [ ! -f "$ROOT/clawft-ui/package.json" ]; then
@@ -1878,6 +1947,9 @@ ${BOLD}Commands:${NC}
   gui-egui        Build native egui GUI binary (weft-gui-egui, requires --features native)
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
+  scope <name>    Build a sensor-cog companion app crates/weftos-<name>-scope (ecg, tof); ADR-104
+  scope-web <name> Same for the browser (wasm + wasm-bindgen into crates/weftos-<name>-scope/www/pkg)
+  ecg-scope[-web] Aliases for scope ecg / scope-web ecg
   ui              Build React frontend (tsc + vite)
   ui-docker       Build the clawft-ui multi-stage Docker image (WEFT-317).
                   Override tag with CLAWFT_UI_DOCKER_TAG=...
@@ -2086,6 +2158,15 @@ parse_args() {
         fi
     fi
 
+    # scope / scope-web take the companion app name: scripts/build.sh scope <name>
+    SCOPE_NAME=""
+    if [ "$COMMAND" = "scope" ] || [ "$COMMAND" = "scope-web" ]; then
+        if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+            SCOPE_NAME="$1"
+            shift
+        fi
+    fi
+
     # Capture optional positional budget overrides for wasm-panel:
     #   scripts/build.sh wasm-panel [<max-raw-kb> [<max-gz-kb>]]
     if [ "$COMMAND" = "wasm-panel" ]; then
@@ -2169,6 +2250,12 @@ main() {
         gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
+        scope)        cmd_scope "$SCOPE_NAME" ;;
+        scope-web)    cmd_scope_web "$SCOPE_NAME" ;;
+        ecg-scope)    cmd_scope ecg ;;
+        ecg-scope-web) cmd_scope_web ecg ;;
+        manager)      cmd_manager ;;
+        manager-web)  cmd_manager_web ;;
         ui)           cmd_ui ;;
         ui-docker)    cmd_ui_docker ;;
         ui-e2e)       cmd_ui_e2e ;;
