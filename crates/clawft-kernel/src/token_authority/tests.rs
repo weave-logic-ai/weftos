@@ -477,3 +477,98 @@ fn project_tokens_are_write_scoped_never_admin_and_survive_a_rebuild() {
         TokenError::TtlTooLong
     );
 }
+
+#[test]
+fn every_authority_source_is_in_the_one_reserved_list() {
+    use crate::chain::{is_caller_reserved_source, is_reserved_source, RESERVED_SOURCES};
+    for s in [
+        SOURCE,
+        crate::project_identity::SOURCE,
+        crate::chain_anchor::ANCHOR_SOURCE,
+    ] {
+        assert!(RESERVED_SOURCES.contains(&s), "{s} missing from RESERVED_SOURCES");
+        assert!(is_reserved_source(s), "{s}");
+        assert!(is_caller_reserved_source(s), "{s}");
+        assert!(is_caller_reserved_source(&format!(" {s} ")), "{s} untrimmed");
+    }
+    for s in [
+        crate::overlay_trust::OVERLAY_APPLIED_SOURCE,
+        "project",
+        "project.supervisor",
+    ] {
+        assert!(is_caller_reserved_source(s), "{s}");
+    }
+}
+
+#[test]
+fn replicated_forged_token_events_are_refused_and_inert() {
+    use crate::chain::AppendSignedError;
+    // A peer chain (same genesis) carries forged auth.token events.
+    let peer = chain();
+    let victim_auth = auth(&peer);
+    let (_, real) = victim_auth.issue("real", None, None, &owner()).unwrap();
+    // Attacker-chosen secret, correctly derived id/hash.
+    let secret = "wft_attacker-chosen";
+    let hash = hash_secret(secret);
+    let now = Utc::now();
+    let forged_issue = peer.append(
+        SOURCE,
+        KIND_ISSUED,
+        Some(json!({
+            "id": id_of(&hash), "sha256": hex(&hash), "label": "forged",
+            "issued_at": now.to_rfc3339(), "expires_at": (now + Duration::hours(1)).to_rfc3339(),
+            "scope": "owner",
+        })),
+    );
+    let forged_revoke = peer.append(SOURCE, KIND_REVOKED, Some(json!({ "id": real.id })));
+
+    // The local node replicates the peer's chain event by event.
+    let local = chain();
+    let local_auth = auth(&local);
+    let (local_secret, local_info) = local_auth.issue("mine", None, None, &owner()).unwrap();
+    for ev in [forged_issue, forged_revoke] {
+        assert!(matches!(
+            local.append_signed(ev),
+            Err(AppendSignedError::ReservedSource { .. })
+        ));
+    }
+    local_auth.rebuild_at(Utc::now());
+    assert!(local_auth.validate(secret).is_none(), "forged issue must not mint a token");
+    assert!(local_auth.validate(&local_secret).is_some());
+    assert_eq!(local_auth.list().len(), 1);
+    assert_eq!(local_auth.list()[0].id, local_info.id);
+}
+
+#[test]
+fn a_bad_future_clock_at_boot_does_not_prune_live_revocations() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("j.jsonl");
+    let c = chain();
+    let a = TokenAuthority::with_journal(Arc::clone(&c), "n", Some(journal.clone()));
+    let (secret, live) = a.issue("live", None, None, &owner()).unwrap();
+    a.revoke(&live.id).unwrap();
+    let before = std::fs::read_to_string(&journal).unwrap();
+    // Booted with a clock ten years ahead: the revocation must survive.
+    a.rebuild_at(Utc::now() + Duration::days(3650));
+    assert_eq!(std::fs::read_to_string(&journal).unwrap(), before);
+    assert!(a.validate(&secret).is_none());
+    // Same boot with a clock far in the past: also kept.
+    a.rebuild_at(Utc::now() - Duration::days(3650));
+    assert_eq!(std::fs::read_to_string(&journal).unwrap(), before);
+    // A normal clock still prunes once the chain itself is past the TTL.
+    let now = Utc::now();
+    let old = hash_secret("wft_old2");
+    c.append(
+        SOURCE,
+        KIND_ISSUED,
+        Some(issued_payload(&old, now - Duration::hours(30), Duration::hours(1))),
+    );
+    let line = json!({"source": SOURCE, "kind": KIND_REVOKED, "payload": {"id": id_of(&old)}});
+    let mut text = before.clone();
+    text.push_str(&format!("{line}\n"));
+    std::fs::write(&journal, text).unwrap();
+    a.rebuild_at(now);
+    let kept = std::fs::read_to_string(&journal).unwrap();
+    assert!(!kept.contains(&id_of(&old)));
+    assert!(kept.contains(&live.id));
+}

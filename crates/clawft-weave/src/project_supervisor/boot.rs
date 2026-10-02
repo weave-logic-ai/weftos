@@ -182,9 +182,18 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
     cfg.parent_socket = paths.socket();
     cfg.manifests_dir = manifests_dir.clone();
     let gate = kernel.governance_gate().cloned();
+    // The parent's real caps, so a child's merged limits start from them
+    // (the overlay can only tighten). Boot-time values, like the caps.
+    let kc = kernel.kernel_config();
+    let parent_limits = clawft_kernel::gate::parent_limits_of(kc);
     let deps = Deps {
         cert_env: CertEnv { chain, user_key: user_key.clone(), manifests_dir: manifests_dir.clone() },
-        snapshot: Arc::new(move || gate.as_ref().and_then(|g| g.governance_snapshot())),
+        snapshot: Arc::new(move || {
+            gate.as_ref().and_then(|g| g.governance_snapshot()).map(|mut s| {
+                s.limits = parent_limits;
+                s
+            })
+        }),
         tokens: crate::token_rpc::authority_for_kernel(kernel),
         activity: Arc::new(idle::RegistryActivity),
         io: Arc::new(io::RpcChildIo::new(user_key, manifests_dir)),

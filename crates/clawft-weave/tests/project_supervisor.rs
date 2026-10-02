@@ -202,6 +202,9 @@ fn env_allowlist_spawn_contract() {
         assert_eq!(pin.trim(), hex::encode(fx.user_key.verifying_key().to_bytes()));
         let pol = clawft_kernel::parent_policy::load_parent_policy(&fx.run_dir().join("parent-policy.json")).unwrap();
         clawft_kernel::parent_policy::verify_parent_policy(&pol, &fx.user_key.verifying_key().to_bytes()).unwrap();
+        // The parent's real limits reach the child (not Limits::default()).
+        assert_eq!(pol.limits.max_processes, Some(12));
+        assert_eq!(pol.limits.spawn_budget, Some(3));
         // The workload path ran through the gate and the chain.
         let loads = fx.events("workload.load");
         assert!(loads.iter().any(|e| e.payload.as_ref().is_some_and(|p| p["permit_rule"] == "PROJECT-SUPERVISOR-PERMIT")));

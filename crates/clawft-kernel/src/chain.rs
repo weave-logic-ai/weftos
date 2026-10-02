@@ -194,12 +194,15 @@ pub struct ChainEvent {
 pub const IDEMPOTENCY_LOOKBACK: usize = 1000;
 
 /// Chain sources only the daemon's own code may append under: the user
-/// chain's identity events (`user.projects`) and project anchors
-/// (`project.anchor`, on both the user and the project chain). Refused from
-/// the `chain.append` RPC and `chain_bridge`, and from replicated events
+/// chain's identity events (`user.projects`), project anchors
+/// (`project.anchor`, on both the user and the project chain) and token
+/// issue/revoke records (`auth.token`, folded by `TokenAuthority`). Refused
+/// from the `chain.append` RPC and `chain_bridge`, and from replicated events
 /// ([`ChainManager::append_signed`]): a forged one would feed the identity
-/// view or fake an anchor.
-pub const RESERVED_SOURCES: &[&str] = &["user.projects", "project.anchor"];
+/// view, fake an anchor or mint/revoke a bearer token. This is the ONE list:
+/// every authority-owned source a kernel component folds belongs here (the
+/// literals are pinned to the owning modules' constants by a test).
+pub const RESERVED_SOURCES: &[&str] = &["user.projects", "project.anchor", "auth.token"];
 
 /// Is `source` reserved for the daemon's own events?
 pub fn is_reserved_source(source: &str) -> bool {
@@ -215,6 +218,32 @@ pub fn is_reserved_source(source: &str) -> bool {
 /// governance events and a peer's must sync; a project kernel replicates
 /// nothing (its mesh is off).
 pub const KERNEL_SOURCES: &[&str] = &["governance", "project", "project.supervisor"];
+
+/// Event kinds a project kernel folds as authority regardless of the source
+/// they carry (the overlay rollback floor and `user_pin_used` read
+/// `governance.overlay.applied`). Refused from replication under any source:
+/// a forged replicated one with `parent_version = u64::MAX` would brick boot
+/// and reload.
+pub const RESERVED_KINDS: &[&str] = &["governance.overlay.applied"];
+
+/// Is `kind` an authority-folded kind that replication must never carry?
+pub fn is_reserved_kind(kind: &str) -> bool {
+    RESERVED_KINDS.contains(&kind.trim())
+}
+
+/// Domain-tag prefix of every project-key signed format
+/// (`weftos-project-cert-v1`, `-anchor-v1`, `-anchor-record-v1`, forward
+/// header, ...). A signer that takes caller-chosen bytes under a key it does
+/// not tag (the chain's `dual_sign`, the tree manager's `sign_bytes`, the mesh
+/// handshake) must never sign bytes that start with it, or its signature
+/// could be replayed as one of those statements (ADR-103 A7 note).
+pub const PROJECT_DOMAIN_PREFIX: &[u8] = b"weftos-project-";
+
+/// True when an untagged signer would be signing a project-domain-tagged
+/// message. Callers refuse (return `None`/`Err`) in release builds too.
+pub fn signs_project_domain(data: &[u8]) -> bool {
+    data.starts_with(PROJECT_DOMAIN_PREFIX)
+}
 
 /// May a caller (an RPC or a tracing emitter) NOT append under `source`?
 pub fn is_caller_reserved_source(source: &str) -> bool {
@@ -1561,6 +1590,11 @@ impl ChainManager {
     /// overwrite; higher-level merge commits are out of scope for linear
     /// catch-up replay.
     pub fn append_signed(&self, event: ChainEvent) -> Result<ChainEvent, AppendSignedError> {
+        // First, before any sequence/fork bookkeeping, so a forged authority
+        // event is refused as such whatever the local chain looks like.
+        if is_reserved_source(&event.source) || is_reserved_kind(&event.kind) {
+            return Err(AppendSignedError::ReservedSource { event_source: event.source.clone() });
+        }
         let mut chain = self.inner.lock().unwrap();
 
         // Idempotent: already have this exact event.
@@ -1575,10 +1609,6 @@ impl ChainManager {
                 local_hash: existing.hash,
                 remote_hash: event.hash,
             });
-        }
-
-        if is_reserved_source(&event.source) {
-            return Err(AppendSignedError::ReservedSource { event_source: event.source.clone() });
         }
 
         if event.chain_id != chain.chain_id {
@@ -2577,6 +2607,10 @@ impl ChainManager {
     pub fn dual_sign(&self, data: &[u8]) -> Option<DualSignature> {
         use ed25519_dalek::Signer;
 
+        if signs_project_domain(data) {
+            tracing::error!("dual_sign refused bytes tagged for a project statement");
+            return None;
+        }
         let signing_key = self.signing_key.as_ref()?;
         let ed_sig = signing_key.sign(data);
         let ed_bytes = ed_sig.to_bytes().to_vec();

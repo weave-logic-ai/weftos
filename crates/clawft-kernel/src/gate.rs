@@ -100,6 +100,16 @@ pub trait GateBackend: Send + Sync {
     }
 }
 
+/// The process and spawn caps a kernel runs under, as the limits a parent
+/// policy exports (ADR-103 A6). Boot-time values, like the caps themselves.
+pub fn parent_limits_of(kc: &clawft_types::config::KernelConfig) -> clawft_types::config::overlay::Limits {
+    clawft_types::config::overlay::Limits {
+        max_processes: Some(u64::from(kc.max_processes)),
+        spawn_budget: kc.agent.as_ref().map(|a| u64::from(a.subagents.max_per_conv)),
+        ..Default::default()
+    }
+}
+
 /// A governance engine's rules and settings at one instant.
 #[derive(Debug, Clone)]
 pub struct GovernanceSnapshot {
@@ -109,6 +119,12 @@ pub struct GovernanceSnapshot {
     pub risk_threshold: f64,
     /// Whether blocking verdicts escalate to a human.
     pub human_approval_required: bool,
+    /// Process and spawn caps the exporter's kernel runs under (ADR-103
+    /// A6). The engine does not know them: the daemon fills them in from
+    /// its kernel config, so a project kernel's merged limits start from the
+    /// parent's real caps and the overlay can only tighten them. The
+    /// threshold and approval flag travel in the fields above, not here.
+    pub limits: clawft_types::config::overlay::Limits,
 }
 
 /// Gate backend wrapping the existing `CapabilityChecker`.
@@ -455,6 +471,7 @@ impl GateBackend for GovernanceGate {
             rules: self.engine.rules().to_vec(),
             risk_threshold: self.engine.risk_threshold(),
             human_approval_required: self.engine.human_approval_required(),
+            limits: Default::default(),
         })
     }
 

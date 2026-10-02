@@ -102,6 +102,9 @@ impl TreeManager {
     #[cfg(feature = "exochain")]
     fn sign_bytes(&self, data: &[u8]) -> Option<Vec<u8>> {
         use ed25519_dalek::Signer;
+        if crate::chain::signs_project_domain(data) {
+            return None;
+        }
         self.signing_key
             .as_ref()
             .map(|k| k.sign(data).to_bytes().to_vec())

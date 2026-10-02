@@ -59,6 +59,11 @@ struct Boot {
 
 static BOOT: OnceLock<Boot> = OnceLock::new();
 static PLANE: OnceCell<Arc<PlacementControlPlane>> = OnceCell::const_new();
+/// The effective-rules hash (hex) the control plane's gate was built from, or
+/// `None` on a kernel without a governance overlay. Compared on every call:
+/// the gate is fixed at build, so a later governance push must not leave an
+/// older, possibly looser, gate deciding (ADR-103 D8: applies after a restart).
+static BUILT_RULES: OnceLock<Option<String>> = OnceLock::new();
 /// This node's `workload-host` (in-process target and, when configured,
 /// served to other nodes).
 static HOST: OnceLock<Arc<WorkloadHostService>> = OnceLock::new();
@@ -87,10 +92,23 @@ pub async fn sync_peers(plane: &PlacementControlPlane, dir: &Path) -> Result<(),
     Ok(())
 }
 
+/// Refuse when the governance in force is no longer the governance the gate
+/// was built from. Fail closed: the placement gate does not follow a push, so
+/// after one it declines to decide until the kernel restarts.
+fn governance_changed(built: Option<&Option<String>>, now: Option<&str>) -> Result<(), String> {
+    match built {
+        Some(b) if b.as_deref() != now => Err(
+            "governance changed since placement started; restart this kernel to apply it (ADR-103 D8)"
+                .into(),
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// The gate for placement decisions. On a project kernel (ADR-103 D8) it is
 /// built from the effective rules (parent policy plus overlay) as of this
-/// build, so an overlay deny on `workload.*` applies; a later push shows up
-/// when the control plane is rebuilt.
+/// build, so an overlay deny on `workload.*` applies. It does not follow a
+/// later push: [`dispatch`] refuses (`governance_changed`) until restart.
 fn gate(
     dir: &Path,
     chain: &Arc<ChainManager>,
@@ -120,7 +138,12 @@ async fn build(
         .cloned()
         .ok_or("placement needs the kernel chain (decisions are chained)")?;
     let membership = k.cluster_membership().clone();
-    let effective = k.governance_overlay().map(|o| o.effective_rules());
+    let effective = k.governance_overlay().map(|o| o.effective_rules_and_hash());
+    let (effective, built) = match effective {
+        Some((rules, hash)) => (Some(rules), Some(hash)),
+        None => (None, None),
+    };
+    let _ = BUILT_RULES.set(built);
     drop(k);
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
@@ -355,6 +378,10 @@ pub async fn dispatch(
         Ok(p) => p.clone(),
         Err(e) => return Response::error(format!("placement unavailable: {e}")),
     };
+    let now = kernel.read().await.governance_overlay().map(|o| o.applied().effective_hash);
+    if let Err(e) = governance_changed(BUILT_RULES.get(), now.as_deref()) {
+        return Response::error(e);
+    }
     if HOST.get().is_some() && !plane.targets().iter().any(|t| t.addr == LOCAL_ADDR) {
         // Facts were not probed yet when the plane was built.
         let _ = plane.add_target(LOCAL_ADDR, TrustTier::Pinned).await;
@@ -390,6 +417,23 @@ pub async fn start_serving(
     tracing::info!(addr = %bound, advertise = %cfg.advertised(), node = %adv.node_id,
         methods = adv.methods.len(), "workload-host served");
     Ok(Some(bound))
+}
+
+#[cfg(test)]
+mod governance_changed_tests {
+    use super::governance_changed;
+
+    #[test]
+    fn a_push_after_build_makes_placement_refuse() {
+        assert!(governance_changed(None, Some("a")).is_ok(), "not built yet");
+        let plain: Option<String> = None;
+        assert!(governance_changed(Some(&plain), None).is_ok(), "no overlay, none now");
+        let built = Some("aa".to_owned());
+        assert!(governance_changed(Some(&built), Some("aa")).is_ok());
+        let e = governance_changed(Some(&built), Some("bb")).unwrap_err();
+        assert!(e.contains("restart"), "{e}");
+        assert!(governance_changed(Some(&built), None).is_err());
+    }
 }
 
 #[cfg(test)]

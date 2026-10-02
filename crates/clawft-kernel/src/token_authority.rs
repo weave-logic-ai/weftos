@@ -368,6 +368,9 @@ impl TokenAuthority {
     /// Replay the chain and journal: issued minus revoked minus expired at
     /// `now`. Only events from [`SOURCE`] count.
     pub fn rebuild_at(&self, now: DateTime<Utc>) {
+        // Held across the journal read AND the prune rewrite, so a revoke
+        // appended between them is never dropped by the rewrite.
+        let _guard = self.journal_lock.lock().unwrap_or_else(|e| e.into_inner());
         let events = self.chain.tail_from(0);
         let revoked_in_journal = self.read_journal();
         let mut records: Vec<Record<'_>> = Vec::new();
@@ -393,10 +396,18 @@ impl TokenAuthority {
     }
 
     /// Drop journal revocations whose token can no longer be live
-    /// (`issued_at + MAX_TTL <= now`, by the chain's issued event). A
+    /// (`issued_at + MAX_TTL <= horizon`, by the chain's issued event). A
     /// revocation whose issued event is unknown is kept. Rewrites
     /// atomically (temp, fsync, rename, fsync dir, mode 0600), and only
     /// when something is dropped.
+    ///
+    /// The horizon is `min(now, newest chain event time)`, never the bare
+    /// wall clock: a daemon booting with a clock far in the future (a Pi
+    /// with a bad RTC) must not delete revocations of tokens that are still
+    /// live by the real clock. The chain's newest event is a time the
+    /// daemon itself recorded, so a token expired by then is expired for
+    /// real; pruning merely lags by one boot. Caller holds `journal_lock`
+    /// ([`Self::rebuild_at`]).
     fn prune_journal(
         &self,
         events: &[crate::chain::ChainEvent],
@@ -405,6 +416,10 @@ impl TokenAuthority {
     ) {
         use std::io::Write;
         let Some(path) = &self.journal else { return };
+        let Some(newest) = events.iter().map(|e| e.timestamp).max() else {
+            return;
+        };
+        let horizon = now.min(newest);
         let mut issued_at: HashMap<&str, DateTime<Utc>> = HashMap::new();
         for ev in events {
             if ev.source != SOURCE || ev.kind != KIND_ISSUED {
@@ -423,13 +438,12 @@ impl TokenAuthority {
             .iter()
             .filter(|p| {
                 let id = p.get("id").and_then(Value::as_str).unwrap_or_default();
-                issued_at.get(id).is_none_or(|t| *t + MAX_TTL > now)
+                issued_at.get(id).is_none_or(|t| *t + MAX_TTL > horizon)
             })
             .collect();
         if keep.len() == revoked.len() {
             return;
         }
-        let _guard = self.journal_lock.lock().unwrap_or_else(|e| e.into_inner());
         let write = || -> std::io::Result<()> {
             let tmp = path.with_extension("jsonl.tmp");
             let mut opts = std::fs::OpenOptions::new();

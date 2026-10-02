@@ -264,6 +264,29 @@ fn from_verified_is_called_only_by_verified_project_attest() {
 }
 
 #[test]
+fn verified_project_constructors_are_called_only_from_their_verification_sites() {
+    // The three laundering-prone constructors (a `String` or a `TokenInfo`
+    // becomes a trusted project id): each has exactly the call sites that
+    // sit right after the check that justifies it.
+    let srcs = sources();
+    assert_eq!(
+        files_with(&srcs, "VerifiedProject::from_verified_forward("),
+        ["clawft-weave/src/project_forward.rs"],
+        "a forward-header principal is minted only by ForwardVerifier::verify (signature, window, replay, project binding)"
+    );
+    assert_eq!(
+        files_with(&srcs, "VerifiedProject::from_token("),
+        ["clawft-weave/src/caller_principal.rs", "clawft-weave/src/shared_rpc.rs"],
+        "a token principal is minted only from a TokenInfo the authority returned"
+    );
+    assert_eq!(
+        files_with(&srcs, "VerifiedProject::from_bound("),
+        ["clawft-weave/src/caller_principal.rs"],
+        "the bound-kernel principal is minted only from the handshake state"
+    );
+}
+
+#[test]
 fn with_project_is_called_only_with_an_attestation_in_hand() {
     let hits = files_with(&sources(), ".with_project(");
     assert_eq!(hits, ["clawft-kernel/src/governance.rs", "clawft-kernel/src/governance_project.rs"]);
