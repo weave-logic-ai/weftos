@@ -1,6 +1,8 @@
 //! Typed bodies of the journal kinds the bindings fold interprets.
 
-use clawft_mesh_local::Principal;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use clawft_mesh_local::{node_id_from_pubkey, Principal};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -60,6 +62,10 @@ pub enum BindError {
     ApprovalRequired,
     #[error("an approved bind must record who approved it (`by`)")]
     ApprovalWithoutApprover,
+    #[error("serial floor {floor} exceeds the allowed maximum {max}")]
+    FloorTooHigh { floor: u64, max: u64 },
+    #[error("seq {0} is not a pending journal.quarantine record")]
+    NoSuchQuarantine(u64),
     #[error("bindings are degraded ({0}); read-only")]
     Degraded(String),
     #[error("certificate not_after must be after issued_at")]
@@ -124,6 +130,8 @@ pub(crate) struct RevokeBody {
 /// raise the serial floor (never lower the clamped quarantine value).
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct AcceptBody {
+    /// Seq of the `journal.quarantine` record this accepts.
+    pub quarantine_seq: u64,
     pub serial_floor: u64,
     pub quarantine: Vec<String>,
     pub by: Principal,
@@ -182,4 +190,16 @@ impl Event {
             Event::Other => ("", Value::Null),
         })
     }
+}
+
+pub(crate) fn id_matches(key: &[u8; 32], user_id: &str) -> Result<(), BindError> {
+    if node_id_from_pubkey(key) == user_id {
+        Ok(())
+    } else {
+        Err(BindError::UserIdMismatch)
+    }
+}
+
+pub(crate) fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }

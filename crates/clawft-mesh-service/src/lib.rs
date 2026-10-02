@@ -6,6 +6,10 @@
 //!
 //! This crate must not depend on `clawft-kernel`.
 
+// The `testing` feature adds a write-failure seam; it must never ship.
+#[cfg(all(feature = "testing", not(debug_assertions)))]
+compile_error!("clawft-mesh-service: the `testing` feature must not be enabled in release builds");
+
 mod bind_events;
 mod chain;
 pub mod bindings;

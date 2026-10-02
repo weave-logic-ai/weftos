@@ -119,7 +119,9 @@ fn truncated_tail_is_quarantined_and_binds_refused() {
     let r = b.bind_pending(&mut j, &Principal::Uid(501), &pk, BindMeta::default());
     assert!(matches!(r, Err(BindError::Journal(JournalError::ReadOnly))));
 
-    b.accept_truncate(&mut j, clawft_mesh_service::AdminAck::admin_verified(Principal::Uid(0)), None).unwrap();
+    let q = pq(&j);
+
+    b.accept_truncate(&mut j, clawft_mesh_service::AdminAck::admin_verified(Principal::Uid(0)), q, None).unwrap();
     b.bind(&mut j, &Principal::Uid(501), &pk, BindHow::Tofu, BindMeta::default()).unwrap();
     drop(j);
     let j = Journal::open(dir.path(), key()).unwrap();
@@ -233,4 +235,8 @@ fn tmpdir() -> tempfile::TempDir {
 /// Records excluding the quarantine bookkeeping record.
 fn real(j: &Journal) -> usize {
     j.iter().filter(|r| r.kind != "journal.quarantine").count()
+}
+
+fn pq(j: &Journal) -> u64 {
+    j.pending_quarantines()[0]
 }

@@ -268,7 +268,8 @@ impl Journal {
         info.revoked_user_ids.extend(ids);
         info.revoked_user_ids.sort();
         info.revoked_user_ids.dedup();
-        info.quarantine.extend(planned.iter().map(|p| p.display().to_string()));
+        info.quarantine.extend(planned.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()));
+        info.quarantine = crate::lost::sanitize_names(std::mem::take(&mut info.quarantine));
         info.ts = ts;
         info.recorded = false;
         crate::lost::write_marker(&self.dir, &info)?;
@@ -337,16 +338,23 @@ impl Journal {
     /// window before the record is appended. Deleting the marker alone cannot
     /// lift it.
     pub fn read_only(&self) -> bool {
-        self.lost.is_some() || self.chain_unaccepted()
+        self.lost.is_some() || !self.pending_quarantines().is_empty()
     }
 
-    fn chain_unaccepted(&self) -> bool {
-        let last = |kind: &str| self.records.iter().rposition(|r| r.kind == kind);
-        match (last(KIND_QUARANTINE), last(KIND_ACCEPT_TRUNCATE)) {
-            (Some(q), Some(a)) => q > a,
-            (Some(_), None) => true,
-            _ => false,
-        }
+    /// Seqs of `journal.quarantine` records no `journal.accept_truncate` has
+    /// accepted yet (oldest first). Each acceptance covers exactly one.
+    pub fn pending_quarantines(&self) -> Vec<u64> {
+        let accepted: std::collections::HashSet<u64> = self
+            .records
+            .iter()
+            .filter(|r| r.kind == KIND_ACCEPT_TRUNCATE)
+            .filter_map(|r| r.body["quarantine_seq"].as_u64())
+            .collect();
+        self.records
+            .iter()
+            .filter(|r| r.kind == KIND_QUARANTINE && !accepted.contains(&r.seq))
+            .map(|r| r.seq)
+            .collect()
     }
 
     /// What the unacknowledged quarantine lost, if anything.
@@ -368,8 +376,12 @@ impl Journal {
         &self.dir
     }
 
-    /// Remove the marker once the acceptance record is journalled.
+    /// Remove the marker once the acceptance record is journalled and no other
+    /// quarantine is still pending.
     pub(crate) fn clear_lost(&mut self, _ack: &AdminAck) -> Result<(), JournalError> {
+        if !self.pending_quarantines().is_empty() {
+            return Ok(());
+        }
         let m = self.dir.join(MARKER);
         if fs::symlink_metadata(&m).is_ok() {
             fs::remove_file(&m)?;

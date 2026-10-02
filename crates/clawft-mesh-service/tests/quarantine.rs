@@ -5,7 +5,7 @@ use std::path::Path;
 
 use clawft_mesh_local::{node_id_from_pubkey, Principal};
 use clawft_mesh_service::{
-    AdminAck, BindHow, BindMeta, Bindings, Check, ConflictReason, Journal, JournalOptions,
+    AdminAck, BindError, BindHow, BindMeta, Bindings, Check, ConflictReason, Journal, JournalOptions,
 };
 use ed25519_dalek::SigningKey;
 use serde_json::json;
@@ -70,33 +70,78 @@ fn quarantine_body(j: &Journal) -> serde_json::Value {
     j.iter().find(|r| r.kind == "journal.quarantine").expect("quarantine record").body.clone()
 }
 
-#[test]
-fn forged_high_water_is_clamped_and_admin_overridable() {
-    let dir = tmpdir();
+fn forged_setup(dir: &Path) {
     {
-        let mut j = Journal::open(dir.path(), key()).unwrap();
+        let mut j = Journal::open(dir, key()).unwrap();
         let mut b = Bindings::default();
         b.bind(&mut j, &u(501), &k(1), BindHow::Tofu, BindMeta::default()).unwrap();
         b.issue_cert(&mut j, &u(501), 10, 20).unwrap();
     }
-    let path = dir.path().join("journal.jsonl");
+    let path = dir.join("journal.jsonl");
     let mut data = fs::read(&path).unwrap();
     data.extend(format!("{{\"kind\":\"user.cert.issue\",\"body\":{{\"serial\":{}}}}}\n", u64::MAX).bytes());
     fs::write(&path, data).unwrap();
+}
 
+#[test]
+fn forged_high_water_is_clamped() {
+    let dir = tmpdir();
+    forged_setup(dir.path());
     let mut j = Journal::open(dir.path(), key()).unwrap();
     let body = quarantine_body(&j);
     assert_eq!(body["raw_serial_high_water"].as_u64(), Some(u64::MAX), "raw kept for information");
     assert_eq!(body["serial_high_water"].as_u64(), Some(2), "clamped to prefix floor 1 + 1 lost line");
     let mut b = Bindings::fold(&j).unwrap();
     assert_eq!(b.last_serial(), 2);
-    b.accept_truncate(&mut j, ack(), None).unwrap();
+    let q = pq(&j);
+    b.accept_truncate(&mut j, ack(), q, None).unwrap();
     assert_eq!(b.issue_cert(&mut j, &u(501), 10, 20).unwrap(), 3, "issuance is not bricked");
+}
 
-    // An admin can choose a higher floor explicitly.
-    b.accept_truncate(&mut j, ack(), Some(100)).unwrap();
+#[test]
+fn admin_floor_can_raise_but_is_capped() {
+    let dir = tmpdir();
+    forged_setup(dir.path());
+    let mut j = Journal::open(dir.path(), key()).unwrap();
+    let mut b = Bindings::fold(&j).unwrap();
+    let q = pq(&j);
+    let r = b.accept_truncate(&mut j, ack(), q, Some(u64::MAX));
+    assert!(matches!(r, Err(BindError::FloorTooHigh { .. })));
+    let r = b.accept_truncate(&mut j, ack(), q, Some(2 + (1 << 32) + 1));
+    assert!(matches!(r, Err(BindError::FloorTooHigh { .. })));
+    assert!(j.read_only(), "a refused acceptance lifts nothing");
+    b.accept_truncate(&mut j, ack(), q, Some(100)).unwrap();
     assert_eq!(b.issue_cert(&mut j, &u(501), 10, 20).unwrap(), 101);
     assert_eq!(Bindings::fold(&j).unwrap(), b);
+}
+
+#[test]
+fn accepting_one_quarantine_does_not_lift_another() {
+    let dir = tmpdir();
+    build(dir.path(), false);
+    corrupt_line_containing(dir.path(), "\"serial\":2");
+    {
+        let mut j = Journal::open(dir.path(), key()).unwrap(); // quarantine A
+        j.append("policy.set", json!({"n": 1})).unwrap();
+        j.append("policy.set", json!({"n": 2})).unwrap();
+    }
+    corrupt_line_containing(dir.path(), "\"n\":2");
+    let mut j = Journal::open(dir.path(), key()).unwrap(); // quarantine B
+    let pending = j.pending_quarantines();
+    assert_eq!(pending.len(), 2);
+    let mut b = Bindings::fold(&j).unwrap();
+    b.accept_truncate(&mut j, ack(), pending[0], None).unwrap();
+    assert!(j.read_only(), "A accepted, B still pending");
+    assert_eq!(j.pending_quarantines(), vec![pending[1]]);
+    // Accepting A again, or a seq that is not a quarantine, is refused.
+    assert!(matches!(b.accept_truncate(&mut j, ack(), pending[0], None), Err(BindError::NoSuchQuarantine(_))));
+    assert!(matches!(b.accept_truncate(&mut j, ack(), 0, None), Err(BindError::NoSuchQuarantine(0))));
+    drop(j);
+    let mut j = Journal::open(dir.path(), key()).unwrap();
+    assert!(j.read_only(), "still read-only after restart");
+    let mut b = Bindings::fold(&j).unwrap();
+    b.accept_truncate(&mut j, ack(), pending[1], None).unwrap();
+    assert!(!j.read_only());
 }
 
 #[test]
@@ -117,6 +162,12 @@ fn crash_after_renames_before_record_recovers_from_the_files() {
     m["raw_serial_high_water"] = json!(u64::MAX);
     m["lost_count"] = json!(1_000_000u64);
     m["revoked_user_ids"] = json!([]);
+    // Names that are not quarantine files (a live segment, a path) must be ignored.
+    let mut names = m["quarantine"].as_array().unwrap().clone();
+    names.push(json!("journal.000.jsonl"));
+    names.push(json!("/etc/passwd"));
+    names.push(json!("../journal.jsonl"));
+    m["quarantine"] = json!(names);
     fs::write(&marker, serde_json::to_vec(&m).unwrap()).unwrap();
 
     let j = Journal::open_with(dir.path(), key(), JournalOptions { max_segment_bytes: 100 }).unwrap();
@@ -148,7 +199,8 @@ fn deleting_the_marker_keeps_floor_and_revocations() {
     assert!(b.is_serial_revoked(&uid, 2) && b.is_serial_revoked(&uid, 3), "lost-tail serials are revoked");
 
     // Acceptance lifts it for good, with or without a marker.
-    b.accept_truncate(&mut j, ack(), None).unwrap();
+    let q = pq(&j);
+    b.accept_truncate(&mut j, ack(), q, None).unwrap();
     assert!(!j.read_only());
     drop(j);
     let j = Journal::open(dir.path(), key()).unwrap();
@@ -170,7 +222,8 @@ fn key_whose_bind_and_revoke_were_both_lost_stays_unbindable() {
     let mut b = Bindings::fold(&j).unwrap();
     assert_eq!(b.key_of(&u(501)), None);
     assert_eq!(b.check(&u(502), &k(1)), Check::Conflict(ConflictReason::KeyRevoked));
-    b.accept_truncate(&mut j, ack(), None).unwrap();
+    let q = pq(&j);
+    b.accept_truncate(&mut j, ack(), q, None).unwrap();
     let r = b.bind(&mut j, &u(502), &k(1), BindHow::Approved, BindMeta { by: Some(u(0)), ..Default::default() });
     assert!(r.is_err(), "even an approved bind cannot resurrect it");
     r.unwrap_err();
@@ -196,4 +249,8 @@ fn overlong_first_line_still_harvests_later_lines() {
     assert_eq!(body["lost_count"].as_u64(), Some(3));
     assert_eq!(body["raw_serial_high_water"].as_u64(), Some(2));
     assert_eq!(body["revoked_user_ids"], json!(["abc"]));
+}
+
+fn pq(j: &Journal) -> u64 {
+    j.pending_quarantines()[0]
 }

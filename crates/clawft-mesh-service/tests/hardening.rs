@@ -79,7 +79,9 @@ fn lost_revoke_and_serials_stay_effective_through_accept() {
     assert_eq!(b.check(&u(501), &k(1)), Check::Conflict(ConflictReason::KeyRevoked));
     assert!(b.issue_cert(&mut j, &u(501), 1, 2).is_err());
 
-    b.accept_truncate(&mut j, ack(), None).unwrap();
+    let q = pq(&j);
+
+    b.accept_truncate(&mut j, ack(), q, None).unwrap();
     assert!(!j.read_only());
     assert!(!dir.path().join("journal.truncated").exists());
     // Needs an approved bind with an approver after a revoke.
@@ -214,4 +216,8 @@ fn tmpdir() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     d
+}
+
+fn pq(j: &Journal) -> u64 {
+    j.pending_quarantines()[0]
 }

@@ -93,6 +93,23 @@ pub(crate) fn recompute(dir: &Path, info: &mut LostInfo) {
     info.revoked_user_ids = ids;
 }
 
+/// Keep only plain basenames of quarantine files (`journal.corrupt.*`), dedup,
+/// and bound the list so the marker stays far below its read limit.
+pub(crate) fn sanitize_names(names: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in names {
+        let base = Path::new(&n).file_name().map(|b| b.to_string_lossy().into_owned());
+        let ok = |b: &String| *b == n && b.starts_with("journal.corrupt.") && !out.contains(b);
+        if let Some(b) = base.filter(ok) {
+            out.push(b);
+        }
+        if out.len() >= 1024 {
+            break;
+        }
+    }
+    out
+}
+
 pub(crate) fn load_marker(path: &Path) -> Result<Option<LostInfo>, JournalError> {
     if fs::symlink_metadata(path).is_err() {
         return Ok(None);
@@ -101,11 +118,10 @@ pub(crate) fn load_marker(path: &Path) -> Result<Option<LostInfo>, JournalError>
     let mut data = Vec::new();
     f.take(1 << 20).read_to_end(&mut data)?;
     // An unreadable marker still means "read-only": keep the journal safe.
-    Ok(Some(serde_json::from_slice(&data).unwrap_or_else(|_| LostInfo {
-        quarantine: vec!["<unreadable marker>".into()],
-        recorded: true,
-        ..LostInfo::default()
-    })))
+    let mut info: LostInfo = serde_json::from_slice(&data)
+        .unwrap_or_else(|_| LostInfo { recorded: true, ..LostInfo::default() });
+    info.quarantine = sanitize_names(std::mem::take(&mut info.quarantine));
+    Ok(Some(info))
 }
 
 pub(crate) fn write_marker(dir: &Path, info: &LostInfo) -> Result<(), JournalError> {

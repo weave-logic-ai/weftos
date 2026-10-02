@@ -90,7 +90,7 @@ fn revoke_drops_binding_and_serials_and_bars_the_key() {
     b.issue_cert(&mut j, &u(501), 15, 25).unwrap();
     b.revoke(&mut j, &u(501), "account removed", &u(0)).unwrap();
     let uid = node_id_from_pubkey(&k(1));
-    assert_eq!(b.revoked_serials(), vec![1, 2]);
+    assert_eq!(b.revoked_serials().unwrap(), vec![1, 2]);
     assert!(b.is_serial_revoked(&uid, 2) && !b.is_serial_revoked(&uid, 3));
     assert_eq!(b.key_of(&u(501)), None);
     // The revoked key is not reusable, by anyone.
@@ -124,7 +124,7 @@ fn rebind_replaces_key_and_revokes_old_serials() {
 
     b.rebind(&mut j, &u(501), &k(3), BindMeta { by: Some(u(0)), ..Default::default() }).unwrap();
     assert_eq!(b.key_of(&u(501)), Some(k(3)));
-    assert_eq!(b.revoked_serials(), vec![1], "only the old key's serials");
+    assert_eq!(b.revoked_serials().unwrap(), vec![1], "only the old key's serials");
     assert_eq!(b.check(&u(501), &k(1)), Check::Conflict(ConflictReason::PrincipalHasOtherKey));
     // Old key can never come back, not even by its former owner via rebind.
     assert!(matches!(b.rebind(&mut j, &u(501), &k(1), BindMeta::default()), Err(BindError::Conflict(ConflictReason::KeyRevoked))));

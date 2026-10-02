@@ -21,11 +21,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use clawft_mesh_local::{node_id_from_pubkey, Principal};
 use crate::bind_events::{
-    AcceptBody, BindBody, CertBody, Event, PendingBody, RevokeBody,
+    id_matches, now, AcceptBody, BindBody, CertBody, Event, PendingBody, RevokeBody,
 };
 pub use crate::bind_events::{BindError, Check, ConflictReason, BindHow, KIND_BIND, KIND_BIND_PENDING, KIND_CERT_ISSUE, KIND_REVOKE};
 use crate::journal::{AdminAck, Journal, JournalError, Record};
@@ -54,6 +52,8 @@ pub struct Bindings {
     revoked_principals: HashSet<Principal>,
     /// Users a quarantine proved revoked (their keys are never bindable).
     lost_revoked_ids: HashSet<String>,
+    /// Seqs of `journal.quarantine` records not yet accepted.
+    pending_quarantines: std::collections::BTreeSet<u64>,
     degraded: Option<String>,
 }
 
@@ -74,8 +74,13 @@ impl Bindings {
         for rec in journal.iter() {
             if b.degraded.is_some() {
                 // Quarantine facts only ever tighten the state; keep applying them.
-                if let Ok(ev @ (Event::Quarantine(_) | Event::Accept(_))) = Event::parse(rec) {
-                    b.commit(&ev);
+                match Event::parse(rec) {
+                    Ok(ev @ Event::Quarantine(_)) => {
+                        b.commit(&ev);
+                        b.pending_quarantines.insert(rec.seq);
+                    }
+                    Ok(ev @ Event::Accept(_)) => b.commit(&ev),
+                    _ => {}
                 }
                 continue;
             }
@@ -109,24 +114,28 @@ impl Bindings {
         }
     }
 
-    /// Admin acknowledgement of a quarantined tail: journals the acceptance
-    /// and lifts read-only. `floor` is an explicit admin-chosen serial floor;
-    /// it can only raise the floor (default: the clamped quarantine value
-    /// already in the state). The constraining facts come from the signed
-    /// `journal.quarantine` record, never from the marker file.
+    /// Admin acknowledgement of one quarantined tail, named by the seq of its
+    /// `journal.quarantine` record (see `Journal::pending_quarantines`): the
+    /// gate is lifted only for that quarantine. `floor` is an explicit
+    /// admin-chosen serial floor; it can only raise the floor (default: the
+    /// clamped quarantine value already in the state) and may exceed the
+    /// current last serial by at most 2^32. The constraining facts come from
+    /// the signed quarantine record, never from the marker file.
     pub fn accept_truncate(
         &mut self,
         journal: &mut Journal,
         ack: AdminAck,
+        quarantine_seq: u64,
         floor: Option<u64>,
     ) -> Result<(), BindError> {
         self.refuse_degraded()?;
+        let max = self.last_serial.saturating_add(MAX_FLOOR_JUMP);
+        let floor = floor.unwrap_or(self.last_serial);
+        if floor > max {
+            return Err(BindError::FloorTooHigh { floor, max });
+        }
         let quarantine = journal.lost().map(|l| l.quarantine.clone()).unwrap_or_default();
-        let ev = Event::Accept(AcceptBody {
-            serial_floor: floor.unwrap_or(self.last_serial),
-            quarantine,
-            by: ack.by.clone(),
-        });
+        let ev = Event::Accept(AcceptBody { quarantine_seq, serial_floor: floor, quarantine, by: ack.by.clone() });
         self.write(journal, false, ev)?;
         journal.clear_lost(&ack)?;
         Ok(())
@@ -145,6 +154,9 @@ impl Bindings {
         self.validate(&ev)
             .map_err(|e| BindError::Replay { seq: rec.seq, source: Box::new(e) })?;
         self.commit(&ev);
+        if matches!(ev, Event::Quarantine(_)) {
+            self.pending_quarantines.insert(rec.seq);
+        }
         Ok(())
     }
 
@@ -169,15 +181,28 @@ impl Bindings {
         Check::New
     }
 
+    /// The principal's bound key. `None` when degraded (partial state is never served).
     pub fn key_of(&self, principal: &Principal) -> Option<[u8; 32]> {
+        if self.degraded.is_some() {
+            return None;
+        }
         self.by_principal.get(principal).copied()
     }
 
+    /// Internal lookup that ignores degradation (mutators refuse separately).
+    fn bound_key(&self, principal: &Principal) -> Option<[u8; 32]> {
+        self.by_principal.get(principal).copied()
+    }
+
+    /// `None` when degraded.
     pub fn principal_of(&self, key: &[u8; 32]) -> Option<&Principal> {
+        if self.degraded.is_some() {
+            return None;
+        }
         self.by_key.get(key)
     }
 
-    /// Serials ever issued to the principal's current key.
+    /// Serials ever issued to the principal's current key (empty when degraded).
     pub fn serials(&self, principal: &Principal) -> Vec<u64> {
         self.key_of(principal)
             .and_then(|k| self.issued.get(&node_id_from_pubkey(&k)))
@@ -185,8 +210,11 @@ impl Bindings {
             .unwrap_or_default()
     }
 
-    /// Every issued serial that is revoked, ascending (rides in the signed facts).
-    pub fn revoked_serials(&self) -> Vec<u64> {
+    /// Every issued serial that is revoked, ascending (rides in the signed
+    /// facts). An error when degraded, so partial state can never be
+    /// published as complete facts.
+    pub fn revoked_serials(&self) -> Result<Vec<u64>, BindError> {
+        self.refuse_degraded()?;
         let mut out: Vec<u64> = self
             .revoked_through
             .iter()
@@ -195,7 +223,7 @@ impl Bindings {
             })
             .collect();
         out.sort_unstable();
-        out
+        Ok(out)
     }
 
     pub fn is_serial_revoked(&self, user_id: &str, serial: u64) -> bool {
@@ -238,7 +266,7 @@ impl Bindings {
         new_key: &[u8; 32],
         meta: BindMeta,
     ) -> Result<(), BindError> {
-        if self.key_of(principal).as_ref() == Some(new_key) {
+        if self.bound_key(principal).as_ref() == Some(new_key) {
             return Ok(());
         }
         self.write(journal, true, Event::Bind(bind_body(principal, new_key, BindHow::Rebind, meta)))
@@ -276,7 +304,7 @@ impl Bindings {
         issued_at: u64,
         not_after: u64,
     ) -> Result<u64, BindError> {
-        let key = self.key_of(principal).ok_or(BindError::NotBound)?;
+        let key = self.bound_key(principal).ok_or(BindError::NotBound)?;
         let serial = self.last_serial.checked_add(1).ok_or(BindError::SerialExhausted)?;
         let ev = Event::Cert(CertBody {
             user_id: node_id_from_pubkey(&key),
@@ -297,7 +325,7 @@ impl Bindings {
         reason: &str,
         by: &Principal,
     ) -> Result<(), BindError> {
-        let key = self.key_of(principal).ok_or(BindError::NotBound)?;
+        let key = self.bound_key(principal).ok_or(BindError::NotBound)?;
         let user_id = node_id_from_pubkey(&key);
         let through = self.issued.get(&user_id).and_then(|v| v.iter().max().copied());
         let ev = Event::Revoke(RevokeBody {
@@ -326,7 +354,14 @@ impl Bindings {
 
     fn validate(&self, ev: &Event) -> Result<(), BindError> {
         match ev {
-            Event::Other | Event::Accept(_) | Event::Quarantine(_) => Ok(()),
+            Event::Other | Event::Quarantine(_) => Ok(()),
+            Event::Accept(a) => {
+                if self.pending_quarantines.contains(&a.quarantine_seq) {
+                    Ok(())
+                } else {
+                    Err(BindError::NoSuchQuarantine(a.quarantine_seq))
+                }
+            }
             Event::Pending(p) => {
                 id_matches(&p.user_pubkey, &p.user_id)?;
                 match self.check(&p.principal, &p.user_pubkey) {
@@ -393,7 +428,10 @@ impl Bindings {
     fn commit(&mut self, ev: &Event) {
         match ev {
             Event::Other => {}
-            Event::Accept(a) => self.last_serial = self.last_serial.max(a.serial_floor),
+            Event::Accept(a) => {
+                self.last_serial = self.last_serial.max(a.serial_floor);
+                self.pending_quarantines.remove(&a.quarantine_seq);
+            }
             Event::Quarantine(q) => self.apply_lost(q.serial_high_water, &q.revoked_user_ids),
             Event::Pending(p) => {
                 self.pending.insert(p.principal.clone(), p.user_pubkey);
@@ -435,14 +473,6 @@ impl Bindings {
     }
 }
 
-fn id_matches(key: &[u8; 32], user_id: &str) -> Result<(), BindError> {
-    if node_id_from_pubkey(key) == user_id {
-        Ok(())
-    } else {
-        Err(BindError::UserIdMismatch)
-    }
-}
-
 fn bind_body(principal: &Principal, key: &[u8; 32], how: BindHow, meta: BindMeta) -> BindBody {
     BindBody {
         principal: principal.clone(),
@@ -455,6 +485,5 @@ fn bind_body(principal: &Principal, key: &[u8; 32], how: BindHow, meta: BindMeta
     }
 }
 
-fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
-}
+/// Largest jump an admin may impose on the serial floor in one acceptance.
+pub const MAX_FLOOR_JUMP: u64 = 1 << 32;
