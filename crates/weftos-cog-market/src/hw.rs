@@ -82,6 +82,10 @@ pub struct Module {
     pub good_for: Vec<String>,
     #[serde(default)]
     pub not_for: Vec<String>,
+    /// Critical application/design notes pulled from the datasheet (gotchas that affect how the part
+    /// must be used), each ideally ending with its source. E.g. UWB antenna co-polarization.
+    #[serde(default)]
+    pub notes: Vec<String>,
     /// Free-form spec rows; a `source` key marks it as vendor/datasheet, not our measurement.
     #[serde(default)]
     pub spec: BTreeMap<String, String>,
