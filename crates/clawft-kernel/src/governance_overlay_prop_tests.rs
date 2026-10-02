@@ -220,7 +220,7 @@ actions = ["tool.shell_exec", "workload.place*"]
 reason = "never"
 [[require_approval]]
 id = "needs.ok"
-actions = ["workload.start*"]
+actions = ["cron.add*"]
 [limits]
 risk_threshold = 0.5
 max_processes = 32

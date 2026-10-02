@@ -102,7 +102,7 @@ id = "project.no-shell"
 actions = ["tool.shell_exec", "workload.place*"]
 reason = "this project never runs shell tools"
 [[require_approval]]
-actions = ["workload.start*"]
+actions = ["cron.add*"]
 [limits]
 risk_threshold = 0.5
 max_processes = 32
@@ -116,7 +116,7 @@ human_approval_required = true
     assert_eq!(e.limits.human_approval_required, Some(true));
     assert!(e.deny_actions.contains(&"tool.shell_exec".to_owned()));
     assert!(e.deny_actions.contains(&"workload.*".to_owned()), "parent deny kept");
-    assert_eq!(e.require_approval_actions, vec!["workload.start*".to_owned()]);
+    assert_eq!(e.require_approval_actions, vec!["cron.add*".to_owned()]);
     let ids: Vec<&str> = e.rules.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(
         ids,
