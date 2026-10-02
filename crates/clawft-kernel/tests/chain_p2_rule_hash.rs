@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clawft_kernel::chain::ChainManager;
-use clawft_kernel::chain_subscribe::{ChainFilter, ChainItem};
+use clawft_kernel::chain_rule_hash::RuleHashCell;
+use clawft_kernel::chain_subscribe::{ChainFilter, ChainItem, SubscribeError};
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chain_pre_p2.jsonl")
@@ -140,14 +141,14 @@ async fn append_signed_accepts_a_stamped_event_and_rejects_a_stripped_one() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("c.jsonl");
     src.save_to_file(&p).unwrap();
-    let dst = ChainManager::load_from_file(&p, 0).unwrap();
+    let dst = Arc::new(ChainManager::load_from_file(&p, 0).unwrap());
 
     let ev = src.append("s", "k", None);
     let mut stripped = ev.clone();
     stripped.rule_hash = None;
     assert!(dst.append_signed(stripped).is_err());
 
-    let mut sub = dst.subscribe(ChainFilter::default());
+    let mut sub = dst.subscribe(ChainFilter::default()).unwrap();
     dst.append_signed(ev.clone()).unwrap();
     match sub.next().await.unwrap() {
         ChainItem::Event(e) => assert_eq!(e.rule_hash, Some([4u8; 32])),
@@ -174,7 +175,7 @@ async fn collect_until(
                     break;
                 }
             }
-            ChainItem::Lagged(n) => panic!("unexpected lag of {n}"),
+            ChainItem::Lagged { missed, .. } => panic!("unexpected lag of {missed}"),
         }
     }
     seen
@@ -200,10 +201,12 @@ async fn replay_then_live_has_no_gap_and_no_duplicate_100_iterations() {
         for _ in 0..(iter % 13) {
             tokio::task::yield_now().await;
         }
-        let mut sub = cm.subscribe(ChainFilter {
-            kind_prefix: None,
-            from_seq: Some(0),
-        });
+        let mut sub = cm
+            .subscribe(ChainFilter {
+                kind_prefix: None,
+                from_seq: Some(0),
+            })
+            .unwrap();
         let seen = collect_until(&mut sub, APPENDS).await; // genesis is seq 0
         writer.join().unwrap();
         let expect: Vec<u64> = (0..=APPENDS).collect();
@@ -213,20 +216,22 @@ async fn replay_then_live_has_no_gap_and_no_duplicate_100_iterations() {
 
 #[tokio::test]
 async fn kind_prefix_filters_replay_and_live() {
-    let cm = ChainManager::new(0, 0);
+    let cm = Arc::new(ChainManager::new(0, 0));
     cm.append("s", "a.one", None);
     cm.append("s", "b.one", None);
-    let mut sub = cm.subscribe(ChainFilter {
-        kind_prefix: Some("a.".into()),
-        from_seq: Some(0),
-    });
+    let mut sub = cm
+        .subscribe(ChainFilter {
+            kind_prefix: Some("a.".into()),
+            from_seq: Some(0),
+        })
+        .unwrap();
     cm.append("s", "b.two", None);
     cm.append("s", "a.two", None);
     let mut kinds = Vec::new();
     for _ in 0..2 {
         match sub.next().await.unwrap() {
             ChainItem::Event(e) => kinds.push(e.kind),
-            ChainItem::Lagged(n) => panic!("lag {n}"),
+            ChainItem::Lagged { missed, .. } => panic!("lag {missed}"),
         }
     }
     assert_eq!(kinds, ["a.one", "a.two"]);
@@ -234,9 +239,9 @@ async fn kind_prefix_filters_replay_and_live() {
 
 #[tokio::test]
 async fn live_only_skips_history() {
-    let cm = ChainManager::new(0, 0);
+    let cm = Arc::new(ChainManager::new(0, 0));
     cm.append("s", "old", None);
-    let mut sub = cm.subscribe(ChainFilter::default());
+    let mut sub = cm.subscribe(ChainFilter::default()).unwrap();
     cm.append("s", "new", None);
     match sub.next().await.unwrap() {
         ChainItem::Event(e) => assert_eq!(e.kind, "new"),
@@ -246,8 +251,8 @@ async fn live_only_skips_history() {
 
 #[tokio::test]
 async fn a_stalled_subscriber_never_slows_append_and_sees_lagged() {
-    let cm = ChainManager::new(0, 0);
-    let mut stalled = cm.subscribe(ChainFilter::default());
+    let cm = Arc::new(ChainManager::new(0, 0));
+    let mut stalled = cm.subscribe(ChainFilter::default()).unwrap();
     let started = Instant::now();
     for i in 0..5000u64 {
         cm.append("s", "flood", Some(serde_json::json!({ "i": i })));
@@ -258,9 +263,183 @@ async fn a_stalled_subscriber_never_slows_append_and_sees_lagged() {
         started.elapsed()
     );
     match stalled.next().await.unwrap() {
-        ChainItem::Lagged(n) => assert!(n > 0),
+        ChainItem::Lagged { missed, .. } => assert!(missed > 0),
         other => panic!("expected Lagged, got {other:?}"),
     }
     // It then recovers and keeps receiving.
     assert!(matches!(stalled.next().await, Some(ChainItem::Event(_))));
+}
+
+#[tokio::test]
+async fn lagged_then_resubscribe_from_resume_from_recovers_everything() {
+    let cm = Arc::new(ChainManager::new(0, 0));
+    let mut sub = cm.subscribe(ChainFilter::default()).unwrap();
+    // One delivered event, then a flood past the buffer.
+    cm.append("s", "k", None); // seq 1
+    let first = match sub.next().await.unwrap() {
+        ChainItem::Event(e) => e.sequence,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(first, 1);
+    for _ in 0..3000 {
+        cm.append("s", "k", None);
+    }
+    let resume = match sub.next().await.unwrap() {
+        ChainItem::Lagged { missed, resume_from } => {
+            assert!(missed > 0);
+            resume_from
+        }
+        other => panic!("expected Lagged, got {other:?}"),
+    };
+    assert_eq!(resume, first + 1);
+    // Resubscribe: replay from resume_from reaches the head contiguously.
+    let head = cm.head_sequence();
+    let mut again = cm
+        .subscribe(ChainFilter {
+            kind_prefix: None,
+            from_seq: Some(resume),
+        })
+        .unwrap();
+    let seen = collect_until(&mut again, head).await;
+    assert_eq!(seen, (resume..=head).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn kind_prefix_and_lagged_compose() {
+    let cm = Arc::new(ChainManager::new(0, 0));
+    let mut sub = cm
+        .subscribe(ChainFilter {
+            kind_prefix: Some("keep.".into()),
+            from_seq: None,
+        })
+        .unwrap();
+    for i in 0..3000 {
+        cm.append("s", if i % 2 == 0 { "keep.x" } else { "drop.x" }, None);
+    }
+    assert!(matches!(
+        sub.next().await.unwrap(),
+        ChainItem::Lagged { missed, .. } if missed > 0
+    ));
+    // After the lag only matching events are delivered.
+    for _ in 0..50 {
+        match sub.next().await.unwrap() {
+            ChainItem::Event(e) => assert!(e.kind.starts_with("keep.")),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn subscription_ends_when_the_manager_drops() {
+    let cm = Arc::new(ChainManager::new(0, 0));
+    let mut sub = cm.subscribe(ChainFilter::default()).unwrap();
+    drop(cm);
+    let end = tokio::time::timeout(Duration::from_secs(5), sub.next())
+        .await
+        .expect("subscription must end, not hang");
+    assert!(end.is_none());
+}
+
+#[tokio::test]
+async fn deep_replay_is_paged_and_complete() {
+    let cm = Arc::new(ChainManager::new(0, 0));
+    for _ in 0..5000 {
+        cm.append("s", "k", None);
+    }
+    let head = cm.head_sequence();
+    let mut sub = cm
+        .subscribe(ChainFilter {
+            kind_prefix: Some("k".into()),
+            from_seq: Some(0),
+        })
+        .unwrap();
+    // Appends continue between pages without stalling or duplicating.
+    let first = match sub.next().await.unwrap() {
+        ChainItem::Event(e) => e.sequence,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(first, 1); // genesis (seq 0) has kind "genesis"
+    cm.append("s", "k", None);
+    let rest = collect_until(&mut sub, head + 1).await;
+    assert_eq!(rest, (2..=head + 1).collect::<Vec<_>>());
+}
+
+#[test]
+fn replay_window_is_enforced_with_a_typed_error() {
+    let cm = Arc::new(ChainManager::new(0, 0));
+    for _ in 0..50 {
+        cm.append("s", "k", None);
+    }
+    cm.set_max_replay_window(10);
+    let err = cm
+        .subscribe(ChainFilter {
+            kind_prefix: None,
+            from_seq: Some(0),
+        })
+        .unwrap_err();
+    assert_eq!(
+        err,
+        SubscribeError::ReplayWindowExceeded {
+            requested: 0,
+            oldest_allowed: 41
+        }
+    );
+    assert!(
+        cm.subscribe(ChainFilter {
+            kind_prefix: None,
+            from_seq: Some(41)
+        })
+        .is_ok()
+    );
+}
+
+// ---- rule_hash provider containment ----
+
+#[test]
+fn a_panicking_provider_does_not_poison_the_chain() {
+    let cm = ChainManager::new(0, 0);
+    cm.set_rule_hash_provider(Arc::new(|| panic!("provider bug")));
+    let e = cm.append("s", "k", None);
+    assert!(e.rule_hash.is_none());
+    // The chain is still usable and consistent.
+    cm.append("s", "k2", None);
+    assert!(cm.verify_integrity().valid);
+}
+
+/// The documented contract: a provider reads lock-free state. A provider
+/// built on `RuleHashCell` is unaffected by an unrelated write-held lock,
+/// and one using `try_read` degrades instead of deadlocking.
+#[test]
+fn provider_with_a_write_held_lock_does_not_deadlock_append() {
+    let rules = Arc::new(std::sync::RwLock::new(Some([6u8; 32])));
+    let cm = Arc::new(ChainManager::new(0, 0));
+    let r = Arc::clone(&rules);
+    cm.set_rule_hash_provider(Arc::new(move || r.try_read().ok().and_then(|g| *g)));
+
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let t = {
+        let (cm, rules) = (Arc::clone(&cm), Arc::clone(&rules));
+        std::thread::spawn(move || {
+            let _w = rules.write().unwrap(); // write-held across the append
+            held_tx.send(()).unwrap();
+            cm.append("s", "while-write-held", None)
+        })
+    };
+    held_rx.recv().unwrap();
+    let e = t.join().expect("append must not deadlock");
+    assert!(e.rule_hash.is_none(), "try_read miss degrades to None");
+    assert!(cm.append("s", "after", None).rule_hash.is_some());
+}
+
+#[test]
+fn rule_hash_cell_provider_stamps_without_locking() {
+    let cell = Arc::new(RuleHashCell::new());
+    let cm = ChainManager::new(0, 0);
+    cm.set_rule_hash_provider(cell.provider());
+    assert!(cm.append("s", "a", None).rule_hash.is_none());
+    cell.set(Some([1; 32]));
+    assert_eq!(cm.append("s", "b", None).rule_hash, Some([1; 32]));
+    cell.set(Some([2; 32]));
+    assert_eq!(cm.append("s", "c", None).rule_hash, Some([2; 32]));
+    assert!(cm.verify_integrity().valid);
 }

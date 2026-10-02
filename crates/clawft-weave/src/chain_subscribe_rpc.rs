@@ -5,17 +5,24 @@
 //! frames until the client disconnects.
 //!
 //! * `chain: "user"`: the daemon's own chain. Requires `Read`, which the
-//!   capability table enforces before this handler runs.
+//!   capability table enforces before this handler runs. A caller holding a
+//!   project-scoped token is refused (`project_scope_mismatch`); a plain
+//!   local Read caller is not.
 //! * `chain: "project/<id>"`: a project's chain. The caller must be `Admin`
 //!   or hold a [`VerifiedProject`] for that id (a validated project-scoped
 //!   token, or this daemon's own bound project); a bare `Request.project`
-//!   claim is not enough. Reading it means proxying to the project's
+//!   claim is not enough. A project-bound daemon serves `project/<own id>`
+//!   from its local chain. Any other id means proxying to that project's
 //!   daemon, which packages G/H wire; until then an authorized caller gets
 //!   the typed `not_yet_supported`.
 //!
 //! Frames: `{"frame":"event", ...}` (hashes hex, `rule_hash` null when the
-//! event predates ADR-103 A7) and `{"frame":"lagged","missed":n}` when the
-//! subscriber fell behind (resubscribe with `from_seq` to recover).
+//! event predates ADR-103 A7); `{"frame":"lagged","missed":n,
+//! "resume_from":seq}` when the subscriber fell behind (resubscribe with
+//! `from_seq = resume_from` to recover); `{"frame":"ping"}` every 30 s so a
+//! closed socket is noticed while the chain is quiet. Refusals are typed:
+//! `invalid_params`, `project_denied`, `project_scope_mismatch`,
+//! `not_yet_supported`, `replay_window_exceeded`, `chain_unavailable`.
 
 use serde::Deserialize;
 
@@ -85,9 +92,10 @@ pub async fn handle_chain_subscribe(
 #[cfg(feature = "exochain")]
 mod stream {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use clawft_kernel::boot::Kernel;
-    use clawft_kernel::chain::ChainEvent;
+    use clawft_kernel::chain::{ChainEvent, ChainManager};
     use clawft_kernel::chain_subscribe::{ChainFilter, ChainItem};
     use clawft_platform::NativePlatform;
     use clawft_rpc::Response;
@@ -96,6 +104,10 @@ mod stream {
     use super::{ChainTarget, SubscribeParams, parse_target, project_read_allowed};
     use crate::capability::{CallerCapabilities, Capability};
     use crate::rpc_ext::{CallerCtx, VerifiedProject};
+
+    /// Idle subscribers get a `ping` frame this often so a closed socket
+    /// is noticed (the shared forwarder only learns of one on a write).
+    const HEARTBEAT: Duration = Duration::from_secs(30);
 
     /// Stream hookup the daemon pipes into the socket after the ack.
     pub type StreamHookup = (
@@ -124,21 +136,18 @@ mod stream {
         })
     }
 
-    /// The projects whose identity this caller has cryptographic proof of.
-    async fn verified_projects(
+    /// The project a validated project-scoped token carries, if the
+    /// caller presented one.
+    async fn token_project(
         caller: &CallerCtx,
         kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
-    ) -> Vec<VerifiedProject> {
-        let mut out = Vec::new();
-        out.extend(VerifiedProject::from_bound(&crate::handshake_rpc::bound()));
-        let token = caller.auth.as_deref().map(str::trim).unwrap_or("");
-        if token.starts_with(clawft_kernel::token_authority::SECRET_PREFIX)
-            && let Some(authority) = crate::token_rpc::authority_for(kernel).await
-            && let Some(info) = authority.validate(token)
-        {
-            out.extend(VerifiedProject::from_token(&info));
+    ) -> Option<VerifiedProject> {
+        let token = caller.auth.as_deref().map(str::trim)?;
+        if !token.starts_with(clawft_kernel::token_authority::SECRET_PREFIX) {
+            return None;
         }
-        out
+        let authority = crate::token_rpc::authority_for(kernel).await?;
+        VerifiedProject::from_token(&authority.validate(token)?)
     }
 
     /// Handle `chain.subscribe`. `Err` is the refusal response.
@@ -148,23 +157,47 @@ mod stream {
         caps: &CallerCapabilities,
         kernel: Arc<RwLock<Kernel<NativePlatform>>>,
     ) -> Result<StreamHookup, Response> {
-        let p: SubscribeParams = serde_json::from_value(params)
-            .map_err(|e| Response::error_with_kind("invalid_params", format!("chain.subscribe: {e}")))?;
+        let p: SubscribeParams = serde_json::from_value(params).map_err(|e| {
+            Response::error_with_kind("invalid_params", format!("chain.subscribe: {e}"))
+        })?;
         let target = parse_target(&p.chain)
             .map_err(|m| Response::error_with_kind("invalid_params", m))?;
+        let scoped = token_project(caller, &kernel).await;
 
-        if let ChainTarget::Project(id) = target {
-            let verified = verified_projects(caller, &kernel).await;
-            if !project_read_allowed(caps.allows(Capability::Admin), &verified, id) {
-                return Err(Response::error_with_kind(
-                    "project_denied",
-                    format!("permission denied: reading project/{id} needs a verified project or admin"),
-                ));
+        match target {
+            ChainTarget::User => {
+                // A project-scoped token never reads the user-level chain.
+                if let Some(v) = &scoped {
+                    return Err(Response::error_with_kind(
+                        "project_scope_mismatch",
+                        format!(
+                            "this token is scoped to project {}; it cannot subscribe chain \"user\"",
+                            v.as_str()
+                        ),
+                    ));
+                }
             }
-            return Err(Response::error_with_kind(
-                "not_yet_supported",
-                format!("chain.subscribe for project/{id} (proxy to the project daemon) is not wired yet"),
-            ));
+            ChainTarget::Project(id) => {
+                let mut verified: Vec<VerifiedProject> = scoped.into_iter().collect();
+                verified.extend(VerifiedProject::from_bound(&crate::handshake_rpc::bound()));
+                if !project_read_allowed(caps.allows(Capability::Admin), &verified, id) {
+                    return Err(Response::error_with_kind(
+                        "project_denied",
+                        format!(
+                            "permission denied: reading project/{id} needs a verified project or admin"
+                        ),
+                    ));
+                }
+                // A project-bound daemon's own chain IS the project's chain.
+                if crate::handshake_rpc::bound_project_id().as_deref() != Some(id) {
+                    return Err(Response::error_with_kind(
+                        "not_yet_supported",
+                        format!(
+                            "chain.subscribe for project/{id} (proxy to the project daemon) is not wired yet"
+                        ),
+                    ));
+                }
+            }
         }
 
         let chain = {
@@ -172,24 +205,33 @@ mod stream {
             k.chain_manager().cloned()
         }
         .ok_or_else(|| Response::error_with_kind("chain_unavailable", "chain is not enabled"))?;
+        stream_local(chain, p)
+    }
 
-        let mut sub = chain.subscribe(ChainFilter {
-            kind_prefix: p.kind_prefix,
-            from_seq: p.from_seq,
-        });
+    fn stream_local(chain: Arc<ChainManager>, p: SubscribeParams) -> Result<StreamHookup, Response> {
+        let mut sub = chain
+            .subscribe(ChainFilter {
+                kind_prefix: p.kind_prefix,
+                from_seq: p.from_seq,
+            })
+            .map_err(|e| Response::error_with_kind("replay_window_exceeded", e.to_string()))?;
+        // The task holds no strong reference, so it never keeps the chain alive.
+        drop(chain);
         let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
         tokio::spawn(async move {
+            let mut beat = tokio::time::interval(HEARTBEAT);
+            beat.tick().await;
             loop {
-                let item = tokio::select! {
+                let frame = tokio::select! {
                     _ = tx.closed() => return,
-                    item = sub.next() => item,
-                };
-                let frame = match item {
-                    Some(ChainItem::Event(e)) => event_frame(&e),
-                    Some(ChainItem::Lagged(n)) => {
-                        serde_json::json!({ "frame": "lagged", "missed": n })
-                    }
-                    None => return,
+                    _ = beat.tick() => serde_json::json!({ "frame": "ping" }),
+                    item = sub.next() => match item {
+                        Some(ChainItem::Event(e)) => event_frame(&e),
+                        Some(ChainItem::Lagged { missed, resume_from }) => serde_json::json!({
+                            "frame": "lagged", "missed": missed, "resume_from": resume_from,
+                        }),
+                        None => return,
+                    },
                 };
                 let mut line = frame.to_string();
                 line.push('\n');
@@ -198,10 +240,9 @@ mod stream {
                 }
             }
         });
-
         let ack = Response::success(serde_json::json!({
             "streaming": true,
-            "chain": "user",
+            "chain": p.chain,
             "from_seq": p.from_seq,
         }));
         Ok((ack, "chain.subscribe".into(), rx, Box::new(|| {})))

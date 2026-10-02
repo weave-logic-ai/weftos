@@ -84,6 +84,8 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     // read-only calls on a user-level daemon, so they must work outside a
     // project. `chain.local` / `chain.export` stay excluded.
     "chain.tail",
+    // Streaming form of `chain.tail` (ADR-103 P2 D).
+    "chain.subscribe",
     "ecc.status",
     "ecc.search",
     "ecc.calibrate",

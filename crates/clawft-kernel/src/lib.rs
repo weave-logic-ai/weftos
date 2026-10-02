@@ -197,7 +197,11 @@ pub mod chain;
 #[cfg(feature = "exochain")]
 pub mod chain_anchor;
 #[cfg(feature = "exochain")]
+pub mod chain_rule_hash;
+#[cfg(feature = "exochain")]
 pub mod chain_subscribe;
+#[cfg(all(test, feature = "exochain"))]
+mod chain_hash_tests;
 pub mod chain_storage;
 #[cfg(feature = "exochain")]
 pub mod token_authority;
