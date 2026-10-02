@@ -301,6 +301,7 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
                 "records": report.records, "head_seq": report.head_seq, "head_hash": report.head_hash,
                 "bad": report.bad.map(|(f, r)| json!({"file": f, "reason": r})),
                 "read_only": g.journal.read_only(),
+                "last_auto_accept": g.journal.last_auto_accept().map(|(seq, at)| json!({"seq": seq, "at": at})),
                 "pending_quarantines": g.journal.pending_quarantines(),
                 "latest_pending_quarantine": g.journal.latest_pending_quarantine(),
                 "degraded": g.bindings.degraded(),

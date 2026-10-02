@@ -347,11 +347,14 @@ struct StagedRecord(Vec<(PathBuf, PathBuf)>);
 
 impl StagedRecord {
     fn publish(mut self) -> Result<(), StartError> {
-        for (tmp, dst) in std::mem::take(&mut self.0) {
-            std::fs::rename(&tmp, &dst).map_err(|e| {
-                let _ = std::fs::remove_file(&tmp);
-                StartError::from(e)
-            })?;
+        let items = std::mem::take(&mut self.0);
+        for (i, (tmp, dst)) in items.iter().enumerate() {
+            if let Err(e) = std::fs::rename(tmp, dst) {
+                for (rest, _) in &items[i..] {
+                    let _ = std::fs::remove_file(rest);
+                }
+                return Err(StartError::from(e));
+            }
         }
         Ok(())
     }
@@ -386,11 +389,35 @@ fn stage_service_json(cfg: &MeshServiceConfig, st: &ServiceState, socket_dir: &P
     // they pin from.
     let mut staged = StagedRecord(Vec::new());
     for dir in [cfg.state_dir.as_path(), socket_dir] {
+        remove_stale_staging(dir);
         let tmp = dir.join(format!("{SERVICE_JSON}.{}.tmp", std::process::id()));
         write_staged(&tmp, &bytes, 0o644)?;
         staged.0.push((tmp, dir.join(SERVICE_JSON)));
     }
     Ok(staged)
+}
+
+/// Remove `service.json.<pid>.tmp` files this uid left behind (a crash between
+/// staging and publishing), keeping those of a still-running process.
+fn remove_stale_staging(dir: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name
+            .strip_prefix(&format!("{SERVICE_JSON}."))
+            .and_then(|r| r.strip_suffix(".tmp"))
+            .and_then(|p| p.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let ours = e.metadata().is_ok_and(|m| m.uid() == fsutil::euid());
+        // SAFETY: signal 0 only probes for the process.
+        let alive = pid as u32 == std::process::id() || unsafe { libc::kill(pid, 0) } == 0;
+        if ours && !alive {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 fn write_staged(tmp: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {

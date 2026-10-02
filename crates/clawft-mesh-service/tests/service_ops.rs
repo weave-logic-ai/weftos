@@ -73,6 +73,63 @@ async fn a_torn_journal_tail_after_a_crash_is_accepted_by_the_service_and_journa
     let log = std::fs::read_to_string(h.state_dir().join("journal.jsonl")).unwrap();
     let acc = log.lines().find(|l| l.contains("journal.accept_truncate")).expect("acceptance is journalled");
     assert!(acc.contains(r#""auto":"torn_tail""#), "{acc}");
+    assert!(v["last_auto_accept"]["seq"].is_u64(), "verify surfaces the auto-accept: {v}");
+    let st = h.admin_ok(Message::Status {}).await;
+    assert!(st["journal"]["last_auto_accept"]["at"].is_u64(), "status surfaces it too: {st}");
+}
+
+/// Drop everything after the end of the last journal line containing `needle`
+/// except that line's body: the line is whole, complete JSON, minus its newline.
+fn leave_line_without_newline(p: &std::path::Path, needle: &str) {
+    let text = std::fs::read_to_string(p).unwrap();
+    let mut keep: Vec<&str> = Vec::new();
+    for l in text.lines() {
+        keep.push(l);
+        if l.contains(needle) {
+            break;
+        }
+    }
+    assert!(keep.last().unwrap().contains(needle), "no {needle} line");
+    std::fs::write(p, keep.join("\n")).unwrap();
+}
+
+async fn assert_quarantined_not_auto_accepted(needle: &str) {
+    let mut h = Harness::start().await;
+    h.connect(None, 1, RegisterParams::default()).await.unwrap().close().await;
+    h.stop().await;
+    leave_line_without_newline(&h.state_dir().join("journal.jsonl"), needle);
+    h.begin().await.expect("the service still starts");
+    let v = h.admin_ok(Message::JournalVerify {}).await;
+    assert_eq!(v["read_only"], true, "a whole signed record without its newline is reviewed by an admin: {v}");
+    assert!(v["last_auto_accept"].is_null());
+}
+
+#[tokio::test]
+async fn a_torn_tail_that_is_complete_signed_json_is_quarantined_for_an_admin() {
+    assert_quarantined_not_auto_accepted(r#""kind":"user.bind""#).await;
+}
+
+#[tokio::test]
+async fn a_torn_certificate_record_with_a_serial_is_quarantined_for_an_admin() {
+    assert_quarantined_not_auto_accepted(r#""kind":"user.cert.issue""#).await;
+}
+
+#[tokio::test]
+async fn a_torn_tail_after_an_unaccepted_quarantine_stays_read_only() {
+    let mut h = Harness::start().await;
+    h.connect(None, 1, RegisterParams::default()).await.unwrap().close().await;
+    h.stop().await;
+    corrupt_last_signature(&h.state_dir().join("journal.jsonl"));
+    h.begin().await.unwrap();
+    assert_eq!(h.admin_ok(Message::JournalVerify {}).await["read_only"], true);
+    h.stop().await;
+    let mut f = std::fs::OpenOptions::new().append(true).open(h.state_dir().join("journal.jsonl")).unwrap();
+    f.write_all(br#"{"v":1,"seq":999,"ts":1,"prev":"00"#).unwrap();
+    drop(f);
+    h.begin().await.unwrap();
+    let v = h.admin_ok(Message::JournalVerify {}).await;
+    assert_eq!(v["read_only"], true, "an earlier pending quarantine is never cleared by the service: {v}");
+    assert!(v["last_auto_accept"].is_null());
 }
 
 #[tokio::test]

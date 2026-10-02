@@ -373,6 +373,13 @@ fn render_status(w: &mut dyn Write, d: &Value) -> Result<()> {
         if j["read_only"] == true { "  READ-ONLY (quarantined tail: `weaver mesh journal verify --accept-truncate`)" } else { "" },
         j["degraded"].as_str().map_or(String::new(), |why| format!("  DEGRADED: {why}")),
     )?;
+    if j["last_auto_accept"].is_object() {
+        writeln!(
+            w,
+            "            the service accepted a crash-torn journal tail on its own (seq {}, at {}); see `weaver mesh journal verify`",
+            j["last_auto_accept"]["seq"], j["last_auto_accept"]["at"]
+        )?;
+    }
     let r = &d["router"];
     writeln!(
         w,
@@ -422,6 +429,13 @@ async fn journal_verify(w: &mut dyn Write, c: &ConnArgs, accept: bool, seq: Opti
     } else {
         writeln!(w, "JOURNAL DOES NOT VERIFY: {} ({})", v["bad"]["reason"], v["bad"]["file"])?;
     }
+    if v["last_auto_accept"].is_object() {
+        writeln!(
+            w,
+            "the service accepted a crash-torn tail on its own at seq {} (time {}); nothing readable was lost",
+            v["last_auto_accept"]["seq"], v["last_auto_accept"]["at"]
+        )?;
+    }
     if v["read_only"] == true {
         writeln!(
             w,
@@ -456,7 +470,7 @@ async fn trust(w: &mut dyn Write, t: TrustArgs) -> Result<()> {
     writeln!(w, "service node {node} (build {sha})")?;
     writeln!(w, "machine key   {}", hexser::encode(&key))?;
     writeln!(w, "fingerprint   {}", fingerprint(&key))?;
-    writeln!(w, "Compare this fingerprint out of band (`weaver mesh status` run on the service host shows the same one) before relying on the pin.")?;
+    writeln!(w, "Compare this fingerprint out of band (`weaver mesh status` run on the service host as root or an admin shows the same one) before relying on the pin.")?;
     let path = t.conn.pin.clone().or_else(default_pin).context("no pin path: set --pin or HOME")?;
     write_pin(&path, &key, t.replace)?;
     writeln!(w, "pinned in {}", path.display())?;

@@ -56,7 +56,7 @@ impl Bindings {
     /// `Journal::lone_torn_tail`). The acceptance is journalled with
     /// `auto: "torn_tail"` so the history shows the service, not an admin,
     /// did it. Returns whether it accepted.
-    pub fn auto_accept_torn_tail(&mut self, journal: &mut Journal, by: Principal) -> Result<bool, BindError> {
+    pub(crate) fn auto_accept_torn_tail(&mut self, journal: &mut Journal, by: Principal) -> Result<bool, BindError> {
         self.refuse_degraded()?;
         let (Some(seq), Some((latest, files))) = (journal.latest_pending_quarantine(), self.latest_quarantine.clone())
         else {

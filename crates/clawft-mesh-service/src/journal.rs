@@ -170,6 +170,21 @@ fn serial_floor(records: &[Record]) -> u64 {
         .unwrap_or(0)
 }
 
+/// True when the bytes from `off` to the end of `path` are not valid JSON (and
+/// so cannot be a whole record): a write that stopped part-way.
+fn torn_bytes_are_partial(path: &Path, off: u64) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = fsutil::open_file(path, false, false, false) else { return false };
+    if f.seek(SeekFrom::Start(off)).is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    if f.take(MAX_RECORD_BYTES as u64 + 1).read_to_end(&mut buf).is_err() {
+        return false;
+    }
+    !buf.contains(&b'\n') && serde_json::from_slice::<serde_json::Value>(&buf).is_err()
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
@@ -239,9 +254,14 @@ impl Journal {
                 return Err(JournalError::Unverifiable { file: files[fi].display().to_string(), reason });
             }
             let prior = j.lost.is_some();
+            // Only a proper prefix of a record can be an unacknowledged
+            // partial write; a torn line that is complete JSON (a whole record
+            // missing just its newline) may have been acted on, so an admin
+            // reviews it.
+            let partial = reason.starts_with("torn final line") && torn_bytes_are_partial(&files[fi], off);
             j.quarantine(&files, fi, off)?;
             j.lone_torn = !prior
-                && reason.starts_with("torn final line")
+                && partial
                 && j.lost.as_ref().is_some_and(|i| {
                     i.lost_count == 1 && i.raw_serial_high_water == 0 && i.revoked_user_ids.is_empty()
                 });
@@ -402,8 +422,18 @@ impl Journal {
     /// True when the only pending quarantine is a single torn final line with
     /// no readable facts (the signature of a crash mid-append). Such a line was
     /// never acknowledged to any caller, so accepting it loses nothing.
-    pub fn lone_torn_tail(&self) -> bool {
+    pub(crate) fn lone_torn_tail(&self) -> bool {
         self.lone_torn && self.pending_quarantines().len() == 1
+    }
+
+    /// Seq and time of the newest quarantine the service accepted on its own
+    /// (a crash-torn tail), if any.
+    pub fn last_auto_accept(&self) -> Option<(u64, u64)> {
+        self.records
+            .iter()
+            .rev()
+            .find(|r| r.kind == KIND_ACCEPT_TRUNCATE && r.body["auto"].is_string())
+            .map(|r| (r.seq, r.ts))
     }
 
     /// What the unacknowledged quarantine lost, if anything.

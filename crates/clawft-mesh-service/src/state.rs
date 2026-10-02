@@ -247,7 +247,7 @@ impl ServiceState {
     /// The `status` reply. Registrations are listed for admins only; the peer
     /// table needs a registered daemon or an admin.
     pub fn status_json(&self, caller_uid: u32, admin: bool, registered: bool) -> Value {
-        let (head, records, read_only, degraded, pending) = {
+        let (head, records, read_only, degraded, pending, auto) = {
             let c = self.core.lock().expect("core lock");
             (
                 c.journal.head(),
@@ -255,6 +255,7 @@ impl ServiceState {
                 c.journal.read_only(),
                 c.bindings.degraded().map(str::to_string),
                 c.journal.pending_quarantines(),
+                c.journal.last_auto_accept(),
             )
         };
         let regs: Vec<Value> = if admin {
@@ -297,6 +298,7 @@ impl ServiceState {
                 "seq": head.as_ref().map(|h| h.seq), "hash": head.map(|h| h.hash),
                 "records": records, "read_only": read_only, "degraded": degraded,
                 "pending_quarantines": pending,
+                "last_auto_accept": auto.map(|(seq, at)| json!({"seq": seq, "at": at})),
             },
             "router": {
                 "delivered": get(&c.delivered), "scope_required": get(&c.scope_required),

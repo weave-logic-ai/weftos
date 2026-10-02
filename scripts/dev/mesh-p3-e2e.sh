@@ -82,6 +82,8 @@ if [ -n "${WEAVER_BIN:-}" ]; then
     [ -n "$first_id" ] || { echo "no node id in: $status" >&2; exit 1; }
     stop_service
 
+    command -v python3 >/dev/null || { echo "python3 is required for the journal-corruption smoke steps" >&2; exit 1; }
+
     echo "-- adopted node key keeps the node id (install-service --adopt-node-key)"
     mkdir -p "$base/st2"
     chmod 700 "$base/st2"
@@ -90,6 +92,17 @@ if [ -n "${WEAVER_BIN:-}" ]; then
     start_service "$base/st2"
     [ "$(node_id_of)" = "$first_id" ] || { echo "adopted key changed the node id" >&2; exit 1; }
     grep -q '"key_origin":"adopted"' "$base/st2/journal.jsonl" || { echo "journal does not record the adoption" >&2; exit 1; }
+    stop_service
+
+    echo "-- a crash-torn journal tail is accepted by the service itself"
+    start_service "$st"
+    stop_service
+    printf '{"v":1,"seq":999,"ts":1,"prev":"00' >>"$st/journal.jsonl"
+    start_service "$st"
+    jv="$(mesh journal verify --json)"
+    printf '%s' "$jv" | grep -q '"read_only": false' || { echo "a torn tail must not leave the journal read-only" >&2; exit 1; }
+    printf '%s' "$jv" | grep -q '"last_auto_accept": {' || { echo "the auto-accept is not surfaced" >&2; exit 1; }
+    grep -q '"auto":"torn_tail"' "$st/journal.jsonl" || { echo "the auto-accept is not journalled" >&2; exit 1; }
     stop_service
 
     echo "-- a corrupt journal tail is quarantined; the CLI accepts it"
