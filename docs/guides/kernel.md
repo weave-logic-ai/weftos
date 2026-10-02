@@ -375,6 +375,11 @@ manifest is adopted, else a ULID is minted. It refuses a relative root,
 
 #### Owner migration (one machine, in this order)
 
+This is the Phase 1 move to the user daemon. The later move of the mesh into the
+machine mesh service (Phase 3) is a separate procedure:
+[weftos-deployment-sops.md](./weftos-deployment-sops.md), "Moving to the machine mesh
+service (owner migration)".
+
 1. **Install the new binaries.** Nothing signals old daemons.
 2. **Stop every older daemon**, from its own project directory with its own
    binary (`weaver kernel stop`, or `kill`). Confirm with `lsof -i :9470`

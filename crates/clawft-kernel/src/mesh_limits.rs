@@ -7,6 +7,9 @@ use std::sync::Arc;
 pub const MAX_CONNECTIONS: usize = 1024;
 /// Time a peer gets to finish the Noise handshake.
 pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How often a connection checks that its route still exists and its peer is
+/// not revoked (review S1: a revoked or disconnected peer is closed within this).
+pub const ROUTE_CHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Per-IP concurrent connection cap (only under a strict gate).
 pub const MAX_CONNECTIONS_PER_IP: usize = 64;

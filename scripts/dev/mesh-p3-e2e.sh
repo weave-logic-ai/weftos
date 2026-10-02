@@ -43,7 +43,7 @@ unset WEFTOS_MESH_SOCKET WEFTOS_MESH_STATE_DIR
 
 echo "== mesh-p3-e2e: in-process service + two user daemons"
 cargo test -p clawft-weave --features mesh \
-    --test mesh_p3_e2e --test mesh_service_client --test mesh_boot_user --test mesh_boot_plain
+    --test mesh_p3_e2e --test mesh_service_client --test mesh_boot_user --test mesh_boot_plain --test mesh_boot_guard
 
 if [ -n "${WEAVER_BIN:-}" ]; then
     echo "== mesh-p3-e2e: process smoke with $WEAVER_BIN"

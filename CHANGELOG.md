@@ -134,9 +134,14 @@ running the mesh itself (collapsed mode). Owner steps:
   | peer revoke|unrevoke | journal verify [--accept-truncate] | trust`.
 - **Installing:** `weaver mesh install-service` and `uninstall-service` print a
   reviewed script (launchd or systemd, service account `_weftos` / `weftos`,
-  binary in `/usr/local/libexec/weftos/`, `--adopt-node-key` to keep the
-  machine's node id). They run nothing. `weaver update` prints the service
-  restart line when the service binary is out of date; it never calls `sudo`.
+  binary in `/usr/local/libexec/weftos/`). They run nothing. On a machine that
+  has `~/.weftos/run/node.key`, `install-service` requires `--adopt-node-key`
+  (keep the node id) or `--fresh-node-key` (a new one, with a `# WARNING` in the
+  script). The service listens on `127.0.0.1:9489` by default; LAN peers such
+  as the Pi need `--listen 0.0.0.0:9489`. Admin verbs need root or a uid given
+  with `--admin-uid`. `weaver update` prints the service restart line when the
+  service binary is out of date; it never calls `sudo` for the service (the
+  user-binary copy keeps its old `sudo cp` fallback).
 - **Mode selection.** New `kernel.mesh.service = "auto" | "required" | "off"`
   (default `auto`) in `~/.weftos/weave.toml`. `auto` uses a service that
   answers and verifies, else collapsed; a service that answers but fails
@@ -146,8 +151,16 @@ running the mesh itself (collapsed mode). Owner steps:
   reads `~/.weftos/run/node.key`.
 - **User key.** `weaver migrate user-key [--dry-run]` copies the migrated
   `chain.key` seed to `~/.weftos/user.key` (same public key, same user id;
-  `chain.key` is kept). The machine key is pinned on first contact in
-  `~/.weftos/mesh/machine.pub`.
+  `chain.key` is kept). The user daemon pins the machine key on first contact
+  in `~/.weftos/mesh/machine.pub`; the `weaver mesh` verbs only compare
+  against a pin and write one with `weaver mesh trust`.
+- **Keep `service = "required"` after removing `~/.weftos/run/node.key`.**
+  Under `auto` a daemon whose service is down would need a new node id; it
+  refuses to boot instead when the machine key is pinned, and only `off`
+  collapses deliberately with a new id.
+- **`weaver mesh peer revoke`** closes the peer's live connection. Under
+  `admission = enforce` it is refused on reconnect; under `observe` (the
+  default) the revocation is only recorded and it can reconnect.
 - **Doctor.** `weaver doctor runtime` adds `mesh.*` checks (service reachable,
   protocol window, pin, journal, box key mode, leftover `node.key`, two
   listeners on 9489, the daemon's mode against the service) and

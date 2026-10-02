@@ -252,7 +252,9 @@ The machine mesh service (ADR-103 Phase 3) and its admin verbs. `serve` runs
 the service; every other verb is a client of its socket that first verifies
 the server (its uid, and the machine key against `service.json` and the pin).
 Admin verbs are authorised by the caller's uid (root or `admin_uids` in
-`mesh.toml`) and hold no keys.
+`mesh.toml`) and hold no keys. The verbs never write a pin except `trust`; they
+compare against `~/.weftos/mesh/machine.pub` when it exists (the user daemon
+writes it on first contact).
 
 ### Usage
 
@@ -267,7 +269,7 @@ weaver mesh peer revoke <NODE_ID> [--reason TEXT]
 weaver mesh peer unrevoke <NODE_ID>
 weaver mesh journal verify [--accept-truncate [--seq N] [--floor N]]
 weaver mesh trust [--replace]
-weaver mesh install-service [--kind launchd|systemd] [--adopt-node-key PATH] [--listen ADDR] [--admin-uid UID]
+weaver mesh install-service [--kind launchd|systemd] [--adopt-node-key PATH | --fresh-node-key] [--listen ADDR] [--admin-uid UID]
 weaver mesh uninstall-service [--kind launchd|systemd] [--purge-key]
 ```
 
@@ -283,10 +285,10 @@ Client verbs also take `--socket PATH` (default `$WEFTOS_MESH_SOCKET`, else
 | `bind approve` | Approves a pending bind; `--user-id` names the key you looked at, and the service refuses if the pending key is another. |
 | `bind revoke` | Revokes the uid's binding and every certificate issued to its key. |
 | `bind rebind` | Replaces the uid's key (default: the key it last offered in conflict) and revokes the old one. The old daemon must be restarted with the new key. |
-| `peer revoke` / `unrevoke` | Refuses and disconnects a mesh peer by node id, or lifts that. |
+| `peer revoke` / `unrevoke` | Revokes a mesh peer by node id (or lifts that) and closes its live connection. Under `admission = enforce` it is refused when it reconnects; under `observe` (the default) the revocation is recorded and the peer can reconnect. |
 | `journal verify` | Re-verifies the machine journal's hash chain and signatures; `--accept-truncate` acknowledges a quarantined tail and lifts read-only mode. |
 | `trust` | Shows the machine key fingerprint and pins it; `--replace` overwrites a different pin after you verified the new key out of band. |
-| `install-service` / `uninstall-service` | Print a reviewed install or uninstall script. They run nothing and refuse `--apply`. See `docs/guides/weftos-deployment-sops.md`. |
+| `install-service` / `uninstall-service` | Print a reviewed install or uninstall script. They run nothing and refuse `--apply`. When `~/.weftos/run/node.key` exists, install needs `--adopt-node-key PATH` (keep the node id) or `--fresh-node-key` (new id, warned in the script). The listener defaults to `127.0.0.1:9489`; `--listen 0.0.0.0:9489` for LAN peers. Admin verbs need root or a uid from `--admin-uid`. See `docs/guides/weftos-deployment-sops.md`. |
 
 The daemon side is `kernel.mesh.service = "auto" | "required" | "off"` in
 `~/.weftos/weave.toml`; `weaver kernel status` shows the resulting

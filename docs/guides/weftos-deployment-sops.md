@@ -191,13 +191,17 @@ weaver mesh status            # identity, policy, registrations, journal
 weaver mesh trust             # shows the machine key fingerprint, then pins it
 ```
 
-`weaver mesh trust` writes `~/.weftos/mesh/machine.pub`. There is no pin by
-default: until it exists, verbs check the key only against the service record
-beside the socket (`service.json`), so the first contact is trust-on-first-use.
-After pinning, a different key is a hard `machine_key_changed` error; replace
-the pin only with `weaver mesh trust --replace` after verifying the new key out
-of band. The service listens on `127.0.0.1:9489` by default; exposing it on the
-LAN (`listen = "0.0.0.0:9489"` in `mesh.toml`) is an explicit choice.
+The pin is `~/.weftos/mesh/machine.pub`, and two clients treat it differently.
+The user daemon pins the machine key on its first contact with the service
+(trust-on-first-use) and from then on refuses a different key. The `weaver mesh`
+verbs never write a pin themselves: they compare against it when it exists and
+otherwise check the key only against the record beside the socket
+(`service.json`); `weaver mesh trust` is the verb that writes it. Either way, after
+pinning a different key is a hard `machine_key_changed` error; replace the pin only
+with `weaver mesh trust --replace` after verifying the new key out of band. The
+service listens on `127.0.0.1:9489` by default; exposing it on the LAN
+(`listen = "0.0.0.0:9489"` in `mesh.toml`, or `--listen` at install) is an explicit
+choice, and a remote peer such as the Pi needs it.
 
 #### Installing and removing the machine mesh service (administrator)
 
@@ -207,10 +211,23 @@ the script, then run it as an administrator from your own account
 (`sudo sh install.sh`); the service itself never runs as root.
 
 ```bash
-weaver mesh install-service > install.sh          # --kind launchd|systemd (default: this host)
-weaver mesh install-service --adopt-node-key ~/.weftos/run/node.key > install.sh
+# A machine that ran the mesh collapsed: keep its node id (--kind launchd|systemd, default: this host)
+weaver mesh install-service --adopt-node-key ~/.weftos/run/node.key \
+    --listen 0.0.0.0:9489 --admin-uid "$(id -u)" > install.sh
+# A new machine (no ~/.weftos/run/node.key): the service generates its key
+weaver mesh install-service --admin-uid "$(id -u)" > install.sh
 less install.sh && sudo sh install.sh             # does NOT start the service
 ```
+
+When `~/.weftos/run/node.key` exists, `install-service` refuses unless you pass
+`--adopt-node-key` (keep the node id) or `--fresh-node-key` (deliberately mint a
+new one; the script then carries a `# WARNING` header and peers that pinned this
+machine must re-pin it). `--listen 0.0.0.0:9489` is needed for LAN peers such as
+the Pi, because the service defaults to loopback while the collapsed daemon
+listened on `0.0.0.0:9489`; the script header flags the exposure. Admin verbs
+(`bindings`, `bind ...`, `peer ...`, `journal verify`) need root or a uid in
+`admin_uids`; the script writes `admin_uids` only from `--admin-uid`, so without it
+run those verbs with `sudo`.
 
 What the script does:
 
@@ -233,8 +250,9 @@ What the script does:
   macOS clears `/var/run`; or `/etc/systemd/system/weftos-mesh.service`);
 - with `--adopt-node-key PATH`, copies that key to `/var/lib/weftos/mesh/node.key`
   (0600, service account) so the node id does not change. It refuses to overwrite an
-  existing different key; an identical key is a no-op, so the script can be re-run.
-  The key then exists in two places until you remove the old copy;
+  existing different key and prints the remedy (stop the service, move
+  `/var/lib/weftos/mesh` aside, re-run); an identical key is a no-op, so the script
+  can be re-run. The key then exists in two places until you remove the old copy;
 - the script is re-runnable. An existing `mesh.toml` is kept and the script says that
   `--listen` / `--admin-uid` were not applied. `--listen` accepts `IP:PORT` or `localhost:PORT` only (no other hostnames); a
   non-loopback address or a port below 1024 is flagged in the script header and on
@@ -254,15 +272,20 @@ the owner procedure below.
 
 #### Moving to the machine mesh service (owner migration)
 
-Nothing here is automatic, and no step touches `~/.weftos/run/node.key`,
+Nothing here is automatic, and no migration step modifies `~/.weftos/run/node.key`,
 `~/.weftos/chain/*`, `~/.clawft/*`, any project runtime directory or the Pi's
 `cluster_peers.json`; they are only read (the adopt copy). The service writes only
 under `/var/lib/weftos/mesh`, the user daemon only `~/.weftos/user.key` and
-`~/.weftos/mesh/`.
+`~/.weftos/mesh/`. Once running in service mode the user daemon does append to its
+own chain as usual, including `mesh.service.bound` and `mesh.journal.anchor` events.
 
 1. **Install the service, adopting the node key.** Build and install the packaged
    binary, then `weaver mesh install-service --adopt-node-key ~/.weftos/run/node.key
-   > install.sh`, read it, and run it as an administrator. It creates the account and
+   --listen 0.0.0.0:9489 --admin-uid "$(id -u)" > install.sh`, read it, and run it as
+   an administrator. `--listen 0.0.0.0:9489` keeps the machine reachable from the Pi
+   (the service default is loopback only; step 5 cannot pass without it), and
+   `--admin-uid` lets you run `weaver mesh bindings`, `bind approve` and the other
+   admin verbs without `sudo`. It creates the account and
    directories, copies the binary and the key, and writes `mesh.toml`. The key is now
    in two places; the node id, and the id the Pi pinned, are unchanged. Log out and in
    so your account's new group membership applies.
@@ -276,7 +299,11 @@ under `/var/lib/weftos/mesh`, the user daemon only `~/.weftos/user.key` and
    weftos-mesh`), then `weaver mesh status` and `weaver mesh trust` after comparing
    the fingerprint with the one the install script printed.
 4. **Require the service.** Set `service = "required"` under `[kernel.mesh]` in
-   `~/.weftos/weave.toml` and start the user daemon again. It registers; the first bind
+   `~/.weftos/weave.toml` and start the user daemon again. **Keep it `required` after
+   step 5.** Once `~/.weftos/run/node.key` is gone, a daemon under `auto` that finds
+   the service down would have to mint a new node key; it refuses to boot instead
+   (because the machine key is pinned), and `required` makes it wait for the service.
+   Only `off` collapses deliberately, with a new node id. It registers; the first bind
    is journalled (`how: "tofu"`, or pending until `weaver mesh bind approve <uid>`
    under the `approve` policy). `weaver kernel status --profile user` prints
    `Profile:    user (roles: user)` and `Mesh:       service (connected)`, and the
@@ -287,8 +314,9 @@ under `/var/lib/weftos/mesh`, the user daemon only `~/.weftos/user.key` and
 
 Rollback, before step 5's removal: stop the service, set `service = "off"`, restart
 the user daemon. It binds 9489 with its own `node.key`; no chain or id has changed.
-After the removal, an administrator first copies `/var/lib/weftos/mesh/node.key`
-back. Choosing a fresh box key instead of adopting means the Pi must re-pin this
+After the removal, first copy the key back and give it to your account, or the daemon
+refuses it (it must be yours and mode 0600):
+`sudo cp /var/lib/weftos/mesh/node.key ~/.weftos/run/node.key && sudo chown "$(id -un)" ~/.weftos/run/node.key && chmod 600 ~/.weftos/run/node.key`. Choosing a fresh box key instead of adopting means the Pi must re-pin this
 machine.
 
 What the suite cannot check and you verify on the real install: the service
@@ -310,7 +338,9 @@ Updating: `weaver update` replaces the user binary and restarts the user daemon.
 the service it only prints the `sudo install ... /usr/local/libexec/weftos/weaver`
 and the restart line (`sudo launchctl kickstart -k system/ai.weftos.mesh` or
 `sudo systemctl restart weftos-mesh`) when the packaged build differs from the one
-`service.json` reports; it never calls `sudo`. `weaver doctor` reports the `mesh.*`
+`service.json` reports; it never calls `sudo` for the service. (For the user binary,
+when copying into a root-owned install directory fails, it still falls back to
+`sudo cp`.) `weaver doctor` reports the `mesh.*`
 checks (reachability, proto window, pin, journal, box key mode, a leftover
 `~/.weftos/run/node.key`, two listeners on 9489, force-revoked users) and the service
 tier skew.

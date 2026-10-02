@@ -302,6 +302,12 @@ impl AdmissionGate for CryptoGate {
         self.mode == MeshAdmissionMode::Enforce
     }
 
+    /// Under `enforce`, a revocation applies to live connections too; under
+    /// `observe` it is recorded at the next admission only, as before.
+    fn is_revoked(&self, node_id: &str) -> bool {
+        self.mode == MeshAdmissionMode::Enforce && self.revocations.is_revoked(node_id)
+    }
+
     async fn admit(&self, hello: &VerifiedHello, ctx: &AdmitContext) -> Admission {
         if self.mode == MeshAdmissionMode::Off {
             return Admission::Admit(Grant::open(ctx.class));

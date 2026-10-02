@@ -6,7 +6,7 @@
 //! tier is always re-read from what the service reports (`service.json`,
 //! `weaver mesh status`) and skew is reported against that.
 //!
-//! `weaver update` never runs `sudo`: for the service it PRINTS the `cp` and
+//! `weaver update` never runs `sudo` for the service: it PRINTS the `cp` and
 //! restart lines ([`service_update_lines`]) when the packaged build differs
 //! from the running service's.
 

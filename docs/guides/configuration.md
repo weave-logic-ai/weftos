@@ -1143,6 +1143,22 @@ noise = true
 seed_peers = ["quic://10.0.0.2:9489"]
 ```
 
+Admission and the machine mesh service (ADR-103 Phase 3):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `admission` | `"observe"` | `off`, `observe` or `enforce`. `observe` checks peers' signed hellos and records would-be refusals but never refuses and never marks a peer verified; it takes effect only once `genesis_hash` is set. `enforce` refuses unsigned, plaintext, wrong-genesis, revoked and verdict-denied peers. |
+| `genesis_hash` | unset | 64 hex chars peers must present. A cluster label, not a credential. Required for `enforce`. |
+| `admission_open_membership` | `false` | Let `enforce` admit every peer with a valid hello when there is no governance gate (otherwise it refuses everyone). |
+| `service` | `"auto"` | User daemon only. `auto`: use the machine mesh service when it answers and verifies, else run the mesh in this daemon (collapsed). `required`: boot fails without the service. `off`: never probe. A service that answers but fails verification always fails the boot. Under `auto`, a machine whose service key is pinned and that has no local `node.key` refuses to collapse (it would need a new node id). |
+| `service_socket` | unset | Service socket override; else `$WEFTOS_MESH_SOCKET`, else `/var/run/weftos/mesh.sock`. |
+
+```toml
+[kernel.mesh]
+enabled = true
+service = "required"      # after moving to the machine mesh service
+```
+
 Full guide: [mesh-quic.md](./mesh-quic.md). Kernel overview: [kernel.md](./kernel.md#mesh-k6).
 
 ## Outside-project policy (`kernel.governance.outside_project`)

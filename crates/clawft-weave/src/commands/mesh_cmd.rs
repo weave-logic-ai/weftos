@@ -209,7 +209,10 @@ pub async fn execute(cmd: MeshCmd, w: &mut dyn Write) -> Result<()> {
         },
         MeshCmd::Peer { cmd } => match cmd {
             PeerCmd::Revoke { node_id, reason, conn } => {
-                let done = format!("revoked peer {node_id}");
+                let done = format!(
+                    "revoked peer {node_id}; its live connection is closed. Under admission = enforce it is refused \
+                     when it reconnects; under observe (the default) the revocation is only recorded and it can reconnect"
+                );
                 ack(w, &conn, Message::PeerRevoke { node_id, reason }, &done).await
             }
             PeerCmd::Unrevoke { node_id, conn } => {

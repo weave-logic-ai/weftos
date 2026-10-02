@@ -512,3 +512,15 @@ async fn unsigned_noise_peer_enforce_refuses_observe_serves() {
 
 #[path = "mesh_admit_fix_tests.rs"]
 mod fix;
+
+#[test]
+fn live_revocation_applies_under_enforce_only() {
+    let id = "e".repeat(32);
+    let (enforce, _, rev) = gate(MeshAdmissionMode::Enforce, Verdict::Permit);
+    let (observe, _, rev_o) = gate(MeshAdmissionMode::Observe, Verdict::Permit);
+    assert!(!enforce.is_revoked(&id));
+    rev.revoke_host(&id, "test");
+    rev_o.revoke_host(&id, "test");
+    assert!(enforce.is_revoked(&id), "enforce cuts a revoked peer off mid-connection");
+    assert!(!observe.is_revoked(&id), "observe only records at the next admission");
+}

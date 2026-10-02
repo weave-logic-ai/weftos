@@ -61,6 +61,12 @@ if cmp -s '/Users/a b/.weftos/run/node.key' /var/lib/weftos/mesh/node.key; then
 echo 'node key already adopted (identical); leaving it'
 else
 echo '/var/lib/weftos/mesh/node.key exists and differs from the key to adopt; not overwriting' >&2
+cat >&2 <<'WEFTOS_EOF'
+remedy: the service already generated its own key (and signed its journal with it). To adopt instead:
+  sudo launchctl bootout system/ai.weftos.mesh
+  sudo mv /var/lib/weftos/mesh /var/lib/weftos/mesh.generated   (keep it until peers reconnect; its binds are lost)
+  then re-run this script
+WEFTOS_EOF
 exit 1
 fi
 else

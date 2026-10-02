@@ -371,7 +371,7 @@ async fn run(
                         error = %e,
                         "the mesh service failed verification on reconnect and is NOT being used. \
                          service.json is read once at boot; after a legitimate machine key rotation run \
-                         `weaver mesh trust` (from the mesh service package) and restart this daemon"
+                         `weaver mesh trust --replace` and restart this daemon"
                     );
                 }
             }

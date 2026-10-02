@@ -271,6 +271,31 @@ async fn a_peer_revoke_is_journalled_and_listed_in_the_revocation_file() {
     assert!(!revoked.contains(&"d".repeat(32)));
 }
 
+#[tokio::test]
+async fn a_peer_revoke_closes_the_live_connection() {
+    use clawft_kernel::ipc::{KernelMessage, MessageTarget};
+    use clawft_kernel::mesh_ipc::MeshIpcEnvelope;
+    let h = Harness::start().await;
+    let _a = h.connect(None, 1, RegisterParams::default()).await.unwrap();
+    let t = clawft_kernel::mesh_serve::transport_for("tcp", None);
+    let mut peer = t.connect(&h.svc().mesh_addr.unwrap().to_string()).await.unwrap();
+    let id = "c".repeat(32);
+    let env = MeshIpcEnvelope::new(id.clone(), h.svc().node_id.clone(), KernelMessage::text(0, MessageTarget::Topic("t".into()), "hi"));
+    peer.send(&env.to_bytes().unwrap()).await.unwrap();
+    for _ in 0..80 {
+        if h.svc().runtime().peer_ids().contains(&id) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(h.svc().runtime().peer_ids().contains(&id), "the peer has a route");
+    h.admin_ok(Message::PeerRevoke { node_id: id.clone(), reason: "stolen".into() }).await;
+    // The service closes the connection (route removed) instead of keeping it.
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(3), peer.recv()).await;
+    assert!(matches!(closed, Ok(Err(_))), "the connection is closed after the revoke");
+    assert!(!h.svc().runtime().peer_ids().contains(&id));
+}
+
 /// "The service exposes no RPC method that evaluates governance": the
 /// mesh-local handlers must not touch the gate, the chain or the kernel.
 #[test]
