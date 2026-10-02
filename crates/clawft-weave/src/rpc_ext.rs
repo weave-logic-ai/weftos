@@ -293,6 +293,18 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::project_cert_rpc::handle,
     },
+    // Read: authenticated by the project key through the statement
+    // signature, not by a token (a project kernel holds none).
+    ExtRoute {
+        prefix: "project.anchor.submit",
+        capability: Capability::Read,
+        handler: crate::anchor_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.anchor.restore",
+        capability: Capability::Admin,
+        handler: crate::anchor_rpc::handle_restore,
+    },
     ExtRoute {
         prefix: "auth.token.issue",
         capability: Capability::Admin,
@@ -387,6 +399,18 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.revoke",
         capability: Capability::Admin,
         handler: crate::project_cert_rpc::handle,
+    },
+    // Read: authenticated by the project key through the statement
+    // signature, not by a token (a project kernel holds none).
+    ExtRoute {
+        prefix: "project.anchor.submit",
+        capability: Capability::Read,
+        handler: crate::anchor_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.anchor.restore",
+        capability: Capability::Admin,
+        handler: crate::anchor_rpc::handle_restore,
     },
     ExtRoute {
         prefix: "auth.token.issue",

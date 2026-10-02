@@ -193,6 +193,19 @@ pub struct ChainEvent {
 /// the whole chain. Configurable in a future pass if needed.
 pub const IDEMPOTENCY_LOOKBACK: usize = 1000;
 
+/// Chain sources only the daemon's own code may append under: the user
+/// chain's identity events (`user.projects`) and project anchors
+/// (`project.anchor`, on both the user and the project chain). Refused from
+/// the `chain.append` RPC and `chain_bridge`, and from replicated events
+/// ([`ChainManager::append_signed`]): a forged one would feed the identity
+/// view or fake an anchor.
+pub const RESERVED_SOURCES: &[&str] = &["user.projects", "project.anchor"];
+
+/// Is `source` reserved for the daemon's own events?
+pub fn is_reserved_source(source: &str) -> bool {
+    RESERVED_SOURCES.contains(&source.trim())
+}
+
 /// Errors from [`ChainManager::append_signed`] (WEFT-105 / K6.4 replay).
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum AppendSignedError {
@@ -209,6 +222,9 @@ pub enum AppendSignedError {
     /// Remote event skips ahead of the next expected sequence.
     #[error("gap: expected seq {expected}, got {got}")]
     Gap { expected: u64, got: u64 },
+    /// The event's source is reserved for locally appended events.
+    #[error("source {event_source:?} is reserved and cannot be replicated")]
+    ReservedSource { event_source: String },
     /// Chain ID mismatch between local and remote event.
     #[error("chain_id mismatch: local={local}, remote={remote}")]
     ChainIdMismatch { local: u32, remote: u32 },
@@ -1544,6 +1560,10 @@ impl ChainManager {
                 local_hash: existing.hash,
                 remote_hash: event.hash,
             });
+        }
+
+        if is_reserved_source(&event.source) {
+            return Err(AppendSignedError::ReservedSource { event_source: event.source.clone() });
         }
 
         if event.chain_id != chain.chain_id {

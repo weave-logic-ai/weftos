@@ -34,6 +34,9 @@ pub mod handshake_rpc;
 /// `project.*` RPCs over the per-user manifest store (ADR-103 Phase 1).
 #[cfg(any(unix, windows))]
 pub mod project_cert_rpc;
+/// `project.anchor.submit`: a project's signed chain-head statement (ADR-103 A7).
+#[cfg(any(unix, windows))]
+pub mod anchor_rpc;
 pub mod project_rpc;
 /// The per-user daemon profile (`weaver kernel start --profile user`).
 #[cfg(any(unix, windows))]

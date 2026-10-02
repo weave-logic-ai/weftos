@@ -117,6 +117,10 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "governance.parent.push",
     "governance.parent.update",
     "governance.reload",
+    "project.anchor.restore",
+    // Signature-authenticated; a project kernel calls it with its project
+    // claim, so it is inside a project and needs no Admin.
+    "project.anchor.submit",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.

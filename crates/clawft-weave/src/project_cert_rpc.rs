@@ -275,6 +275,8 @@ pub fn register(env: &CertEnv, req: RegisterRequest, now: DateTime<Utc>) -> Resu
 /// PoP over a nonce from `project.cert.challenge`). The old key is revoked
 /// for good.
 pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued, IssueError> {
+    // Before the journal lock (see `anchor_rpc::identity_change_guard`).
+    let _anchor_guard = crate::anchor_rpc::identity_change_guard();
     let id = str_param(params, "id")?;
     registered_manifest(env, id)?;
     let new_pk = pubkey_param(params, "new_pubkey")?;
@@ -312,6 +314,8 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
 /// `project.revoke`: revoke the certified key. The project has no key
 /// until a later register (the revoked key can never return).
 pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
+    // Before the journal lock (see `anchor_rpc::identity_change_guard`).
+    let _anchor_guard = crate::anchor_rpc::identity_change_guard();
     let id = str_param(params, "id")?;
     validate_id(id).map_err(|_| IssueError::Invalid("project id is not a canonical ULID".into()))?;
     let journal = IdentityJournal::new(&env.manifests_dir);
@@ -385,13 +389,18 @@ fn sig_param(p: &Value, k: &str) -> Result<[u8; 64], IssueError> {
 
 /// Build the environment from the daemon: only the user daemon, which
 /// signs with the user key and keeps the manifests.
-async fn env_from(ctx: &ExtCtx) -> Result<CertEnv, IssueError> {
+pub(crate) async fn env_from(ctx: &ExtCtx) -> Result<CertEnv, IssueError> {
+    env_from_kernel(&ctx.kernel).await
+}
+
+/// [`env_from`] for a caller that has the kernel but no request context.
+pub(crate) async fn env_from_kernel(kernel: &crate::rpc_ext::KernelRef) -> Result<CertEnv, IssueError> {
     if !crate::user_daemon::is_active() {
         return Err(IssueError::Unavailable(
             "project certificates are issued by the user daemon only".into(),
         ));
     }
-    let k = ctx.kernel.read().await;
+    let k = kernel.read().await;
     let chain = k.chain_manager().cloned();
     let user_key = chain.as_ref().and_then(|c| c.signing_key_clone());
     let (Some(chain), Some(user_key)) = (chain, user_key) else {
