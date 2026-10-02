@@ -173,20 +173,22 @@ fn short(first: u64, per_ip: usize) -> Limits {
 }
 
 #[tokio::test]
-async fn silent_connection_is_dropped_under_a_strict_gate_only() {
-    let strict = server_with(crypto(MeshAdmissionMode::Observe), short(300, 64)).await;
+async fn silent_connection_is_dropped_under_enforce_only() {
+    let strict = server_with(crypto(MeshAdmissionMode::Enforce), short(300, 64)).await;
     let mut c = Client::connect(&strict.addr, false).await;
     assert!(c.closed().await, "strict gate must drop a silent peer");
 
-    let lenient = server_with(Arc::new(AllowAll), short(300, 64)).await;
-    let mut c = Client::connect(&lenient.addr, false).await;
-    let r = tokio::time::timeout(Duration::from_millis(900), c.ch.recv_encrypted()).await;
-    assert!(r.is_err(), "AllowAll keeps the old no-timeout behaviour");
+    for g in [Arc::new(AllowAll) as Arc<dyn AdmissionGate>, crypto(MeshAdmissionMode::Observe)] {
+        let lenient = server_with(g, short(300, 64)).await;
+        let mut c = Client::connect(&lenient.addr, false).await;
+        let r = tokio::time::timeout(Duration::from_millis(900), c.ch.recv_encrypted()).await;
+        assert!(r.is_err(), "AllowAll and observe keep the old no-timeout behaviour");
+    }
 }
 
 #[tokio::test]
 async fn per_ip_cap_refuses_the_extra_connection() {
-    let srv = server_with(crypto(MeshAdmissionMode::Observe), short(30_000, 2)).await;
+    let srv = server_with(crypto(MeshAdmissionMode::Enforce), short(30_000, 2)).await;
     let _a = Client::connect(&srv.addr, false).await;
     let _b = Client::connect(&srv.addr, false).await;
     tokio::time::sleep(Duration::from_millis(200)).await;

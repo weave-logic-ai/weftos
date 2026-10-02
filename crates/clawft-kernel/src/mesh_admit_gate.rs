@@ -279,8 +279,13 @@ impl CryptoGate {
             if c.len() >= MAX_CACHE {
                 let ttl = self.ttl;
                 c.retain(|_, (t, _)| t.elapsed() < ttl);
-                if c.len() >= MAX_CACHE {
-                    c.clear();
+                // Still full: evict the oldest entries, not everything.
+                while c.len() >= MAX_CACHE {
+                    let Some(oldest) = c.iter().min_by_key(|(_, (t, _))| *t).map(|(k, _)| k.clone())
+                    else {
+                        break;
+                    };
+                    c.remove(&oldest);
                 }
             }
             c.insert(key, (Instant::now(), v.clone()));
@@ -291,8 +296,10 @@ impl CryptoGate {
 
 #[async_trait]
 impl AdmissionGate for CryptoGate {
+    /// Only `enforce` bounds connections: observe must stay a no-op for
+    /// legacy peers (quiet leaves, large NAT'd fleets).
     fn strict(&self) -> bool {
-        self.mode != MeshAdmissionMode::Off
+        self.mode == MeshAdmissionMode::Enforce
     }
 
     async fn admit(&self, hello: &VerifiedHello, ctx: &AdmitContext) -> Admission {

@@ -204,3 +204,33 @@ fn disconnect_channel_only_removes_routes_still_on_that_channel() {
     assert_eq!(rt.disconnect_channel(&new_tx), 1);
     assert!(rt.peer_ids().is_empty());
 }
+
+#[tokio::test]
+async fn unadmitted_leaf_keeps_its_subscription_across_a_reconnect() {
+    let (rt, _) = runtime(true);
+    let sub = env("leaf", "mesh.subscribe", MessagePayload::Json(serde_json::json!({"topic": "push.leaf"})));
+    let (tx1, _rx1) = chan();
+    rt.handle_incoming_from(&sub, tx1.clone()).await.unwrap();
+    assert_eq!(rt.peers_for_topic("push.leaf"), vec!["leaf".to_string()]);
+
+    assert_eq!(rt.disconnect_channel(&tx1), 1);
+    assert!(rt.peer_ids().is_empty());
+
+    // Reconnect on a fresh channel without re-subscribing.
+    let (tx2, mut rx2) = chan();
+    rt.handle_incoming_from(&text("leaf", "t"), tx2).await.unwrap();
+    assert_eq!(rt.peers_for_topic("push.leaf"), vec!["leaf".to_string()]);
+    let msg = KernelMessage::text(0, MessageTarget::Topic("push.leaf".into()), "p");
+    rt.send_to_peer("leaf", MeshIpcEnvelope::new("local".into(), "leaf".into(), msg)).await.unwrap();
+    assert!(rx2.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn admitted_route_loses_its_subscriptions_on_close() {
+    let (rt, _) = runtime(true);
+    let sub = env("n1", "mesh.subscribe", MessagePayload::Json(serde_json::json!({"topic": "push.n1"})));
+    let (tx, _rx) = chan();
+    rt.handle_incoming_peer(&sub, tx.clone(), Some(&verified("n1"))).await.unwrap();
+    assert_eq!(rt.disconnect_channel(&tx), 1);
+    assert!(rt.peers_for_topic("push.n1").is_empty());
+}

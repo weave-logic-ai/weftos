@@ -345,7 +345,8 @@ impl MeshRuntime {
 
     /// Remove every route that still points at `tx` (a closed connection's
     /// outbound channel). Routes since replaced by a newer connection are
-    /// left alone. Returns the number removed.
+    /// left alone; `Left` is emitted only for routes actually removed.
+    /// Returns the number removed.
     pub fn disconnect_channel(&self, tx: &tokio::sync::mpsc::Sender<Vec<u8>>) -> usize {
         let ids: Vec<String> = self
             .peers
@@ -355,8 +356,14 @@ impl MeshRuntime {
             .collect();
         let mut n = 0;
         for id in ids {
-            if self.peers.remove_if(&id, |_, p| p.sender.same_channel(tx)).is_some() {
-                self.unregister_all_peer_topics(&id);
+            if let Some((_, conn)) = self.peers.remove_if(&id, |_, p| p.sender.same_channel(tx)) {
+                // Admitted routes lose their subscriptions with the
+                // connection. Unadmitted (legacy) peers keep theirs, as
+                // before: a leaf that reconnects must not have to
+                // re-subscribe.
+                if conn.verified {
+                    self.unregister_all_peer_topics(&id);
+                }
                 self.peer_events.emit(MeshPeerEvent::Left { node_id: id });
                 n += 1;
             }

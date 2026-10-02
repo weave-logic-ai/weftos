@@ -22,11 +22,26 @@ pub(crate) struct IpSlot {
 }
 
 impl IpSlot {
+    /// Slot key for a source address: IPv4-mapped IPv6 is folded onto its
+    /// IPv4 form and IPv6 is bucketed by /64, so one host cannot multiply
+    /// its quota by rotating addresses.
+    fn key(ip: std::net::IpAddr) -> std::net::IpAddr {
+        match ip.to_canonical() {
+            std::net::IpAddr::V6(v6) => {
+                let mut o = v6.octets();
+                o[8..].fill(0);
+                std::net::IpAddr::V6(o.into())
+            }
+            v4 => v4,
+        }
+    }
+
     pub(crate) fn acquire(
         map: &Arc<std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>>,
         ip: std::net::IpAddr,
         max: usize,
     ) -> Option<Self> {
+        let ip = Self::key(ip);
         let mut m = map.lock().unwrap();
         let n = m.entry(ip).or_insert(0);
         if *n >= max {
@@ -71,3 +86,25 @@ impl Default for Limits {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    #[test]
+    fn mapped_and_prefix_addresses_share_a_slot() {
+        let map = Arc::new(std::sync::Mutex::new(Default::default()));
+        let v4: IpAddr = "192.0.2.1".parse().unwrap();
+        let mapped: IpAddr = "::ffff:192.0.2.1".parse().unwrap();
+        let _a = IpSlot::acquire(&map, v4, 1).unwrap();
+        assert!(IpSlot::acquire(&map, mapped, 1).is_none());
+
+        let p1: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let p2: IpAddr = "2001:db8:1:2:ffff::9".parse().unwrap();
+        let other: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        let _b = IpSlot::acquire(&map, p1, 1).unwrap();
+        assert!(IpSlot::acquire(&map, p2, 1).is_none(), "same /64");
+        assert!(IpSlot::acquire(&map, other, 1).is_some(), "different /64");
+    }
+}
