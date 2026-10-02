@@ -142,7 +142,7 @@
         "GND"
       ],
       "chips": [
-        "adi-ad8232"
+        "ad8232"
       ],
       "photo": "",
       "datasheet": "",
@@ -640,21 +640,34 @@
       "good_for": [
         "ambient environment channel",
         "altitude estimate (~1 m)",
-        "humidity compensation for gas sensors"
+        "humidity compensation for gas sensors",
+        "temperature/humidity/pressure",
+        "altitude from pressure",
+        "sweating/comfort proxy",
+        "temperature / humidity / pressure",
+        "environmental fusion context"
       ],
       "not_for": [
         "fast continuous temp (self-heating bias)",
-        "CO2 (that's SCD41)"
+        "CO2 (that's SCD41)",
+        "gas/VOC (that's BME680)",
+        "motion / presence",
+        "vitals"
       ],
       "notes": [],
       "spec": {
+        "measures": "T (0.01\u00b0C), RH (0.001 %RH), pressure (Pa)",
         "interface": "I2C (0x76 / 0x77) or SPI",
+        "power": "3.3V ~3 mA",
+        "datasheet_ref": "BST-BME280-DS002",
+        "source": "docs/hardware/sensors.md + Bosch BME280 datasheet",
+        "type": "temp + humidity + pressure",
+        "chip": "BME280",
         "vin": "1.71-3.6 V",
         "temp": "-40..+85 C (+-1 C)",
         "rh": "0-100% (+-3%)",
         "press": "300-1100 hPa (+-1 hPa)",
-        "current": "~3.6 uA @ 1 Hz",
-        "source": "docs/hardware/sensors.md + Bosch BME280 datasheet"
+        "current": "~3.6 uA @ 1 Hz"
       },
       "pins": [
         "VCC",
@@ -662,7 +675,12 @@
         "SCL/SCK",
         "SDA/SDI",
         "SDO",
-        "CSB"
+        "CSB",
+        "I2C SDA",
+        "I2C SCL",
+        "3.3V",
+        "SDO->GND(0x76)",
+        "I2C SDA/SCL"
       ],
       "chips": [
         "bme280"
@@ -676,56 +694,7 @@
           "price": "$17.59 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Pimoroni/PIM472?qs=P1JMDcb91o7p2TYl00AP7g%3D%3D",
           "ships_from": "Mouser"
-        }
-      ],
-      "seen_in": [
-        "docs/hardware/sensors.md"
-      ]
-    },
-    {
-      "id": "bme280-env",
-      "name": "Bosch BME280 (T/RH/P) \u2014 SHILLEHTEK 3.3V module",
-      "vendor": "Bosch Sensortec (SHILLEHTEK module)",
-      "kind": "sensor",
-      "summary": "Companion environmental sensor (owned, working in Node A1). Temperature (0.01\u00b0C), humidity (0.001 %RH), pressure (Pa); altitude derivable from pressure. I2C @ 0x76. Room comfort / sweating proxy via RH spike.",
-      "good_for": [
-        "temperature/humidity/pressure",
-        "altitude from pressure",
-        "sweating/comfort proxy",
-        "temperature / humidity / pressure",
-        "environmental fusion context"
-      ],
-      "not_for": [
-        "gas/VOC (that's BME680)",
-        "motion / presence",
-        "vitals"
-      ],
-      "notes": [],
-      "spec": {
-        "measures": "T (0.01\u00b0C), RH (0.001 %RH), pressure (Pa)",
-        "interface": "I2C @ 0x76 (SDO=GND), 400 kHz",
-        "power": "3.3V ~3 mA",
-        "datasheet_ref": "BST-BME280-DS002",
-        "source": "docs/MODULES.md \u00a76; firmware/node-a1-bringup/src/bme280.h/.c",
-        "type": "temp + humidity + pressure",
-        "chip": "BME280"
-      },
-      "pins": [
-        "I2C SDA",
-        "I2C SCL",
-        "3.3V",
-        "GND",
-        "SDO->GND(0x76)",
-        "I2C SDA/SCL",
-        "VCC"
-      ],
-      "chips": [
-        "bme280"
-      ],
-      "photo": "",
-      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bme280_ds002.pdf",
-      "mouser_query": "Bosch BME280",
-      "buy": [
+        },
         {
           "vendor": "Mouser",
           "price": "$4.00 USD",
@@ -734,6 +703,7 @@
         }
       ],
       "seen_in": [
+        "docs/hardware/sensors.md",
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/bme280.h",
         "firmware/node-a1-bringup/src/bme280.c",
@@ -1283,7 +1253,7 @@
       ],
       "chips": [
         "esp32-s3",
-        "goodix-gt911"
+        "gt911"
       ],
       "photo": "",
       "datasheet": "https://www.mouser.com/datasheet/3/6039/1/ESP32_Display_HMI_User_Manual.pdf",
@@ -2297,21 +2267,28 @@
       "kind": "sensor",
       "summary": "Companion 9-DOF IMU (considered, not owned). Cheaper alternative for an IMU body rig than BNO085 (no on-chip fusion). I2C / SPI.",
       "good_for": [
-        "cheap 9-DOF body-rig IMU"
+        "cheap 9-DOF body-rig IMU",
+        "orientation / motion reference",
+        "pose fiducial"
       ],
       "not_for": [
-        "on-chip fusion (BNO085 does that)"
+        "on-chip fusion (BNO085 does that)",
+        "absolute position (needs UWB/other)"
       ],
       "notes": [],
       "spec": {
-        "dof": "9 (accel/gyro/mag)",
+        "type": "9-axis IMU (accel/gyro/mag)",
+        "chip": "ICM-20948",
         "interface": "I2C / SPI",
-        "source": "docs/MODULES.md \u00a78"
+        "source": "docs/MODULES.md \u00a78",
+        "dof": "9 (accel/gyro/mag)"
       },
       "pins": [
         "I2C/SPI",
         "3.3V",
-        "GND"
+        "GND",
+        "INT",
+        "VCC"
       ],
       "chips": [
         "icm-20948"
@@ -2328,50 +2305,7 @@
         }
       ],
       "seen_in": [
-        "docs/MODULES.md"
-      ]
-    },
-    {
-      "id": "icm20948-imu",
-      "name": "ICM-20948 9-axis IMU breakout",
-      "vendor": "TDK InvenSense (breakout)",
-      "kind": "sensor",
-      "summary": "9-axis (accel + gyro + magnetometer) motion/orientation IMU; orientation and motion reference stream in the RING-X1 bench.",
-      "good_for": [
-        "orientation / motion reference",
-        "pose fiducial"
-      ],
-      "not_for": [
-        "absolute position (needs UWB/other)"
-      ],
-      "notes": [],
-      "spec": {
-        "type": "9-axis IMU (accel/gyro/mag)",
-        "chip": "ICM-20948",
-        "interface": "I2C/SPI",
-        "source": "docs/corpus/ring-x1-master-build-plan.md"
-      },
-      "pins": [
-        "I2C/SPI",
-        "INT",
-        "VCC",
-        "GND"
-      ],
-      "chips": [
-        "tdk-icm20948"
-      ],
-      "photo": "",
-      "datasheet": "",
-      "mouser_query": "ICM-20948",
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "",
-          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICM-20948?qs=u4fy%2FsgLU9OtGc31yF%2Friw%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ],
-      "seen_in": [
+        "docs/MODULES.md",
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
     },
@@ -2449,7 +2383,7 @@
         "Radar Baseboard MCU7 header"
       ],
       "chips": [
-        "infineon-bgt60tr13c"
+        "bgt60tr13c"
       ],
       "photo": "",
       "datasheet": "https://www.mouser.com/datasheet/3/70/1/infineon_ug091519_radar_baseboard_mcu7_usermanual_en.pdf",
@@ -2468,58 +2402,6 @@
       ]
     },
     {
-      "id": "inmp441-mems-mic",
-      "name": "InvenSense/TDK INMP441 (I2S MEMS microphone)",
-      "vendor": "TDK InvenSense",
-      "kind": "sensor",
-      "summary": "Companion I2S MEMS mic (5-pack, working in Node A1). 24-bit PCM in 32-bit slot, Philips I2S frame, mono LEFT (L/R tied GND), 16 kHz typical / 24 kHz max. For breath-audio FFT, voice prompts, ambient classification, keyword spotting.",
-      "good_for": [
-        "broadband voice/breath audio",
-        "KWS (ESP-DL)",
-        "ambient sound classification"
-      ],
-      "not_for": [
-        "multichannel (single channel)",
-        "contact/body vibration (use piezo)"
-      ],
-      "notes": [],
-      "spec": {
-        "type": "I2S MEMS microphone, omnidirectional",
-        "output": "16/24-bit PCM, 24 kHz max, 16 kHz typical",
-        "interface": "I2S (BCLK/WS/SD, 3 wires + L/R + power)",
-        "driver_note": "24-bit signed PCM in 32-bit slot; L channel with L/R tied GND",
-        "source": "docs/MODULES.md \u00a75; firmware/node-a1-bringup/src/mic_inmp441.h/.c"
-      },
-      "pins": [
-        "I2S BCLK",
-        "I2S WS",
-        "I2S SD",
-        "L/R->GND",
-        "3.3V",
-        "GND"
-      ],
-      "chips": [
-        "inmp441"
-      ],
-      "photo": "",
-      "datasheet": "https://invensense.tdk.com/products/digital/inmp441/",
-      "mouser_query": "INMP441",
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "",
-          "url": "https://www.mouser.com/en/ProductDetail/TDK/INMP441?qs=A6eO%252BMLsxmQ7QOONrFN3Pg%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ],
-      "seen_in": [
-        "docs/MODULES.md",
-        "firmware/node-a1-bringup/src/mic_inmp441.h",
-        "firmware/node-a1-bringup/src/mic_inmp441.c",
-        "docs/TRAINING_RIG.md"
-      ]
-    },
-    {
       "id": "inmp441-mic",
       "name": "InvenSense INMP441 I2S MEMS microphone",
       "vendor": "TDK InvenSense",
@@ -2528,20 +2410,28 @@
       "good_for": [
         "digital audio capture (no ADC)",
         "sound-level / speech sensing",
-        "whisper transcription front end"
+        "whisper transcription front end",
+        "broadband voice/breath audio",
+        "KWS (ESP-DL)",
+        "ambient sound classification"
       ],
       "not_for": [
         "calibrated SPL without characterization",
-        "spectral analysis at the scalar 'Rate' characterization level"
+        "spectral analysis at the scalar 'Rate' characterization level",
+        "multichannel (single channel)",
+        "contact/body vibration (use piezo)"
       ],
       "notes": [],
       "spec": {
+        "type": "I2S MEMS microphone, omnidirectional",
+        "output": "16/24-bit PCM, 24 kHz max, 16 kHz typical",
         "interface": "I2S slave, 24-bit left-justified",
+        "driver_note": "24-bit signed PCM in 32-bit slot; L channel with L/R tied GND",
+        "source": ".planning/sensors/JOURNALED-SENSOR-MIC.md",
         "rate": "16 kHz nominal",
         "noise_floor": "~ -57 dBFS quiet room (observed)",
         "speech_peak": "~ -10 dBFS at 30 cm (observed)",
-        "host": "ESP32-S3",
-        "source": ".planning/sensors/JOURNALED-SENSOR-MIC.md"
+        "host": "ESP32-S3"
       },
       "pins": [
         "VDD",
@@ -2549,7 +2439,12 @@
         "SCK",
         "WS",
         "SD",
-        "L/R"
+        "L/R",
+        "I2S BCLK",
+        "I2S WS",
+        "I2S SD",
+        "L/R->GND",
+        "3.3V"
       ],
       "chips": [
         "inmp441"
@@ -2563,13 +2458,23 @@
           "price": "$3.36 USD",
           "url": "https://www.mouser.com/en/ProductDetail/PUI-Audio/DMM-4026-B-I2S-R?qs=zhx2xqPtQQxBuLVw%2Fwt86Q%3D%3D",
           "ships_from": "Mouser"
+        },
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK/INMP441?qs=A6eO%252BMLsxmQ7QOONrFN3Pg%3D%3D",
+          "ships_from": "Mouser"
         }
       ],
       "seen_in": [
         ".planning/sensors/JOURNALED-SENSOR-MIC.md",
         ".planning/sensors/JOURNALED-NODE-ESP32.md",
         ".planning/sensors/PIPELINE-PRIMITIVE-SPIKE.md",
-        "docs/hardware/microcontrollers.md"
+        "docs/hardware/microcontrollers.md",
+        "docs/MODULES.md",
+        "firmware/node-a1-bringup/src/mic_inmp441.h",
+        "firmware/node-a1-bringup/src/mic_inmp441.c",
+        "docs/TRAINING_RIG.md"
       ]
     },
     {
@@ -2975,50 +2880,6 @@
       ]
     },
     {
-      "id": "max30102-module",
-      "name": "MAX30102 optical pulse / PPG module",
-      "vendor": "Maxim/ADI (breakout)",
-      "kind": "sensor",
-      "summary": "Integrated red/IR PPG + pulse-oximetry optical module; contact optical streams and phase correlation in the RING-X1 bench.",
-      "good_for": [
-        "contact PPG / SpO2 optical samples",
-        "optical phase correlation"
-      ],
-      "not_for": [
-        "non-GRpi contactless use (requires skin contact)"
-      ],
-      "notes": [],
-      "spec": {
-        "type": "red/IR PPG + pulse-ox",
-        "chip": "MAX30102",
-        "interface": "I2C",
-        "source": "docs/corpus/ring-x1-master-build-plan.md"
-      },
-      "pins": [
-        "I2C SDA/SCL",
-        "INT",
-        "VCC",
-        "GND"
-      ],
-      "chips": [
-        "maxim-max30102"
-      ],
-      "photo": "",
-      "datasheet": "",
-      "mouser_query": "MAX30102",
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$21.90 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0518?qs=MyNHzdoqoQJAnv7sQmwMqQ%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ],
-      "seen_in": [
-        "docs/corpus/ring-x1-master-build-plan.md"
-      ]
-    },
-    {
       "id": "max30102-ppg",
       "name": "Maxim MAX30102 (PPG / SpO2)",
       "vendor": "Maxim Integrated / Analog Devices",
@@ -3026,22 +2887,30 @@
       "summary": "Companion optical PPG sensor (considered, not owned). Red+IR PPG with derived HR + SpO2 (\u00b12 BPM, \u00b12% SpO2). For wrist/finger HR on the tricorder/wand (too contact-required for Node A1). I2C.",
       "good_for": [
         "contact HR + SpO2",
-        "wrist/finger wearable"
+        "wrist/finger wearable",
+        "contact PPG / SpO2 optical samples",
+        "optical phase correlation"
       ],
       "not_for": [
-        "contactless sensing (Node A1)"
+        "contactless sensing (Node A1)",
+        "non-GRpi contactless use (requires skin contact)"
       ],
       "notes": [],
       "spec": {
-        "measures": "red+IR PPG -> HR, SpO2 (\u00b12 BPM, \u00b12% SpO2)",
+        "type": "red/IR PPG + pulse-ox",
+        "chip": "MAX30102",
         "interface": "I2C",
-        "source": "docs/MODULES.md \u00a77"
+        "source": "docs/MODULES.md \u00a77",
+        "measures": "red+IR PPG -> HR, SpO2 (\u00b12 BPM, \u00b12% SpO2)"
       },
       "pins": [
         "I2C SDA",
         "I2C SCL",
         "3.3V",
-        "GND"
+        "GND",
+        "I2C SDA/SCL",
+        "INT",
+        "VCC"
       ],
       "chips": [
         "max30102"
@@ -3058,7 +2927,8 @@
         }
       ],
       "seen_in": [
-        "docs/MODULES.md"
+        "docs/MODULES.md",
+        "docs/corpus/ring-x1-master-build-plan.md"
       ]
     },
     {
@@ -4063,17 +3933,21 @@
       "good_for": [
         "Seed host",
         "running cogs",
-        "I2C + UART sensor hookup"
+        "I2C + UART sensor hookup",
+        "low-cost hub for feature-packet decision layer"
       ],
       "not_for": [
-        "5 V sensor logic (GPIO is 3.3 V only)"
+        "5 V sensor logic (GPIO is 3.3 V only)",
+        "full raw sensing-server load"
       ],
       "notes": [],
       "spec": {
+        "compute": "Pi Zero 2 W",
+        "power": "micro-USB",
+        "source": "Raspberry Pi datasheet",
         "soc": "Broadcom BCM2710A1 (RP3A0), quad-core A53",
         "header": "40-pin GPIO",
-        "logic": "3.3 V",
-        "source": "Raspberry Pi datasheet"
+        "logic": "3.3 V"
       },
       "pins": [
         "1 3V3",
@@ -4081,7 +3955,9 @@
         "3 SDA",
         "5 SCL",
         "8 TXD",
-        "10 RXD"
+        "10 RXD",
+        "GPIO 40-pin",
+        "micro-USB"
       ],
       "chips": [
         "bcm2710a1"
@@ -4097,7 +3973,9 @@
           "ships_from": "Mouser"
         }
       ],
-      "seen_in": []
+      "seen_in": [
+        "reference/whitsentry/docs/hardware/phase0-parts-list.md"
+      ]
     },
     {
       "id": "piezo-contact-mic-18mm",
@@ -4278,52 +4156,20 @@
       "summary": "Wearable ECG/HR chest strap used as a cited reference/ground-truth device against mmWave HR estimates.",
       "good_for": [
         "HR ground-truth reference",
-        "ECG-gated cardiac timing"
-      ],
-      "not_for": [
-        "contactless sensing (it is a wearable strap)"
-      ],
-      "notes": [],
-      "spec": {
-        "type": "wearable ECG/HR chest strap",
-        "interface": "BLE / ANT+",
-        "source": ".metaharness/ingest/findings/hardware/hw-brandstetter-2025-pubmed41002864.json"
-      },
-      "pins": [],
-      "chips": [],
-      "photo": "",
-      "datasheet": "",
-      "mouser_query": "Polar H10",
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$14.71 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Samtec/SFSDT-06-28-H-10.00-S?qs=Jm2GQyTW%2FbjozObQ6v5LtQ%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ],
-      "seen_in": [
-        ".metaharness/ingest/findings/hardware/hw-brandstetter-2025-pubmed41002864.json"
-      ]
-    },
-    {
-      "id": "polar-h10-hr-strap",
-      "name": "Polar H10 BLE heart-rate strap",
-      "vendor": "Polar",
-      "kind": "sensor",
-      "summary": "Companion BLE HR chest strap (considered, not owned). Gold-standard fitness HR/HRV/RR via BLE GATT. An ESP32-S3 can act as BLE central (~200 lines NimBLE) to ingest it. For clinical-grade HR/HRV beyond LD6002B.",
-      "good_for": [
+        "ECG-gated cardiac timing",
         "clinical-grade HR/HRV/RR",
         "BLE GATT HR service"
       ],
       "not_for": [
+        "contactless sensing (it is a wearable strap)",
         "contactless",
         "non-chest form factors"
       ],
       "notes": [],
       "spec": {
-        "interface": "BLE GATT (HR + RR + HRV)",
-        "source": "docs/MODULES.md \u00a77"
+        "interface": "BLE / ANT+",
+        "source": ".metaharness/ingest/findings/hardware/hw-brandstetter-2025-pubmed41002864.json",
+        "type": "wearable ECG/HR chest strap"
       },
       "pins": [
         "BLE"
@@ -4341,6 +4187,7 @@
         }
       ],
       "seen_in": [
+        ".metaharness/ingest/findings/hardware/hw-brandstetter-2025-pubmed41002864.json",
         "docs/MODULES.md"
       ]
     },
@@ -4484,18 +4331,29 @@
       "good_for": [
         "server-side pose inference",
         "model training",
-        "bridge host"
+        "bridge host",
+        "sensing-server / hub compute",
+        "Nexmon CSI capture host"
       ],
       "not_for": [
-        "on-glasses/edge low-power inference"
+        "on-glasses/edge low-power inference",
+        "low-power battery nodes"
       ],
       "notes": [],
       "spec": {
-        "role": "mentra-coaching-server host",
-        "source": "docs/MODULES.md \u00a71"
+        "compute": "Pi 5 8 GB",
+        "wifi_csi": "Nexmon shim on BCM43455c0 (Pi 5/4/3B+)",
+        "source": "docs/MODULES.md \u00a71",
+        "role": "mentra-coaching-server host"
       },
-      "pins": [],
-      "chips": [],
+      "pins": [
+        "GPIO 40-pin",
+        "USB",
+        "Ethernet"
+      ],
+      "chips": [
+        "broadcom-bcm43455"
+      ],
       "photo": "",
       "datasheet": "https://www.raspberrypi.com/products/raspberry-pi-5/",
       "mouser_query": "Raspberry Pi 5",
@@ -4505,10 +4363,18 @@
           "price": "$410.00 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Raspberry-Pi/Raspberry-Pi-500%2b-PT-unit-only?qs=yc9RBI4tIAIXyMjzfnmVcw%3D%3D",
           "ships_from": "Mouser"
+        },
+        {
+          "vendor": "Mouser",
+          "price": "$536.21 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/EDATEC/ED-HMI3010-133CA-0832?qs=yc9RBI4tIAKqtxR52Sd3ZQ%3D%3D",
+          "ships_from": "Mouser"
         }
       ],
       "seen_in": [
-        "docs/MODULES.md"
+        "docs/MODULES.md",
+        "reference/whitsentry/docs/hardware/phase0-parts-list.md",
+        "reference/whitsentry/docs/research/ruview-primer.md"
       ]
     },
     {
@@ -4667,87 +4533,6 @@
       ]
     },
     {
-      "id": "rpi-5",
-      "name": "Raspberry Pi 5 (8 GB)",
-      "vendor": "Raspberry Pi Ltd",
-      "kind": "board",
-      "summary": "Reference hub / RuView sensing-server compute; also a Nexmon WiFi-CSI capture host (BCM43455c0) on the Pi 5/4/3B+ path.",
-      "good_for": [
-        "sensing-server / hub compute",
-        "Nexmon CSI capture host"
-      ],
-      "not_for": [
-        "low-power battery nodes"
-      ],
-      "notes": [],
-      "spec": {
-        "compute": "Pi 5 8 GB",
-        "wifi_csi": "Nexmon shim on BCM43455c0 (Pi 5/4/3B+)",
-        "source": "reference/whitsentry/docs/hardware/phase0-parts-list.md; reference/whitsentry/docs/research/ruview-primer.md"
-      },
-      "pins": [
-        "GPIO 40-pin",
-        "USB",
-        "Ethernet"
-      ],
-      "chips": [
-        "broadcom-bcm43455"
-      ],
-      "photo": "",
-      "datasheet": "https://www.mouser.com/datasheet/3/6063/1/ED_HMI3010_133C_datasheet_en.pdf",
-      "mouser_query": "Raspberry Pi 5 8GB",
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$536.21 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/EDATEC/ED-HMI3010-133CA-0832?qs=yc9RBI4tIAKqtxR52Sd3ZQ%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ],
-      "seen_in": [
-        "reference/whitsentry/docs/hardware/phase0-parts-list.md",
-        "reference/whitsentry/docs/research/ruview-primer.md"
-      ]
-    },
-    {
-      "id": "rpi-zero-2w",
-      "name": "Raspberry Pi Zero 2 W",
-      "vendor": "Raspberry Pi Ltd",
-      "kind": "board",
-      "summary": "Low-cost target hub running the decision layer against 1 Hz feature packets.",
-      "good_for": [
-        "low-cost hub for feature-packet decision layer"
-      ],
-      "not_for": [
-        "full raw sensing-server load"
-      ],
-      "notes": [],
-      "spec": {
-        "compute": "Pi Zero 2 W",
-        "power": "micro-USB",
-        "source": "reference/whitsentry/docs/hardware/phase0-parts-list.md"
-      },
-      "pins": [
-        "GPIO 40-pin",
-        "micro-USB"
-      ],
-      "chips": [],
-      "photo": "",
-      "datasheet": "",
-      "mouser_query": "Raspberry Pi Zero 2 W",
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$15.00 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Raspberry-Pi/SC1146?qs=ST9lo4GX8V3CWSVbdflDaA%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ],
-      "seen_in": [
-        "reference/whitsentry/docs/hardware/phase0-parts-list.md"
-      ]
-    },
-    {
       "id": "rtl-sdr",
       "name": "RTL-SDR (passive RF / spectrum receiver)",
       "vendor": "Realtek RTL2832U-based dongle",
@@ -4756,17 +4541,27 @@
       "good_for": [
         "passive RF spectrum capture",
         "433/315 MHz device decode (rtl_433)",
-        "passive-radar experiments"
+        "passive-radar experiments",
+        "cheap RX-only spectrum sensing",
+        "cost floor reference"
       ],
       "not_for": [
         "transmit",
-        "coherent phased arrays (single channel)"
+        "coherent phased arrays (single channel)",
+        "TX",
+        "wide instantaneous bandwidth",
+        "high dynamic range (8-bit)"
       ],
       "notes": [],
       "spec": {
+        "tuning": "~24 MHz - 1.766 GHz",
+        "bw": "~2.4 MHz usable",
+        "adc": "8-bit",
+        "host": "USB 2.0",
+        "role": "baseline",
+        "source": "docs/MODULES.md \u00a712; rtl_433/ and rtl-sdr/ trees",
         "interface": "USB",
-        "tuner": "RTL2832U + R820T2-class tuner",
-        "source": "docs/MODULES.md \u00a712; rtl_433/ and rtl-sdr/ trees"
+        "tuner": "RTL2832U + R820T2-class tuner"
       },
       "pins": [
         "USB",
@@ -4789,40 +4584,7 @@
       "seen_in": [
         "docs/MODULES.md",
         "rtl_433/",
-        "rtl-sdr/"
-      ]
-    },
-    {
-      "id": "rtl-sdr-rtl2832u",
-      "name": "RTL-SDR (RTL2832U) RX-only SDR dongle (baseline)",
-      "vendor": "generic",
-      "kind": "sensor",
-      "summary": "~$30 RX-only SDR dongle named as the low-cost RF-sensing floor / comparison baseline.",
-      "good_for": [
-        "cheap RX-only spectrum sensing",
-        "cost floor reference"
-      ],
-      "not_for": [
-        "TX",
-        "wide instantaneous bandwidth",
-        "high dynamic range (8-bit)"
-      ],
-      "notes": [],
-      "spec": {
-        "tuning": "~24 MHz - 1.766 GHz",
-        "bw": "~2.4 MHz usable",
-        "adc": "8-bit",
-        "host": "USB 2.0",
-        "role": "baseline",
-        "source": "docs/hardware/sdr-radio.md"
-      },
-      "pins": [],
-      "chips": [],
-      "photo": "",
-      "datasheet": "https://www.rtl-sdr.com/about-rtl-sdr/",
-      "mouser_query": "RTL-SDR RTL2832U",
-      "buy": [],
-      "seen_in": [
+        "rtl-sdr/",
         "docs/hardware/sdr-radio.md"
       ]
     },
@@ -5324,52 +5086,6 @@
       ]
     },
     {
-      "id": "st-vl53l1x-breakout",
-      "name": "ST VL53L1X time-of-flight range breakout",
-      "vendor": "STMicroelectronics (breakout)",
-      "kind": "sensor",
-      "summary": "Long-range (up to ~4 m) 940 nm laser time-of-flight ranging sensor breakout; range + simple geometry in the RING-X1 bench.",
-      "good_for": [
-        "mm-class laser ToF ranging to ~4 m",
-        "simple geometry / moving-target range"
-      ],
-      "not_for": [
-        "imaging / multi-zone (single zone)"
-      ],
-      "notes": [],
-      "spec": {
-        "type": "940 nm laser ToF",
-        "chip": "VL53L1X",
-        "range": "up to ~4 m",
-        "interface": "I2C",
-        "source": "docs/corpus/ring-x1-master-build-plan.md"
-      },
-      "pins": [
-        "I2C SDA/SCL",
-        "XSHUT",
-        "GPIO1",
-        "VCC",
-        "GND"
-      ],
-      "chips": [
-        "st-vl53l1x"
-      ],
-      "photo": "",
-      "datasheet": "",
-      "mouser_query": "VL53L1X",
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$20.84 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L1X-SATEL?qs=MLItCLRbWsy6f0tjWUkKGA%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ],
-      "seen_in": [
-        "docs/corpus/ring-x1-master-build-plan.md"
-      ]
-    },
-    {
       "id": "ti-awr1642-evm",
       "name": "TI AWR1642 76-81 GHz automotive FMCW radar",
       "vendor": "Texas Instruments",
@@ -5519,7 +5235,7 @@
         "5V"
       ],
       "chips": [
-        "ti-iwr6843"
+        "iwr6843"
       ],
       "photo": "",
       "datasheet": "https://www.ti.com/tool/IWR6843ISK",
@@ -5798,20 +5514,25 @@
       "summary": "Single-zone ToF ranging up to ~4 m with a 940 nm VCSEL; lightweight presence / single-point distance cog candidate.",
       "good_for": [
         "single-point distance / presence",
-        "lighter sibling to SEN0628 matrix"
+        "lighter sibling to SEN0628 matrix",
+        "mm-class laser ToF ranging to ~4 m",
+        "simple geometry / moving-target range"
       ],
       "not_for": [
         "depth imaging (single zone only)",
-        "multi-sensor buses without XSHUT address sequencing"
+        "multi-sensor buses without XSHUT address sequencing",
+        "imaging / multi-zone (single zone)"
       ],
       "notes": [],
       "spec": {
-        "interface": "I2C 0x29 (reprogrammable)",
-        "vin": "2.6-3.5 V",
+        "type": "940 nm laser ToF",
+        "chip": "VL53L1X",
         "range": "~4 m",
+        "interface": "I2C 0x29 (reprogrammable)",
+        "source": "docs/hardware/sensors.md + st.com VL53L1X",
+        "vin": "2.6-3.5 V",
         "rate": "up to 50 Hz",
-        "emitter": "940 nm VCSEL",
-        "source": "docs/hardware/sensors.md + st.com VL53L1X"
+        "emitter": "940 nm VCSEL"
       },
       "pins": [
         "VDD",
@@ -5819,7 +5540,9 @@
         "SCL",
         "SDA",
         "XSHUT",
-        "GPIO1"
+        "GPIO1",
+        "I2C SDA/SCL",
+        "VCC"
       ],
       "chips": [
         "vl53l1x"
@@ -5836,7 +5559,8 @@
         }
       ],
       "seen_in": [
-        "docs/hardware/sensors.md"
+        "docs/hardware/sensors.md",
+        "docs/corpus/ring-x1-master-build-plan.md"
       ]
     },
     {
@@ -6110,10 +5834,11 @@
       ],
       "summary": "Integrated instrumentation amplifier + filtering AFE that recovers P-QRS-T morphology from a single ECG lead; the silicon on DFRobot SEN0213.",
       "spec": {
+        "type": "single-lead ECG AFE",
+        "source": "docs/hardware/sensors.md + AD8232 datasheet",
         "vin": "2.0-3.5 V typ",
         "output": "0-3.3 V analog",
-        "extra": "Lead-Off Detection (LO+/LO-) available but unexposed on SEN0213",
-        "source": "docs/hardware/sensors.md + AD8232 datasheet"
+        "extra": "Lead-Off Detection (LO+/LO-) available but unexposed on SEN0213"
       },
       "mouser_query": "AD8232",
       "datasheet": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad8232.pdf",
@@ -6245,33 +5970,6 @@
       ]
     },
     {
-      "id": "adi-ad8232",
-      "name": "ADI AD8232 single-lead ECG AFE",
-      "manufacturer": "Analog Devices",
-      "role": "Single-lead ECG / biopotential analog front end",
-      "tags": [
-        "ecg",
-        "biopotential",
-        "afe"
-      ],
-      "summary": "Single-lead heart-rate/ECG analog front end with lead-off detection; analog output.",
-      "spec": {
-        "type": "single-lead ECG AFE",
-        "source": "docs/corpus/ring-x1-master-build-plan.md"
-      },
-      "mouser_query": "AD8232",
-      "datasheet": "",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "",
-          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD8232?qs=%252BEew9%252B0nqrD7yQn%252BwQPzuQ%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
       "id": "adi-max86141",
       "name": "ADI MAX86141 optical AFE",
       "manufacturer": "Analog Devices",
@@ -6309,18 +6007,20 @@
         "i2c",
         "16-bit",
         "analog-frontend",
-        "pressure-mat"
+        "pressure-mat",
+        "analog"
       ],
       "summary": "Precision 16-bit delta-sigma ADC with 4 single-ended channels and a PGA. The brains of the ADS1115 breakout the analog cogs read through.",
       "spec": {
+        "type": "4-ch 16-bit ADC",
+        "interface": "I2C",
+        "source": "TI datasheet",
         "resolution": "16-bit",
         "channels": "4 single-ended / 2 differential",
         "rate": "8-860 SPS",
         "addr": "0x48-0x4B",
-        "source": "TI datasheet",
         "pga": "+-6.144 V .. +-0.256 V",
-        "vin": "2.0-5.5 V",
-        "interface": "I2C"
+        "vin": "2.0-5.5 V"
       },
       "mouser_query": "ADS1115IDGSR",
       "datasheet": "https://www.ti.com/product/ADS1115",
@@ -6330,6 +6030,12 @@
           "vendor": "Mouser",
           "price": "$5.19 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1115IDGSR?qs=IK5e5L0zOXjKCJoVMhYO%2FQ%3D%3D",
+          "ships_from": "Mouser"
+        },
+        {
+          "vendor": "Mouser",
+          "price": "$7.74 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1115QNKSRQ1?qs=ulEaXIWI0c%252B%252BH1ufhGRAvg%3D%3D",
           "ships_from": "Mouser"
         }
       ]
@@ -6604,15 +6310,22 @@
         "60ghz",
         "soli",
         "gesture",
-        "spi"
+        "spi",
+        "mmwave",
+        "fmcw",
+        "vitals",
+        "xensiv"
       ],
       "summary": "60 GHz FMCW radar, 1 TX x 3 RX, ~5 GHz BW, raw FIFO over SPI (ESP32-friendly). The Project Soli gesture-sensing chip.",
       "spec": {
+        "band": "58-63.5 GHz",
+        "channels": "1Tx/3Rx",
+        "bw": "~5 GHz",
+        "power": "1.8 V ~200 mA, <5 mW duty-cycled",
+        "source": "docs/MODULES.md \u00a72",
         "freq": "60 GHz",
         "antenna": "1TX x 3RX",
-        "bw": "~5 GHz",
-        "interface": "SPI FIFO",
-        "source": "docs/MODULES.md \u00a72"
+        "interface": "SPI FIFO"
       },
       "mouser_query": "BGT60TR13C",
       "datasheet": "https://www.mouser.com/datasheet/3/70/1/Infineon_DS_BGT60TR13C_DataSheet_v02_49_EN.pdf",
@@ -6642,11 +6355,12 @@
       ],
       "summary": "Combined T/RH/P environmental sensor; the Seed agent ships a native driver. BMP280 is the pressure+temp-only sibling in the same package/address.",
       "spec": {
+        "type": "temp + humidity + pressure",
+        "interface": "I2C 0x76/0x77 or SPI",
+        "source": "docs/hardware/sensors.md + Bosch datasheet",
         "temp": "-40..+85 C (+-1 C)",
         "rh": "0-100% (+-3%)",
         "press": "300-1100 hPa (+-1 hPa)",
-        "interface": "I2C 0x76/0x77 or SPI",
-        "source": "docs/hardware/sensors.md + Bosch datasheet",
         "measures": "T/RH/P"
       },
       "mouser_query": "BME280",
@@ -6702,15 +6416,17 @@
         "fusion",
         "accel",
         "gyro",
-        "mag"
+        "mag",
+        "motion"
       ],
       "summary": "9-DOF IMU with a built-in fusion core outputting absolute orientation (quaternion/Euler) at 100 Hz.",
       "spec": {
+        "type": "9-axis IMU + fusion",
+        "interface": "I2C/UART",
+        "source": "docs/hardware/sensors.md",
         "accel": "+-2-16 g",
         "gyro": "+-125-2000 dps",
-        "fusion": "on-chip, 100 Hz",
-        "interface": "I2C/UART",
-        "source": "docs/hardware/sensors.md"
+        "fusion": "on-chip, 100 Hz"
       },
       "mouser_query": "BNO055",
       "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bno055_ds000.pdf",
@@ -6754,64 +6470,6 @@
           "vendor": "Mouser",
           "price": "$15.38 USD",
           "url": "https://www.mouser.com/en/ProductDetail/CEVA/BNO085?qs=ulEaXIWI0c9BFVeZDQCmmQ%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
-      "id": "bosch-bme280",
-      "name": "Bosch BME280 environmental sensor",
-      "manufacturer": "Bosch Sensortec",
-      "role": "Combined temperature / humidity / pressure sensor",
-      "tags": [
-        "environmental",
-        "temperature",
-        "humidity",
-        "pressure"
-      ],
-      "summary": "Combined T/RH/pressure sensor used as environmental ground-truth in the Cognitum Seed CSI pipeline.",
-      "spec": {
-        "type": "temp + humidity + pressure",
-        "interface": "I2C/SPI",
-        "source": "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md"
-      },
-      "mouser_query": "BME280",
-      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bme280_ds002.pdf",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$4.00 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME280?qs=2OnyuXx6vpj2fK9HX7qb3g%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
-      "id": "bosch-bno055",
-      "name": "Bosch BNO055 9-axis IMU with fusion",
-      "manufacturer": "Bosch Sensortec",
-      "role": "9-axis IMU with on-chip sensor fusion (absolute orientation)",
-      "tags": [
-        "imu",
-        "fusion",
-        "orientation",
-        "motion"
-      ],
-      "summary": "9-axis absolute-orientation sensor with on-chip fusion; cited with DWM1001 UWB for Kalman-fusion tracking.",
-      "spec": {
-        "type": "9-axis IMU + fusion",
-        "interface": "I2C/UART",
-        "source": ".metaharness/ingest/findings/hardware/hw-liu-2022-pubmed36365854.json"
-      },
-      "mouser_query": "BNO055",
-      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bno055_ds000.pdf",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$13.60 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BNO055?qs=QhAb4EtQfbV8Z2YmISucWw%3D%3D",
           "ships_from": "Mouser"
         }
       ]
@@ -7124,26 +6782,6 @@
       ]
     },
     {
-      "id": "goodix-gt911",
-      "name": "Goodix GT911 capacitive touch controller",
-      "manufacturer": "Goodix",
-      "role": "5-point capacitive touch-screen controller",
-      "tags": [
-        "touch",
-        "capacitive",
-        "input"
-      ],
-      "summary": "Multi-touch capacitive touch controller on the CrowPanel 7\" display (I2C).",
-      "spec": {
-        "type": "capacitive multi-touch controller",
-        "interface": "I2C",
-        "source": "docs/whitsentry-synergy-report.md"
-      },
-      "mouser_query": "GT911",
-      "datasheet": "",
-      "seen_in": []
-    },
-    {
       "id": "gt911",
       "name": "GT911 capacitive touch controller",
       "manufacturer": "Goodix",
@@ -7152,13 +6790,15 @@
         "touch",
         "capacitive",
         "i2c",
-        "display"
+        "display",
+        "input"
       ],
       "summary": "I2C projected-capacitive touch controller (up to 5 points) on the CrowPanel ESP32-S3 display; in-tree HAL-agnostic driver.",
       "spec": {
+        "type": "capacitive multi-touch controller",
         "interface": "I2C",
-        "touches": "up to 5-point",
-        "source": "docs/hardware/microcontrollers.md"
+        "source": "docs/hardware/microcontrollers.md",
+        "touches": "up to 5-point"
       },
       "mouser_query": "Goodix GT911",
       "datasheet": "https://www.goodix.com/en/product/touch/touch_screen_controller",
@@ -7173,13 +6813,18 @@
         "imu",
         "9dof",
         "i2c",
-        "spi"
+        "spi",
+        "accel",
+        "gyro",
+        "mag",
+        "motion"
       ],
       "summary": "Low-power 9-axis motion sensor (accel+gyro+AK09916 mag) with optional on-chip DMP. I2C/SPI.",
       "spec": {
-        "dof": "9",
+        "type": "9-axis IMU",
         "interface": "I2C/SPI",
-        "source": "docs/MODULES.md \u00a78"
+        "source": "docs/MODULES.md \u00a78",
+        "dof": "9"
       },
       "mouser_query": "ICM-20948",
       "datasheet": "https://invensense.tdk.com/products/motion-tracking/9-axis/icm-20948/",
@@ -7277,38 +6922,6 @@
           "vendor": "Mouser",
           "price": "$10.41 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT60LTR11AIPE6327XUMA2?qs=iLbezkQI%252BshzShzFWLPiPQ%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
-      "id": "infineon-bgt60tr13c",
-      "name": "Infineon BGT60TR13C 60 GHz FMCW radar MMIC",
-      "manufacturer": "Infineon (XENSIV)",
-      "role": "60 GHz FMCW radar, 1Tx3Rx, SPI+FIFO",
-      "tags": [
-        "mmwave",
-        "60ghz",
-        "fmcw",
-        "vitals",
-        "xensiv"
-      ],
-      "summary": "1Tx/3Rx 58-63.5 GHz FMCW radar MMIC with >5 GHz BW, 0.2-15 m, SPI + internal FIFO; research/clinical-grade micro-displacement vitals.",
-      "spec": {
-        "band": "58-63.5 GHz",
-        "channels": "1Tx/3Rx",
-        "bw": ">5 GHz",
-        "power": "1.8 V ~200 mA, <5 mW duty-cycled",
-        "source": ".metaharness/ingest/findings/hardware/hw-bgt60tr13c-demo.json; docs/research/hardware-alternatives-and-life-detection.md"
-      },
-      "mouser_query": "BGT60TR13C",
-      "datasheet": "https://www.mouser.com/datasheet/3/70/1/Infineon_DS_BGT60TR13C_DataSheet_v02_49_EN.pdf",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$17.99 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT60TR13CE6327XUMA1?qs=sPbYRqrBIVnK9rZEOIh6SA%3D%3D",
           "ships_from": "Mouser"
         }
       ]
@@ -7417,14 +7030,17 @@
         "radar",
         "mimo",
         "60ghz",
-        "fmcw"
+        "fmcw",
+        "mmwave"
       ],
       "summary": "60 GHz FMCW MIMO radar, 3 TX x 4 RX (12 virtual array), 4 GHz BW, raw IF via DCA1000 (LVDS->GigE). Canonical research chip for radar pose and radar MMG.",
       "spec": {
+        "band": "60-64 GHz",
+        "channels": "3Tx/4Rx",
+        "source": "docs/MODULES.md \u00a72",
         "freq": "60 GHz",
         "mimo": "3TX x 4RX (12 virtual)",
-        "bw": "4 GHz",
-        "source": "docs/MODULES.md \u00a72"
+        "bw": "4 GHz"
       },
       "mouser_query": "IWR6843",
       "datasheet": "https://www.ti.com/product/IWR6843",
@@ -7535,13 +7151,16 @@
         "spo2",
         "heart-rate",
         "optical",
-        "i2c"
+        "i2c",
+        "vitals",
+        "contact"
       ],
       "summary": "Red + IR LED optical PPG module with photodetector and AFE; derives HR and SpO2 (\u00b12 BPM, \u00b12% SpO2). I2C.",
       "spec": {
-        "measures": "red+IR PPG -> HR, SpO2",
+        "type": "red/IR PPG + pulse-ox",
         "interface": "I2C",
-        "source": "docs/MODULES.md \u00a77"
+        "source": "docs/MODULES.md \u00a77",
+        "measures": "red+IR PPG -> HR, SpO2"
       },
       "mouser_query": "MAX30102",
       "datasheet": "https://www.analog.com/en/products/max30102.html",
@@ -7581,36 +7200,6 @@
           "vendor": "Mouser",
           "price": "$4.08 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices-Maxim-Integrated/MAX98357AETE%2bT?qs=AAveGqk956HhNpoJjF5x2g%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
-      "id": "maxim-max30102",
-      "name": "Maxim/ADI MAX30102 PPG + pulse-ox sensor",
-      "manufacturer": "Maxim Integrated / Analog Devices",
-      "role": "Integrated red/IR PPG + SpO2 optical sensor",
-      "tags": [
-        "ppg",
-        "spo2",
-        "optical",
-        "vitals",
-        "contact"
-      ],
-      "summary": "Integrated pulse-oximeter and heart-rate optical sensor (red + IR LEDs + photodetector), I2C.",
-      "spec": {
-        "type": "red/IR PPG + pulse-ox",
-        "interface": "I2C",
-        "source": "docs/corpus/ring-x1-master-build-plan.md"
-      },
-      "mouser_query": "MAX30102",
-      "datasheet": "",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$21.90 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0518?qs=MyNHzdoqoQJAnv7sQmwMqQ%3D%3D",
           "ships_from": "Mouser"
         }
       ]
@@ -8257,36 +7846,6 @@
       ]
     },
     {
-      "id": "st-vl53l1x",
-      "name": "ST VL53L1X time-of-flight ranging sensor",
-      "manufacturer": "STMicroelectronics",
-      "role": "940 nm laser ToF ranging IC (up to ~4 m)",
-      "tags": [
-        "tof",
-        "lidar",
-        "ranging",
-        "optical"
-      ],
-      "summary": "FlightSense 940 nm laser ToF ranging sensor, up to ~4 m, single-zone, I2C.",
-      "spec": {
-        "type": "940 nm laser ToF",
-        "range": "up to ~4 m",
-        "interface": "I2C",
-        "source": "docs/corpus/ring-x1-master-build-plan.md"
-      },
-      "mouser_query": "VL53L1X",
-      "datasheet": "",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$20.84 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L1X-SATEL?qs=MLItCLRbWsy6f0tjWUkKGA%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
       "id": "stm32l431",
       "name": "ST STM32L431",
       "manufacturer": "STMicroelectronics",
@@ -8401,64 +7960,6 @@
       ]
     },
     {
-      "id": "tdk-icm20948",
-      "name": "TDK InvenSense ICM-20948 9-axis IMU",
-      "manufacturer": "TDK InvenSense",
-      "role": "9-axis MEMS IMU (accel/gyro/mag)",
-      "tags": [
-        "imu",
-        "accel",
-        "gyro",
-        "mag",
-        "motion"
-      ],
-      "summary": "Low-power 9-axis motion sensor (3-axis accel + gyro + magnetometer), I2C/SPI.",
-      "spec": {
-        "type": "9-axis IMU",
-        "interface": "I2C/SPI",
-        "source": "docs/corpus/ring-x1-master-build-plan.md"
-      },
-      "mouser_query": "ICM-20948",
-      "datasheet": "",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "",
-          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICM-20948?qs=u4fy%2FsgLU9OtGc31yF%2Friw%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
-      "id": "ti-ads1115",
-      "name": "TI ADS1115 4-channel 16-bit ADC",
-      "manufacturer": "Texas Instruments",
-      "role": "4-channel 16-bit I2C ADC (analog sensor inputs)",
-      "tags": [
-        "adc",
-        "analog",
-        "i2c"
-      ],
-      "summary": "4-channel 16-bit delta-sigma I2C ADC used to read analog sensor inputs on the Cognitum Seed sensor pipeline.",
-      "spec": {
-        "type": "4-ch 16-bit ADC",
-        "interface": "I2C",
-        "source": "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md"
-      },
-      "mouser_query": "ADS1115",
-      "datasheet": "",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$7.74 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1115QNKSRQ1?qs=ulEaXIWI0c%252B%252BH1ufhGRAvg%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
       "id": "ti-ads1292r",
       "name": "TI ADS1292R ECG/respiration AFE",
       "manufacturer": "Texas Instruments",
@@ -8509,34 +8010,6 @@
           "vendor": "Mouser",
           "price": "$385.15 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/AWR1642BOOST?qs=5aG0NVq1C4x%2FRPjTzpqDvA%3D%3D",
-          "ships_from": "Mouser"
-        }
-      ]
-    },
-    {
-      "id": "ti-iwr6843",
-      "name": "TI IWR6843 60-64 GHz FMCW radar SoC",
-      "manufacturer": "Texas Instruments",
-      "role": "60-64 GHz FMCW mmWave radar SoC (3Tx4Rx)",
-      "tags": [
-        "mmwave",
-        "60ghz",
-        "fmcw"
-      ],
-      "summary": "60-64 GHz FMCW radar SoC behind the IWR6843ISK EVM; USB point-cloud, raw LVDS ADC via DCA1000.",
-      "spec": {
-        "band": "60-64 GHz",
-        "channels": "3Tx/4Rx",
-        "source": ".metaharness/ingest/findings/hardware/hw-iwr6843isk-60ghz.json"
-      },
-      "mouser_query": "IWR6843",
-      "datasheet": "https://www.ti.com/product/IWR6843",
-      "seen_in": [],
-      "buy": [
-        {
-          "vendor": "Mouser",
-          "price": "$52.15 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/IWR6843ABGABL?qs=zW32dvEIR3v7NcgbkVUeyA%3D%3D",
           "ships_from": "Mouser"
         }
       ]
@@ -8636,14 +8109,18 @@
       "tags": [
         "tof",
         "distance",
-        "vcsel"
+        "vcsel",
+        "lidar",
+        "ranging",
+        "optical"
       ],
       "summary": "Single-zone 940 nm VCSEL ToF ranger up to ~4 m; the chip behind candidate single-point distance cogs.",
       "spec": {
+        "type": "940 nm laser ToF",
         "range": "~4 m",
-        "rate": "up to 50 Hz",
         "interface": "I2C 0x29",
-        "source": "docs/hardware/sensors.md"
+        "source": "docs/hardware/sensors.md",
+        "rate": "up to 50 Hz"
       },
       "mouser_query": "VL53L1X",
       "datasheet": "https://www.st.com/en/imaging-and-photonics-solutions/vl53l1x.html",
