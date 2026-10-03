@@ -1,149 +1,121 @@
-//! `weaver update` / `weft update` — Self-update both binaries.
+//! `weaver update` / `weft update` — verified, receipt-aware self-update.
 //!
-//! Downloads the latest release from GitHub Releases and replaces
-//! both `weft` and `weaver` binaries in-place.
+//! Fetches the latest GitHub Release, verifies every archive against its
+//! published sha256 and `dist-manifest.json`, then replaces every binary of
+//! the release set together, with rollback. It refuses to touch Homebrew,
+//! `cargo install` and source-build copies and prints their own update
+//! command instead. See [`super::update_flow`] for the sequence and
+//! `docs/guides/updating.md` for the user-facing behaviour.
 
-use std::path::PathBuf;
+use std::io::{IsTerminal, Write};
 
-use clap::Subcommand;
+use clap::{Args, Subcommand};
+use clawft_rpc::doctor::DoctorEnv;
 
-const REPO: &str = "weave-logic-ai/weftos";
+use super::daemon_restart::{self, RealHost};
+use super::update_flow::{Ctx, Opts, Outcome, execute};
+use super::update_release::Source;
+
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Update subcommands.
+/// Flags shared by `weaver update` and `weaver update install`.
+#[derive(Debug, Clone, Copy, Default, Args)]
+pub struct UpdateFlags {
+    /// Report whether an update exists and how it would be applied; install nothing.
+    #[arg(long)]
+    pub check: bool,
+    /// Show which binaries would be replaced; download and install nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Reinstall even if already on the latest release.
+    #[arg(long)]
+    pub force: bool,
+    /// Restart the per-user daemon after installing, without asking.
+    #[arg(long, conflicts_with = "no_restart")]
+    pub restart: bool,
+    /// Never restart or ask; print the restart command.
+    #[arg(long)]
+    pub no_restart: bool,
+}
+
+/// `weaver update` arguments.
+#[derive(Debug, Args)]
+pub struct UpdateArgs {
+    #[command(subcommand)]
+    pub cmd: Option<UpdateCmd>,
+    #[command(flatten)]
+    pub flags: UpdateFlags,
+}
+
+/// Update subcommands (kept for compatibility; the flags work without them).
 #[derive(Debug, Subcommand)]
 pub enum UpdateCmd {
-    /// Check for new versions without installing.
+    /// Same as `weaver update --check`.
     Check,
-    /// Download and install the latest version of both binaries.
+    /// Same as `weaver update`.
     Install {
-        /// Force reinstall even if already on latest.
-        #[arg(long)]
-        force: bool,
-        /// Restart the per-user daemon after installing (default: print the command).
-        #[arg(long)]
-        restart: bool,
+        #[command(flatten)]
+        flags: UpdateFlags,
     },
 }
 
-impl Default for UpdateCmd {
-    fn default() -> Self {
-        Self::Install { force: false, restart: false }
+pub async fn run(args: UpdateArgs) -> anyhow::Result<()> {
+    let flags = match args.cmd {
+        Some(UpdateCmd::Check) => UpdateFlags { check: true, ..args.flags },
+        Some(UpdateCmd::Install { flags }) => flags,
+        None => args.flags,
+    };
+    run_with(flags)
+}
+
+fn ask(question: &str) -> bool {
+    print!("{question} [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).is_ok() && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// root reached through `sudo` (`SUDO_USER` set): HOME and uid are root's.
+fn running_as_sudo_root() -> bool {
+    #[cfg(unix)]
+    {
+        nix::unistd::geteuid().is_root() && std::env::var_os("SUDO_USER").is_some()
+    }
+    #[cfg(not(unix))]
+    {
+        false
     }
 }
 
-pub async fn run(cmd: UpdateCmd) -> anyhow::Result<()> {
-    match cmd {
-        UpdateCmd::Check => check().await,
-        UpdateCmd::Install { force, restart } => install(force, restart).await,
+fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let ctx = Ctx {
+        src: Source::github(),
+        triple: detect_target_triple().to_string(),
+        current_version: CURRENT_VERSION.to_string(),
+        dirty: option_env!("BUILD_VERSION").is_some_and(|v| v.contains("-dirty")),
+        env: DoctorEnv::detect(),
+        restart_base: daemon_restart::user_inputs(exe.clone()),
+        current_exe: exe,
+        host: &RealHost,
+        interactive: std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+        prompt: &ask,
+        sudo_root: running_as_sudo_root(),
+        inject: Default::default(),
+    };
+    let opts = Opts {
+        check: flags.check,
+        dry_run: flags.dry_run,
+        force: flags.force,
+        restart: flags.restart,
+        no_restart: flags.no_restart,
+    };
+    let outcome = execute(&ctx, &opts, &mut std::io::stdout())?;
+    match outcome {
+        Outcome::Refused { .. } => anyhow::bail!("update refused: this install is managed elsewhere"),
+        Outcome::Installed { .. } => print_service_update_lines(),
+        _ => {}
     }
-}
-
-/// Just run install with no subcommand (`weaver update` = `weaver update install`).
-pub async fn run_default() -> anyhow::Result<()> {
-    install(false, false).await
-}
-
-async fn check() -> anyhow::Result<()> {
-    let latest = fetch_latest_version().await?;
-    println!("Current: v{CURRENT_VERSION}");
-    println!("Latest:  v{latest}");
-    if latest == CURRENT_VERSION {
-        println!("You are up to date.");
-    } else {
-        println!("Update available. Run: weaver update install");
-    }
-    Ok(())
-}
-
-async fn install(force: bool, restart: bool) -> anyhow::Result<()> {
-    let latest = fetch_latest_version().await?;
-    println!("Current: v{CURRENT_VERSION}");
-    println!("Latest:  v{latest}");
-
-    if latest == CURRENT_VERSION && !force {
-        println!("Already on latest. Use --force to reinstall.");
-        return Ok(());
-    }
-
-    let triple = detect_target_triple();
-    println!("Platform: {triple}");
-    println!();
-
-    // Download both binaries
-    let bins = [
-        ("clawft-cli", "weft"),
-        ("clawft-weave", "weaver"),
-        ("weftos", "weftos"),
-    ];
-
-    let temp_dir = tempfile::tempdir()?;
-
-    for (asset_prefix, bin_name) in &bins {
-        let asset = format!("{asset_prefix}-{triple}.tar.gz");
-        let url = format!("https://github.com/{REPO}/releases/download/v{latest}/{asset}");
-
-        println!("Downloading {bin_name}...");
-        let tarball_path = temp_dir.path().join(&asset);
-
-        // Download with curl (available everywhere)
-        let status = std::process::Command::new("curl")
-            .args(["-fsSL", "-o"])
-            .arg(&tarball_path)
-            .arg(&url)
-            .status()?;
-
-        if !status.success() {
-            eprintln!("  Skipping {bin_name} — asset not found: {asset}");
-            continue;
-        }
-
-        // Extract
-        let extract_dir = temp_dir.path().join(bin_name);
-        std::fs::create_dir_all(&extract_dir)?;
-
-        let status = std::process::Command::new("tar")
-            .args(["xzf"])
-            .arg(&tarball_path)
-            .arg("--strip-components=1")
-            .arg("-C")
-            .arg(&extract_dir)
-            .status()?;
-
-        if !status.success() {
-            anyhow::bail!("failed to extract {asset}");
-        }
-
-        // Find the binary in extracted dir
-        let extracted_bin = extract_dir.join(bin_name);
-        if !extracted_bin.exists() {
-            eprintln!("  Skipping {bin_name} — binary not found in archive");
-            continue;
-        }
-
-        // Find where the current binary lives
-        let install_path = find_install_path(bin_name)?;
-        println!("  Installing to: {}", install_path.display());
-
-        // Replace binary
-        replace_binary(&extracted_bin, &install_path)?;
-        println!("  ✓ {bin_name} updated to v{latest}");
-    }
-
-    println!();
-    println!("Update complete. Both binaries are now v{latest}.");
-    println!();
-    if restart {
-        let cmd = "weaver kernel stop && weaver kernel start";
-        for line in super::daemon_restart::restart_user_daemon().lines(cmd) {
-            println!("{line}");
-        }
-    } else {
-        println!("If the kernel is running, restart it:");
-        println!("  weaver kernel stop && weaver kernel start");
-    }
-    print_service_update_lines();
-
     Ok(())
 }
 
@@ -200,111 +172,6 @@ fn is_musl() -> bool {
             out.contains("musl") || !o.status.success()
         })
         .unwrap_or(false)
-}
-
-fn find_install_path(bin_name: &str) -> anyhow::Result<PathBuf> {
-    // 1. Check where the current binary lives
-    if bin_name == "weaver"
-        && let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        return Ok(dir.join(bin_name));
-    }
-
-    // 2. Check PATH for existing installation
-    let which = std::process::Command::new("which").arg(bin_name).output();
-    if let Ok(output) = which
-        && output.status.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Ok(PathBuf::from(path));
-        }
-    }
-
-    // 3. Default to /usr/local/bin
-    Ok(PathBuf::from("/usr/local/bin").join(bin_name))
-}
-
-fn replace_binary(src: &std::path::Path, dst: &std::path::Path) -> anyhow::Result<()> {
-    // Make executable
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(src)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(src, perms)?;
-    }
-
-    // On Linux, a running binary can't be overwritten (ETXTBSY / "Text file
-    // busy"). The fix: rename the old binary out of the way first — rename()
-    // works on busy executables because it operates on the directory entry,
-    // not the file. The kernel keeps the old inode alive until the process
-    // exits, but the path is now free for the new binary.
-    let backup = dst.with_extension("old");
-
-    // Try rename-then-copy (handles "Text file busy").
-    if dst.exists() && std::fs::rename(dst, &backup).is_ok() {
-        match std::fs::copy(src, dst) {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&backup);
-                return Ok(());
-            }
-            Err(e) => {
-                // Restore backup if copy fails.
-                let _ = std::fs::rename(&backup, dst);
-                eprintln!("  Copy failed after rename: {e}");
-            }
-        }
-    }
-
-    // Try direct copy (works when binary isn't running).
-    if std::fs::copy(src, dst).is_ok() {
-        return Ok(());
-    }
-
-    // Last resort: sudo cp.
-    eprintln!("  Permission denied, trying with sudo...");
-    let status = std::process::Command::new("sudo")
-        .args(["cp"])
-        .arg(src)
-        .arg(dst)
-        .status()?;
-
-    if !status.success() {
-        anyhow::bail!(
-            "failed to install to {} — try: sudo cp {} {}",
-            dst.display(),
-            src.display(),
-            dst.display()
-        );
-    }
-
-    Ok(())
-}
-
-async fn fetch_latest_version() -> anyhow::Result<String> {
-    // Use GitHub API to get latest release tag
-    let output = std::process::Command::new("curl")
-        .args([
-            "-fsSL",
-            "-H",
-            "Accept: application/vnd.github.v3+json",
-            &format!("https://api.github.com/repos/{REPO}/releases/latest"),
-        ])
-        .output()?;
-
-    if !output.status.success() {
-        anyhow::bail!("failed to fetch latest release from GitHub");
-    }
-
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let tag = body["tag_name"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("no tag_name in release response"))?;
-
-    // Strip leading 'v'
-    Ok(tag.strip_prefix('v').unwrap_or(tag).to_string())
 }
 
 /// Machine mesh service: print (never run) the sudo lines when its build

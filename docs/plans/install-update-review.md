@@ -6,6 +6,30 @@
 this machine ended up with stale copies, and what to change. Review and
 plan only. Nothing on the machine or in the code was modified.
 
+## Status
+
+- **Phase 2 (updater half), Phase 3 (restart half): implemented on
+  `wt/weaver-update` (board card 630fb468).** `weaver update` verifies
+  every archive against its published `.sha256` (plus `sha256.sum` when the
+  manifest declares one) and `dist-manifest.json`, installs the whole
+  release set together with per-binary atomic rename and full rollback,
+  refuses Homebrew, cargo and dev builds with the owning channel's command,
+  uses the cargo-dist receipt when present (and records the new version in
+  it), supports `--check` and `--dry-run`, offers or flags the daemon
+  restart through launchd/systemd via the existing `daemon_restart` host,
+  and lists copies it did not touch. Tests run against a loopback mock
+  release server with fake receipts and a fake daemon host.
+- **Deviation from the plan:** the updater is in-tree (`update_flow.rs`,
+  `update_release.rs`, `update_install.rs`), not an embedded `axoupdater`.
+  It reads the same receipt and manifest, so switching to `axoupdater`
+  later does not change behaviour. The single-installer spike, the
+  `install-updater = true` regeneration, the `install.sh` wrapper and the
+  Windows run remain open.
+- **Deferred:** protocol-version integer and skew check in
+  `DaemonClient::connect`; service-unit binary resolution from the install
+  prefix; GitHub attestation and minisign verification of downloaded archives (sha256 is integrity only);
+  end-to-end run on a clean VM against a real prerelease tag.
+
 ## 1. Summary
 
 WeftOS has five separate ways to put binaries on a machine, three of
