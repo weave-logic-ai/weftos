@@ -7,7 +7,9 @@
 //! | `workload.cog.checkout.renew`   | Admin      | `{cog_id, version}`: an on-demand renewal pass now; reports that checkout's grant before and after |
 //! | `workload.cog.checkout.list`    | Read       | held grants (validity, expiry, approval per artifact) and approvals |
 //!
-//! Release and renew go through the steward's own link to `weft-licence`
+//! Release and renew are paced node-wide (one per 60 s, `[rate_limited]`
+//! with the wait), and arrive as Admin extension routes so the chain events
+//! carry the caller's principal. They go through the steward's own link to `weft-licence`
 //! (the renewer's client, refusing `not_holder` / `not_steward` without
 //! sending), so they run on the steward. The renewal endpoint renews every
 //! active checkout of the mesh at once: the Seed has no per-checkout renewal
@@ -23,6 +25,47 @@ use serde_json::{Value, json};
 
 use crate::licence_boot;
 use crate::licence_checkout_rpc::Ctx;
+
+/// Least time between two manual renew or release calls on this node (each
+/// costs the Seed a signature per active checkout).
+pub const MANUAL_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The node-wide pace of manual renew and release.
+pub struct ManualLimit {
+    min: std::time::Duration,
+    last: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl ManualLimit {
+    /// A limit of one call per `min`.
+    pub const fn new(min: std::time::Duration) -> Self {
+        Self { min, last: std::sync::Mutex::new(None) }
+    }
+
+    /// Take the slot, or say how long to wait.
+    pub fn take(&self) -> Result<(), std::time::Duration> {
+        let now = std::time::Instant::now();
+        let mut last = self.last.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(t) = *last {
+            let since = now.duration_since(t);
+            if since < self.min {
+                return Err(self.min - since);
+            }
+        }
+        *last = Some(now);
+        Ok(())
+    }
+}
+
+/// The daemon's limit.
+pub static MANUAL: ManualLimit = ManualLimit::new(MANUAL_MIN_INTERVAL);
+
+fn paced(ctx: &Ctx<'_>) -> Result<(), String> {
+    ctx.manual.take().map_err(|wait| {
+        format!("[rate_limited] one manual renew or release per {} s on this node: try again in {} s",
+            MANUAL_MIN_INTERVAL.as_secs(), wait.as_secs() + 1)
+    })
+}
 
 /// Methods served here.
 pub const METHODS: &[&str] =
@@ -84,6 +127,7 @@ fn refused(e: &clawft_kernel::licence::LicenceClientError) -> String {
 /// `workload.cog.checkout.release`.
 pub async fn release(ctx: &Ctx<'_>, p: OneParams) -> Result<Value, String> {
     let renewer = steward_renewer(ctx, &p)?;
+    paced(ctx)?;
     let before = held(ctx, &p.cog_id, &p.version).map(|(s, _)| s);
     let out = renewer.release(&p.cog_id, &p.version).await;
     let base = json!({ "cog_id": p.cog_id, "version": p.version, "principal": ctx.principal, "seq_before": before });
@@ -121,6 +165,7 @@ pub async fn renew(ctx: &Ctx<'_>, p: OneParams) -> Result<Value, String> {
     let Some((seq_before, _)) = held(ctx, &p.cog_id, &p.version) else {
         return Err(format!("no checkout of {}@{} is held here: weaver cog checkout it first", p.cog_id, p.version));
     };
+    paced(ctx)?;
     let out = renewer.run_once().await;
     let after = held(ctx, &p.cog_id, &p.version);
     let mut ev = json!({ "cog_id": p.cog_id, "version": p.version, "principal": ctx.principal, "seq_before": seq_before });

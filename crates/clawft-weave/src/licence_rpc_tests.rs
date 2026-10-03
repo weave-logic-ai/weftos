@@ -309,7 +309,10 @@ async fn reset_floor_previews_without_confirm_and_chains_with_it() {
     assert_eq!(v["applied"], false);
     assert!(v["preview"]["revived"].is_array());
     assert!(!chain_kinds(&chain).contains(&"licence.floor_reset".to_owned()), "a preview changes nothing");
-    let r = call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true})).await;
+    let e = call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true})).await;
+    assert!(err_of(&e).contains("'floor'"), "a confirm must name the floor");
+    let floor = v["preview"]["floor"].as_u64().unwrap();
+    let r = call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true, "floor": floor})).await;
     assert_eq!(r.result.unwrap()["applied"], true);
     let kinds = chain_kinds(&chain);
     assert!(kinds.contains(&"licence.floor_reset_requested".to_owned()) && kinds.contains(&"licence.floor_reset".to_owned()), "{kinds:?}");

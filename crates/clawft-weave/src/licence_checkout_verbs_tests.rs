@@ -168,7 +168,21 @@ fn never(_: &str) -> bool {
     false
 }
 
+static UNPACED: crate::licence_checkout_verbs::ManualLimit =
+    crate::licence_checkout_verbs::ManualLimit::new(std::time::Duration::ZERO);
+
 async fn call(r: &Rig, renewer: bool, m: &str, params: Value) -> Result<Value, String> {
+    call_as(r, renewer, m, params, "operator", &UNPACED).await
+}
+
+async fn call_as(
+    r: &Rig,
+    renewer: bool,
+    m: &str,
+    params: Value,
+    principal: &str,
+    manual: &crate::licence_checkout_verbs::ManualLimit,
+) -> Result<Value, String> {
     let ctx = Ctx {
         rt: &r.rt,
         mesh: None,
@@ -177,8 +191,9 @@ async fn call(r: &Rig, renewer: bool, m: &str, params: Value) -> Result<Value, S
         reachable: &never,
         arch: Some("aarch64"),
         now: now(),
-        principal: "operator",
+        principal,
         renewer: renewer.then(|| r.renewer.clone()),
+        manual,
     };
     let resp = route(&ctx, m, params).await;
     if resp.ok { Ok(resp.result.unwrap_or_default()) } else { Err(resp.error.unwrap_or_default()) }
@@ -233,4 +248,29 @@ async fn release_and_renew_refuse_off_the_steward_without_a_renewer_and_for_bad_
     assert!(e.starts_with("[not_steward]"), "{e}");
     // list is read-only and works anywhere.
     assert!(call(&member, false, "workload.cog.checkout.list", json!({})).await.unwrap()["grants"].as_array().unwrap().is_empty());
+}
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn manual_renew_and_release_are_paced_node_wide_and_chain_the_callers_principal() {
+    let r = rig("node-steward").await;
+    let paced = crate::licence_checkout_verbs::ManualLimit::new(std::time::Duration::from_secs(60));
+    call_as(&r, true, "workload.cog.checkout.renew", ONE(), "project:01J000000000000000000000PX", &paced).await.expect("first");
+    let e = call_as(&r, true, "workload.cog.checkout.release", ONE(), "operator", &paced).await.unwrap_err();
+    assert!(e.starts_with("[rate_limited]") && e.contains("try again in"), "{e}");
+    // A refused call is not chained and spends nothing at the Seed.
+    let renews: Vec<Value> = r.chain.tail(r.chain.len()).into_iter()
+        .filter(|ev| ev.kind == "cog.checkout.renew").filter_map(|ev| ev.payload).collect();
+    assert_eq!(renews.len(), 1);
+    assert_eq!(renews[0]["principal"], "project:01J000000000000000000000PX", "the event names the caller");
+    assert!(!kinds(&r.chain).contains(&"cog.checkout.release".to_string()));
+}
+
+#[test]
+fn release_and_renew_are_admin_extension_routes_by_exact_name() {
+    let routes = crate::rpc_ext::builtin_route_names();
+    for m in ["workload.cog.checkout.release", "workload.cog.checkout.renew"] {
+        assert!(routes.contains(&(m, crate::capability::Capability::Admin)), "{m}");
+    }
+    assert!(!routes.iter().any(|(p, _)| *p == "workload.cog.checkout."), "no prefix route");
 }

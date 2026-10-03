@@ -223,8 +223,12 @@ fn reset_floor(ctx: &Ctx<'_>, confirm: bool, expected_floor: Option<u64>) -> Res
             Err(e) => err(e),
         };
     }
+    // The operator must name the floor the preview showed.
+    let Some(expected_floor) = expected_floor else {
+        return Response::error("confirm needs 'floor': the floor the preview showed (the reset is pinned to it)");
+    };
     // One critical section: the preview chained is the state that was reset.
-    match store.reset_floor_checked(expected_floor) {
+    match store.reset_floor_checked(Some(expected_floor)) {
         Ok(preview) => {
             ctx.rt.chain.append(
                 licence_boot::LICENCE_CHAIN_SOURCE,

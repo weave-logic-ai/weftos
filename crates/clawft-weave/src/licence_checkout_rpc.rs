@@ -74,6 +74,8 @@ pub struct Ctx<'a> {
     pub principal: &'a str,
     /// The steward's renewer (release and renew use its path).
     pub renewer: Option<Arc<clawft_kernel::licence::Renewer>>,
+    /// The node-wide pace of manual release and renew.
+    pub manual: &'a crate::licence_checkout_verbs::ManualLimit,
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,9 +324,9 @@ pub fn principal_of(ctx: &crate::rpc_ext::ExtCtx) -> String {
     }
 }
 
-/// `workload.cog.checkout`, registered in `rpc_ext::ROUTES` (Admin: a
-/// checkout spends the Seed's licence and transfer budget), so the handler
-/// knows the caller's principal.
+/// `workload.cog.checkout`, `.release` and `.renew`, registered in
+/// `rpc_ext::ROUTES` (Admin: each spends the Seed's licence budget), so the
+/// handler knows the caller's principal (rate limits and chain events).
 pub fn handle_ext(call: crate::rpc_ext::ExtCall) -> crate::rpc_ext::ExtFuture {
     Box::pin(async move {
         let principal = principal_of(&call.ctx);
@@ -371,6 +373,7 @@ async fn dispatch_as(
         now: chrono::Utc::now().timestamp().max(0) as u64,
         principal,
         renewer: licence_steward::renewer(),
+        manual: &crate::licence_checkout_verbs::MANUAL,
     };
     route(&ctx, method, params).await
 }

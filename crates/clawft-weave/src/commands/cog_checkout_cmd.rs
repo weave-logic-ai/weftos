@@ -58,7 +58,8 @@ pub enum CheckoutCmd {
         json: bool,
     },
     /// End a checkout: the steward asks the Seed for a withdrawal, which is
-    /// flooded (operator, Admin; run on the steward).
+    /// flooded (operator, Admin; run on the steward). The same Seed call also
+    /// renews every other active checkout of the mesh.
     Release {
         /// `<cog>@<version>` (an exact version).
         reference: String,
@@ -82,11 +83,11 @@ pub enum CheckoutCmd {
         json: bool,
     },
     /// Forget the grant clock high-water mark (alias of `weaver workload
-    /// node reset-floor`); changes nothing without `--confirm`.
+    /// node reset-floor`); changes nothing without `--confirm <floor>`.
     ResetFloor {
-        /// Apply the reset (chained).
-        #[arg(long)]
-        confirm: bool,
+        /// Apply the reset (chained), pinned to the floor the dry run printed.
+        #[arg(long, value_name = "FLOOR", num_args = 0..=1)]
+        confirm: Option<Option<String>>,
     },
 }
 

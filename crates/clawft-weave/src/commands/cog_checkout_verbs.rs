@@ -33,7 +33,12 @@ pub async fn run(cmd: CheckoutCmd, client: &mut DaemonClient) -> anyhow::Result<
         CheckoutCmd::Release { reference, json } => {
             let (cog, version) = exact(&reference)?;
             let v = call(client, "workload.cog.checkout.release", json!({ "cog_id": cog, "version": version })).await?;
-            let t = format!("released {cog}@{version} (withdrawal seq {}, flooded; chained as cog.checkout.release)\n", v["seq"]);
+            let r = &v["report"];
+            let t = format!(
+                "released {cog}@{version} (withdrawal seq {}, flooded; chained as cog.checkout.release)\n\
+                 the same Seed call renewed every other active checkout: {} renewed, {} unchanged\n",
+                v["seq"], r["renewed"], r["unchanged"]
+            );
             print(&v, json, t)
         }
         CheckoutCmd::Renew { reference, json } => {
@@ -50,22 +55,7 @@ pub async fn run(cmd: CheckoutCmd, client: &mut DaemonClient) -> anyhow::Result<
             let v = call(client, "workload.cog.checkout.list", json!({})).await?;
             print(&v, json, render_list(&v))
         }
-        CheckoutCmd::ResetFloor { confirm } => {
-            let shown = call(client, "workload.node.reset-floor", json!({})).await?;
-            let r = if confirm {
-                let floor = shown["preview"]["floor"].as_u64();
-                call(client, "workload.node.reset-floor", json!({ "confirm": true, "floor": floor })).await?
-            } else {
-                shown
-            };
-            print!("{}", super::workload_node_cmd::render_floor_preview(&r["preview"]));
-            if r["applied"].as_bool() == Some(true) {
-                println!("floor reset (chained as licence.floor_reset_requested and licence.floor_reset)");
-            } else {
-                println!("nothing changed; run again with --confirm to apply");
-            }
-            Ok(())
-        }
+        CheckoutCmd::ResetFloor { confirm } => super::workload_node_cmd::reset_floor(client, confirm).await,
         _ => unreachable!("handles() selects the verbs"),
     }
 }
@@ -140,7 +130,8 @@ mod tests {
         assert!(matches!(parse(&["release", "fall-detect@1.2.0"]).unwrap(), CheckoutCmd::Release { ref reference, json: false } if reference == "fall-detect@1.2.0"));
         assert!(matches!(parse(&["renew", "fall-detect@1.2.0", "--json"]).unwrap(), CheckoutCmd::Renew { json: true, .. }));
         assert!(matches!(parse(&["list"]).unwrap(), CheckoutCmd::List { json: false }));
-        assert!(matches!(parse(&["reset-floor", "--confirm"]).unwrap(), CheckoutCmd::ResetFloor { confirm: true }));
+        assert!(matches!(parse(&["reset-floor", "--confirm", "1790000000"]).unwrap(), CheckoutCmd::ResetFloor { confirm: Some(Some(_)) }));
+        assert!(matches!(parse(&["reset-floor", "--confirm"]).unwrap(), CheckoutCmd::ResetFloor { confirm: Some(None) }), "bare: refused at run time with a hint");
         assert!(parse(&["release"]).is_err(), "release needs a reference");
         assert!(handles(&parse(&["list"]).unwrap()));
         assert!(exact("fall-detect@latest").is_err());

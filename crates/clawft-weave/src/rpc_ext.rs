@@ -434,6 +434,18 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::licence_checkout_rpc::handle_ext,
     },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "workload.cog.checkout.release",
+        capability: Capability::Admin,
+        handler: crate::licence_checkout_rpc::handle_ext,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "workload.cog.checkout.renew",
+        capability: Capability::Admin,
+        handler: crate::licence_checkout_rpc::handle_ext,
+    },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.
     ExtRoute {
@@ -610,6 +622,18 @@ const ROUTES: &[ExtRoute] = &[
     #[cfg(all(feature = "placement", unix))]
     ExtRoute {
         prefix: "workload.cog.checkout",
+        capability: Capability::Admin,
+        handler: crate::licence_checkout_rpc::handle_ext,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "workload.cog.checkout.release",
+        capability: Capability::Admin,
+        handler: crate::licence_checkout_rpc::handle_ext,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "workload.cog.checkout.renew",
         capability: Capability::Admin,
         handler: crate::licence_checkout_rpc::handle_ext,
     },
