@@ -21,12 +21,12 @@ use crate::infer_wire_tests::{Audit, fake_on, free_port, http_get, parts, write_
 
 const ROSTER: &str = include_str!("../../clawft-kernel/src/workload_runtime/infer/fixtures/model-lab-roster.yaml");
 
-struct Lab {
-    dir: tempfile::TempDir,
-    chain: Arc<ChainManager>,
+pub(crate) struct Lab {
+    pub(crate) dir: tempfile::TempDir,
+    pub(crate) chain: Arc<ChainManager>,
 }
 
-fn permit(max_network: NetworkPolicy) -> WorkloadPermitRule {
+pub(crate) fn permit(max_network: NetworkPolicy) -> WorkloadPermitRule {
     let mut r = WorkloadPermitRule::new("permit-infer", ["workload.*"], ["inference"]);
     r.min_package_trust = PackageTrust::OperatorAttested;
     r.max_network = max_network;
@@ -44,7 +44,7 @@ fn gate(chain: &Arc<ChainManager>, dir: &Path, rule: Option<WorkloadPermitRule>)
 
 /// A runtime dir with a fake launcher, an operator-trusted model registry
 /// holding `Model-A`/`Model-B` (gguf), and a chain.
-fn lab() -> Lab {
+pub(crate) fn lab() -> Lab {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
     let bin = p.join("bin");
@@ -88,19 +88,19 @@ fn lab() -> Lab {
 }
 
 impl Lab {
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         self.dir.path()
     }
-    fn serve(&self) -> serde_json::Value {
+    pub(crate) fn serve(&self) -> serde_json::Value {
         serde_json::json!({"llamacpp": self.path().join("bin/serve-llamacpp"), "mlx-lm": self.path().join("bin/serve")})
     }
-    fn parts(&self, g: Option<Arc<WorkloadGate>>) -> InitParts<'_> {
+    pub(crate) fn parts(&self, g: Option<Arc<WorkloadGate>>) -> InitParts<'_> {
         let mut p = parts(self.path(), None, false, None);
         p.gate = g;
         p.chain = Some(self.chain.clone());
         p
     }
-    fn gate(&self, rule: Option<WorkloadPermitRule>) -> Arc<WorkloadGate> {
+    pub(crate) fn gate(&self, rule: Option<WorkloadPermitRule>) -> Arc<WorkloadGate> {
         gate(&self.chain, self.path(), rule)
     }
     fn refusals(&self) -> Vec<String> {
@@ -113,7 +113,7 @@ impl Lab {
     }
 }
 
-fn managed(role: &str, model: &str, gb: f64, instance: u16, proxy: Option<u16>) -> serde_json::Value {
+pub(crate) fn managed(role: &str, model: &str, gb: f64, instance: u16, proxy: Option<u16>) -> serde_json::Value {
     let mut r = serde_json::json!({"role": role, "mode": "managed", "flavor": "llamacpp", "model": model,
         "memory_gb": gb, "instance_port": instance});
     if let Some(p) = proxy {
@@ -122,7 +122,7 @@ fn managed(role: &str, model: &str, gb: f64, instance: u16, proxy: Option<u16>) 
     r
 }
 
-async fn wait_for(p: &Path) -> bool {
+pub(crate) async fn wait_for(p: &Path) -> bool {
     for _ in 0..200 {
         if p.exists() {
             return true;
@@ -132,7 +132,7 @@ async fn wait_for(p: &Path) -> bool {
     false
 }
 
-fn state_of(st: &InferState, role: &str) -> (String, Option<String>) {
+pub(crate) fn state_of(st: &InferState, role: &str) -> (String, Option<String>) {
     let v = st.role_json_for_test(role);
     (v["state"].as_str().unwrap().to_string(), v["reason"].as_str().map(str::to_string))
 }
@@ -332,6 +332,10 @@ fn token_file(lab: &Lab, mode: u32, text: &str) -> &'static str {
     let rel = "secrets/infer/hermes.token";
     let p: PathBuf = lab.path().join(rel);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    for d in [p.parent().unwrap().parent().unwrap(), p.parent().unwrap()] {
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let _ = std::fs::remove_file(&p);
     std::fs::write(&p, text).unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
     rel
@@ -341,7 +345,7 @@ const TOKEN: &str = "t0ken-0123456789-abcdefghijklmnopqrstuvwxyz";
 
 fn exposed_cfg(lab: &Lab, instance: u16, proxy: u16) -> serde_json::Value {
     let mut r = serde_json::json!({"role": "hermes", "flavor": "llamacpp", "instance_port": instance, "proxy_port": proxy,
-        "expose": {"listen": "127.0.0.1", "token_file": "secrets/infer/hermes.token"}});
+        "expose": {"listen": "127.0.0.1", "port": free_port(), "token_file": "secrets/infer/hermes.token"}});
     let _ = lab;
     r["provider"] = serde_json::Value::Null;
     r.as_object_mut().unwrap().remove("provider");
@@ -354,7 +358,7 @@ async fn beyond_loopback_needs_a_token_and_a_chained_permit_with_network_lan() {
     let lab = lab();
     let proxy = free_port();
     write_cfg(lab.path(), exposed_cfg(&lab, up.addr.port(), proxy));
-    let state = |st: &InferState| st.role_json_for_test("hermes")["proxy"].clone();
+    let state = |st: &InferState| st.role_json_for_test("hermes")["exposed_proxy"].clone();
     let refused = |v: serde_json::Value| v["refused"].as_str().unwrap_or("").to_string();
 
     // No gate: refused.
@@ -375,8 +379,21 @@ async fn beyond_loopback_needs_a_token_and_a_chained_permit_with_network_lan() {
     std::fs::remove_file(&link).unwrap();
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let (st, _) = build(lab.parts(Some(lab.gate(Some(permit(NetworkPolicy::Lan)))))).await.unwrap().unwrap();
-    assert!(refused(state(&st)).contains("not a regular file"), "{:?}", state(&st));
+    assert!(refused(state(&st)).contains("a link is refused"), "{:?}", state(&st));
     std::fs::remove_file(&link).unwrap();
+    // A parent directory others can write to (or a link in the path): refused.
+    token_file(&lab, 0o600, TOKEN);
+    std::fs::set_permissions(lab.path().join("secrets/infer"), std::fs::Permissions::from_mode(0o777)).unwrap();
+    let (st, _) = build(lab.parts(Some(lab.gate(Some(permit(NetworkPolicy::Lan)))))).await.unwrap().unwrap();
+    assert!(refused(state(&st)).contains("must not be writable"), "{:?}", state(&st));
+    token_file(&lab, 0o600, TOKEN);
+    let moved = lab.path().join("secrets-real");
+    std::fs::rename(lab.path().join("secrets"), &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, lab.path().join("secrets")).unwrap();
+    let (st, _) = build(lab.parts(Some(lab.gate(Some(permit(NetworkPolicy::Lan)))))).await.unwrap().unwrap();
+    assert!(refused(state(&st)).contains("not a real directory"), "{:?}", state(&st));
+    std::fs::remove_file(lab.path().join("secrets")).unwrap();
+    std::fs::rename(&moved, lab.path().join("secrets")).unwrap();
     token_file(&lab, 0o600, TOKEN);
 
     // Default deny, and a permit that does not allow lan: the gate refuses.
@@ -386,12 +403,21 @@ async fn beyond_loopback_needs_a_token_and_a_chained_permit_with_network_lan() {
     }
     assert!(lab.chain.tail(0).iter().any(|e| e.kind == "workload.refuse" || e.kind == "workload.start"), "the gate chained its decisions");
 
-    // A lan permit: the proxy listens, behind the token.
+    // A lan permit: the proxy listens, behind the token. (Fresh ports: the
+    // states above still hold their listeners.)
+    write_cfg(lab.path(), exposed_cfg(&lab, up.addr.port(), free_port()));
     let audit = Arc::new(Audit::default());
     let mut p = lab.parts(Some(lab.gate(Some(permit(NetworkPolicy::Lan)))));
     p.audit = Some(audit.clone());
     let (st, _) = build(p).await.unwrap().unwrap();
-    let ProxyState::Exposed(addr) = *st.roles[0].proxy.lock().unwrap() else { panic!("{:?}", state(&st)) };
+    let ProxyState::Exposed(addr) = st.roles[0].exposed_proxy.lock().unwrap().clone().unwrap() else {
+        panic!("{:?}", state(&st))
+    };
+    // The role's own proxy_port stays a token-free loopback listener for
+    // local consumers; the exposed one demands the token.
+    let ProxyState::Listening(local) = st.roles[0].proxy.lock().unwrap().clone() else { panic!() };
+    assert_ne!(local, addr);
+    assert!(http_get(local, "/v1/models").await.starts_with("HTTP/1.1 200"), "local consumers need no token");
     let r = http_get(addr, "/v1/models").await;
     assert!(r.starts_with("HTTP/1.1 401"), "{r}");
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -413,10 +439,12 @@ async fn the_default_is_loopback_only() {
     assert!(a.ip().is_loopback());
     // `expose` without a proxy port, or with a non-IP listen, is a config error.
     for bad in [
-        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"expose":{"listen":"0.0.0.0","token_file":"t"}}),
-        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"proxy_port":8,"expose":{"listen":"all","token_file":"t"}}),
-        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"proxy_port":8,"expose":{"listen":"0.0.0.0","token_file":"../t"}}),
-        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"proxy_port":8,"expose":{"listen":"0.0.0.0","token_file":"/etc/t"}}),
+        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"expose":{"listen":"0.0.0.0","port":7,"token_file":"t"}}),
+        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"proxy_port":8,"expose":{"listen":"all","port":7,"token_file":"t"}}),
+        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"proxy_port":8,"expose":{"listen":"0.0.0.0","port":7,"token_file":"../t"}}),
+        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"proxy_port":8,"expose":{"listen":"0.0.0.0","port":7,"token_file":"/etc/t"}}),
+        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"proxy_port":8,"expose":{"listen":"0.0.0.0","port":8,"token_file":"t"}}),
+        serde_json::json!({"role":"a","flavor":"llamacpp","instance_port":9,"proxy_port":8,"expose":{"listen":"0.0.0.0","port":0,"token_file":"t"}}),
     ] {
         write_cfg(dir.path(), serde_json::json!({"roles": [bad]}));
         assert!(crate::infer_cfg::load_config(dir.path()).is_err());

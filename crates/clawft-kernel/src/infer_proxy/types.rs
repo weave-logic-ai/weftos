@@ -32,6 +32,8 @@ pub struct ProxyLimits {
     pub request_timeout: Duration,
     /// Concurrent connections per listener.
     pub max_connections: usize,
+    /// Concurrent connections per client address on an exposed listener.
+    pub max_connections_per_ip: usize,
 }
 
 impl Default for ProxyLimits {
@@ -48,6 +50,7 @@ impl Default for ProxyLimits {
             stall_timeout: Duration::from_secs(120),
             request_timeout: Duration::from_secs(900),
             max_connections: 32,
+            max_connections_per_ip: 8,
         }
     }
 }

@@ -246,6 +246,10 @@ impl InferRuntime {
                         return Err(RuntimeError::InvalidState("already running".into()));
                     }
                     mg.proc = None;
+                    // An explicit start gets a fresh restart budget (a server
+                    // that gave up is started again by the operator, not by
+                    // reconcile).
+                    mg.restarts = 0;
                     spawn(self, inst)
                 }
                 ManagedPlan::Ollama { tag } => {
@@ -261,8 +265,26 @@ impl InferRuntime {
                         ServerClient::new(inst.client.base().to_string(), OLLAMA_LOAD_TIMEOUT)?;
                     let state = std::sync::Arc::new(std::sync::Mutex::new(LoadState::Loading));
                     let (s2, tag) = (state.clone(), tag.clone());
+                    let we_loaded = mg.we_loaded.clone();
+                    let ledger = self.managed_cfg().and_then(|m| m.ledger.clone());
+                    let instance = h.instance_id.clone();
                     let task = tokio::spawn(async move {
-                        let r = ollama::load(&client, &tag, &keep).await;
+                        // A model somebody else already holds in memory is not
+                        // ours to load or to unload later.
+                        let r = if ollama::resident(&client, &tag).await {
+                            we_loaded.store(false, std::sync::atomic::Ordering::SeqCst);
+                            Ok(())
+                        } else {
+                            let r = ollama::load(&client, &tag, &keep).await;
+                            we_loaded.store(r.is_ok(), std::sync::atomic::Ordering::SeqCst);
+                            r
+                        };
+                        if r.is_err()
+                            && let Some(l) = ledger
+                        {
+                            // A failed load holds no memory.
+                            l.release(&instance);
+                        }
                         *s2.lock().unwrap_or_else(|e| e.into_inner()) =
                             r.map_or_else(LoadState::Failed, |()| LoadState::Done);
                     });
@@ -290,7 +312,8 @@ impl InferRuntime {
     }
 
     /// Stop the instance. For Ollama this unloads the model from Ollama's
-    /// memory, even when another client loaded it or is using it: Ollama
+    /// memory when this adapter loaded it (a model that was already
+    /// resident belongs to whoever loaded it): Ollama
     /// has no per-client ownership of a loaded model.
     pub(super) async fn stop_instance(
         &self,
@@ -299,7 +322,7 @@ impl InferRuntime {
     ) -> Result<RunEvidence, RuntimeError> {
         enum Todo {
             Proc(Supervised),
-            Ollama(ServerClient, String),
+            Ollama(ServerClient, String, bool),
         }
         let todo = {
             let mut g = self.instances.lock().await;
@@ -322,14 +345,19 @@ impl InferRuntime {
                     if let Some((_, t)) = mg.load.take() {
                         t.abort();
                     }
-                    Todo::Ollama(client, tag.clone())
+                    Todo::Ollama(
+                        client,
+                        tag.clone(),
+                        mg.we_loaded.swap(false, std::sync::atomic::Ordering::SeqCst),
+                    )
                 }
             }
         };
-        self.release_residency(h);
+        // The memory is given back only once the server is really gone.
         match todo {
             Todo::Proc(p) => {
                 let ev = p.terminate(grace).await;
+                self.release_residency(h);
                 if let Some(mg) = self
                     .instances
                     .lock()
@@ -345,10 +373,14 @@ impl InferRuntime {
                 ev.instance_id = h.instance_id.clone();
                 Ok(ev)
             }
-            Todo::Ollama(client, tag) => {
-                ollama::unload(&client, &tag)
-                    .await
-                    .map_err(RuntimeError::Backend)?;
+            Todo::Ollama(client, tag, ours) => {
+                // Only a model this adapter loaded is taken out of memory.
+                if ours {
+                    ollama::unload(&client, &tag)
+                        .await
+                        .map_err(RuntimeError::Backend)?;
+                }
+                self.release_residency(h);
                 Ok(RunEvidence {
                     runtime: self.rt_id(),
                     instance_id: h.instance_id.clone(),
@@ -367,7 +399,6 @@ impl InferRuntime {
             .await
             .remove(&h.instance_id)
             .ok_or_else(|| unknown(h))?;
-        self.release_residency(h);
         if let Some(mg) = inst.managed.as_mut() {
             // Only ever a process this adapter spawned itself.
             if let Some(p) = mg.proc.take() {
@@ -381,11 +412,17 @@ impl InferRuntime {
                     let _ = std::fs::remove_dir_all(&l.dir);
                 }
                 ManagedPlan::Ollama { tag } => {
-                    // Best effort: leave Ollama without our model resident.
-                    let _ = ollama::unload(&inst.client, tag).await;
+                    // Best effort, and only a model this adapter loaded.
+                    if mg.we_loaded.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        let _ = ollama::unload(&inst.client, tag).await;
+                    }
                 }
             }
         }
+        // The instance is forgotten here, so its memory is released even if
+        // the best-effort unload above failed: there is no handle left to
+        // release it later.
+        self.release_residency(h);
         Ok(())
     }
 
@@ -416,6 +453,8 @@ impl InferRuntime {
             let ev = p.terminate(Duration::from_secs(3)).await;
             self.store_last(h, ev).await;
         }
+        // Stopped for good (until reloaded): it holds no memory any more.
+        self.release_residency(h);
         tracing::warn!(instance = %h.instance_id, ?beyond, "model server listened beyond loopback; stopped");
         Some(beyond)
     }
@@ -540,9 +579,10 @@ impl InferRuntime {
                 return Ok(Reconcile::NotManaged);
             }
             if let Some(a) = &mg.exposed {
-                return Ok(Reconcile::StoppedExposed {
-                    reachable_on: a.clone(),
-                });
+                let reachable_on = a.clone();
+                drop(g);
+                self.release_residency(h);
+                return Ok(Reconcile::StoppedExposed { reachable_on });
             }
             if !mg.wanted {
                 return Ok(Reconcile::Healthy);
@@ -571,7 +611,13 @@ impl InferRuntime {
             self.store_last(h, ev).await;
         }
         match next {
-            Next::Done(r) => Ok(r),
+            Next::Done(r) => {
+                // Out of restarts: nothing is running, so nothing is held.
+                if matches!(r, Reconcile::GaveUp { .. }) {
+                    self.release_residency(h);
+                }
+                Ok(r)
+            }
             Next::Restart { ip, port } => {
                 if port_in_use(ip, port).await {
                     return Err(RuntimeError::Backend(format!(

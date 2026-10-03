@@ -9,6 +9,7 @@
 //! - The socket is bound without `SO_REUSEADDR`, so a wildcard listener on
 //!   the same port also makes the bind fail instead of being shadowed.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use std::sync::Arc;
@@ -89,6 +90,39 @@ impl Drop for InferProxy {
     }
 }
 
+/// Open connections per client address.
+type IpCounts = Arc<std::sync::Mutex<HashMap<IpAddr, usize>>>;
+
+/// One of a client address's connections on an exposed listener.
+struct IpSlot {
+    counts: IpCounts,
+    ip: IpAddr,
+}
+
+impl IpSlot {
+    fn take(counts: &IpCounts, ip: IpAddr, cap: usize) -> Option<Self> {
+        let mut g = counts.lock().unwrap_or_else(|e| e.into_inner());
+        let n = g.entry(ip).or_insert(0);
+        if *n >= cap {
+            return None;
+        }
+        *n += 1;
+        Some(Self { counts: counts.clone(), ip })
+    }
+}
+
+impl Drop for IpSlot {
+    fn drop(&mut self) {
+        let mut g = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = g.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                g.remove(&self.ip);
+            }
+        }
+    }
+}
+
 /// A bind address is loopback, or the caller holds a permit and a token.
 pub fn check_bind(addr: SocketAddr, exposed: bool) -> Result<(), ProxyError> {
     if addr.ip().is_loopback() || exposed {
@@ -133,15 +167,45 @@ impl std::fmt::Debug for ExposureAuth {
     }
 }
 
-/// Proof that a governance decision permitted binding beyond loopback.
-/// Only a [`GateDecision::Permit`] makes one, so the caller must have asked
-/// the gate (which chains its decisions) first.
+/// Proof that the governance gate permitted binding beyond loopback.
+/// It can only be made by [`ask`](Self::ask), which runs the gate check
+/// itself (the gate chains its decisions), so holding one means the gate said
+/// permit for this role just now.
 #[derive(Debug)]
 pub struct ExposurePermit(());
 
 impl ExposurePermit {
+    /// Ask `gate`, as `principal`, whether `role`'s proxy may listen beyond
+    /// loopback: a `workload.start` of kind `inference` with `network: lan`
+    /// and the package id `inference-expose:<role>`. A deny or a deferral is
+    /// returned as the reason.
+    pub fn ask(gate: &dyn crate::gate::GateBackend, principal: &str, role: &str) -> Result<Self, String> {
+        let ctx = serde_json::json!({"workload": {
+            "kind": "inference",
+            "package_trust": "operator_attested",
+            "node_tier": "pinned",
+            "network": "lan",
+            "secrets": false,
+            "emulated": false,
+            "resource_cost": 0.1,
+            "package_id": format!("inference-expose:{role}"),
+            "signer_keys": [],
+            "artifact_hashes": [],
+        }});
+        let d = gate.check(principal, "workload.start", &ctx);
+        Self::from_decision(&d).ok_or_else(|| match d {
+            crate::gate::GateDecision::Deny { reason, .. } => {
+                format!("governance denied listening beyond loopback: {reason}")
+            }
+            crate::gate::GateDecision::Defer { reason } => {
+                format!("listening beyond loopback is deferred to a human: {reason}")
+            }
+            _ => "no governance permit".to_string(),
+        })
+    }
+
     /// `Some` only for a permit.
-    pub fn from_decision(d: &crate::gate::GateDecision) -> Option<Self> {
+    pub(crate) fn from_decision(d: &crate::gate::GateDecision) -> Option<Self> {
         matches!(d, crate::gate::GateDecision::Permit { .. }).then_some(Self(()))
     }
 }
@@ -244,6 +308,12 @@ impl InferProxy {
     /// carry `Authorization: Bearer <token>` (checked before any body is
     /// read), the token is never forwarded, and the `Host` need not be
     /// loopback. The default, [`start`](Self::start), stays loopback only.
+    ///
+    /// The token travels in cleartext (HTTP, no TLS): `network: lan` is for
+    /// trusted segments until TLS lands. An exposed listener is *in
+    /// addition to* a loopback one: it does not register as the proxy port
+    /// of the role (local consumers keep using the token-free loopback
+    /// listener), and it has its own connection pool with a per-client cap.
     #[allow(clippy::too_many_arguments)]
     pub async fn start_exposed(
         role: &str,
@@ -317,7 +387,11 @@ impl InferProxy {
         let bound = listener
             .local_addr()
             .map_err(|e| ProxyError::Io(e.to_string()))?;
-        table.set_proxy_port(role, bound.port());
+        // Only the loopback listener is the address in-process consumers use
+        // for a remote role; an exposed listener demands a token they lack.
+        if auth.is_none() {
+            table.set_proxy_port(role, bound.port());
+        }
         note(
             "infer.proxy.bind",
             serde_json::json!({"listening": bound.to_string(), "exposed": auth.is_some()}),
@@ -332,8 +406,13 @@ impl InferProxy {
             limits: limits.clone(),
             stats: stats.clone(),
         });
+        // Each listener has its own connection pool, so clients of the
+        // exposed one (slow or many) cannot starve the loopback one. The
+        // exposed pool also caps connections per client address.
         let permits = Arc::new(Semaphore::new(limits.max_connections));
         let exposed = sh.bearer.is_some();
+        let per_ip: Option<(usize, IpCounts)> =
+            exposed.then(|| (limits.max_connections_per_ip.max(1), Arc::default()));
         let task = tokio::spawn(async move {
             let mut backoff = Duration::from_millis(10);
             loop {
@@ -359,10 +438,21 @@ impl InferProxy {
                     drop(s);
                     continue;
                 };
+                let slot = match &per_ip {
+                    Some((cap, counts)) => match IpSlot::take(counts, peer.ip(), *cap) {
+                        Some(slot) => Some(slot),
+                        None => {
+                            drop(s);
+                            continue;
+                        }
+                    },
+                    None => None,
+                };
                 let sh = sh.clone();
                 tokio::spawn(async move {
                     serve_conn(sh, s).await;
                     drop(permit);
+                    drop(slot);
                 });
             }
         });

@@ -40,6 +40,22 @@ pub fn clear() {
     }
 }
 
+/// `http://<loopback host>[:port][/path]` and nothing else: a resolver (or
+/// whatever feeds it) must not be able to point a consumer, and the
+/// credentials it sends, at another host.
+fn is_loopback_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(h) => h.split(']').next().unwrap_or(""),
+        None => authority.rsplit_once(':').map_or(authority, |(h, _)| h),
+    };
+    host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 fn root(url: &str) -> String {
     let u = url.trim_end_matches('/');
     u.strip_suffix("/v1").unwrap_or(u).to_string()
@@ -50,7 +66,7 @@ fn root(url: &str) -> String {
 pub fn resolve(role: &str) -> Option<String> {
     let g = HOOK.read().ok()?;
     let h = g.as_ref()?;
-    (h.resolve)(role).map(|u| root(&u))
+    (h.resolve)(role).filter(|u| is_loopback_http(u)).map(|u| root(&u))
 }
 
 /// [`resolve`] for the role a provider name (`local`) follows.
@@ -87,5 +103,31 @@ mod tests {
         assert_eq!(resolve_for_provider("openai"), None);
         clear();
         assert_eq!(resolve("hermes"), None);
+        // A non-loopback answer is dropped, whoever gave it.
+        let mut providers = HashMap::new();
+        providers.insert("local".to_string(), "r".to_string());
+        install(Arc::new(|_| Some("http://203.0.113.9:8090/v1".to_string())), providers);
+        assert_eq!(resolve("r"), None);
+        assert_eq!(resolve_for_provider("local"), None);
+        clear();
+    }
+
+    #[test]
+    fn only_loopback_http_answers_are_accepted() {
+        for ok in ["http://127.0.0.1:1/v1", "http://localhost:8/v1", "http://[::1]:9", "http://127.0.0.1"] {
+            assert!(is_loopback_http(ok), "{ok}");
+        }
+        for bad in [
+            "https://127.0.0.1:1",
+            "http://10.0.0.5:1/v1",
+            "http://evil.example/v1",
+            "http://127.0.0.1@evil.example/",
+            "http://localhost.evil.example",
+            "http://0.0.0.0:1",
+            "file:///etc/passwd",
+            "",
+        ] {
+            assert!(!is_loopback_http(bad), "{bad}");
+        }
     }
 }

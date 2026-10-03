@@ -14,53 +14,67 @@
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use clawft_kernel::gate::GateBackend;
 use clawft_kernel::infer_proxy::{ExposureAuth, ExposurePermit};
 use clawft_kernel::workload_governance::WorkloadGate;
-use serde_json::json;
 
 /// Principal the exposure decision is made as.
 pub const PRINCIPAL: &str = "infer-daemon";
 
-/// Read the bearer token at `rel` under `dir`.
+/// Every directory between the runtime dir and the token (exclusive of the
+/// runtime dir) is a real directory the daemon's user owns that others
+/// cannot write to: nobody else can swap the file or a link in its path.
+fn check_dirs(dir: &Path, rel: &Path, me: u32) -> Result<(), String> {
+    let mut cur = dir.to_path_buf();
+    let comps: Vec<_> = rel.components().collect();
+    for c in &comps[..comps.len().saturating_sub(1)] {
+        cur.push(c);
+        let m = std::fs::symlink_metadata(&cur).map_err(|e| format!("token directory {}: {e}", cur.display()))?;
+        if !m.file_type().is_dir() {
+            return Err(format!("token directory {} is not a real directory", cur.display()));
+        }
+        if m.uid() != me {
+            return Err(format!("token directory {} is not owned by the daemon's user", cur.display()));
+        }
+        if m.mode() & 0o022 != 0 {
+            return Err(format!("token directory {} must not be writable by group or others", cur.display()));
+        }
+    }
+    Ok(())
+}
+
+/// Read the bearer token at `rel` under `dir`. The file is opened without
+/// following a link and checked through the open descriptor (not by path),
+/// so what was checked is what is read.
 pub fn read_token(dir: &Path, rel: &str) -> Result<ExposureAuth, String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let me = nix::unistd::geteuid().as_raw();
+    check_dirs(dir, Path::new(rel), me)?;
     let path = dir.join(rel);
-    let meta = std::fs::symlink_metadata(&path).map_err(|e| format!("token file {rel}: {e}"))?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits())
+        .open(&path)
+        .map_err(|e| format!("token file {rel}: {e} (a link is refused)"))?;
+    let meta = file.metadata().map_err(|e| format!("token file {rel}: {e}"))?;
     if !meta.file_type().is_file() {
         return Err(format!("token file {rel} is not a regular file"));
     }
-    let me = nix::unistd::geteuid().as_raw();
     if meta.uid() != me {
         return Err(format!("token file {rel} is not owned by the daemon's user"));
     }
     if meta.mode() & 0o077 != 0 {
         return Err(format!("token file {rel} must not be readable by group or others (chmod 600)"));
     }
-    if meta.len() > 4096 {
+    let mut text = String::new();
+    file.take(4097).read_to_string(&mut text).map_err(|e| format!("token file {rel}: {e}"))?;
+    if text.len() > 4096 {
         return Err(format!("token file {rel} is too large"));
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("token file {rel}: {e}"))?;
     ExposureAuth::new(&text).map_err(|e| format!("token file {rel}: {e}"))
 }
 
 /// Ask the gate whether `role`'s proxy may listen beyond loopback.
 pub fn permit_for(gate: &WorkloadGate, role: &str) -> Result<ExposurePermit, String> {
-    let ctx = json!({"workload": {
-        "kind": "inference",
-        "package_trust": "operator_attested",
-        "node_tier": "pinned",
-        "network": "lan",
-        "secrets": false,
-        "emulated": false,
-        "resource_cost": 0.1,
-        "package_id": format!("inference-expose:{role}"),
-        "signer_keys": [],
-        "artifact_hashes": [],
-    }});
-    let d = gate.check(PRINCIPAL, "workload.start", &ctx);
-    ExposurePermit::from_decision(&d).ok_or_else(|| match d {
-        clawft_kernel::gate::GateDecision::Deny { reason, .. } => format!("governance denied listening beyond loopback: {reason}"),
-        clawft_kernel::gate::GateDecision::Defer { reason } => format!("listening beyond loopback is deferred to a human: {reason}"),
-        _ => "no governance permit".to_string(),
-    })
+    ExposurePermit::ask(gate, PRINCIPAL, role)
 }

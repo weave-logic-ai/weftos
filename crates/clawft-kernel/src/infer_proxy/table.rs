@@ -265,6 +265,11 @@ impl PlacementTable {
         }
     }
 
+    /// The loopback proxy port registered for `role` (tests, status).
+    pub fn proxy_port(&self, role: &str) -> Option<u16> {
+        self.inner.read().unwrap().proxy_ports.get(role).copied()
+    }
+
     /// The loopback proxy port that fronts `role` on this node.
     pub fn set_proxy_port(&self, role: &str, port: u16) {
         self.inner
@@ -438,6 +443,15 @@ impl PlacementTable {
                 let port = *self.inner.read().unwrap().proxy_ports.get(role)?;
                 Some(format!("http://127.0.0.1:{port}/v1"))
             }
+        }
+    }
+
+    /// Base URL of a server for `role` on this node only (`.../v1`), for
+    /// consumers that cannot go through the mesh.
+    pub fn local_base_for_role(&self, role: &str) -> Option<String> {
+        match self.resolve(role)? {
+            Target::Local { base } => Some(format!("{base}/v1")),
+            Target::Remote { .. } => None,
         }
     }
 

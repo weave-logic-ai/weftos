@@ -127,3 +127,95 @@ fn only_a_permit_makes_an_exposure_permit_and_tokens_are_checked() {
     assert!(!format!("{:?}", ExposureAuth::new(TOKEN).unwrap()).contains("t0ken"));
     assert!(ct_eq(b"abc", b"abc") && !ct_eq(b"abc", b"abd") && !ct_eq(b"abc", b"ab") && !ct_eq(b"", b"a") && ct_eq(b"", b""));
 }
+
+async fn plain(t: &Arc<PlacementTable>) -> InferProxy {
+    match InferProxy::start("hermes", "127.0.0.1:0".parse().unwrap(), OccupiedPolicy::Refuse, t.clone(), small_limits(), None).await.unwrap() {
+        Started::Running(p) => p,
+        _ => panic!(),
+    }
+}
+
+#[tokio::test]
+async fn local_consumers_keep_a_token_free_loopback_listener_beside_the_exposed_one() {
+    let up = fake(Reply::ok("served")).await;
+    let t = Arc::new(PlacementTable::new("node-a", None, None));
+    t.register_local("hermes", &up.base(), None, "openai-v1", "LlamaCpp").unwrap();
+    let local = plain(&t).await;
+    let wide = exposed(&t, None).await;
+    // The role's registered proxy port is the loopback one (what in-process
+    // consumers of a remote role use), whichever started last.
+    assert_eq!(t.proxy_port("hermes"), Some(local.addr().port()));
+    assert_ne!(local.addr(), wide.addr());
+    // A local consumer needs no token.
+    let a = local.addr();
+    let r = raw(a, &req(a, &a.to_string(), None, "/v1/models")).await;
+    assert_eq!(status(&r), 200, "{r}");
+    // The exposed listener still demands one.
+    let b = wide.addr();
+    assert_eq!(status(&raw(b, &req(b, "x", None, "/v1/models")).await), 401);
+    assert_eq!(status(&raw(b, &req(b, "x", Some(&format!("Bearer {TOKEN}")), "/v1/models")).await), 200);
+}
+
+#[tokio::test]
+async fn slow_or_many_exposed_clients_cannot_starve_the_loopback_path() {
+    let up = fake(Reply::ok("served")).await;
+    let t = Arc::new(PlacementTable::new("node-a", None, None));
+    t.register_local("hermes", &up.base(), None, "openai-v1", "LlamaCpp").unwrap();
+    let limits = ProxyLimits { max_connections: 2, max_connections_per_ip: 2, head_timeout: Duration::from_secs(30), ..small_limits() };
+    let local = match InferProxy::start("hermes", "127.0.0.1:0".parse().unwrap(), OccupiedPolicy::Refuse, t.clone(), limits.clone(), None).await.unwrap() {
+        Started::Running(p) => p,
+        _ => panic!(),
+    };
+    let wide = match InferProxy::start_exposed(
+        "hermes", "127.0.0.1:0".parse().unwrap(), OccupiedPolicy::Refuse, t.clone(), limits, None, permit(), ExposureAuth::new(TOKEN).unwrap(),
+    ).await.unwrap() {
+        Started::Running(p) => p,
+        _ => panic!(),
+    };
+    // Fill the exposed listener's pool with heads that never finish.
+    let mut idle = Vec::new();
+    for _ in 0..2 {
+        let mut s = TcpStream::connect(wide.addr()).await.unwrap();
+        s.write_all(b"GET /v1/models HTTP/1.1\r\nHost: x\r\n").await.unwrap();
+        idle.push(s);
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // A third connection from the same address is shed at once (per-IP cap).
+    let mut third = TcpStream::connect(wide.addr()).await.unwrap();
+    let mut buf = [0u8; 16];
+    let n = tokio::time::timeout(Duration::from_secs(2), third.read(&mut buf)).await.expect("shed, not held").unwrap();
+    assert_eq!(n, 0, "no response for a connection over the per-client cap");
+    // The loopback listener is untouched by all of it.
+    let a = local.addr();
+    let t0 = std::time::Instant::now();
+    let r = raw(a, &req(a, &a.to_string(), None, "/v1/models")).await;
+    assert_eq!(status(&r), 200, "{r}");
+    assert!(t0.elapsed() < Duration::from_secs(2));
+    // Closing the idle ones frees the slots on the exposed side.
+    drop(idle);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let b = wide.addr();
+    assert_eq!(status(&raw(b, &req(b, "x", Some(&format!("Bearer {TOKEN}")), "/v1/models")).await), 200);
+}
+
+struct FixedGate(bool);
+
+impl crate::gate::GateBackend for FixedGate {
+    fn check(&self, _agent: &str, action: &str, ctx: &serde_json::Value) -> GateDecision {
+        assert_eq!(action, "workload.start");
+        assert_eq!(ctx["workload"]["network"], "lan");
+        assert_eq!(ctx["workload"]["package_id"], "inference-expose:hermes");
+        if self.0 {
+            GateDecision::Permit { token: None }
+        } else {
+            GateDecision::Deny { reason: "default deny".into(), receipt: None }
+        }
+    }
+}
+
+#[test]
+fn a_permit_is_minted_only_by_asking_the_gate() {
+    assert!(ExposurePermit::ask(&FixedGate(true), "infer-daemon", "hermes").is_ok());
+    let e = ExposurePermit::ask(&FixedGate(false), "infer-daemon", "hermes").unwrap_err();
+    assert!(e.contains("governance denied") && e.contains("default deny"), "{e}");
+}

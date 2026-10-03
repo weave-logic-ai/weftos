@@ -43,6 +43,22 @@ pub async fn load(client: &ServerClient, tag: &str, keep_alive: &str) -> Result<
     }
 }
 
+/// Whether `tag` is in memory now (`/api/ps`); false when Ollama does not
+/// answer, so a load is attempted and reports the failure itself.
+pub async fn resident(client: &ServerClient, tag: &str) -> bool {
+    let Ok((200, body)) = client.get("/api/ps").await else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&body) else {
+        return false;
+    };
+    let same = |n: &str| n == tag || n.strip_suffix(":latest") == Some(tag) || tag.strip_suffix(":latest") == Some(n);
+    v.get("models").and_then(Value::as_array).is_some_and(|ms| {
+        ms.iter()
+            .any(|m| ["name", "model"].iter().any(|k| m.get(k).and_then(Value::as_str).is_some_and(same)))
+    })
+}
+
 /// Ask Ollama to drop `tag` from memory now (`keep_alive: 0`).
 pub async fn unload(client: &ServerClient, tag: &str) -> Result<(), String> {
     let body = json!({"model": tag, "keep_alive": 0});

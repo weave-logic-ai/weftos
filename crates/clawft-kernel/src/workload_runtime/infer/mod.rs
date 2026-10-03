@@ -33,6 +33,8 @@ pub(crate) mod fakes;
 #[cfg(test)]
 mod tests_adopted;
 #[cfg(test)]
+mod tests_ledger;
+#[cfg(test)]
 mod tests_managed;
 #[cfg(test)]
 mod tests_ollama;

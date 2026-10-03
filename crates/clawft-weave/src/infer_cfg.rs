@@ -10,7 +10,8 @@
 //!       "proxy_port": 8090, "provider": "local", "autostart": false },
 //!     { "role": "coder-daily", "mode": "managed", "roster_id": "coder-daily",
 //!       "instance_port": 18081, "proxy_port": 8081,
-//!       "expose": { "listen": "0.0.0.0", "token_file": "secrets/infer/coder-daily.token" } },
+//!       "expose": { "listen": "0.0.0.0", "port": 18082,
+//!                   "token_file": "secrets/infer/coder-daily.token" } },
 //!     { "role": "orpheus-tts", "mode": "managed", "flavor": "ollama",
 //!       "model": "orpheus-tts", "memory_gb": 4, "instance_port": 11434 } ],
 //!   "roster": { "file": "/path/to/queue.yaml",
@@ -31,9 +32,12 @@
 //! - `budget_gb` is the unified-memory budget and `excludes` (roster
 //!   overlay or per role) the co-residency rule, enforced across every
 //!   managed role.
-//! - `expose` lets the role's proxy listen beyond loopback, with a bearer
-//!   token and a chained governance permit; the model server itself always
-//!   stays on loopback.
+//! - `expose` adds a second proxy listener beyond loopback (`listen:port`),
+//!   with a bearer token and a chained governance permit, beside the
+//!   token-free loopback listener on `proxy_port` that local consumers keep
+//!   using; the model server itself always stays on loopback. The token
+//!   travels in cleartext on the LAN (no TLS yet), so `network: lan` is for
+//!   trusted segments.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -113,6 +117,9 @@ pub struct RoleCfg {
 pub struct ExposeCfg {
     /// Address to listen on (`0.0.0.0`).
     pub listen: String,
+    /// Port of the exposed listener. The role's `proxy_port` stays a
+    /// loopback listener without a token for consumers on this machine.
+    pub port: u16,
     /// Bearer token file under the runtime dir (mode 0600).
     pub token_file: String,
 }
@@ -230,6 +237,9 @@ impl FileCfg {
             if let Some(e) = &r.expose {
                 if r.proxy_port.is_none() {
                     return bad(format!("role {}: expose needs a proxy_port", r.role));
+                }
+                if e.port == 0 || Some(e.port) == r.proxy_port || Some(e.port) == r.instance_port {
+                    return bad(format!("role {}: expose.port must be nonzero and differ from proxy_port and instance_port", r.role));
                 }
                 if e.listen.parse::<std::net::IpAddr>().is_err() {
                     return bad(format!("role {}: expose.listen is not an IP address", r.role));

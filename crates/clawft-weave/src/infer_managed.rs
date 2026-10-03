@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clawft_kernel::infer_proxy::{InferProxy, OccupiedPolicy, PlacementTable, Started, Target};
+use clawft_kernel::workload_runtime::infer::Reconcile;
 use clawft_kernel::workload_runtime::types::WorkloadRuntime;
 use serde_json::{Value, json};
 use tracing::warn;
@@ -26,70 +27,72 @@ fn record(p: &InitParts<'_>, kind: &str, role: &str, why: &str) {
     }
 }
 
-/// Start `r`'s proxy, if it has a `proxy_port`.
-pub(crate) async fn start_proxy(
-    r: &Resolved,
-    table: &Arc<PlacementTable>,
-    p: &InitParts<'_>,
-) -> (ProxyState, Option<InferProxy>) {
-    let Some(port) = r.cfg.proxy_port else { return (ProxyState::Off, None) };
+/// A role's listeners: the loopback one (token-free, what local consumers
+/// use) and, when configured, the exposed one.
+pub(crate) struct Proxies {
+    pub local: (ProxyState, Option<InferProxy>),
+    pub exposed: Option<(ProxyState, Option<InferProxy>)>,
+}
+
+/// Start `r`'s proxies. `proxy_port` is always a loopback listener; `expose`
+/// adds a second one beyond loopback, with its own pool, behind a token and
+/// a chained permit.
+pub(crate) async fn start_proxies(r: &Resolved, table: &Arc<PlacementTable>, p: &InitParts<'_>) -> Proxies {
+    let Some(port) = r.cfg.proxy_port else {
+        return Proxies { local: (ProxyState::Off, None), exposed: None };
+    };
     let role = &r.cfg.role;
     let policy = if r.cfg.on_occupied.as_deref() == Some("adopt") { OccupiedPolicy::Adopt } else { OccupiedPolicy::Refuse };
     let refused = |why: String| {
         warn!(role = %role, %why, "inference proxy not started");
         (ProxyState::Refused(why), None)
     };
-    let started = match &r.cfg.expose {
-        None => {
-            let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-            InferProxy::start(role, addr, policy, table.clone(), p.limits.clone(), p.audit.clone()).await
-        }
-        Some(e) => {
-            // Beyond loopback: a token, then the gate's chained permit.
-            let ip: IpAddr = match e.listen.parse() {
-                Ok(ip) => ip,
-                Err(_) => return refused("expose.listen is not an IP address".into()),
-            };
-            let gate = match &p.gate {
-                Some(g) => g,
-                None => {
-                    record(p, "infer.proxy.expose_refused", role, "no governance gate");
-                    return refused("listening beyond loopback needs the workload governance gate".into());
-                }
-            };
-            let auth = match crate::infer_expose::read_token(p.dir, &e.token_file) {
-                Ok(a) => a,
-                Err(why) => {
-                    record(p, "infer.proxy.expose_refused", role, &why);
-                    return refused(why);
-                }
-            };
-            let permit = match crate::infer_expose::permit_for(gate, role) {
-                Ok(pm) => pm,
-                Err(why) => {
-                    record(p, "infer.proxy.expose_refused", role, &why);
-                    return refused(why);
-                }
-            };
-            InferProxy::start_exposed(
-                role,
-                SocketAddr::new(ip, port),
-                policy,
-                table.clone(),
-                p.limits.clone(),
-                p.audit.clone(),
-                permit,
-                auth,
-            )
-            .await
-        }
-    };
-    match started {
-        Ok(Started::Running(px)) if r.cfg.expose.is_some() => (ProxyState::Exposed(px.addr()), Some(px)),
+    let local = match InferProxy::start(
+        role,
+        ([127, 0, 0, 1], port).into(),
+        policy,
+        table.clone(),
+        p.limits.clone(),
+        p.audit.clone(),
+    )
+    .await
+    {
         Ok(Started::Running(px)) => (ProxyState::Listening(px.addr()), Some(px)),
         Ok(Started::Adopted(a)) => (ProxyState::Adopted(a), None),
         Err(e) => refused(e.to_string()),
+    };
+    let Some(e) = &r.cfg.expose else {
+        return Proxies { local, exposed: None };
+    };
+    // Beyond loopback: a token, then the gate's chained permit.
+    let exposed = async {
+        let ip: IpAddr = e.listen.parse().map_err(|_| "expose.listen is not an IP address".to_string())?;
+        let gate = p.gate.as_ref().ok_or("listening beyond loopback needs the workload governance gate")?;
+        let auth = crate::infer_expose::read_token(p.dir, &e.token_file)?;
+        let permit = crate::infer_expose::permit_for(gate, role)?;
+        InferProxy::start_exposed(
+            role,
+            SocketAddr::new(ip, e.port),
+            OccupiedPolicy::Refuse,
+            table.clone(),
+            p.limits.clone(),
+            p.audit.clone(),
+            permit,
+            auth,
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
+    .await;
+    let exposed = match exposed {
+        Ok(Started::Running(px)) => (ProxyState::Exposed(px.addr()), Some(px)),
+        Ok(Started::Adopted(a)) => (ProxyState::Adopted(a), None),
+        Err(why) => {
+            record(p, "infer.proxy.expose_refused", role, &why);
+            refused(why)
+        }
+    };
+    Proxies { local, exposed: Some(exposed) }
 }
 
 impl InferState {
@@ -147,6 +150,17 @@ impl InferState {
             }
         }
         let started = r.run.lock().unwrap_or_else(|e| e.into_inner()).started;
+        if started {
+            // A started instance can still fail to load (Ollama): notice it,
+            // so the role stops claiming to run.
+            if let Some(handle) = h.as_ref() {
+                let st = m.host.status(handle).await;
+                if let Some(d) = st.detail.filter(|d| d.starts_with("load failed")) {
+                    return self.fail(r, d);
+                }
+            }
+            return;
+        }
         if !started && let Some(handle) = h.as_ref() {
             match m.host.start(handle).await {
                 Ok(()) => {
@@ -173,7 +187,24 @@ impl InferState {
             let live = r.managed.is_none() || r.run.lock().unwrap_or_else(|e| e.into_inner()).started;
             match h {
                 Some(h) if live => {
-                    self.table.sync_local(&r.cfg.role, &r.rt, &h).await;
+                    let out = self.table.sync_local(&r.cfg.role, &r.rt, &h).await;
+                    // A server that gave up restarting, or was stopped for
+                    // listening beyond loopback, is not running: say so (its
+                    // memory is already released) and try again later.
+                    match out.reconcile {
+                        Some(Reconcile::GaveUp { attempts }) if r.managed.is_some() => {
+                            self.fail(r, format!("the server exited and gave up after {attempts} restarts"));
+                        }
+                        Some(Reconcile::StoppedExposed { .. }) if r.managed.is_some() => {
+                            self.fail(r, "the server was stopped for listening beyond loopback".into());
+                            // The adapter will not start it again until it is
+                            // reloaded: drop the instance so the retry loads a new one.
+                            if let (Some(m), Some(h)) = (&r.managed, r.handle.lock().await.take()) {
+                                let _ = m.host.unload(h).await;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 _ => self.table.deregister_local(&r.cfg.role),
             }
@@ -268,6 +299,7 @@ impl InferState {
             "state": state,
             "reason": reason,
             "proxy": &*r.proxy.lock().unwrap_or_else(|e| e.into_inner()),
+            "exposed_proxy": r.exposed_proxy.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             "serves": serves,
             "exposed": self.table.exposed_roles().contains(&r.cfg.role),
         })

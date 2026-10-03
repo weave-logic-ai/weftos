@@ -81,6 +81,9 @@ pub(crate) struct RoleState {
     pub run: std::sync::Mutex<RunState>,
     pub proxy: std::sync::Mutex<ProxyState>,
     pub _proxy: std::sync::Mutex<Option<InferProxy>>,
+    /// The listener beyond loopback, when configured.
+    pub exposed_proxy: std::sync::Mutex<Option<ProxyState>>,
+    pub _exposed: std::sync::Mutex<Option<InferProxy>>,
 }
 
 /// Everything the daemon holds for inference placement.
@@ -173,9 +176,18 @@ fn managed_for(
             .ok_or_else(|| format!("no serve_programs entry for {key} (the launcher path is configured, never guessed)"))?;
         let meta = std::fs::metadata(prog).map_err(|e| format!("serve program {prog}: {e}"))?;
         {
-            use std::os::unix::fs::PermissionsExt;
-            if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
+            use std::os::unix::fs::MetadataExt;
+            if !meta.is_file() || meta.mode() & 0o111 == 0 {
                 return Err(format!("serve program {prog} is not an executable file"));
+            }
+            // The daemon runs this as itself: only its own user or root may
+            // own it, and nobody else may be able to replace it.
+            let me = nix::unistd::geteuid().as_raw();
+            if meta.uid() != me && meta.uid() != 0 {
+                return Err(format!("serve program {prog} is owned by neither the daemon's user nor root"));
+            }
+            if meta.mode() & 0o022 != 0 {
+                return Err(format!("serve program {prog} must not be writable by group or others"));
             }
         }
         mc = mc.with_serve_program(prog);
@@ -188,6 +200,51 @@ fn managed_for(
     Ok((rt, Managed { host }))
 }
 
+/// Read the roster file the operator named: a regular file (checked before
+/// and after opening, so a FIFO or device is never read), and never more
+/// than the importer's cap.
+fn read_roster(path: &str) -> Result<String, String> {
+    use std::io::Read;
+    let max = clawft_kernel::workload_runtime::infer::roster::MAX_ROSTER_BYTES;
+    let fail = |m: String| format!("{CONFIG_FILE}: roster {path}: {m}");
+    let before = std::fs::metadata(path).map_err(|e| fail(e.to_string()))?;
+    if !before.is_file() {
+        return Err(fail("not a regular file".into()));
+    }
+    let file = std::fs::File::open(path).map_err(|e| fail(e.to_string()))?;
+    let meta = file.metadata().map_err(|e| fail(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(fail("not a regular file".into()));
+    }
+    if meta.len() > max as u64 {
+        return Err(fail(format!("over {max} bytes")));
+    }
+    let mut text = String::new();
+    file.take(max as u64 + 1).read_to_string(&mut text).map_err(|e| fail(e.to_string()))?;
+    if text.len() > max {
+        return Err(fail(format!("over {max} bytes")));
+    }
+    Ok(text)
+}
+
+/// The resolver consumers use. A provider role (`local`, OpenAI-compatible
+/// over HTTP) may resolve to a role served by another node (through this
+/// node's proxy). Any other named role (the voice TTS speaks Ollama's native
+/// API, which the mesh does not carry to peers) resolves only to a server on
+/// this node, and otherwise the consumer keeps its own configured endpoint.
+pub(crate) fn role_resolver(
+    table: Arc<PlacementTable>,
+    provider_roles: std::collections::HashSet<String>,
+) -> clawft_types::placement::roles::RoleResolver {
+    Arc::new(move |role: &str| {
+        if provider_roles.contains(role) {
+            table.base_url_for_role(role)
+        } else {
+            table.local_base_for_role(role)
+        }
+    })
+}
+
 /// Build the placement state from `<runtime>/inference.json` and run one
 /// local pass, without installing anything process-wide. `Ok(None)` when
 /// the file is absent (the default: off).
@@ -195,8 +252,7 @@ pub async fn build(p: InitParts<'_>) -> Result<Option<(Arc<InferState>, FileCfg)
     let Some(cfg) = load_config(p.dir)? else { return Ok(None) };
     let imported = match &cfg.roster {
         Some(r) => {
-            let text = std::fs::read_to_string(&r.file).map_err(|e| format!("{CONFIG_FILE}: roster {}: {e}", r.file))?;
-            Some(import_roster(&text, &r.overlay)?)
+            Some(import_roster(&read_roster(&r.file)?, &r.overlay)?)
         }
         None => None,
     };
@@ -264,7 +320,12 @@ pub async fn build(p: InitParts<'_>) -> Result<Option<(Arc<InferState>, FileCfg)
         } else {
             (Arc::new(InferRuntime::new(InferConfig::adopted(r.spec.runtime))), None)
         };
-        let (proxy, handle) = crate::infer_managed::start_proxy(r, &table, &p).await;
+        let px = crate::infer_managed::start_proxies(r, &table, &p).await;
+        let (proxy, handle) = px.local;
+        let (exposed_state, exposed_handle) = match px.exposed {
+            Some((s, h)) => (Some(s), h),
+            None => (None, None),
+        };
         roles.push(RoleState {
             cfg: r.cfg.clone(),
             spec: r.spec.clone(),
@@ -274,6 +335,8 @@ pub async fn build(p: InitParts<'_>) -> Result<Option<(Arc<InferState>, FileCfg)
             run: std::sync::Mutex::new(run),
             proxy: std::sync::Mutex::new(proxy),
             _proxy: std::sync::Mutex::new(handle),
+            exposed_proxy: std::sync::Mutex::new(exposed_state),
+            _exposed: std::sync::Mutex::new(exposed_handle),
         });
     }
     let state = Arc::new(InferState {
@@ -305,10 +368,7 @@ pub async fn init(p: InitParts<'_>) -> Result<Option<Arc<InferState>>, String> {
         .iter()
         .filter_map(|r| r.provider.clone().map(|p| (p, r.role.clone())))
         .collect();
-    let resolver = {
-        let t = table.clone();
-        Arc::new(move |role: &str| t.base_url_for_role(role)) as Arc<dyn Fn(&str) -> Option<String> + Send + Sync>
-    };
+    let resolver = role_resolver(table.clone(), provider_roles.values().cloned().collect());
     clawft_types::placement::roles::install(resolver.clone(), provider_roles.clone());
     if !provider_roles.is_empty() {
         clawft_core::placement_hook::install(resolver, Duration::from_secs(5), provider_roles);

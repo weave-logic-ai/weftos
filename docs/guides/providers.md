@@ -578,24 +578,42 @@ placed workloads. Managed roles are governed and off by default.
   that excludes it), is refused as unplaceable, chained as `workload.refuse`
   with the reason, shown as the role's `state: unplaceable`, and retried
   after a pause. Stopping a role gives its memory back.
-- `expose` lets a role's proxy listen beyond loopback (`0.0.0.0`, for
-  containers that reach this machine). The model server itself stays on
-  loopback. It needs a bearer token (`token_file`, relative to the runtime
-  dir, a regular file you own with mode 0600, at least 32 characters) and a
-  chained governance permit: the gate is asked for a `workload.start` of
-  kind `inference` with `network: lan` and package id
-  `inference-expose:<role>`, so `workload-permits.json` needs a rule whose
-  `max_network` is `lan`. Without both, the proxy stays unbound and says why.
-  Clients send `Authorization: Bearer <token>`; the token is checked before
-  any body is read, is never forwarded to the model server, and never
-  appears in the chain or the logs. Without `expose` nothing listens beyond
-  127.0.0.1.
+- `expose` adds a second proxy listener beyond loopback (`listen`, `port`;
+  `0.0.0.0` for containers that reach this machine). The role's
+  `proxy_port` stays a loopback listener without a token, which is what
+  consumers on this machine use; the exposed listener has its own
+  connection pool and a per-client-address cap (8), so LAN clients cannot
+  starve local ones. The model server itself stays on loopback. Exposure
+  needs a bearer token (`token_file`, relative to the runtime dir) and a
+  chained governance permit. The token file is opened without following a
+  link and checked through the open descriptor: a regular file you own,
+  mode 0600, 32 to 4096 characters, in directories you own that others
+  cannot write to. The gate is asked for a `workload.start` of kind
+  `inference` with `network: lan` and package id `inference-expose:<role>`,
+  so `workload-permits.json` needs a rule whose `max_network` is `lan`.
+  Without both, the exposed listener stays unbound and says why. Clients
+  send `Authorization: Bearer <token>`; it is checked before any body is
+  read, never forwarded to the model server, and never appears in the chain
+  or the logs. Without `expose` nothing listens beyond 127.0.0.1.
+  **The token travels in cleartext on the LAN** (plain HTTP): `network: lan`
+  is meant for trusted segments until TLS lands.
+- The launcher (`serve_programs`) must be an executable owned by the
+  daemon's user or root and not writable by group or others, and the roster
+  must be a regular file of at most 1 MiB; anything else is refused with
+  the reason. The memory a managed role holds is released when it stops
+  (after the process has exited), gives up restarting, is stopped for
+  listening beyond loopback, or fails to load, and the role stops claiming to
+  run. An Ollama model that was already in memory when asked is never
+  loaded or unloaded by WeftOS.
 - Consumers follow a placed role when nothing explicit chose their
   endpoint: in-process agents (`provider`), the kernel `llm` service (its
   endpoint is the `local` role's server, refreshed when the role moves; its
   health check follows), and the voice TTS (Orpheus follows a role named
   `orpheus-tts` when its default endpoint is in use; an explicit endpoint
-  wins). A role served on this node resolves straight to its server, so the
+  wins). Only a `provider` role may resolve to a node elsewhere (through this
+  node's proxy, OpenAI paths only); the TTS speaks Ollama's native API, which
+  the mesh does not carry to peers, so it follows a server on this node or
+  keeps its own endpoint. A role served on this node resolves straight to its server, so the
   latency path is the same as without placement. Only a role served by
   another node goes through this node's proxy.
 - Not covered yet: failing a role over to a second node and marking its KV

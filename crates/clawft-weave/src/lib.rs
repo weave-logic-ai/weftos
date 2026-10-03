@@ -185,6 +185,8 @@ pub(crate) mod infer_wire_tests;
 mod infer_managed_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_cfg_tests;
+#[cfg(all(test, feature = "placement", unix))]
+mod infer_hardening_tests;
 pub mod node_facts_rpc;
 pub mod protocol;
 pub mod service_units;
