@@ -386,7 +386,7 @@ pub fn check_file(file: &FileRef, content: &[u8]) -> Result<(), VerifyError> {
 /// hex of the right length is skipped like an unpinned one: it can neither
 /// authenticate the package nor veto a valid signature next to it, so one
 /// garbage entry cannot fail the whole verify.
-fn check_signatures(
+pub(crate) fn check_signatures(
     env: &ManifestEnvelope,
     anchors: &TrustAnchors,
 ) -> Result<Vec<AcceptedSigner>, VerifyError> {

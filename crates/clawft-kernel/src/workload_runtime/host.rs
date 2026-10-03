@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 use super::cog_spec::valid_value;
 use super::evidence::RunEvidence;
 use super::types::{
-    InstanceHandle, InstanceStatus, Preemption, RuntimeError, VerifiedWorkload, WorkloadConfig,
+    ControlMode, InstanceHandle, InstanceStatus, Preemption, RuntimeError, VerifiedWorkload, WorkloadConfig,
     WorkloadRuntime, WorkloadSource,
 };
 use crate::chain::{self, ChainManager};
@@ -98,6 +98,23 @@ impl WorkloadHost {
             // `PackageTrust::ProjectCert`: matched only by a permit that
             // names it (the supervisor's, see `project_supervisor_permit`).
             WorkloadSource::Project(_) => ("project_cert", 0.25),
+            // Managed: model weights are operator-attested hash manifests
+            // (ADR-101 section 3). Adopted: a server the operator started
+            // is only observed, nothing is verified. Cost is the share of a
+            // 128 GiB unified pool.
+            WorkloadSource::Inference(p) => {
+                let m = &p.spec.memory;
+                let bytes = m.weights_bytes.saturating_add(m.kv_budget_bytes);
+                let trust = if self.runtime.control_mode() == ControlMode::Adopted {
+                    "adopted_unverified"
+                } else {
+                    "operator_attested"
+                };
+                (
+                    trust,
+                    (bytes as f64 / (128.0 * 1024.0 * 1024.0 * 1024.0)).clamp(0.1, 1.0),
+                )
+            }
         };
         json!({ "workload": {
             "kind": kind,

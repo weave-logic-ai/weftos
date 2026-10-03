@@ -57,6 +57,10 @@ enum Commands {
     /// Governed workloads placed across the mesh (ADR-099).
     Workload(commands::workload_cmd::WorkloadArgs),
 
+    /// Adopt, verify and explain locally held model weights (ADR-101).
+    #[cfg(all(feature = "ecc", feature = "exochain"))]
+    Model(commands::model_cmd::ModelArgs),
+
     /// Project cog sources (WeftOS, Cognitum, private), licences, search, install (ADR-105).
     Cog(commands::cog_cmd::CogArgs),
 
@@ -168,6 +172,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Agent(args) => commands::agent_cmd::run(args).await?,
         Commands::App(args) => commands::app_cmd::run(args).await?,
         Commands::Workload(args) => commands::workload_cmd::run(args).await?,
+        #[cfg(all(feature = "ecc", feature = "exochain"))]
+        Commands::Model(args) => commands::model_cmd::run(args)?,
         Commands::Cog(args) => commands::cog_cmd::run(args).await?,
         Commands::Cluster(args) => commands::cluster_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,

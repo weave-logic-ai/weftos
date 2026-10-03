@@ -51,6 +51,8 @@ use tracing::{info, warn};
 pub const MEASURED_FILE: &str = "perf.measured.json";
 /// Declared feeds file under the runtime dir.
 pub const FEEDS_FILE: &str = "feeds.declared.json";
+/// Model registry inside the runtime directory (card mesh-placement-17).
+pub const MODEL_REGISTRY_FILE: &str = "models/registry.json";
 /// Probe settings file under the runtime dir.
 pub const CONFIG_FILE: &str = "facts.config.json";
 /// Environment override for the container-engine probe image.
@@ -211,6 +213,18 @@ pub fn probe_config(runtime_dir: &Path) -> ProbeConfig {
         match serde_json::from_str::<Vec<Capability>>(&text) {
             Ok(feeds) => cfg.declared_feeds = feeds,
             Err(e) => warn!(error = %e, "declared feeds unreadable; ignored"),
+        }
+    }
+    let registry_path = runtime_dir.join(MODEL_REGISTRY_FILE);
+    if registry_path.exists() {
+        match clawft_kernel::model_manifest::ModelRegistry::open(&registry_path) {
+            Ok(reg) => {
+                cfg.models = clawft_kernel::model_manifest::model_capabilities(
+                    &reg,
+                    &clawft_kernel::model_manifest::TierResolver::system_default(),
+                );
+            }
+            Err(e) => warn!(error = %e, "model registry unreadable; models not advertised"),
         }
     }
     cfg

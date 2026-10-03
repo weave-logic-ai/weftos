@@ -14,6 +14,8 @@
 //! - [`seed`] / [`seed_ops`]: the `remote.api` adapter for a Cognitum Seed
 //!   (its own HTTP API; pinned store cogs only; pairing; governed,
 //!   backed-up firmware upgrade), over [`seed_http`].
+//! - [`infer`]: `infer.llamacpp`, `infer.mlx-lm` and `infer.ollama` for model
+//!   servers (ADR-101 section 4): adopt a running server, or manage one.
 //! - [`host_contract`]: `COG_CSI_BIND`, `COG_SENSOR_URL`,
 //!   `COGNITUM_COG_TOKEN`, `COGNITUM_COG_DATA_DIR`.
 //! - [`host`]: [`WorkloadHost`], which gates each transition and chains it
@@ -32,6 +34,7 @@ pub mod fleet_mcp;
 pub mod host;
 pub mod host_contract;
 pub mod host_seed;
+pub mod infer;
 pub mod logical;
 pub mod native;
 pub mod seed;
@@ -86,6 +89,9 @@ pub use fleet_inventory::{
 pub use fleet_mcp::{COGNITUM_MCP_URL, OAuthTokens};
 pub use host::{RUNTIME_CHAIN_SOURCE, WorkloadHost};
 pub use host_contract::HostContract;
+pub use infer::{
+    InferConfig, InferFlavor, InferMode, InferRuntime, InferenceSpec, ManagedConfig, RestartPolicy,
+};
 pub use logical::{
     CAP_PROJECT_LOGICAL, ChildLauncher, ChildProbe, ChildRef, ChildSpec, LOGICAL_ID, LogicalRuntime,
 };
@@ -99,7 +105,7 @@ pub use seed_creds::FileCredentials;
 pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};
 pub use seed_ops::{SeedBackup, UpgradeOutcome};
 pub use types::{
-    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, LinkSecurity, Preemption,
-    ProjectPayload, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
+    Admission, ControlMode, InferencePayload, InstanceHandle, InstanceState, InstanceStatus,
+    LinkSecurity, Preemption, ProjectPayload, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
     WorkloadSource,
 };

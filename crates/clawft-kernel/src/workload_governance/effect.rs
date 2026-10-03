@@ -26,6 +26,11 @@ pub const MAX_REFS: usize = 64;
 pub enum PackageTrust {
     /// No valid signature.
     Unsigned,
+    /// A server somebody else started, registered and observed by an
+    /// adopted-mode inference adapter (ADR-101): nothing about it was
+    /// verified. Ordered just above `Unsigned` so no signed or attested
+    /// minimum is satisfied by it; only a permit that names it matches.
+    AdoptedUnverified,
     /// Authorised by a project certificate chained to the user key (the
     /// `project` kind, ADR-103 A6). Ordered just above `Unsigned` so it never
     /// satisfies the signed-package minimums cog permits ask for; only a
@@ -171,6 +176,7 @@ impl WorkloadEffect {
         let clamp = |v: f64| v.clamp(0.0, 1.0);
         let trust_risk = match self.package_trust {
             PackageTrust::Unsigned => 0.9,
+            PackageTrust::AdoptedUnverified => 0.5,
             PackageTrust::SignedUnpinned => 0.6,
             PackageTrust::OperatorAttested => 0.3,
             PackageTrust::PinnedSigner => 0.1,

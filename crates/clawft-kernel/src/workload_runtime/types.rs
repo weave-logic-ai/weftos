@@ -76,6 +76,17 @@ pub enum WorkloadSource {
     /// A project workload, authorised by a project certificate rather than
     /// a signed package. Type only: no adapter accepts it yet.
     Project(ProjectPayload),
+    /// An inference endpoint (ADR-101): adopted or managed by an
+    /// `infer.*` adapter. Authorised by the operator's request and the
+    /// operator-attested model manifest, not by a signed package.
+    Inference(Box<InferencePayload>),
+}
+
+/// The spec of a [`WorkloadSource::Inference`] workload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InferencePayload {
+    /// What to adopt or run.
+    pub spec: super::infer::InferenceSpec,
 }
 
 /// Identity of the project a [`WorkloadSource::Project`] workload belongs to.

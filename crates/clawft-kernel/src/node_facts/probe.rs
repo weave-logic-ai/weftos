@@ -69,6 +69,9 @@ pub struct ProbeConfig {
     pub declared_feeds: Vec<Capability>,
     /// Harness / admission-probe results; only `measured` `perf.*` kept.
     pub measured: Vec<Capability>,
+    /// Model-registry output (`crate::model_manifest::model_capabilities`);
+    /// only `model.present` and a detached `store.tier.external` are kept.
+    pub models: Vec<Capability>,
     /// Remembers the privileged emulation probe between runs (none: always run it).
     pub emulation_cache: Option<std::sync::Arc<EmulationCache>>,
 }
@@ -79,6 +82,7 @@ impl Default for ProbeConfig {
             docker_probe_image: Some("alpine:3.20".into()),
             declared_feeds: Vec::new(),
             measured: Vec::new(),
+            models: Vec::new(),
             emulation_cache: None,
         }
     }
@@ -215,6 +219,25 @@ pub fn probe_capabilities(host: &dyn ProbeHost, cfg: &ProbeConfig) -> Collected 
         c.note(
             "feed",
             "sensor feeds are operator-declared (claimed), not probed",
+        );
+    }
+    let held = c.caps.len();
+    c.caps.extend(
+        cfg.models
+            .iter()
+            .filter(|m| {
+                m.id.as_str() == "model.present" || m.id.as_str() == "store.tier.external"
+            })
+            .cloned()
+            .map(|mut m| {
+                m.provenance = Provenance::Probed;
+                m
+            }),
+    );
+    if c.caps.len() > held {
+        c.note(
+            "model",
+            "model.present is from the local model registry (existence and size checks); paths and drive names are not advertised",
         );
     }
     let before = c.caps.len();
