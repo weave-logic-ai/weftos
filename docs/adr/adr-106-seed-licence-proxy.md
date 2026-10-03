@@ -33,7 +33,8 @@
   - ADR-105 (cog sources; section 3 licensing)
   - mesh-facts (`RedistributionPolicy` with `Audience`, `GrantOrigin`, `ServePeer`), now in `integrate/cog-repo`
 - **Relates-To**: COG-009 (`weft-cog-host` on the appliance) and COG-011 (per-node Ed25519 request signing, clock floor), both in the private cogs repo
-- **Implementation**: none yet. Phase plan below.
+- **Implementation**: Phase 1a built (see the status line below). Phases 1b to 4 are not started.
+- **Implementation status, phase 1a**: done on branch `wt/seed-1a`. Module `crates/clawft-kernel/src/licence/` (gated like the mesh swarm code): `MeshId`, binding v2 with the member profile, `CheckoutGrant`, `Approval`, `CheckoutGrantStore`, `ApprovalStore`, the persisted clock floor with the clamp, `MeshCheckoutPolicy`, `ArtifactExchange::grant_checkout`, and the `may_run` gate. The daemon installs `MeshCheckoutPolicy` unconditionally (`workload_place_rpc.rs`); its local mesh id is unset until the `mesh_nonce` config entry exists, so it behaves exactly like `ManifestPolicy` for now. Not yet: floods and sync (1b), transport and steward relay (1c), the steward profile hook (`BindingExtraCheck`) and the RPCs (1d), and wiring `may_run` into placement (phase 3). Detail choices made in 1a are listed under "Phase 1a implementation notes" below.
 
 ## Owner decisions this ADR implements (not reopened here)
 
@@ -234,6 +235,8 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
   seq, issued_at, expires_at }
 ```
 
+`grant_id` is the sha256 of the canonical payload with `grant_id` set to the empty string, since the payload cannot contain its own hash. `grant_key_id` is `ed25519:` plus the first 16 hex chars of `sha256(grant public key)`. Verifiers refuse a grant whose `grant_id` or `grant_key_id` does not match, whose lifetime exceeds 7 days, or whose artifacts are unsorted or duplicated by arch.
+
 **Replacement rules (M6).**
 - For one (mesh, cog, version), the highest `seq` wins and a lower `seq` is ignored.
 - A newer grant carries the **union** of every arch checked out so far for that version, so adding an arch never drops another.
@@ -250,7 +253,7 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
 - `weft-licence` refuses to sign until its clock passes a build-time floor and its persisted last `issued_at` (`clock_not_set`).
 - Each verifier keeps, per grant key, `floor = max(highest accepted issued_at, persisted local-now high-water mark)`. It persists the floor and uses `max(now, floor)` for expiry, so a reset clock cannot revive a grant.
 - A grant more than 5 min ahead of `max(now, floor)` is deferred as not yet valid and retried at the next sync.
-- A floor more than 30 days ahead of the newest accepted `issued_at` is treated as a far-future poisoning. The verifier chains it and clamps the floor to that `issued_at`. An operator `weaver cog checkout reset-floor` (Admin, chained) is the manual reset.
+- The persisted mark never goes down, and its growth is capped: `hw = max(hw, min(now, max_issued + 30 d))`, recorded only once a grant has been accepted. A forward clock jump therefore cannot push the floor more than 30 days past the newest `issued_at`, and a clock set back never revives an expired grant. Undoing a jump that did land is the manual `weaver cog checkout reset-floor` (Admin, chained). (Round 4 replaced the earlier rule, which clamped the floor back down and so let a set-back clock revive expired grants.)
 
 ### 5. Swarm, transport and sync
 
@@ -351,6 +354,7 @@ A LAN path is plain text and needs the explicit per-Seed lab opt-in (`allow_unpi
   - A withdrawal reaches the mesh within the next steward pull (at most 12 h), then flood or sync (30 min).
   - A TTL of T means a lapse can go unnoticed for up to T. The 7-day maximum therefore means up to a 7-day lapse.
   - The steward can delay a withdrawal for up to one TTL (section 9), which is why the default is 72 h.
+- **Unbind and rebind.** Unbind alone does not void grants against a later rebind to the same grant key: the grants resume. The response to a rogue or stolen Seed is unbind plus a `SignerKey` revocation of the grant key.
 - **Soft stop recommended.** Sharing and new starts stop, and running instances finish. This matches current revocation semantics. It does not kill safety-relevant cogs over a clock or network fault, and the overrun is bounded by the instance's next restart.
 - **Hard stop, if C5 demands it.** A `hard_stop: true` withdrawal would make placement stop those instances through the teardown path that `check_teardown` already allows.
 
@@ -409,7 +413,7 @@ All of phase 1 runs in process, with no hardware and no network, under `scripts/
 - a lower-seq grant is ignored, and a withdrawal stops serving;
 - a newer grant keeps the union of arches;
 - a same-seq conflict is refused;
-- a clock set back cannot revive a grant, the floor and the store survive a restart, and the far-future clamp works;
+- a clock set back cannot revive a grant, the floor and the store survive a restart, and the far-future growth cap holds (only `reset-floor` undoes a forward jump);
 - a `SignerKey` revocation of the grant key ends every checkout grant, while a hash that another unrevoked package grant still lists keeps only that grant's own policy result (L6);
 - open membership, `observe` and `off` refuse the binding.
 
@@ -466,6 +470,27 @@ Tests:
 Placement still uses operator re-signing. Acceptance: after a lapse, a restart is refused.
 
 **Phase 4. Needs Cognitum.** A Cognitum-signed entitlement and a signed registry entry (C9) attached verbatim to grants and verified offline by members, replacing the operator approval. Then grant-backed placement eligibility (replacing operator re-signing inside the mesh), licensed download, a device-key cross-certificate of the grant key, a Cognitum withdrawal feed, and multi-Seed meshes if wanted.
+
+## Phase 1a implementation notes
+
+Choices made while building 1a that the text above leaves open. None change a decision.
+
+- **Envelope.** Every record travels as `{payload, public_key, signature}` (hex). The signed bytes are `domain tag || "\n" || payload`. The payload is the serde struct serialization, and a verifier refuses a payload that does not re-serialize to itself, so each record has one signed spelling.
+- **Operator keys.** A binding or approval is accepted only from a `TrustAnchors` key with origin `Operator`. A pinned `Weftos` key is not accepted, unlike revocation notices.
+- **Binding fields.** `node_id` from the v1 `BindRecord` is dropped, because `steward_node_id` names the same node. The v2 record is `{v, device_id, device_pubkey, mesh_id, grant_pubkey, steward_node_id, steward_pubkey, state, seq, bound_at}`.
+- **Unbind keeps the record.** An `unbound` binding is stored, so its `seq` persists and grants stop at once. A rebind with the same grant key resumes the held grants. A rebind with a new grant key voids them.
+- **Grant rules added.** A newer `seq` may not change the hashes of an arch the older grant carried (`ChangesArtifact`). A grant is valid only while `max(now, floor)` is below both `expires_at` and `licence.expires`. Expired and withdrawn grants stay in the store as `seq` tombstones, so an older unexpired grant cannot be replayed to undo a withdrawal.
+- **Same-seq conflict.** The store keeps the newest earlier grant per (cog, version). On a conflict it restores that grant and refuses both payloads at that `seq` from then on. If either payload is a withdrawal it fails closed instead: the withdrawal stays as the tombstone and no grant is valid.
+- **Saves.** A change is built on a copy, saved, then made the state. An unbind, a withdrawal or a conflict is applied in memory even if the save fails (the error is returned and `tick` retries), so a disk fault cannot keep a lapsed grant alive. Only `tick` writes the high-water mark; reads never write. Events are emitted after the lock is released.
+- **Shape bounds.** A grant refuses duplicate sha256 or blake3 across arches, sizes of 0 or over 1 GiB, a non-printable-ASCII `registry`, and times past 2100. A binding may not name a trust-anchor key as `grant_pubkey` or `steward_pubkey`. The floors map in a store file must hold only the bound key. `may_run` takes the BLAKE3 computed from the bytes and requires the grant's (sha256, blake3) pair to equal it.
+- **Floor.** The high-water mark never goes down and grows at most 30 days past the newest accepted `issued_at`. Only the Admin `reset_floor` lowers it. The `floor_clamped` event no longer exists.
+- **Fail closed.** A store file that is missing is empty. One that cannot be read, parsed or re-verified (every signature is checked again at load) is an error from `open`, or a poisoned store from `open_or_poisoned`, which serves nothing, refuses writes and leaves the file alone.
+- **Run gate.** `may_run` checks a valid grant that lists the binary's sha256, then that the grant's BLAKE3 is not revoked as an `ArtifactHash`, then an approval covering the sha256. The revocation is how an approval is withdrawn.
+- **Crash window.** An unbind, withdrawal or conflict that could not be saved is applied in memory only. A crash before a later successful save loses it until sync or a pull delivers it again, or until the grant TTL ends.
+- **Go-live condition.** The daemon must call `CheckoutGrantStore::tick()` about every 60 s before `mesh_nonce` is ever set, because `tick` is the only writer of the high-water mark and the retry for unsaved restrictive records.
+- **`reset_floor` revives by design.** It is Admin-only and chained. Phase 1d shows the floor before and after, and which grants it would bring back, before it runs.
+- **Cognitum questions raised by the bounds.** A perpetual licence has no sentinel: `licence.expires` of 0 or `u64::MAX` is refused, so the Seed should clamp to `MAX_UNIX_TIME` (2100-01-01). The 1 GiB artifact cap may be too small for cogs that bundle models.
+- **Events.** The stores report `binding_refused`, `binding_conflict`, `binding_orphaned`, `grant_conflict` and `floor_reset` through a `LicenceEventSink`. The daemon maps them to chain events in a later phase.
 
 ## Open questions
 

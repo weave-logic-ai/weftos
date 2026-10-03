@@ -188,9 +188,18 @@ async fn build(
     let store = ArtifactStore::open_file(dir.join("workload-artifacts"))
         .map_err(|e| format!("workload artifact store: {e}"))?;
     // The licence boundary is explicit: what this node may hand to peers is
-    // decided by the signed manifests (`redistributable = true`), nothing else.
+    // decided by the signed manifests (`redistributable = true`), except for
+    // Cognitum cogs under a valid checkout grant of a bound Seed (ADR-106).
+    // The policy is installed unconditionally and reads the binding live, so
+    // a binding that arrives later needs no restart; with none (or no mesh id
+    // yet) it is exactly `ManifestPolicy`.
     let cfg = ExchangeConfig {
-        redistribution: Arc::new(clawft_kernel::mesh_swarm_state::ManifestPolicy),
+        redistribution: clawft_kernel::licence::MeshCheckoutPolicy::open(
+            dir,
+            anchors.clone(),
+            revocations.clone(),
+            clawft_kernel::licence::LocalMeshId::unset(),
+        ),
         ..ExchangeConfig::default()
     };
     let mut ex = ArtifactExchange::new(&id, Arc::new(store), cfg)

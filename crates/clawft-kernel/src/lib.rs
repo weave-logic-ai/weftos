@@ -378,6 +378,9 @@ pub mod mesh_swarm_rate;
 pub mod mesh_swarm_revoke;
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod mesh_swarm_state;
+// ADR-106 phase 1a: Seed licence proxy, member side (checkout grants, approvals, policy).
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod licence;
 #[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 mod mesh_swarm_tests;
 #[cfg(feature = "mesh")]
