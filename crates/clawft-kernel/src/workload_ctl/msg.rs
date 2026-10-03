@@ -62,6 +62,13 @@ pub mod method {
     /// Every method of the set.
     pub const ALL: &[&str] = &[DESCRIBE, PLACE, LOAD, START, STOP, UNLOAD, STATUS, LOGS];
 
+    /// Methods that only take down what is running. Trust policy never
+    /// blocks these on the controller: an operator can always stop and
+    /// unload what they placed.
+    pub fn is_teardown(m: &str) -> bool {
+        matches!(m, STOP | UNLOAD)
+    }
+
     /// Methods that change state (they need a decision id).
     pub fn mutates(m: &str) -> bool {
         matches!(m, PLACE | LOAD | START | STOP | UNLOAD)
@@ -212,14 +219,14 @@ pub struct CtlResponse {
     pub outcome: CtlOutcome,
 }
 
-fn signed_bytes(domain: &[u8], payload: &str) -> Vec<u8> {
+pub(crate) fn signed_bytes(domain: &[u8], payload: &str) -> Vec<u8> {
     let mut v = Vec::with_capacity(domain.len() + payload.len());
     v.extend_from_slice(domain);
     v.extend_from_slice(payload.as_bytes());
     v
 }
 
-fn sign(domain: &[u8], payload: String, key: &SigningKey) -> SignedCtl {
+pub(crate) fn sign(domain: &[u8], payload: String, key: &SigningKey) -> SignedCtl {
     let sig = key.sign(&signed_bytes(domain, &payload));
     SignedCtl {
         payload,
@@ -229,7 +236,7 @@ fn sign(domain: &[u8], payload: String, key: &SigningKey) -> SignedCtl {
 }
 
 /// Check the envelope signature; returns the signer's raw key.
-fn open(domain: &[u8], s: &SignedCtl) -> Result<[u8; 32], Refusal> {
+pub(crate) fn open(domain: &[u8], s: &SignedCtl) -> Result<[u8; 32], Refusal> {
     let bad = |m: &str| Refusal::new(RefusalCode::Signature, m);
     if s.payload.len() > MAX_CTL_BYTES {
         return Err(bad("payload too large"));

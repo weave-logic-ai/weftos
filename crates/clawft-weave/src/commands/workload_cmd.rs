@@ -32,6 +32,8 @@ pub enum WorkloadCommand {
         /// Workload name.
         name: String,
     },
+    /// List cogs across the project's sources with run mode and placement policy (local, no daemon).
+    Catalog(super::cog_cmd::CatalogArgs),
     /// Package commands (pack, verify, keygen); these run locally, without the daemon.
     #[cfg(all(feature = "ecc", feature = "exochain"))]
     #[command(flatten)]
@@ -85,6 +87,10 @@ pub fn render_list(catalog: &[Value], placed: Option<&Value>) -> String {
 
 /// Run a `weaver workload` subcommand against the daemon.
 pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
+    if let WorkloadCommand::Catalog(a) = args.command {
+        // The catalog reads registries with a blocking HTTP client; keep it off the async threads.
+        return tokio::task::spawn_blocking(move || super::cog_cmd::run_catalog(a)).await?;
+    }
     #[cfg(all(feature = "ecc", feature = "exochain"))]
     if let WorkloadCommand::Package(cmd) = args.command {
         return super::workload_pack::run(cmd);
@@ -128,6 +134,7 @@ pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
             }
             println!("{}", serde_json::to_string_pretty(&resp.result.unwrap_or_default())?);
         }
+        WorkloadCommand::Catalog(_) => unreachable!("catalog is handled before connecting"),
         #[cfg(all(feature = "ecc", feature = "exochain"))]
         WorkloadCommand::Package(_) => unreachable!("package commands are handled before connecting"),
         #[cfg(all(feature = "placement", unix))]

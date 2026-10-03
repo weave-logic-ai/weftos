@@ -6,7 +6,7 @@
 - **Date**: 2026-09-28
 - **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
 - **Depends-On**: ADR-099 (governed workload placement)
-- **Relates-To**: ADR-025, ADR-092, ADR-101, `docs/research/mesh-placement/README.md`
+- **Relates-To**: ADR-025, ADR-092, ADR-101, ADR-105 (cog sources, per-project catalog and licences), `docs/research/mesh-placement/README.md`
 
 ## Context
 
@@ -63,12 +63,16 @@ What was measured:
 - The Seed API (firmware 0.24.2; MCP endpoint with 130 tools at `toolScope` "full"). Relevant endpoints: `/api/v1/apps/install {"id"}`, `/api/v1/apps/{id}/start`, `stop`, `console {"command"}`, `logs`, `config`, `manifest`; pairing via `/api/v1/pair/window` and `/pair` over USB with a bearer token; `/api/v1/upgrade/apply` for binary OTA.
 - Store facts: the registry (v2.3.2) lists 107 cogs but **not `anomaly-detect`**. So on Seeds the v1 first cogs are `fall-detect` or `baby-cry` via the store, while `anomaly-detect` goes through our own signed-package path (native adapter, on nodes we control). Installed cogs auto-start. The Seed caps concurrency at 3. Contention on UDP 5006 (upstream cogs#14) is real: running instances must be stopped before a console run. The console runs one cycle.
 - Parity and speed: `fall-detect` on the Seed (armhf) versus the Pi 5 (aarch64 native) on an identical synthetic feed gave the same `z_impact` to the last digit printed (0.7071067811865475 versus ...476). A Pi Zero 2 W cycle at `--interval 1` is about 6 s versus about 1 s on the Pi 5, the motivating case for measured-throughput placement (ADR-099).
-- Pi 5: already runs weaver v0.8.1 as a mesh member and runs released aarch64 cogs natively (`anomaly-detect`, `fall-detect`, `baby-cry`, `sleep-apnea` ingest). It is the reference native node.
+- Pi 5: already runs weaver v0.8.1 as a mesh member and runs released aarch64 cogs natively (`anomaly-detect`, `fall-detect`, `baby-cry`, `sleep-apnea` ingest). It is the reference native node. Evidence for the card-09 native-on-real-ARM criterion is this 2026-09-29 Pi 5 run (owner-reported; not re-run for card `d4fe33c5`); see [seed-adapter-operations.md](../research/mesh-placement/seed-adapter-operations.md) section 3.
 - Firmware quirks: an upgrade from 0.10.x tripped the known witness-chain `writes_gated` state, recovered with `/api/v1/store/truncate-confirm` after a backup, so the adapter must treat firmware upgrade as a governed, backed-up operation. MCP specification defects are tracked upstream (cognitum-one/support#19, cognitum-claude-plugin #3 to #6).
+
+Seed bind status: a tested library; no daemon or RPC path reaches `SeedBinder` yet; when wired it must use `dir.join(BIND_STATE_FILE)`. Teardown waiver: `check_teardown` re-decides at the highest node tier (`pinned`), which also waives the secrets-need-pinned deny and the tier-scaled risk threshold; that is intended, because both are caused by the tier. It accepts only `workload.stop`, `workload.unload` and `workload.load` (re-adoption); any other action is denied.
+
+Link rule (2026-10-02): a Seed is bound and placed on only over a pinned link (https with a certificate or public-key pin); plain http or WebPKI-only (even a CA-signed certificate) needs the explicit per-Seed lab opt-in, which is read only from the runtime dir's `workload-seeds.json`. See [seed-adapter-operations.md](../research/mesh-placement/seed-adapter-operations.md) section 4.
 
 Consequences of (b): governance on a Seed is enforced by WeftOS **at the adapter** (gate before any install, chained results) and not on the device; the Seed's own isolation and trust apply on-device. The adapter needs a per-Seed credential, held in the operator secret store and never in chain events. The Seed's registry provenance is Cognitum's, so installs from the store are accepted only for packages the operator has pinned (by id and version) in governance config; our own signed packages cannot be installed through the store path and use option (a) nodes.
 
-Remaining unknowns: whether Seeds can be given the WeftOS node agent later; how Cognitum identity maps to a WeftOS node id (the adapter uses an operator-assigned node id per Seed); behavior beyond firmware 0.24.2.
+Remaining unknowns: whether Seeds can be given the WeftOS node agent later; ~~how Cognitum identity maps to a WeftOS node id~~ (settled: an operator-signed bind record `{device_id, device_pubkey, node_id, bound_at}` verified against the Seed's `GET /api/v1/identity` and chained as `workload.node.bind`; the node id is derived from a per-Seed adapter key, see [seed-adapter-operations.md](../research/mesh-placement/seed-adapter-operations.md) section 5); behavior beyond firmware 0.24.2.
 
 ### 6. Trust (Decided 2026-09-29, defaults accepted by user)
 
@@ -89,11 +93,42 @@ Cost: package signing, the ingest bridge, container adapters, and Seed integrati
 2. **Emulation**: operator opt-in only, never automatic (ADR-099).
 3. **v1 cog scope**: the 93 cogs that run clean in the conformance sweep. Rationale: they are demonstrated working. `anomaly-detect` is the first cog on nodes we control (native or container path), since the Seed registry lacks it; `fall-detect` or `baby-cry` are the first via a Seed.
 4. **Source of truth**: our fork, ahead of upstream until our PRs merge (section 6).
-5. **Still open**: where ingested vectors live and which node owns the store the ingest bridge forwards to (needs a decision at card 10); whether a live ESP32 feed or a replayed feed is used for the real-hardware acceptance run (the Pi 5 and Seed results above used a synthetic feed).
+5. **Resolved 2026-10-02**: see "Decision 5 resolved" below.
+
+## Decision 5 resolved (2026-10-02)
+
+Ingested vectors belong to the **project that placed the cog**. The ingest
+bridge forwards a cog's batches to the store owned by that project's kernel,
+resolved from the placement's project id (ADR-103: a project kernel owns its
+own chain and stores). When the placement has no project, the batch goes to
+the placing controller's store. A placement whose project has no known store
+owner is refused; it is never redirected to the controller's store, because
+that would put one project's data in another's store.
+
+Acceptance runs for the real-hardware card use a **replayed ESP32 feed**
+(recorded or synthetic packets). A live feed is optional and documented
+where it is used. Mechanics and limits: `docs/cogs/ingest-bridge.md`.
+
+Network egress for ingesting cogs is **deferred**, not solved: native
+egress enforcement waits for landlock, seccomp and nftables on Linux and a
+sandbox profile on macOS (follow-up); container egress is operator network
+configuration following the recipe in `docs/cogs/ingest-bridge.md`. Until
+then the adapters report `egress` to the gate. The ingest bridge itself is
+wired into placement: the placing project id rides `PlaceOrder`,
+`PlaceBody` and `PlacementRecord`, tokens are issued at place and revoked at
+stop and unload.
+
+The target host decides who may place for a project: the controller must be
+the node itself, be listed for the project in the node's `cog-ingest.json`,
+or be the node of the project's bound key. A placement whose vectors have no
+routed store owner is refused at place time, and a node whose ingest bridge
+could not start places cogs without a token and reports `ingest: disabled`.
+Whatever re-creates an instance record without going through `place` (adopt,
+host-restart re-adoption) must issue a new ingest lease for native and
+container instances.
 
 ## Amendment (2026-10-02): `redistributable` in the signed cog manifest
 
 The cog manifest body has an optional field `redistributable` (default false, omitted from the signed statement when false, so existing manifests and package ids are unchanged). A cog package is seeded, advertised and served over the swarm (ADR-099 section 6) only when its signer wrote `redistributable = true` and it has no Cognitum provenance (a `cognitum.*` attestation or a `cognitum` release URL), which stays licence-gated whatever the flag says. `weaver workload pack --redistributable` sets it. Our own weftos cogs need the flag to be shared.
 
 **Compatibility.** `CogPackageBody` rejects unknown fields, so a verifier built before this change (v0.8.1 nodes, the cog repository, Seed tooling) rejects a manifest signed with `redistributable = true`. In a mixed-version mesh, upgrade every verifier before packing with the flag. Manifests without it verify everywhere as before.
-

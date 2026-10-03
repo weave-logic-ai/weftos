@@ -425,6 +425,17 @@ mod tests {
     }
 
     #[test]
+    fn install_with_a_path_like_id_is_a_400() {
+        let _g = serial();
+        let (a, root) = start();
+        let body = r#"{"id":"../x","source":"cognitum","sha256":"00","binary_b64":"eA=="}"#;
+        let (st, _, resp) = send(a, &post("/install", &format!("{JSON}{TOK}"), body));
+        assert!(st.contains("400"), "{st}");
+        assert!(resp.contains("bad cog id"), "{resp}");
+        assert!(!root.path().join("../x").exists());
+    }
+
+    #[test]
     fn heartbeat_stays_open_but_is_size_capped() {
         let _g = serial();
         let (a, _r) = start();

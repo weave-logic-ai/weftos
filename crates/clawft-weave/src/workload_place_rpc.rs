@@ -67,6 +67,8 @@ static BUILT_RULES: OnceLock<Option<String>> = OnceLock::new();
 /// This node's `workload-host` (in-process target and, when configured,
 /// served to other nodes).
 static HOST: OnceLock<Arc<WorkloadHostService>> = OnceLock::new();
+/// Keeps the cog ingest bridge listening for the daemon's life.
+static INGEST: OnceLock<crate::cog_ingest_serve::IngestRuntime> = OnceLock::new();
 /// Where it is served, once serving started.
 static SERVED: OnceLock<SocketAddr> = OnceLock::new();
 const LOCAL_ADDR: &str = "mem://local";
@@ -204,6 +206,26 @@ async fn build(
         let now = chrono::Utc::now().timestamp().max(0) as u64;
         fm.facts().get(&fid, now).map(|c| c.signed)
     });
+    let identity: Arc<dyn clawft_kernel::cog_ingest::ProjectDirectory> =
+        Arc::new(crate::cog_ingest_serve::IdentityDirectory);
+    let ingest = match crate::cog_ingest_serve::load_config(dir) {
+        Ok(cfg) => match crate::cog_ingest_serve::start(&cfg, &boot.key, Some(identity)).await {
+            Ok(rt) => Some(rt),
+            Err(e) => {
+                tracing::warn!(error = %e, "cog ingest not started");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "cog ingest config invalid; cogs run without ingest");
+            None
+        }
+    };
+    let hooks = ingest.as_ref().map(|r| r.hooks.clone());
+    if let Some(rt) = ingest {
+        tracing::info!(bridge = ?rt.bridge_addr, disabled = ?rt.bridge_error, store_owner = ?rt.owner_addr, "cog ingest");
+        let _ = INGEST.set(rt);
+    }
     let local = Arc::new(local_host(HostParts {
         key: &boot.key,
         dir,
@@ -214,6 +236,7 @@ async fn build(
         facts,
         serving: serving.as_ref(),
         container,
+        ingest: hooks,
     })?);
     let _ = HOST.set(local.clone());
     let conn = Arc::new(MeshConnector::new(true));
@@ -263,6 +286,12 @@ struct PlaceParams {
     csi_port: Option<u16>,
     #[serde(default)]
     start: Option<bool>,
+    /// Project the cog is placed for (a project id). Its ingested vectors
+    /// go to that project's store; absent, to the placing controller's.
+    /// Refused here unless the project is registered and not revoked, and
+    /// again by the target host unless this controller may place for it.
+    #[serde(default)]
+    project: Option<String>,
 }
 
 /// `workload.place {store_pin: ...}`: an operator-pinned store cog on a
@@ -322,6 +351,9 @@ fn store_pin_order(v: Value) -> Result<StorePinOrder, String> {
 
 fn order(p: PlaceParams, dry_run: bool) -> Result<(PlaceOrder, Vec<String>), String> {
     let mode = run_mode(p.mode.as_deref(), p.interval)?;
+    if let Some(proj) = &p.project {
+        crate::cog_ingest_serve::check_project(proj)?;
+    }
     if !p.package_dir.is_absolute() {
         return Err(format!(
             "package_dir {} must be absolute (the daemon does not share the caller's working directory)",
@@ -348,6 +380,7 @@ fn order(p: PlaceParams, dry_run: bool) -> Result<(PlaceOrder, Vec<String>), Str
             allow_emulated: p.allow_emulated,
             start: p.start.unwrap_or(true),
             dry_run,
+            project_id: p.project,
         },
         p.peers,
     ))

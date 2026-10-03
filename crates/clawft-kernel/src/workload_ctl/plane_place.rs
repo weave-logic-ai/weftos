@@ -63,6 +63,15 @@ pub struct PlaceOrder {
     /// Decide and explain only; dispatch nothing.
     #[serde(default)]
     pub dry_run: bool,
+    /// Project the workload is placed for. The target's ingest bridge
+    /// delivers a cog's vectors to this project's store; `None` delivers
+    /// them to the placing controller's store. The target refuses the order
+    /// unless this controller may place for the project (it is the target
+    /// node itself, is listed for the project in the target's
+    /// `cog-ingest.json`, or is the node of the project's bound key); the
+    /// controller's signature covers the id but does not by itself prove it.
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 fn yes() -> bool {
@@ -84,6 +93,10 @@ pub struct Attempt {
     /// Why, if not placed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The target's ingest state for a placed cog (`enabled`, `disabled` or
+    /// `none`). `disabled`: placed without a token, its vectors go nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingest: Option<String>,
 }
 
 /// Result of `place` (and of a dry run).
@@ -267,6 +280,7 @@ impl PlacementControlPlane {
                 outcome: outcome.to_string(),
                 code,
                 reason,
+                ingest: None,
             };
             if ex == Execution::Emulated
                 && let GateVerdict::Deny { reason } = self.gate_verdict(w, &node, true)
@@ -282,6 +296,7 @@ impl PlacementControlPlane {
                 variant: variant.clone(),
                 config: order.config.clone(),
                 start: order.start,
+                project_id: order.project_id.clone(),
             })
             .unwrap_or_default();
             let target = match self.target(&node) {
@@ -312,6 +327,7 @@ impl PlacementControlPlane {
                 variant: variant.clone(),
                 decision_id: report.decision_id.clone(),
                 manifest_hash: manifest.to_string(),
+                project_id: order.project_id.clone(),
             };
             match r {
                 Ok((result, _)) => {
@@ -331,7 +347,9 @@ impl PlacementControlPlane {
                         p.insert(rec.instance_id.clone(), rec.clone());
                     }
                     self.persist();
-                    report.attempts.push(attempt("placed", None, None));
+                    let mut a = attempt("placed", None, None);
+                    a.ingest = result["ingest"].as_str().map(String::from);
+                    report.attempts.push(a);
                     report.placed = Some(rec);
                     return;
                 }
@@ -415,7 +433,15 @@ impl PlacementControlPlane {
                     .unwrap_or(crate::workload_governance::NodeTrustTier::Discovered),
                 "network": "egress", "resource_cost": 0.0,
             }});
-            if let GateDecision::Deny { reason, .. } = self.gate.check(&self.node_id, m, &ctx) {
+            // Stop and unload only shrink what is running: a denial caused
+            // by the node's trust tier alone (a demoted peer) is waived by
+            // the gate and chained there; any other denial stands.
+            let verdict = if method::is_teardown(m) {
+                self.gate.check_teardown(&self.node_id, m, &ctx)
+            } else {
+                self.gate.check(&self.node_id, m, &ctx)
+            };
+            if let GateDecision::Deny { reason, .. } = verdict {
                 return Err(PlaneError::Governance(reason));
             }
             Some(
@@ -470,6 +496,11 @@ pub fn render(r: &PlaceReport) -> String {
                     ))
                     .unwrap_or_default()
             ));
+            if a.ingest.as_deref() == Some("disabled") {
+                s.push_str(
+                    "     placed with ingest disabled: the cog has no token and its vectors go nowhere\n",
+                );
+            }
         }
     }
     s

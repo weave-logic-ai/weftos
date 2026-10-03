@@ -25,6 +25,19 @@ const TEXT: Color32 = Color32::from_rgb(225, 228, 232);
 const DIM: Color32 = Color32::from_rgb(150, 155, 162);
 const BAD: Color32 = Color32::from_rgb(220, 70, 70);
 
+// One type scale for every painted diagram, so titles, labels, pin numbers and detail text
+// are sized consistently across header / wiring / flow / grid rather than ad-hoc per call.
+const F_TITLE: f32 = 14.0; // board / panel title
+const F_NAME: f32 = 13.0; // part name, legend name, grid title
+const F_LABEL: f32 = 12.0; // primary labels and pin numbers (mono)
+const F_AXIS: f32 = 11.0; // orientation / axis / note labels
+const F_TINY: f32 = 10.0; // dense labels (wire labels, header row labels, pad labels)
+const F_DETAIL: f32 = 9.5; // secondary detail text inside boxes
+const F_CELL: f32 = 9.0; // grid cell index (mono)
+
+/// Standard inset from a canvas edge to its text, so every diagram's margins match.
+const MARGIN: f32 = 14.0;
+
 /// Paints `text` wrapped to `width`; returns the height used.
 fn wrapped(
     p: &egui::Painter,
@@ -60,17 +73,17 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
     // 1-39 and is drawn below. Pin 1 (3.3 V) is the inner row's left pin. Matches the orientation text.
     let (y_even, y_odd) = (r.top() + 70.0, r.top() + 70.0 + pitch);
     p.text(
-        pos2(r.left() + 14.0, r.top() + 12.0),
+        pos2(r.left() + MARGIN, r.top() + 12.0),
         Align2::LEFT_TOP,
         &h.board,
-        FontId::proportional(14.0),
+        FontId::proportional(F_TITLE),
         TEXT,
     );
     p.text(
-        pos2(r.left() + 14.0, r.top() + 32.0),
+        pos2(r.left() + MARGIN, r.top() + 32.0),
         Align2::LEFT_TOP,
         &h.orientation,
-        FontId::proportional(11.0),
+        FontId::proportional(F_AXIS),
         DIM,
     );
     p.rect_stroke(
@@ -87,14 +100,14 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
         pos2(x0 - pitch * 0.7, y_even - pitch * 0.95),
         Align2::LEFT_BOTTOM,
         "outer row · even 2-40 (board edge)",
-        FontId::proportional(10.0),
+        FontId::proportional(F_TINY),
         DIM,
     );
     p.text(
         pos2(x0 - pitch * 0.7, y_odd + pitch * 0.95),
         Align2::LEFT_TOP,
         "inner row · odd 1-39 (nearer the chip) — pin 1 = 3V3 at left",
-        FontId::proportional(10.0),
+        FontId::proportional(F_TINY),
         DIM,
     );
     for pin in 1..=40u8 {
@@ -129,7 +142,7 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
                 pos + vec2(0.0, dy),
                 Align2::CENTER_CENTER,
                 pin.to_string(),
-                FontId::monospace(10.0),
+                FontId::monospace(F_TINY),
                 TEXT,
             );
         }
@@ -142,7 +155,7 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
             &p,
             pos2(r.left() + 32.0, y),
             &text,
-            FontId::proportional(12.0),
+            FontId::proportional(F_LABEL),
             TEXT,
             r.width() - 46.0,
         ) + 3.0;
@@ -151,9 +164,9 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
         let text = format!("x  pin {}: never use. {}", a.pin, a.why);
         y += wrapped(
             &p,
-            pos2(r.left() + 14.0, y),
+            pos2(r.left() + MARGIN, y),
             &text,
-            FontId::proportional(11.0),
+            FontId::proportional(F_AXIS),
             BAD,
             r.width() - 28.0,
         ) + 3.0;
@@ -242,7 +255,7 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
                 pos2(x - 4.0, (a.y + b.y) / 2.0),
                 Align2::RIGHT_CENTER,
                 &w.label,
-                FontId::proportional(10.0),
+                FontId::proportional(F_TINY),
                 DIM,
             );
             continue;
@@ -266,7 +279,7 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
             pos2(lx, pa.y - 2.0),
             align,
             &w.label,
-            FontId::proportional(10.0),
+            FontId::proportional(F_TINY),
             c,
         );
     }
@@ -274,11 +287,11 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
         p.rect_filled(*rect, 6.0, PANEL);
         p.rect_stroke(*rect, 6.0, Stroke::new(1.5, EDGE), egui::StrokeKind::Middle);
         let wide = p
-            .layout_no_wrap(part.name.clone(), FontId::proportional(13.0), TEXT)
+            .layout_no_wrap(part.name.clone(), FontId::proportional(F_NAME), TEXT)
             .size()
             .x
             > rect.width() - 8.0;
-        let name_font = FontId::proportional(if wide { 10.5 } else { 13.0 });
+        let name_font = FontId::proportional(if wide { 10.5 } else { F_NAME });
         p.text(
             pos2(rect.center().x, rect.top() + 8.0),
             Align2::CENTER_TOP,
@@ -288,7 +301,7 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
         );
         let detail = p.layout(
             part.detail.clone(),
-            FontId::proportional(9.0),
+            FontId::proportional(F_DETAIL),
             DIM,
             rect.width() - 6.0,
         );
@@ -303,7 +316,7 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
                 pos2(rect.center().x, y),
                 Align2::CENTER_CENTER,
                 pin,
-                FontId::monospace(12.0),
+                FontId::monospace(F_LABEL),
                 TEXT,
             );
         }
@@ -357,7 +370,7 @@ pub fn placements(ui: &mut Ui, doc: &GuideDoc, selected: &mut usize) {
         at(0.5, 1.02),
         Align2::CENTER_TOP,
         "<- subject's right      subject's left ->",
-        FontId::proportional(10.0),
+        FontId::proportional(F_TINY),
         DIM,
     );
     let pad_col = |l: &str| match l {
@@ -376,7 +389,7 @@ pub fn placements(ui: &mut Ui, doc: &GuideDoc, selected: &mut usize) {
             c,
             Align2::CENTER_CENTER,
             &pad.label,
-            FontId::proportional(10.0),
+            FontId::proportional(F_TINY),
             Color32::BLACK,
         );
         p.circle_filled(pos2(lx, ly + 8.0), 8.0, pad_col(&pad.label));
@@ -385,7 +398,7 @@ pub fn placements(ui: &mut Ui, doc: &GuideDoc, selected: &mut usize) {
             &p,
             pos2(lx + 16.0, ly),
             &text,
-            FontId::proportional(13.0),
+            FontId::proportional(F_NAME),
             TEXT,
             r.right() - lx - 24.0,
         );
@@ -412,12 +425,12 @@ pub fn flow(ui: &mut Ui, doc: &GuideDoc) {
             pos2(b.center().x, b.top() + 10.0),
             Align2::CENTER_TOP,
             &s.name,
-            FontId::proportional(12.0),
+            FontId::proportional(F_LABEL),
             TEXT,
         );
         let detail = p.layout(
             s.detail.clone(),
-            FontId::proportional(9.5),
+            FontId::proportional(F_DETAIL),
             DIM,
             b.width() - 8.0,
         );
@@ -443,10 +456,10 @@ pub fn grid(ui: &mut Ui, doc: &GuideDoc) {
     let cell = ((ui.available_width().min(980.0) - 160.0) / cols).clamp(18.0, 44.0);
     let (p, r) = canvas(ui, 70.0 + cell * rows + 60.0);
     p.text(
-        pos2(r.left() + 14.0, r.top() + 10.0),
+        pos2(r.left() + MARGIN, r.top() + 10.0),
         Align2::LEFT_TOP,
         &g.title,
-        FontId::proportional(13.0),
+        FontId::proportional(F_NAME),
         TEXT,
     );
     let origin = pos2(r.center().x - cell * cols / 2.0, r.top() + 50.0);
@@ -463,7 +476,7 @@ pub fn grid(ui: &mut Ui, doc: &GuideDoc) {
                     cr.center(),
                     Align2::CENTER_CENTER,
                     (y * g.cols + x).to_string(),
-                    FontId::monospace(9.0),
+                    FontId::monospace(F_CELL),
                     DIM,
                 );
             }
@@ -482,28 +495,28 @@ pub fn grid(ui: &mut Ui, doc: &GuideDoc) {
         pos2(origin.x + gw / 2.0, origin.y - 6.0),
         Align2::CENTER_BOTTOM,
         &g.top,
-        FontId::proportional(11.0),
+        FontId::proportional(F_AXIS),
         TEXT,
     );
     p.text(
         pos2(origin.x + gw / 2.0, origin.y + gh + 4.0),
         Align2::CENTER_TOP,
         &g.bottom,
-        FontId::proportional(11.0),
+        FontId::proportional(F_AXIS),
         TEXT,
     );
     p.text(
         pos2(origin.x - 8.0, origin.y + gh / 2.0),
         Align2::RIGHT_CENTER,
         &g.left,
-        FontId::proportional(11.0),
+        FontId::proportional(F_AXIS),
         TEXT,
     );
     p.text(
         pos2(origin.x + gw + 8.0, origin.y + gh / 2.0),
         Align2::LEFT_CENTER,
         &g.right,
-        FontId::proportional(11.0),
+        FontId::proportional(F_AXIS),
         TEXT,
     );
     if !g.note.is_empty() {
@@ -511,7 +524,7 @@ pub fn grid(ui: &mut Ui, doc: &GuideDoc) {
             &p,
             pos2(r.left() + 14.0, origin.y + gh + 22.0),
             &g.note,
-            FontId::proportional(11.0),
+            FontId::proportional(F_AXIS),
             DIM,
             r.width() - 28.0,
         );

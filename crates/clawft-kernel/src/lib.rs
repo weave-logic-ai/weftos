@@ -91,6 +91,9 @@ pub mod workload_kind;
 // mesh-placement-09: WorkloadRuntime adapters (native, container, Seed API).
 #[cfg(all(feature = "workload-runtime", unix))]
 pub mod workload_runtime;
+// mesh-placement-10: cog ingest bridge and store forwarding.
+#[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
+pub mod cog_ingest;
 // mesh-placement-12: placement control plane and the workload-host service.
 #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
 pub mod workload_ctl;

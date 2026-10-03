@@ -103,6 +103,13 @@ pub struct VerifyPolicy {
     /// default; when on, a valid record from a pinned Cognitum key that
     /// binds one of the package binaries counts as a signature.
     pub accept_cognitum_release: bool,
+    /// BLAKE3 hashes of `cog.toml` files an operator has reviewed and pins
+    /// for **record-only** trust. A Cognitum release record binds the cog id,
+    /// version, source commit and binary digest but not the raw `cog.toml`,
+    /// so a package trusted through a record alone is accepted only when its
+    /// `cog.toml` hash is in this list. Operator-signed packages need no pin
+    /// (the envelope signature covers `cog.toml`).
+    pub record_cog_toml_pins: Vec<String>,
 }
 
 /// A signer whose signature was accepted.
@@ -247,11 +254,20 @@ pub fn verify_with_source_in(
 ) -> Result<VerifiedPackage, VerifyError> {
     let (envelope, body, mut signers) = parse_and_check(manifest, anchors, kinds)?;
 
+    // An attached Cognitum record is checked whenever the verifier is on, also
+    // on packages an operator already signed: a forged or mismatched record
+    // must not ride along unexamined next to a valid signature.
+    let record = if policy.accept_cognitum_release {
+        cognitum::check_attached(&body, source, anchors)?
+    } else {
+        None
+    };
     if signers.is_empty()
-        && policy.accept_cognitum_release
-        && let Some(signer) = cognitum::accept_from_package(&body, source, anchors)?
+        && let Some(rec) = record
     {
-        signers.push(signer);
+        // Record-only trust: the record has to bind what it cannot sign.
+        cognitum::require_record_only_binding(&body, &rec.facts, policy)?;
+        signers.push(rec.signer);
     }
     if signers.is_empty() {
         return Err(no_signer_error(&envelope));
@@ -353,9 +369,13 @@ pub fn check_file(file: &FileRef, content: &[u8]) -> Result<(), VerifyError> {
     Ok(())
 }
 
-/// Returns accepted pinned signers. Any signature from a pinned key that
-/// fails is fatal ([`VerifyError::BadSignature`]); entries from unpinned
-/// keys are ignored here and only reported if nothing else is accepted.
+/// Returns accepted pinned signers. A well-formed signature from a pinned
+/// key that fails to verify is fatal ([`VerifyError::BadSignature`]);
+/// entries from unpinned keys are ignored here and only reported if nothing
+/// else is accepted. An entry whose public key or signature is not valid
+/// hex of the right length is skipped like an unpinned one: it can neither
+/// authenticate the package nor veto a valid signature next to it, so one
+/// garbage entry cannot fail the whole verify.
 fn check_signatures(
     env: &ManifestEnvelope,
     anchors: &TrustAnchors,
@@ -369,9 +389,9 @@ fn check_signatures(
                 entry.algorithm
             )));
         }
-        let pk = hex_decode_exact::<32>(&entry.public_key).ok_or_else(|| {
-            VerifyError::Manifest(format!("{}: bad public key encoding", entry.key_id))
-        })?;
+        let Some(pk) = hex_decode_exact::<32>(&entry.public_key) else {
+            continue;
+        };
         let Some(pinned) = anchors.signer(&pk) else {
             continue;
         };
@@ -381,7 +401,9 @@ fn check_signatures(
         if pinned.key_id != entry.key_id {
             return Err(bad());
         }
-        let sig = hex_decode_exact::<64>(&entry.signature).ok_or_else(bad)?;
+        let Some(sig) = hex_decode_exact::<64>(&entry.signature) else {
+            continue;
+        };
         let vk = VerifyingKey::from_bytes(&pk).map_err(|_| bad())?;
         vk.verify_strict(&msg, &Signature::from_bytes(&sig))
             .map_err(|_| bad())?;

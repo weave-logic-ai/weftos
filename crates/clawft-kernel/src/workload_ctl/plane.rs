@@ -27,7 +27,7 @@ use crate::node_facts_advert::SignedNodeFacts;
 use crate::node_registry::node_id_from_pubkey;
 use crate::workload_kind::KindRegistry;
 use crate::workload_pkg::TrustAnchors;
-use crate::workload_runtime::{InstanceHandle, WorkloadHost};
+use crate::workload_runtime::WorkloadHost;
 
 use super::facts::{LiveNodeFacts, placement_view};
 use super::msg::{ANY_TARGET, CtlOutcome, CtlRequest, Refusal, method, verify_response};
@@ -140,6 +140,11 @@ pub struct PlacementRecord {
     pub decision_id: String,
     /// Package manifest hash.
     pub manifest_hash: String,
+    /// Project that placed it, when placement went through a project; the
+    /// cog ingest bridge delivers the instance's vectors to that project's
+    /// store (ADR-100, Decision 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 /// One signed round trip.
@@ -177,7 +182,7 @@ pub struct PlacementControlPlane {
     /// with the trust tier the operator assigned.
     pub(super) seeds: RwLock<BTreeMap<String, (Arc<WorkloadHost>, FactsTier)>>,
     /// Handles of instances placed on Seeds.
-    pub(super) seed_handles: tokio::sync::Mutex<BTreeMap<String, InstanceHandle>>,
+    pub(super) seed_handles: Mutex<BTreeMap<String, super::plane_seed::SeedEntry>>,
     pub(super) cfg: PlaneConfig,
     /// Where targets and placements are persisted (see `plane_state`).
     pub(super) state_file: Option<std::path::PathBuf>,
@@ -220,7 +225,7 @@ impl PlacementControlPlane {
             placements: Mutex::new(BTreeMap::new()),
             unsettled: Mutex::new(BTreeMap::new()),
             seeds: RwLock::new(BTreeMap::new()),
-            seed_handles: tokio::sync::Mutex::new(BTreeMap::new()),
+            seed_handles: Mutex::new(BTreeMap::new()),
             cfg: PlaneConfig::default(),
             state_file: None,
             state_lock: Mutex::new(()),

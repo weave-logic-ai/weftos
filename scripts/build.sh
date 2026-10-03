@@ -32,7 +32,6 @@ BENCH_CRATE=""
 BENCH_NAME=""
 CLEAN_STALE_DAYS=""
 TEST_PACKAGES=()
-# test: only run tests whose name contains this substring (skips doctests)
 TEST_FILTER=""
 # WEFT-460: optional gate step — cargo-dist host-triple rehearsal
 WITH_RELEASE_DRY_RUN=false
@@ -646,6 +645,12 @@ isolate_test_runtime() {
 workspace_test() {
     isolate_test_runtime
     local extra=()
+    local filter=() cfilter=()
+    # `--filter <substr>` narrows to tests whose name contains <substr>.
+    if [ -n "${TEST_FILTER:-}" ]; then
+        filter=("$TEST_FILTER")
+        cfilter=(-- "$TEST_FILTER")
+    fi
     [ "$NO_FAIL_FAST" = true ] && extra+=(--no-fail-fast)
     # Honor `--features <f>` so feature-gated adapters (matrix, email, …)
     # are compiled and tested (WEFT-159).
@@ -662,18 +667,11 @@ workspace_test() {
     fi
     # ${arr[@]+…} guard: macOS bash 3.2 + `set -u` errors on expanding an
     # empty array without it.
-    if [ -n "$TEST_FILTER" ]; then
-        # Targeted run (--test-filter): one name substring, no doctests.
-        if command -v cargo-nextest >/dev/null 2>&1; then
-            cargo nextest run "${scope[@]}" ${extra[@]+"${extra[@]}"} "$TEST_FILTER"
-        else
-            cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} "$TEST_FILTER"
-        fi
-    elif command -v cargo-nextest >/dev/null 2>&1; then
-        cargo nextest run "${scope[@]}" ${extra[@]+"${extra[@]}"} \
-            && cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}
+    if command -v cargo-nextest >/dev/null 2>&1; then
+        cargo nextest run "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
+            && { [ ${#filter[@]} -gt 0 ] || cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}; }
     else
-        cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"}
+        cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
     fi
 }
 
@@ -1562,6 +1560,7 @@ cmd_n6_leaf() {
     # .cargo/config.toml (thumbv8m target) applies only to the firmware.
     [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-n6-leaf" && cargo build --release $v) || rc=$?
     [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-n6-leaf-hostcheck" && cargo build --release $v) || rc=$?
+    [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-n6-node" && cargo build --release $v) || rc=$?
     timer_end
     return $rc
 }
@@ -2077,8 +2076,10 @@ ${BOLD}Commands:${NC}
   releases-mdx    Regenerate docs/src/content/docs/weftos/vision/releases.mdx
                   from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
-  test [pkg…]     Run cargo test --workspace (or scoped: test clawft-channels …)
-                  --filter (alias --test-filter) <substr> runs only tests whose name contains it
+  test [pkg…] [--filter <substr>]
+                  Run cargo test --workspace (or scoped: test clawft-channels …);
+                  --filter (alias --test-filter) keeps only tests whose
+                  name contains <substr>
   test-pi [crate…] [--filter <test>] [--live-native] [--cogs] [--full]
                   Run ARM tests on the real Raspberry Pi 5: cross-build aarch64
                   test binaries in an arm64 Debian container (image
@@ -2089,10 +2090,10 @@ ${BOLD}Commands:${NC}
                   + native adapter live test (anomaly-detect) + cog conformance
                   in ssh mode. Pi from WEFTOS_PI_HOST (skips when unset); never
                   touches ~/.clawft or weaver.service. See docs/cogs/test-pi.md
-  n6-leaf         Build the STM32N6 leaf firmware (crates/weftos-n6-leaf,
-                  thumbv8m.main-none-eabihf, RAM image) and its host RVF
-                  validator (crates/weftos-n6-leaf-hostcheck). Run on the
-                  board with scripts/n6.sh leaf.
+  n6-leaf         Build the STM32N6 firmware: the leaf smoke
+                  (crates/weftos-n6-leaf) with its host RVF validator
+                  (crates/weftos-n6-leaf-hostcheck), and the embassy node
+                  (crates/weftos-n6-node). Run with scripts/n6.sh leaf / node.
   test-browser    Run browser WASM regression suite under headless Chrome
                   (WEFT-388 / M5-A). Requires wasm-pack + chromedriver.
   bundle-size     Gate browser WASM bundle (raw + gzip) against the
@@ -2323,11 +2324,15 @@ parse_args() {
                 FEATURES="${2:?'--features requires a value'}"
                 shift 2
                 ;;
+            --filter)
+                TEST_FILTER="${2:?'--filter requires a value'}"
+                shift 2
+                ;;
             --profile)
                 PROFILE="${2:?'--profile requires a value'}"
                 shift 2
                 ;;
-            --test-filter|--filter)
+            --test-filter)
                 TEST_FILTER="${2:?'--test-filter requires a test-name substring'}"
                 shift 2
                 ;;

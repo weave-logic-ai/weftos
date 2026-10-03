@@ -91,6 +91,20 @@ pub trait GateBackend: Send + Sync {
     ///   target PID, etc.).
     fn check(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision;
 
+    /// [`Self::check`] for a teardown (stop / unload / re-adoption of what
+    /// is already placed): a denial caused only by the node's trust tier is
+    /// waived, every other denial (revocation, default deny, rule or
+    /// threshold) stands. Gates that cannot tell the difference return the
+    /// plain decision, so they never waive anything.
+    fn check_teardown(
+        &self,
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+    ) -> GateDecision {
+        self.check(agent_id, action, context)
+    }
+
     /// The rules and settings this gate evaluates with, when it is backed by
     /// a governance engine. The user daemon exports it as the signed parent
     /// policy for its project kernels (ADR-103 D8). `None` for gates with no

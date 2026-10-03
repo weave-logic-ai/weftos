@@ -87,6 +87,11 @@ pub struct VerifyArgs {
     /// Accept a valid Cognitum release record (pinned key) as a signature.
     #[arg(long)]
     pub cognitum_release: bool,
+    /// BLAKE3 of a reviewed `cog.toml` to pin for record-only trust (repeat).
+    /// A Cognitum record does not cover `cog.toml`, so a package trusted by a
+    /// record alone is refused unless its `cog.toml` hash is pinned here.
+    #[arg(long = "cog-toml-pin", value_name = "BLAKE3")]
+    pub cog_toml_pins: Vec<String>,
     /// Verify from a file-backed ArtifactStore instead of a directory.
     #[arg(long, requires = "manifest")]
     pub store: Option<PathBuf>,
@@ -260,6 +265,7 @@ fn verify(a: VerifyArgs) -> anyhow::Result<()> {
     let anchors = load_trust(a.trust.as_deref())?;
     let policy = VerifyPolicy {
         accept_cognitum_release: a.cognitum_release,
+        record_cog_toml_pins: a.cog_toml_pins.clone(),
     };
     let result = match (&a.store, &a.manifest, &a.dir) {
         (Some(store_dir), Some(hash), _) => {

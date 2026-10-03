@@ -7,7 +7,9 @@
 //! `0600` after every change. On load, targets come back unreachable and
 //! are re-described with their stored key before use; trust tiers are
 //! re-derived from operator policy on the next sync. Seed placements are
-//! not persisted: the Seed adapter's instance state is in memory.
+//! persisted with the store pin they came from; after a restart the first
+//! verb on one re-adopts it into the (fresh) Seed adapter, which first
+//! checks the Seed still holds the pinned cog.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -15,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::plane::{PlacementControlPlane, PlacementRecord, PlaneError, TargetInfo};
-use super::plane_seed::SEED_ROUTE;
+use super::plane_seed::SeedEntry;
 
 const STATE_VERSION: u32 = 1;
 const MAX_STATE_BYTES: u64 = 8 * 1024 * 1024;
@@ -27,6 +29,9 @@ struct PlaneState {
     targets: Vec<TargetInfo>,
     placements: Vec<PlacementRecord>,
     unsettled: Vec<PlacementRecord>,
+    /// Handles of instances placed on Seeds (older files have none).
+    #[serde(default)]
+    seed_instances: Vec<SeedEntry>,
 }
 
 fn read_state(path: &Path) -> Result<Option<PlaneState>, PlaneError> {
@@ -87,6 +92,11 @@ impl PlacementControlPlane {
                     p.insert(r.instance_id.clone(), r);
                 }
             }
+            if let Ok(mut m) = self.seed_handles.lock() {
+                for e in st.seed_instances {
+                    m.insert(e.handle.instance_id.clone(), e);
+                }
+            }
             if let Ok(mut u) = self.unsettled.lock() {
                 for r in st.unsettled {
                     u.insert(r.decision_id.clone(), r);
@@ -107,12 +117,13 @@ impl PlacementControlPlane {
         let st = PlaneState {
             version: STATE_VERSION,
             targets: self.targets(),
-            placements: self
-                .placements()
-                .into_iter()
-                .filter(|r| r.variant != SEED_ROUTE)
-                .collect(),
+            placements: self.placements(),
             unsettled: self.unsettled(),
+            seed_instances: self
+                .seed_handles
+                .lock()
+                .map(|m| m.values().cloned().collect())
+                .unwrap_or_default(),
         };
         let res = serde_json::to_vec_pretty(&st)
             .map_err(std::io::Error::other)

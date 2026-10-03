@@ -137,7 +137,10 @@ impl WorkloadGate {
     /// The verified project this gate decides for: its own attestation, else
     /// the kernel's (never anything from the request context).
     fn project(&self) -> Option<(ProjectAttestation, Option<&'static str>)> {
-        match (&self.attestation, crate::governance_project::instance_project()) {
+        match (
+            &self.attestation,
+            crate::governance_project::instance_project(),
+        ) {
             (Some(a), inst) => Some((a.clone(), inst.map(|(_, i)| i))),
             (None, Some((a, i))) => Some((a.clone(), Some(i))),
             (None, None) => None,
@@ -147,6 +150,16 @@ impl WorkloadGate {
     /// Permit rules in evaluation order.
     pub fn permits(&self) -> &[WorkloadPermitRule] {
         &self.permits
+    }
+
+    /// The denial for an action that is not a teardown action.
+    pub(crate) fn not_teardown(action: &str) -> Option<GateDecision> {
+        (!TEARDOWN_ACTIONS.contains(&action)).then(|| {
+            Self::deny(format!(
+                "'{action}' is not a teardown action ({})",
+                TEARDOWN_ACTIONS.join(", ")
+            ))
+        })
     }
 
     fn deny(reason: impl Into<String>) -> GateDecision {
@@ -177,7 +190,8 @@ impl WorkloadGate {
 
         if let Some(list) = &self.revocations {
             if let Some(err) = list.subjects_error() {
-                out.decision = Self::deny(format!("revocation list unreadable (fail closed): {err}"));
+                out.decision =
+                    Self::deny(format!("revocation list unreadable (fail closed): {err}"));
                 return out;
             }
             let hit = list.first_revoked(
@@ -186,14 +200,16 @@ impl WorkloadGate {
                 &req.refs.artifact_hashes,
             );
             if let Some(s) = hit {
-                out.decision = Self::deny(format!("{} '{}' is revoked: {}", s.kind, s.id, s.reason));
+                out.decision =
+                    Self::deny(format!("{} '{}' is revoked: {}", s.kind, s.id, s.reason));
                 out.revoked = serde_json::to_value(&s).ok();
                 return out;
             }
         }
 
         if req.effect.secrets && req.effect.node_tier < NodeTrustTier::Pinned {
-            out.decision = Self::deny("workloads carrying secrets require a pinned node (ADR-099 s8.3)");
+            out.decision =
+                Self::deny("workloads carrying secrets require a pinned node (ADR-099 s8.3)");
             return out;
         }
 
@@ -242,6 +258,10 @@ impl WorkloadGate {
     }
 }
 
+/// Actions [`GateBackend::check_teardown`] accepts: stop, unload, and
+/// re-adoption of a placed instance (gated as `workload.load`).
+const TEARDOWN_ACTIONS: &[&str] = &["workload.stop", "workload.unload", "workload.load"];
+
 /// Intermediate result, turned into the chain payload.
 struct Outcome {
     decision: GateDecision,
@@ -283,7 +303,9 @@ impl GateBackend for WorkloadGate {
         if !action.starts_with(WORKLOAD_ACTION_PREFIX) {
             // Not ours: refuse rather than silently permit. Not chained,
             // because the workload audit trail covers workload.* only.
-            return Self::deny(format!("WorkloadGate only governs workload.* actions, got '{action}'"));
+            return Self::deny(format!(
+                "WorkloadGate only governs workload.* actions, got '{action}'"
+            ));
         }
         if !is_governed_action(action) {
             let reason = format!(
@@ -321,6 +343,47 @@ impl GateBackend for WorkloadGate {
             }),
         );
         out.decision
+    }
+
+    fn check_teardown(
+        &self,
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+    ) -> GateDecision {
+        // Only taking something down (or re-attaching what is already
+        // placed, gated as a load) may use this path; anything else could
+        // be used to dodge the node-tier rules.
+        if let Some(d) = Self::not_teardown(action) {
+            debug_assert!(false, "check_teardown called with {action}");
+            return d;
+        }
+        let first = self.check(agent_id, action, context);
+        let GateDecision::Deny { reason, .. } = &first else {
+            return first;
+        };
+        // Would the same request pass on a node of the highest tier? Then
+        // the denial was the node tier alone, which never blocks taking
+        // something down. Revoked packages, default deny, rule and threshold
+        // denials do not depend on the tier and stay denials.
+        let mut raised = context.clone();
+        let Some(w) = raised.get_mut("workload").and_then(|w| w.as_object_mut()) else {
+            return first;
+        };
+        w.insert("node_tier".into(), serde_json::json!(NodeTrustTier::Pinned));
+        if !self.decide(agent_id, action, &raised).decision.is_permit() {
+            return first;
+        }
+        let kind = event_kind_for(action).unwrap_or(chain::EVENT_KIND_WORKLOAD_REFUSE);
+        self.record(
+            kind,
+            serde_json::json!({
+                "decision": "permit", "agent_id": agent_id, "action": action,
+                "teardown_node_tier_waived": true, "waived_denial": reason,
+                "node_tier": context.pointer("/workload/node_tier"),
+            }),
+        );
+        GateDecision::Permit { token: None }
     }
 }
 

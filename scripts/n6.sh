@@ -13,6 +13,8 @@
 #   scripts/n6.sh dw3000-id     read the DEV_ID of a DWM3000EVB shield on the Arduino header
 #   scripts/n6.sh leaf          WeftOS leaf smoke: RVF segment + leaf-types CBOR on the M55,
 #                               segment validated on the host with weftos-rvf-wire
+#   scripts/n6.sh node [secs]   embassy node: HSE clocks, Ethernet DHCP, UDP 47006 announce;
+#                               streams its defmt log and listens for the announce on this host
 #   scripts/n6.sh run <elf>     load a RAM-linked ELF into AXISRAM and start it
 #   scripts/n6.sh shell         interactive shell with probe-rs available
 set -euo pipefail
@@ -163,6 +165,36 @@ EOF
   "$REPO/crates/weftos-n6-leaf-hostcheck/target/release/weftos-n6-leaf-hostcheck" "$out/segment.bin"
 }
 
+cmd_node() {
+  local secs="${1:-40}"
+  [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: n6.sh node [seconds]"
+  "$REPO/scripts/build.sh" n6-leaf >/dev/null || die "scripts/build.sh n6-leaf failed"
+  local elf="$REPO/crates/weftos-n6-node/target/thumbv8m.main-none-eabihf/release/weftos-n6-node"
+  # Listen on this host for the node's CBOR announce (UDP broadcast, port 47006).
+  python3 - "$secs" <<'PY' &
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("", 47006)); s.settimeout(1.0)
+end, n = time.time() + int(sys.argv[1]) + 10, 0
+while time.time() < end:
+    try:
+        data, addr = s.recvfrom(2048)
+    except socket.timeout:
+        continue
+    n += 1
+    print(f"host: announce from {addr[0]}:{addr[1]}, {len(data)} bytes CBOR, n6-node={b'n6-node' in data}", flush=True)
+print(f"host: {n} announce(s) received on UDP 47006" if n else "host: no announce received on UDP 47006", flush=True)
+PY
+  local listener=$!
+  N6_SECS="$secs" N6_EXTRA_MOUNT="$elf:/work/app.elf:ro" in_container <<'EOF'
+. /work/n6/lib.sh
+load_and_start /work/app.elf
+timeout "$N6_SECS" probe-rs attach --chip "$CHIP" /work/app.elf 2>&1 | grep -v -E 'SIGTERM|Exited by user' || true
+EOF
+  wait "$listener"
+}
+
 cmd_run() {
   local elf="${1:-}"
   [[ -f "$elf" ]] || die "usage: n6.sh run <ram-linked.elf>"
@@ -188,7 +220,8 @@ case "${1:-}" in
   clock)  shift; cmd_clock "$@" ;;
   dw3000-id) cmd_dw3000_id ;;
   leaf)   cmd_leaf ;;
+  node)   shift; cmd_node "$@" ;;
   run)    shift; cmd_run "$@" ;;
   shell)  cmd_shell ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

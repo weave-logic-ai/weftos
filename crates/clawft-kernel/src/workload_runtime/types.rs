@@ -231,6 +231,39 @@ impl InstanceStatus {
     }
 }
 
+/// How the link to a remote device is authenticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkSecurity {
+    /// `https://` with an operator-pinned certificate or public key.
+    Pinned,
+    /// Not pinned (plain http, or https verified only by WebPKI), accepted
+    /// because the operator set the explicit lab-link opt-in.
+    LabOptIn,
+    /// Not pinned and no opt-in.
+    Unpinned,
+}
+
+impl LinkSecurity {
+    /// Whether a remote.api node may be bound or placed on over this link.
+    /// An opt-in link is allowed with a loud log; an unpinned one is not.
+    pub fn require_pinned(self, node: &str) -> Result<(), String> {
+        match self {
+            Self::Pinned => Ok(()),
+            Self::LabOptIn => {
+                tracing::warn!(
+                    node,
+                    "UNPINNED lab link accepted by operator opt-in: the Seed's identity is not authenticated on this link"
+                );
+                Ok(())
+            }
+            Self::Unpinned => Err(format!(
+                "{node}: a remote.api node needs a pinned transport (https with a certificate or \
+                 public-key pin); set allow_unpinned_lab_link only for a USB or lab link"
+            )),
+        }
+    }
+}
+
 /// Adapter failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RuntimeError {
@@ -243,6 +276,10 @@ pub enum RuntimeError {
     /// Unknown instance handle.
     #[error("unknown instance {0}")]
     UnknownInstance(String),
+    /// The device no longer holds a cog the operator (or this adapter) put
+    /// there: it was removed out of band.
+    #[error("{0} is not installed on the Seed")]
+    NotInstalled(String),
     /// Wrong lifecycle state for the operation.
     #[error("invalid state: {0}")]
     InvalidState(String),
@@ -282,6 +319,7 @@ impl RuntimeError {
             Self::AdmissionRefused(_) => "admission-refused",
             Self::InvalidConfig(_) => "invalid-config",
             Self::UnknownInstance(_) => "unknown-instance",
+            Self::NotInstalled(_) => "not-installed",
             Self::InvalidState(_) => "invalid-state",
             Self::Governance(_) => "governance",
             Self::Backend(_) => "backend",
@@ -319,9 +357,26 @@ pub trait WorkloadRuntime: Send + Sync {
     async fn status(&self, h: &InstanceHandle) -> InstanceStatus;
     /// Managed or adopted.
     fn control_mode(&self) -> ControlMode;
+    /// How the link to a remote device is authenticated. Fails closed:
+    /// only a remote adapter with a pinned transport says `Pinned`.
+    fn link_security(&self) -> LinkSecurity {
+        LinkSecurity::Unpinned
+    }
     /// Network exposure instances of this adapter actually get, reported
     /// to the gate as the request's `network` (never assumed).
     fn network_exposure(&self) -> NetworkPolicy;
+    /// Re-attach an instance this adapter loaded before the controller
+    /// restarted (its in-memory table is gone but the device still holds
+    /// it). The adapter verifies the instance is still there and still the
+    /// pinned version, so `stop` / `unload` work again; it starts and
+    /// changes nothing on the device.
+    async fn adopt(&self, h: &InstanceHandle, _w: &VerifiedWorkload) -> Result<(), RuntimeError> {
+        Err(RuntimeError::Unsupported(format!(
+            "{} cannot re-adopt {}",
+            self.id(),
+            h.instance_id
+        )))
+    }
     /// Instances that must stop before a console run of `h`. The host
     /// gates each one as `workload.stop` before calling [`Self::preempt`].
     async fn console_preemptions(
