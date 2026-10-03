@@ -164,9 +164,11 @@ fn lock_is_booting(lock: &Path) -> bool {
     lock_held(lock) && std::fs::read_to_string(lock).is_ok_and(|s| s.trim().is_empty())
 }
 
-/// Read a pid file. Empty content (a kernel still booting) is read again for
-/// up to `grace`; any other content that is not a pid is bad at once.
-pub async fn read_pid_file(path: &Path, grace: std::time::Duration) -> Result<u32, String> {
+/// Read a pid file. Empty content is read again for up to `grace`, but only
+/// while `lock` is held (a kernel still booting); with nobody holding the lock
+/// an empty file is stale and fails at once. Any other content that is not a
+/// pid is bad at once.
+pub async fn read_pid_file(path: &Path, lock: &Path, grace: std::time::Duration) -> Result<u32, String> {
     let deadline = tokio::time::Instant::now() + grace;
     loop {
         let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
@@ -174,7 +176,7 @@ pub async fn read_pid_file(path: &Path, grace: std::time::Duration) -> Result<u3
         if !t.is_empty() {
             return t.parse::<u32>().map_err(|e| e.to_string());
         }
-        if tokio::time::Instant::now() >= deadline {
+        if tokio::time::Instant::now() >= deadline || !lock_held(lock) {
             return t.parse::<u32>().map_err(|e| e.to_string());
         }
         tokio::time::sleep(PID_FILE_POLL).await;
@@ -188,7 +190,7 @@ pub async fn scan_one(dir: &Path, id: &str, current_exe: &Path, io: &dyn ChildIo
     if !pid_file.exists() {
         return None;
     }
-    let pid = match read_pid_file(&pid_file, PID_FILE_GRACE).await {
+    let pid = match read_pid_file(&pid_file, &dir.join("kernel.lock"), PID_FILE_GRACE).await {
         Ok(p) => p,
         Err(e) => return Some(Found::Unverifiable { id, pid: None, reason: Skip::BadPidFile(e) }),
     };
@@ -246,17 +248,36 @@ mod pid_file_tests {
     use super::*;
     use std::time::Duration;
 
+    /// Hold `kernel.lock` in `dir` for as long as the guard lives.
+    fn held_lock(dir: &Path) -> (nix::fcntl::Flock<std::fs::File>, std::path::PathBuf) {
+        let lock = dir.join("kernel.lock");
+        let f = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&lock).unwrap();
+        let g = nix::fcntl::Flock::lock(f, nix::fcntl::FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+        (g, lock)
+    }
+
+    #[tokio::test]
+    async fn an_empty_pid_file_with_no_lock_held_fails_at_once() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("kernel.pid");
+        std::fs::write(&p, "").unwrap();
+        let start = std::time::Instant::now();
+        assert!(read_pid_file(&p, &t.path().join("kernel.lock"), Duration::from_secs(2)).await.is_err());
+        assert!(start.elapsed() < Duration::from_millis(100), "stale empty file cost {:?}", start.elapsed());
+    }
+
     #[tokio::test]
     async fn an_empty_pid_file_that_fills_in_shortly_is_read() {
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("kernel.pid");
         std::fs::write(&p, "").unwrap();
+        let (_held, lock) = held_lock(t.path());
         let p2 = p.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(150));
             std::fs::write(&p2, "4242").unwrap();
         });
-        assert_eq!(read_pid_file(&p, Duration::from_secs(2)).await, Ok(4242));
+        assert_eq!(read_pid_file(&p, &lock, Duration::from_secs(2)).await, Ok(4242));
     }
 
     #[tokio::test]
@@ -264,11 +285,12 @@ mod pid_file_tests {
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("kernel.pid");
         std::fs::write(&p, "12x").unwrap();
+        let (_held, lock) = held_lock(t.path());
         let start = std::time::Instant::now();
-        assert!(read_pid_file(&p, Duration::from_secs(2)).await.is_err());
+        assert!(read_pid_file(&p, &lock, Duration::from_secs(2)).await.is_err());
         assert!(start.elapsed() < Duration::from_millis(500), "garbage is not retried");
         std::fs::write(&p, "").unwrap();
-        assert!(read_pid_file(&p, Duration::from_millis(100)).await.is_err());
+        assert!(read_pid_file(&p, &lock, Duration::from_millis(100)).await.is_err());
     }
 
     #[tokio::test]
