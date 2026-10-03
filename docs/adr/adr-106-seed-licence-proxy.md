@@ -11,6 +11,16 @@
   - H4: catch-up sync.
   - H5: the steward can delay a withdrawal, and any operator-Admin node can unbind.
   - M1 to M7 and L1 to L6 are folded in below.
+
+  Review round 2 (SOUND-WITH-CHANGES), owner decisions written in:
+  - N1: `mesh_id` uses an operator `mesh_nonce` instead of the per-machine owner key.
+  - N2: an operator hash approval per version is the run gate in phases 1 to 3, and the direct registry check is optional.
+  - N3: the mesh service stamps a delivery origin, with an ADR-103 amendment.
+  - N4: sync is bounded.
+  - N5: every `weft-licence` endpoint except identity needs a steward signature.
+  - Nits: the clamp rule (M2 nit) and the request domain (L3).
+
+  This round supersedes the round 1 notes for H1 and B2 above.
 - **Deciders**: Owner / platform
 - **Depends-On**:
   - ADR-099 (placement; section 6 swarm, section 8 trust)
@@ -48,6 +58,10 @@ What exists, from local sources:
   - The hello signs a `genesis_hash`. That is an operator-chosen label, not a credential.
   - `kernel.mesh.admission_open_membership` admits any valid hello with that label (`boot.rs`, the `bind_open` branch).
   - `TenantRouter::deliver_local` builds `PeerCtx {node_verified: true}` for every local tenant (`router.rs`), including another OS user's tenant on the same machine.
+  - Daemons never see admission:
+    - the mesh service's `Deliver` message carries no admitted flag (`clawft-mesh-service/src/router.rs`);
+    - the daemon side builds `PeerCtx::unauthenticated` (`mesh_local_sink.rs`).
+  - The cluster owner is a per-machine uid, and `user.key` is per machine and per user (`clawft-mesh-service/src/state.rs`, `verdicts.rs`). Neither is a mesh-wide identity.
 - **Seed binding is a library.**
   - `workload_runtime/seed_bind.rs` verifies an operator-signed `BindRecord` against the Seed's `GET /api/v1/identity`. It accepts a record only within a 600 s age window and persists replay memory.
   - `workload.node.bind` is a reserved method in the daemon's `NOT_YET` list (`clawft-weave/src/workload_rpc.rs`).
@@ -115,12 +129,15 @@ Rejected options:
 **Mesh id (W1, decided).**
 
 ```
-mesh_id = sha256("weft-licence-v1/mesh-id\n" || genesis_pin || cluster_owner_user_pubkey)
+mesh_id = sha256("weft-licence-v1/mesh-id\n" || genesis_pin || mesh_nonce)
 ```
 
 - `genesis_pin` is the 32-byte genesis pin that admission compares.
-- `cluster_owner_user_pubkey` is the Ed25519 user key of the designated cluster owner whose daemon answers admission verdicts (ADR-103 Phase 3).
-- Two meshes that copied a label but have different owners get different ids.
+- `mesh_nonce` is a random 32-byte value. The operator generates it once per mesh and writes it into every node's mesh config next to the genesis pin. It is not a secret, but it must be identical on every node.
+- Two meshes that copied a genesis label still get different ids unless they also copied the nonce.
+- The cluster-owner key cannot be the input. The cluster owner is a per-machine uid and `user.key` is per machine and per user, so members would compute different ids, and a key rotation would silently change the id.
+- The owner property comes from the operator signature on the binding record, not from the id.
+- **Id changes are surfaced.** If a node's computed `mesh_id` no longer matches its stored binding (the nonce or the pin changed), it chains `binding_orphaned`, turns the checkout policy off, and `weaver doctor` reports it. A new binding for the new id fixes it.
 
 **Admission requirement.** A node accepts a binding, and turns on the checkout part of its policy, only when all of these hold:
 - admission is `enforce`,
@@ -163,17 +180,17 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
 
 **One mesh only.** `weft-licence` stores one binding and refuses a bind for another `mesh_id` (`seed_bound_elsewhere`). Phases 1 to 3 allow one Seed per mesh.
 
-**Licence scope inside a member machine (ADR-103).** A Seed licence covers the **admitted machines** of the mesh. The project kernels and user daemons on an admitted machine are covered as part of that machine. They obtain Cognitum cogs through that machine's own node, under the owning user daemon's governance gate. They are never served as a swarm peer through `deliver_local`. Another OS user's tenant on the steward's machine is not a swarm peer, and its checkout request is not accepted (section 4). Whether per-machine scope fits Cognitum's terms is part of C3.
+**Licence scope inside a member machine (ADR-103).** A Seed licence covers the **admitted machines** of the mesh. The project kernels and user daemons on an admitted machine are covered as part of that machine. They obtain Cognitum cogs through that machine's own node, under the owning user daemon's governance gate. They are never served as a swarm peer. Only a delivery stamped `AdmittedPeer` by the mesh service counts as a peer (section 5.3). Another OS user's tenant on the steward's machine is not a swarm peer, and its checkout request is not accepted (section 4). Whether per-machine scope fits Cognitum's terms is part of C3.
 
 ### 4. Checkout protocol
 
 1. **Local first (decision 4).** A node that wants `cognitum:<cog>` version V for its arch first looks for a valid grant for this mesh that covers (cog, V, arch). If it finds one, it fetches from peers via `who_has`, with no request to anyone.
 2. **Request.** Otherwise it sends `CheckoutRequest {request_id, cog_id, version | "latest", arch}` to the steward on the `mesh.cog.checkout` request topic.
-   - The steward accepts it only on a connection the **mesh listener admitted**: `PeerCtx.node_verified`, class `node`, and not a `deliver_local` delivery.
+   - The steward accepts it only when the mesh service stamped the delivery `origin: AdmittedPeer` (section 5.3) and the peer's class is `node`. `LocalTenant` and `Unadmitted` deliveries are refused.
    - It also accepts requests from its own kernel.
    - It asks its governance gate for `cog.checkout` (Write).
    - Concurrent requests for the same (cog, version, arch) are merged.
-3. **Relay.** The steward calls `POST /licence/v1/checkout` on `weft-licence`. Each request is signed with the steward key, using the COG-011 fields: method, path, node, timestamp, nonce and body hash. `weft-licence` accepts only the bound `steward_pubkey`.
+3. **Relay.** The steward calls `POST /licence/v1/checkout` on `weft-licence`. Each request is signed with the steward key, using the COG-011 field layout under its own domain. The signed string starts with `weft-licence-v1/request`, then method, path, node, timestamp, nonce and body hash. `weft-licence` accepts only the bound `steward_pubkey`.
 4. **Seed decision.**
    - If no licence covers the cog, or the licence has expired: `cog_unlicensed` or `licence_expired`.
    - If a valid grant already exists, the existing grant is returned. Bytes are sent only on request.
@@ -185,7 +202,16 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
 
    It then stores the bytes, registers the grant and chains `cog.checkout.granted`, and floods the grant on `mesh.cog.grant`.
 6. **Use.** Other nodes fetch from peers. The steward is the first seeder.
-7. **Before running (B2).** A node installs or runs the bytes only after it has itself checked the grant's sha256 against the Cognitum registry entry for (cog, V, arch). It fetches that entry over https from its `cognitum` source; the entry is small and needs no licence. A grant alone never makes bytes runnable.
+7. **Before running (B2, N2).** A node installs or runs the bytes only when it holds **both** a valid grant and a valid **operator hash approval** for that (cog, version) whose sha256 set covers the artifact. A grant alone never makes bytes runnable.
+
+**Operator hash approval (the run gate in phases 1 to 3).**
+- `weaver cog checkout approve <cog>@<version>` (Admin) signs `{v: 1, mesh_id, cog_id, version, sha256: [..], approved_at, seq}` with a pinned operator key under the domain `weft-licence-v1/approval`.
+- The operator approves after checking the hashes, for example against the registry or an upstream release.
+- Approvals are flooded on `mesh.cog.grant` and carried by sync (section 5.5), with the same seq rule as grants.
+- One signature per version per mesh is the cheap form of ADR-100 6.3. It replaces the per-node operator re-sign for running checked-out cogs. It does not replace the governed-placement `cogpkg` signature (section 10).
+- A compromised grant key alone therefore cannot make any node run code.
+- **Direct registry check.** A node that can reach the Cognitum registry may also compare the sha256 with the registry entry. That is an extra check, never the only gate: requiring every member to reach Cognitum would break decision 2 and offline meshes.
+- **Phase 4 (pending C9).** If Cognitum signs its listing or release entries, `weft-licence` attaches the signed entry verbatim to the grant. Members verify it offline against a pinned Cognitum release key, and that replaces the approval.
 
 **Grant format.** Canonical JSON, signed Ed25519 by the grant key, domain tag `weft-licence-v1/grant`:
 
@@ -195,7 +221,7 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
   source: "cognitum", registry, cog_id, version,
   artifacts: [{ arch, size, sha256, blake3 }],
   manifest_sha256,                       # registry entry used
-  licence: { licence_id, account, expires },
+  licence: { ref_sha256, expires },      # hashed licence ref; no plaintext account
   seq, issued_at, expires_at }
 ```
 
@@ -215,7 +241,7 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
 - `weft-licence` refuses to sign until its clock passes a build-time floor and its persisted last `issued_at` (`clock_not_set`).
 - Each verifier keeps, per grant key, `floor = max(highest accepted issued_at, persisted local-now high-water mark)`. It persists the floor and uses `max(now, floor)` for expiry, so a reset clock cannot revive a grant.
 - A grant more than 5 min ahead of `max(now, floor)` is deferred as not yet valid and retried at the next sync.
-- A floor more than 30 days ahead of a clock that the steward's sync confirms is treated as a far-future poisoning. The verifier chains it and clamps the floor to the newest accepted `issued_at`. An operator `weaver cog checkout reset-floor` (Admin, chained) is the manual reset.
+- A floor more than 30 days ahead of the newest accepted `issued_at` is treated as a far-future poisoning. The verifier chains it and clamps the floor to that `issued_at`. An operator `weaver cog checkout reset-floor` (Admin, chained) is the manual reset.
 
 ### 5. Swarm, transport and sync
 
@@ -229,18 +255,27 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
    - `Advertise` is always denied, so peers look the content up via `who_has`.
    - Validity is checked on every call. A sweep drops expired grants and evicts bytes that no running instance pins.
 2. **Grant source.** `ArtifactExchange::grant_checkout(&VerifiedCheckoutGrant)` calls `grant_with(blake3, "checkout:<cog>@<version>", [grant_pubkey_hex], GrantOrigin::Cognitum {..})`. Revocation of the key, the hash or the package then applies through `is_revoked_subject`. This makes the bytes *shareable* inside the mesh. It does not make them runnable (section 4, step 7) or placement-eligible (section 10).
-3. **Who is a peer (H2).** A `ServePeer` is built only on connections the mesh listener admitted (`PeerCtx.node_verified`, class `node`). It is never built from `TenantRouter::deliver_local` contexts.
+3. **Who is a peer (H2, N3).** The daemon cannot see admission today: `Deliver` carries no admitted flag, and `mesh_local_sink` builds `PeerCtx::unauthenticated`. Decision:
+   - The machine mesh service stamps every `Deliver` with a service-vouched `origin: AdmittedPeer {node_id, class} | LocalTenant | Unadmitted`.
+   - The daemon trusts `origin` only on the authenticated local service socket, the one the mesh-local protocol already guards with peer credentials. A field arriving any other way is ignored.
+   - Only `AdmittedPeer` with class `node` builds a verified `ServePeer` or is accepted for checkout.
+   - `TenantRouter::deliver_local` stamps `LocalTenant`, never `AdmittedPeer`. This settles H2.
+   - **ADR-103 amendment needed:** the mesh-local `Deliver` message gains the `origin` field, versioned. A daemon talking to an older service, which sends no `origin`, treats every delivery as `Unadmitted`. A service never forwards an `origin` supplied by a tenant.
 4. **Transport (H3, phase 1c).** This is new production work:
+   - the `Deliver` origin stamp in `clawft-mesh-service` and its consumption in the daemon's `mesh_local_sink`;
    - a production artifact dialer over admitted mesh connections, replacing the test-only `PeerDialer`;
-   - an inbound artifact serve handler on the mesh listener that passes the admitted `PeerCtx` to `serve_as` / `serve_frame_as`;
-   - changing the existing `workload_ctl` `session.rs` serve to take admission's verified flag instead of `ServePeer::unverified`.
+   - an inbound artifact serve that runs **in the daemon**, which holds the `ArtifactExchange`. It is fed by service-stamped deliveries and builds `ServePeer` from `origin` for `serve_as` / `serve_frame_as`;
+   - changing the existing `workload_ctl` `session.rs` `serve_frame` to take the stamped origin instead of `ServePeer::unverified`.
 
    Until this exists, Cognitum bytes move only between the steward and its own kernel.
-5. **Catch-up sync (H4).**
-   - On each admitted connect, and every 30 min, a node asks the peer (preferably the steward) for `{binding, highest-seq grant per (cog, version)}`.
-   - It verifies everything locally under its own profile.
-   - It defers verification while `clock_not_set` and retries at the next sync.
-   - Sync answers are budgeted like the flood topics.
+5. **Catch-up sync (H4, N4).**
+   - On each `AdmittedPeer` connect, and every 30 min, a node asks a peer (preferably the steward) for `{binding, highest-seq grant and approval per (cog, version)}`.
+   - A node answers at most one sync per peer per minute, and only for `AdmittedPeer`.
+   - **Response caps:** at most 256 entries and 256 KiB per response. Anything larger is paged with `since`.
+   - **Cheap filters first:** the record kind and size, then the key id equal to the bound grant key (grants) or a pinned operator key (binding, approvals), then `seq` greater than the stored seq. Only entries that pass all of these reach signature verification.
+   - **On the first bad signature,** the node aborts the response, discards the rest, and penalises the peer: a 10-minute sync ban and a chained `sync_bad_signature`.
+   - **Budgets:** each connection has its own sync token bucket, separate from the binding, grant and revocation flood budgets, so sync traffic cannot starve them.
+   - Verification is deferred while `clock_not_set` and retried at the next sync.
    - This brings late joiners, partitions and transient refusals to the same state.
 6. **No manifest change.** `CogPackageBody` is `deny_unknown_fields`, so an older verifier rejects an unknown field. The grant is a separate object and is never embedded in a package. New fields go only in `provenance.json`.
 7. **Fail closed.** Under `off`, `observe` or open membership, no checkout policy is active and no Cognitum bytes move between nodes. `Legacy` and `Leaf` peers are never served.
@@ -274,6 +309,14 @@ What protects the link:
 - `grant_pubkey` comes only from the USB `init` with fingerprint confirmation (section 3), so swapping it in transit gains nothing.
 - Confidentiality of the licensed bytes comes only from the link itself: WireGuard on the tailnet, or the physical USB cable.
 
+**Endpoint rules (N5).**
+- Every endpoint except `GET /licence/v1/identity` requires a valid steward signature, including `GET /licence/v1/grants`.
+- An unsigned or badly signed request is refused before any work is done.
+- Rate limiting has two pools:
+  - The steward's rate budget (section 6) is charged only **after** its signature verifies, so forged traffic cannot use it up.
+  - Unsigned callers (identity, and refused requests) share a small separate pool, 30 requests per minute in total.
+- Recommended: a tailnet ACL that allows the `weft-licence` port only from the steward host.
+
 A LAN path is plain text and needs the explicit per-Seed lab opt-in (`allow_unpinned_lab_link`, read only from the runtime dir). Without TLS, a normal deployment uses the tailnet or USB. In practice every Seed-bound mesh that wants a LAN-only link needs the opt-in until TLS with a pinned SPKI is added to `weft-licence` (W4, decided in phase 2).
 
 ### 8. Lapse, unbinding and revocation
@@ -296,7 +339,7 @@ A LAN path is plain text and needs the explicit per-Seed lab opt-in (`allow_unpi
 
 - **Grant key isolation (B1).** The key lives only in `weft-licence`'s own uid and directory. Cogs, `weft-cog-host`, its token holders and the agent cannot read it. A compromised `weft-cog-host` or cog does not yield the key; what remains is root on the Seed, which is the stolen-Seed case.
 - **A compromised grant key (B2)** lets its holder make member nodes *share* bytes inside the mesh under a forged grant. It does **not** let them run code:
-  - every install or run re-checks the sha256 against the Cognitum registry independently (section 4, step 7);
+  - every install or run also needs an operator hash approval for that version (section 4, step 7), and the grant key cannot sign one;
   - governed placement still needs an operator signature until phase 4 (section 10).
 
   Response: unbind from any operator-Admin node, then a `SignerKey` revocation.
@@ -313,14 +356,20 @@ A LAN path is plain text and needs the explicit per-Seed lab opt-in (`allow_unpi
   - the steward can be replaced by a rebind.
 - **A stolen Seed** can sign grants for its `mesh_id`, which only admitted members act on, and only for sharing. Response: unbind plus key revocation. There is no hardware key store (**assumption**).
 - **Clocks.** `weft-licence` refuses to sign before its floor. The steward refuses grants skewed by more than 5 min. Verifiers keep a persisted floor with a clamp.
-- **Local tenants (H2).** They are not swarm peers, and their checkout requests are refused (section 3, licence scope).
+- **Local tenants (H2, N3).** They are stamped `LocalTenant` by the mesh service. They are not swarm peers, and their checkout requests are refused (section 3, licence scope).
+- **A malicious sync peer (N4)** costs a node at most one capped response per minute, filtered cheaply before any signature verification. Its first bad signature gets it banned from sync.
+- **Privacy.** Grants carry only a hash of the licence reference, so the Cognitum account label is not flooded around the mesh.
 
 ### 10. Reconciliation with ADR-105, ADR-100 and F3
 
-- **ADR-105 section 3.** In a Seed-bound mesh, the `[[cog_licence]]` record is no longer the install gate on member nodes; a valid grant plus the member's own registry sha256 check is. The licence record moves to `weft-licence`: operator-signed in phase 2, Cognitum-signed in phase 4. Meshes without a Seed are unchanged.
-- **ADR-105 section 2 and ADR-100 6.3: not superseded before phase 4 (B2).** Governed placement of a Cognitum cog still needs an operator hash and signature. The grant is shareability evidence, not a placement signer. In phase 4, once members can verify a statement Cognitum signed (C1), a grant that carries one may become placement-eligible inside its mesh.
+- **ADR-105 section 3.** In a Seed-bound mesh, the `[[cog_licence]]` record is no longer the install gate on member nodes; a valid grant plus an operator hash approval is, with an optional direct registry check. The licence record moves to `weft-licence`: operator-signed in phase 2, Cognitum-signed in phase 4. Meshes without a Seed are unchanged.
+- **ADR-105 section 2 and ADR-100 6.3: not superseded before phase 4 (B2).** Governed placement of a Cognitum cog still needs an operator hash and signature. The grant is shareability evidence, not a placement signer.
+- For running a checked-out cog through `weft-cog-host`, the one-per-version operator hash approval is the cheap form of 6.3 and replaces the per-node re-sign.
+- Governed placement keeps the `cogpkg` operator signature.
+- In phase 4, once a grant carries a Cognitum-signed entry that members can verify offline (C9, C1), that entry replaces the approval, and the grant may become placement-eligible inside its mesh.
 - **ADR-105 open question 4.** The grant is a signed statement of an operator-declared licence. It is not a Cognitum proof until phase 4.
-- **Provenance.** Adds `trust = "mesh-checkout-grant"`, `grant_id`, `mesh_id`, `grant_key_id` and `registry_sha256_checked`.
+- **Provenance.** Adds `trust = "mesh-checkout-grant"`, `grant_id`, `mesh_id`, `grant_key_id`, `approval_seq` and `registry_sha256_checked`.
+- **ADR-103.** Needs an amendment for the mesh-local `Deliver` `origin` field (section 5.3), and the `mesh_nonce` mesh config entry next to the genesis pin (section 3).
 - **ADR-099 8.4 and ADR-100 6.4.** Commercial terms stay contractual.
 - **ADR-100 section 5.** The reserved method `workload.node.bind` is implemented in phase 1d. The store-pin rule for cogs the agent runs on the Seed is unchanged.
 - **F3.** The default stays: Cognitum content is never redistributable. `MeshCheckoutPolicy` is the only exception, and it applies to admitted members of the grant's mesh while the grant is valid.
@@ -329,7 +378,9 @@ A LAN path is plain text and needs the explicit per-Seed lab opt-in (`allow_unpi
 
 All of phase 1 runs in process, with no hardware and no network, under `scripts/build.sh test` and `clippy`.
 
-**1a. Types, store and policy (pure unit tests).** `mesh_checkout.rs` (grant, binding v2, canonical JSON, domain tags, both verification profiles, seq rules, arch union, conflicts, the persisted floor and clamp), `CheckoutGrantStore`, `MeshCheckoutPolicy` and `grant_checkout`. Tests:
+**1a. Types, store and policy (pure unit tests).** `mesh_checkout.rs` (grant, binding v2, operator hash approval, `mesh_id` from `mesh_nonce`, canonical JSON, domain tags, both verification profiles, seq rules, arch union, conflicts, the persisted floor and clamp), `CheckoutGrantStore`, `MeshCheckoutPolicy` and `grant_checkout`. Tests:
+- a run or install without an approval, or with an approval whose sha256 set does not cover the artifact, is refused, even with a valid grant;
+- a changed `mesh_nonce` chains `binding_orphaned` and turns the checkout policy off;
 - without a binding the policy equals `ManifestPolicy`;
 - a binding that arrives at runtime takes effect with no restart;
 - a grant signed by a node key, signed by an unbound key, or for another `mesh_id` is refused;
@@ -346,15 +397,31 @@ All of phase 1 runs in process, with no hardware and no network, under `scripts/
 - a late joiner reaches the binding and the highest grants through sync;
 - a partition heals;
 - a grant deferred under `clock_not_set` is accepted later;
-- an unbind issued by a non-steward Admin node reaches every node.
+- an unbind issued by a non-steward Admin node reaches every node;
+- sync limits:
+  - an oversized response is cut at the caps;
+  - entries under a non-bound key or with a stale `seq` are dropped before any signature verification;
+  - the first bad signature aborts the response and bans the peer;
+  - a second sync from the same peer within a minute is not answered;
+  - a non-`AdmittedPeer` gets no answer;
+  - sync flooding does not consume the revocation budget.
 
-**1c. Transport and steward relay.** The production dialer, the inbound serve with `PeerCtx`, the admission flag in `session.rs`, the `mesh.cog.checkout` handler, and the steward client against a stub `weft-licence` that implements the HTTP contract in section 4. Tests:
+**1c. Transport and steward relay.** Includes:
+- the `Deliver` `origin` stamp in `clawft-mesh-service` and its use in the daemon's `mesh_local_sink` (ADR-103 amendment);
+- the production dialer;
+- the daemon-side inbound serve fed by the stamped origin;
+- the origin in `session.rs` `serve_frame`;
+- the `mesh.cog.checkout` handler;
+- the steward client against a stub `weft-licence` that implements the HTTP contract and the signature rules in sections 4 and 7.
+
+Tests:
 - in a 3-node `enforce` mesh, A checks out, and B and C install from peers; the stub records exactly 1 checkout and 1 byte transfer;
-- a `deliver_local` tenant is neither served nor accepted for checkout;
+- **through the real `clawft-mesh-service` and daemon path**, a remote admitted peer is stamped `AdmittedPeer` and served, while a local tenant (`LocalTenant`) and an unadmitted connection are neither served nor accepted for checkout;
+- a daemon facing a service that sends no `origin` treats every delivery as `Unadmitted`;
 - an unverified peer, a `Legacy` peer and a `Leaf` peer are refused;
-- a run is refused when the registry sha256 does not match the grant.
+- the stub refuses an unsigned `GET /grants`, and forged requests do not consume the steward's budget.
 
-**1d. Bind RPC.** Implement the reserved method `workload.node.bind` (Admin), the full steward profile, and the fingerprint confirmation. Test the end-to-end bind and refusal paths with a stub Seed identity.
+**1d. Bind and approval RPCs.** Implement the reserved method `workload.node.bind` (Admin), the full steward profile, the fingerprint confirmation, and `weaver cog checkout approve` (Admin). Test the end-to-end bind and refusal paths with a stub Seed identity.
 
 **Phase 2. `weft-licence` on the Seed (armhf).** Depends on C2 (registry access) and C7 (arches).
 - `init` over USB, the own uid and service unit, the key, an operator-signed licence record (the ADR-105 fields plus `mesh_id`);
@@ -372,28 +439,29 @@ All of phase 1 runs in process, with no hardware and no network, under `scripts/
 - the start-time grant check in `weft-cog-host` and the workload host;
 - `weaver cog checkout list|release|renew|reset-floor`;
 - the chain events `cog.checkout.request|granted|renewed|refused|lapsed`;
-- `weaver doctor` checks for binding health and the expiry horizon.
+- `weaver doctor` checks for binding health (including `binding_orphaned`), missing approvals and the expiry horizon.
 
 Placement still uses operator re-signing. Acceptance: after a lapse, a restart is refused.
 
-**Phase 4. Needs Cognitum.** A Cognitum-signed entitlement and release statement that members can verify. Then grant-backed placement eligibility (replacing operator re-signing inside the mesh), licensed download, a device-key cross-certificate of the grant key, a Cognitum withdrawal feed, and multi-Seed meshes if wanted.
+**Phase 4. Needs Cognitum.** A Cognitum-signed entitlement and a signed registry entry (C9) attached verbatim to grants and verified offline by members, replacing the operator approval. Then grant-backed placement eligibility (replacing operator re-signing inside the mesh), licensed download, a device-key cross-certificate of the grant key, a Cognitum withdrawal feed, and multi-Seed meshes if wanted.
 
 ## Open questions
 
 **For Cognitum (C).** Anything not verifiable locally is marked as an assumption above.
 
 - **C1.** Is there an entitlement or release-statement API, a signed artifact and an offline grace? (None today; ADR-105 open question 4.)
-- **C2.** Will registry binaries and entries stay public? If they move behind authentication, how does a local process on the Seed fetch without holding the token? This affects section 4 step 7 as well.
+- **C2.** Will registry binaries and entries stay public? If they move behind authentication, how does a local process on the Seed fetch without holding the token? (The optional direct registry check in section 4 step 7 would also stop working for members.)
 - **C3.** Does one Seed licence per mesh (scoped to admitted machines) fit Cognitum's terms? Are there size limits, and redistribution terms for the binaries?
 - **C4.** Is there an HTTP device-key signing call for local processes? What is the key format of `/api/v1/identity`?
 - **C5.** Must a lapse hard-stop running instances?
 - **C6.** Will Cognitum provide a withdrawn-version feed?
 - **C7.** Does the registry carry aarch64 and x86_64 builds for every cog, beside armhf?
 - **C8.** Can the agent install without starting the cog?
+- **C9.** Does the registry sign its listing or its per-release entries? If so, with what key, and is that key published for pinning? A yes lets phase 4 replace the operator hash approval with an entry members verify offline.
 
 **For us (W).**
 
-- **W1.** Decided in section 3: the genesis pin combined with the cluster-owner key.
+- **W1.** Decided in section 3: the genesis pin combined with an operator `mesh_nonce`. The owner property comes from the binding signature.
 - **W2.** Should there be a standby steward?
 - **W3.** Should unused checkouts be released automatically?
 - **W4.** TLS in `weft-licence`, or the tailnet only (decided in phase 2)?
