@@ -307,6 +307,22 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/health # full 
 
 ---
 
+## OpenAPI
+
+```
+GET /api/openapi.json
+```
+
+OpenAPI 3.1 description of every REST, WebSocket, SSE and MCP route. It needs
+a bearer token like everything but health: it holds no secrets, but it maps the
+whole surface (admin routes included), and a client has a token before it needs
+the spec. The document is a hand-maintained asset
+(`crates/clawft-services/src/api/openapi.json`); bodies are mostly untyped.
+A unit test in `api/openapi.rs` fails when a served route is missing from the
+spec or the spec lists one that is gone, so add new routes there.
+
+---
+
 ## MCP
 
 ```

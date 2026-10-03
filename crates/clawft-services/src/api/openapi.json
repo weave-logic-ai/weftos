@@ -1,0 +1,1697 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WeftOS gateway API",
+    "version": "0.8.1",
+    "description": "REST, WebSocket and MCP surface of `weft gateway`. Every route except GET /api/health needs a bearer token issued by the kernel daemon (`weft token issue`); there is no mint route. Request and response bodies are mostly untyped here; see docs/ui/api-reference.md. Hand-maintained: tests/openapi.rs fails when a served route is missing or stale."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/admin/rate-limiter": {
+      "get": {
+        "summary": "Rate limiter metrics",
+        "operationId": "get_api_admin_rate_limiter",
+        "tags": [
+          "monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/admin/rate-limiter/flush": {
+      "post": {
+        "summary": "Rate limiter flush",
+        "operationId": "post_api_admin_rate_limiter_flush",
+        "tags": [
+          "monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/admin/routing/decisions": {
+      "get": {
+        "summary": "Routing decisions",
+        "operationId": "get_api_admin_routing_decisions",
+        "tags": [
+          "monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/admin/routing/stats": {
+      "get": {
+        "summary": "Routing stats",
+        "operationId": "get_api_admin_routing_stats",
+        "tags": [
+          "monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/agents": {
+      "get": {
+        "summary": "List agents",
+        "operationId": "get_api_agents",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/agents/spawn": {
+      "post": {
+        "summary": "Kernel facade: agent.spawn",
+        "operationId": "post_api_agents_spawn",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/agents/{name}": {
+      "get": {
+        "summary": "Get agent",
+        "operationId": "get_api_agents_name_",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete agent by pid",
+        "operationId": "delete_api_agents_name_",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/agents/{name}/start": {
+      "post": {
+        "summary": "Start agent",
+        "operationId": "post_api_agents_name_start",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/agents/{name}/stop": {
+      "post": {
+        "summary": "Stop agent",
+        "operationId": "post_api_agents_name_stop",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/auth/revoke": {
+      "post": {
+        "summary": "Revoke the caller's own token",
+        "operationId": "post_api_auth_revoke",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "description": "Forwards the authenticating token's own id to the daemon. Cannot name another token."
+      }
+    },
+    "/api/chain/events": {
+      "get": {
+        "summary": "Kernel facade: chain.tail",
+        "operationId": "get_api_chain_events",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/chain/status": {
+      "get": {
+        "summary": "Kernel facade: chain.status",
+        "operationId": "get_api_chain_status",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/channels": {
+      "get": {
+        "summary": "List channels",
+        "operationId": "get_api_channels",
+        "tags": [
+          "channels"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/config": {
+      "get": {
+        "summary": "Get config",
+        "operationId": "get_api_config",
+        "tags": [
+          "config"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      },
+      "put": {
+        "summary": "Save config",
+        "operationId": "put_api_config",
+        "tags": [
+          "config"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/cron": {
+      "get": {
+        "summary": "List cron jobs",
+        "operationId": "get_api_cron",
+        "tags": [
+          "cron"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create cron job",
+        "operationId": "post_api_cron",
+        "tags": [
+          "cron"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/cron/{id}": {
+      "put": {
+        "summary": "Update cron job",
+        "operationId": "put_api_cron_id_",
+        "tags": [
+          "cron"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete cron job",
+        "operationId": "delete_api_cron_id_",
+        "tags": [
+          "cron"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/cron/{id}/run": {
+      "post": {
+        "summary": "Run cron job",
+        "operationId": "post_api_cron_id_run",
+        "tags": [
+          "cron"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/custody/attest": {
+      "get": {
+        "summary": "Kernel facade: custody.attest",
+        "operationId": "get_api_custody_attest",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/delegation/active": {
+      "get": {
+        "summary": "List active delegations",
+        "operationId": "get_api_delegation_active",
+        "tags": [
+          "delegation"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/delegation/history": {
+      "get": {
+        "summary": "Delegation history",
+        "operationId": "get_api_delegation_history",
+        "tags": [
+          "delegation"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/delegation/rules": {
+      "get": {
+        "summary": "List delegation rules",
+        "operationId": "get_api_delegation_rules",
+        "tags": [
+          "delegation"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Upsert delegation rule",
+        "operationId": "patch_api_delegation_rules",
+        "tags": [
+          "delegation"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/delegation/rules/{name}": {
+      "delete": {
+        "summary": "Delete delegation rule",
+        "operationId": "delete_api_delegation_rules_name_",
+        "tags": [
+          "delegation"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/ecc/calibration": {
+      "get": {
+        "summary": "Kernel facade: ecc.calibrate",
+        "operationId": "get_api_ecc_calibration",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/ecc/coherence": {
+      "get": {
+        "summary": "Kernel facade: ecc.coherence",
+        "operationId": "get_api_ecc_coherence",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Liveness, or full status with a token",
+        "operationId": "get_api_health",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Anonymous: {\"status\":\"ok\"}. With a token: the full status document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/HealthAnonymous"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HealthFull"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Daemon unreachable: {\"status\":\"degraded\"}, or the full document with status \"degraded\" for a token holder.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/HealthAnonymous"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HealthFull"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Public. Without a valid bearer token the body is only {\"status\":\"ok\"} (200) or {\"status\":\"degraded\"} (503). With a valid owner token it is the full status document.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/memory": {
+      "get": {
+        "summary": "List memory",
+        "operationId": "get_api_memory",
+        "tags": [
+          "memory"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create memory",
+        "operationId": "post_api_memory",
+        "tags": [
+          "memory"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/memory/search": {
+      "get": {
+        "summary": "Search memory",
+        "operationId": "get_api_memory_search",
+        "tags": [
+          "memory"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/memory/{key}": {
+      "delete": {
+        "summary": "Delete memory",
+        "operationId": "delete_api_memory_key_",
+        "tags": [
+          "memory"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/monitoring/costs": {
+      "get": {
+        "summary": "Cost breakdown",
+        "operationId": "get_api_monitoring_costs",
+        "tags": [
+          "monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/monitoring/pipeline-runs": {
+      "get": {
+        "summary": "Pipeline runs",
+        "operationId": "get_api_monitoring_pipeline_runs",
+        "tags": [
+          "monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/monitoring/token-usage": {
+      "get": {
+        "summary": "Token usage",
+        "operationId": "get_api_monitoring_token_usage",
+        "tags": [
+          "monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/processes": {
+      "get": {
+        "summary": "Kernel facade: kernel.ps",
+        "operationId": "get_api_processes",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/services": {
+      "get": {
+        "summary": "Kernel facade: kernel.services",
+        "operationId": "get_api_services",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions": {
+      "post": {
+        "summary": "Create session",
+        "operationId": "post_api_sessions",
+        "tags": [
+          "chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      },
+      "get": {
+        "summary": "List sessions",
+        "operationId": "get_api_sessions",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions/{key}": {
+      "get": {
+        "summary": "Get session",
+        "operationId": "get_api_sessions_key_",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete session",
+        "operationId": "delete_api_sessions_key_",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/sessions/{key}/export": {
+      "get": {
+        "summary": "Export session",
+        "operationId": "get_api_sessions_key_export",
+        "tags": [
+          "chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/sessions/{key}/messages": {
+      "post": {
+        "summary": "Send message",
+        "operationId": "post_api_sessions_key_messages",
+        "tags": [
+          "chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/sessions/{key}/stream": {
+      "get": {
+        "summary": "Stream session",
+        "operationId": "get_api_sessions_key_stream",
+        "tags": [
+          "chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/skills": {
+      "get": {
+        "summary": "List skills",
+        "operationId": "get_api_skills",
+        "tags": [
+          "skills"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/skills/install": {
+      "post": {
+        "summary": "Install skill",
+        "operationId": "post_api_skills_install",
+        "tags": [
+          "skills"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/skills/registry/search": {
+      "get": {
+        "summary": "Search registry",
+        "operationId": "get_api_skills_registry_search",
+        "tags": [
+          "skills"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/skills/{name}": {
+      "delete": {
+        "summary": "Uninstall skill",
+        "operationId": "delete_api_skills_name_",
+        "tags": [
+          "skills"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/tools": {
+      "get": {
+        "summary": "List tools",
+        "operationId": "get_api_tools",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/tools/{name}/schema": {
+      "get": {
+        "summary": "Get tool schema",
+        "operationId": "get_api_tools_name_schema",
+        "tags": [
+          "handlers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/vectors/search": {
+      "post": {
+        "summary": "Kernel facade: ecc.search",
+        "operationId": "post_api_vectors_search",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/vectors/status": {
+      "get": {
+        "summary": "Kernel facade: ecc.status",
+        "operationId": "get_api_vectors_status",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/voice/settings": {
+      "put": {
+        "summary": "Update voice settings",
+        "operationId": "put_api_voice_settings",
+        "tags": [
+          "voice"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/voice/status": {
+      "get": {
+        "summary": "Voice status",
+        "operationId": "get_api_voice_status",
+        "tags": [
+          "voice"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      },
+      "post": {
+        "summary": "Update voice pipeline",
+        "operationId": "post_api_voice_status",
+        "tags": [
+          "voice"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/voice/test-mic": {
+      "post": {
+        "summary": "Test mic",
+        "operationId": "post_api_voice_test_mic",
+        "tags": [
+          "voice"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/voice/test-speaker": {
+      "post": {
+        "summary": "Test speaker",
+        "operationId": "post_api_voice_test_speaker",
+        "tags": [
+          "voice"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/voice/tts": {
+      "post": {
+        "summary": "Synthesize tts",
+        "operationId": "post_api_voice_tts",
+        "tags": [
+          "voice"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/voice/tts/config": {
+      "get": {
+        "summary": "Tts config",
+        "operationId": "get_api_voice_tts_config",
+        "tags": [
+          "voice"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/custody/witness": {
+      "post": {
+        "summary": "Custody witness",
+        "operationId": "post_custody_witness",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "summary": "Server-sent kernel events",
+        "operationId": "get_events",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "MCP JSON-RPC (full profile)",
+        "operationId": "post_mcp",
+        "tags": [
+          "mcp"
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON-RPC response"
+          },
+          "202": {
+            "description": "Notification accepted"
+          },
+          "400": {
+            "description": "Malformed JSON"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        },
+        "description": "initialize, tools/list, tools/call and notifications. Only mounted when the gateway has an MCP shell. Owner-equivalent: every tool is reachable.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonRpcRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ws": {
+      "get": {
+        "summary": "WebSocket upgrade (token via Authorization header or ?token=)",
+        "operationId": "get_ws",
+        "tags": [
+          "ws"
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching protocols"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "summary": "This document",
+        "operationId": "get_api_openapi_json",
+        "tags": [
+          "openapi"
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Daemon-issued owner token (wft_...). Project tokens are refused."
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing, unknown, expired, revoked or non-owner token",
+        "headers": {
+          "WWW-Authenticate": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DaemonUnavailable": {
+        "description": "The daemon that owns tokens is unreachable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "remedy": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "HealthAnonymous": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "HealthFull": {
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "uptime_secs",
+          "build",
+          "gateway",
+          "daemon",
+          "kernel",
+          "chain",
+          "mcp",
+          "channels",
+          "providers",
+          "token"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "uptime_secs": {
+            "type": "integer"
+          },
+          "build": {
+            "type": "object"
+          },
+          "gateway": {
+            "type": "object"
+          },
+          "daemon": {
+            "type": "object"
+          },
+          "kernel": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "chain": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "mcp": {
+            "type": "object"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "configured": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "token": {
+            "type": "object"
+          }
+        }
+      },
+      "JsonRpcRequest": {
+        "type": "object",
+        "required": [
+          "jsonrpc",
+          "method"
+        ],
+        "properties": {
+          "jsonrpc": {
+            "const": "2.0"
+          },
+          "id": {},
+          "method": {
+            "type": "string"
+          },
+          "params": {}
+        }
+      }
+    }
+  }
+}

@@ -32,6 +32,8 @@ pub fn api_routes() -> Router<ApiState> {
         // Auth: tokens are minted by the daemon (`weft token issue`), never
         // over HTTP (ADR-102 D5); only self-revoke is exposed here.
         .route("/auth/revoke", post(revoke_token))
+        // OpenAPI 3.1 description of this surface (behind the token).
+        .route("/openapi.json", get(super::openapi::openapi_json))
         // Health check (tiered by token, ADR-102 D1)
         .route("/health", get(super::health::health_check))
         // Delegation monitoring

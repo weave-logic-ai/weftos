@@ -16,6 +16,7 @@ pub mod handlers;
 pub mod health;
 pub mod http_facade_api;
 pub mod mcp_mount;
+pub mod openapi;
 pub mod memory_api;
 pub mod middleware;
 pub mod monitoring;

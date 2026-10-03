@@ -356,7 +356,7 @@ fn spawn_heartbeat_task(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! WEFT-300: heartbeat + dead-connection cleanup.
     //!
     //! These tests boot a real `ws_handler` against an in-process axum
@@ -491,7 +491,7 @@ mod tests {
         }
     }
 
-    fn stub_state() -> ApiState {
+    pub(crate) fn stub_state() -> ApiState {
         let stub: Arc<Stub> = Arc::new(Stub);
         ApiState {
             routing_history: std::sync::Arc::new(
@@ -501,7 +501,7 @@ mod tests {
                 clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0),
             ),
             health_cache: Default::default(),
-        mcp: None,
+            mcp: None,
             tools: stub.clone(),
             sessions: stub.clone(),
             agents: stub.clone(),
