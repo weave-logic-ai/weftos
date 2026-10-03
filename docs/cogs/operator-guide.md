@@ -89,6 +89,14 @@ The catalog verbs `weaver workload install` and `unload` are default-deny: they 
 
 Without a matching permit the verb is refused and the refusal is chained. Policy files in the runtime dir (`workload-permits.json`, `workload-trust.json`, peers, container, seeds) must be owned by the daemon's user (or root) and not group- or world-writable (`chmod 600`); the daemon refuses a file that is not.
 
+**Upgrading: three things now stop the placement plane from building.** When the daemon cannot read its policy files it refuses all placement (`place`, `explain`, `status`, `stop`, `logs`, `unload`) with "placement unavailable: ..." until you fix the file; `weaver workload revoke` still works throughout. The causes, and the fix for each:
+
+- a permit in `workload-permits.json` with `"min_package_trust": "unsigned"` and no `"principals"`: add `"principals": ["catalog"]` (the permit above), or raise the trust floor;
+- a policy file with mode 0664 or any group/world write bit: `chmod 600 <runtime dir>/workload-*.json`;
+- a policy file owned by another user: `chown <daemon user> <runtime dir>/workload-*.json`.
+
+The error names the file and the rule it broke. Fix it and the next call rebuilds the plane; no restart is needed.
+
 **Catalog revocation is by name only.** The catalog does not verify what it records, so `workload revoke --package <name>` is the only revocation that reaches a `workload install` entry (and a `blake3:` manifest hash revokes it as an artifact hash). Revoking the signer key of a package you installed elsewhere does not stop a catalog entry of the same name: revoke the name too.
 
 **Store (Seed) cogs** are revoked by the synthetic package id `store.<cog id>.<version>`, for example `weaver workload revoke --package store.fall-detect.1.0.0`. A package id that is 64 hex characters is matched case-insensitively.

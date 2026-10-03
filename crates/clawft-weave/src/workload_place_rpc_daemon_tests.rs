@@ -288,6 +288,15 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
     assert_eq!(tier_of(&st, &me), "pinned");
     assert_eq!(st["workload_host"]["metadata"]["routes"], "native");
 
+    // The in-process host the daemon builds holds the kernel's own list.
+    assert!(
+        HOST.get().unwrap().revocations().is_some_and(|l| Arc::ptr_eq(
+            l,
+            kernel.try_read().unwrap().revocation_list()
+        )),
+        "build() gives the workload-host the kernel's revocation list"
+    );
+
     // Trust is bound to the key: the peer listed for another key loses
     // its tier, and the listed key is not learned (nobody holds it here).
     let other = hex_encode(&SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes());

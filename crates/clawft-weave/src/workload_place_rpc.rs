@@ -69,6 +69,11 @@ static BUILT_RULES: OnceLock<Option<String>> = OnceLock::new();
 /// control plane is built.
 static REVOKER: OnceLock<Arc<crate::workload_revoke_rpc::Revoker>> = OnceLock::new();
 
+/// When the plane last failed to build, for the revoke verb's backoff.
+static BUILD_FAILED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+/// How long the revoke verb waits before trying to build the plane again.
+const BUILD_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The daemon's revoker, made on first use from the kernel's list (so a
 /// notice or the verb that arrives before placement is up still has one).
 fn revoker_for(
@@ -281,6 +286,7 @@ async fn build(
         serving: serving.as_ref(),
         container,
         ingest: hooks,
+        revocations: revocations.clone(),
     })?);
     let _ = HOST.set(local.clone());
     let conn = Arc::new(MeshConnector::new(true));
@@ -529,8 +535,24 @@ pub async fn dispatch(
 async fn revoke_dispatch(params: Value, kernel: &Arc<RwLock<Kernel<NativePlatform>>>) -> Response {
     let list = kernel.read().await.revocation_list().clone();
     let revoker = revoker_for(list);
-    if let Err(e) = PLANE.get_or_try_init(|| build(kernel)).await {
-        tracing::warn!(error = %e, "placement unavailable: revoking against the revocation list alone");
+    // One build attempt per BUILD_RETRY: a plane that cannot be built (a
+    // broken policy file) is not rebuilt, with all that costs, on every call
+    // of the incident verb.
+    let recently_failed = BUILD_FAILED
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .is_some_and(|t| t.elapsed() < BUILD_RETRY);
+    if !recently_failed {
+        match PLANE.get_or_try_init(|| build(kernel)).await {
+            Ok(_) => {}
+            Err(e) => {
+                if let Ok(mut g) = BUILD_FAILED.lock() {
+                    *g = Some(std::time::Instant::now());
+                }
+                tracing::warn!(error = %e, "placement unavailable: revoking against the revocation list alone");
+            }
+        }
     }
     match revoker.revoke(params).await {
         Ok(v) => Response::success(v),

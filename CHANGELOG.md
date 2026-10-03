@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Changed — workload permits and policy files are stricter (upgrade note)
+
+- The placement control plane now refuses to build, which takes down all
+  `weaver workload place|explain|status|stop|logs|unload` until fixed, if
+  any of these is true of a file in the runtime dir: a permit in
+  `workload-permits.json` accepts `"min_package_trust": "unsigned"` and
+  names no `"principals"`; a policy file (`workload-permits.json`,
+  `workload-trust.json`, peers, container, seeds) is group- or
+  world-writable (for example mode 0664); a policy file is owned by another
+  user. `weaver workload revoke` keeps working in every one of these cases.
+  Fix: `chmod 600 <runtime>/workload-*.json`, `chown` the files to the
+  daemon's user, and add `"principals": ["catalog"]` to an unsigned permit
+  for the catalog verbs. See docs/cogs/operator-guide.md.
+- `workload install` / `unload` are decided by the permit gate as the
+  principal `catalog` on `unsigned` packages (they were always denied).
+
+### Added — `weaver workload revoke` and forced unload
+
+- `weaver workload revoke --package|--signer|--hash` revokes, chains
+  (`workload.revoke`, `workload.unrevoke`), stops and unloads what runs from
+  the subject on this node and on peers that receive the signed notice.
+  `WorkloadGate::new` / `with_rules` now take the revocation list.
+
 ### Added — cog manifest `redistributable` flag (ADR-100 amendment, ADR-099 section 6)
 
 - The signed cog manifest has an optional `redistributable` field (default

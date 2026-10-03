@@ -203,6 +203,11 @@ impl WorkloadHostService {
         self.revocations.set(list).is_ok()
     }
 
+    /// The list set by [`Self::set_revocations`], if any.
+    pub fn revocations(&self) -> Option<&Arc<crate::revocation::RevocationList>> {
+        self.revocations.get()
+    }
+
     /// Wire the ingest bridge: placed cogs get a per-instance token,
     /// bound to the placing project and revoked at stop and unload.
     pub fn with_ingest(mut self, hooks: IngestHooks) -> Self {
