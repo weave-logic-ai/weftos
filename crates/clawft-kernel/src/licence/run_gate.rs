@@ -137,6 +137,10 @@ pub trait CognitumRunGate: Send + Sync {
     fn claims(&self, _sha256: &str, _blake3: &str) -> bool {
         false
     }
+    /// True when this BLAKE3 is revoked as an `ArtifactHash`.
+    fn revoked(&self, _blake3: &str) -> bool {
+        false
+    }
 }
 
 /// [`CognitumRunGate`] over this node's stores.
@@ -154,5 +158,9 @@ impl CognitumRunGate for StoreRunGate {
 
     fn claims(&self, sha256: &str, blake3: &str) -> bool {
         self.grants.claims_artifact(sha256, blake3) || self.grants.is_hash_revoked(blake3)
+    }
+
+    fn revoked(&self, blake3: &str) -> bool {
+        self.grants.is_hash_revoked(blake3)
     }
 }

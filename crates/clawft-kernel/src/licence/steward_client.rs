@@ -91,7 +91,7 @@ impl LicenceClient for StewardLicenceClient {
         self.signed()?.grants_page(since).await
     }
 
-    async fn renew(&self) -> Result<Vec<SignedGrant>, LicenceClientError> {
+    async fn renew(&self) -> Result<GrantsPage, LicenceClientError> {
         self.signed()?.renew().await
     }
 }

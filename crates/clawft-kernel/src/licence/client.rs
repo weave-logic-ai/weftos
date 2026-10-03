@@ -130,8 +130,9 @@ pub trait LicenceClient: Send + Sync + 'static {
     /// `GET /licence/v1/grants?since=<seq>`: renewal batch.
     async fn grants_since(&self, since: u64) -> Result<Vec<SignedGrant>, LicenceClientError>;
     /// `POST /licence/v1/renew`: a new grant (or a withdrawal) for every
-    /// active checkout, at most one batch.
-    async fn renew(&self) -> Result<Vec<SignedGrant>, LicenceClientError> {
+    /// active checkout, at most one batch. `next` is the Seed's issue counter
+    /// after the renewal (the bound for the catch-up cursor).
+    async fn renew(&self) -> Result<GrantsPage, LicenceClientError> {
         Err(LicenceClientError::BadResponse("renew is not supported by this client".into()))
     }
     /// [`Self::grants_since`] with the paging cursor.
@@ -256,9 +257,10 @@ impl<T: LicenceTransport> LicenceClient for SignedLicenceClient<T> {
         Ok(GrantsPage { grants: b.grants, next: b.next, more: b.more })
     }
 
-    async fn renew(&self) -> Result<Vec<SignedGrant>, LicenceClientError> {
+    async fn renew(&self) -> Result<GrantsPage, LicenceClientError> {
         let out = self.signed("POST", RENEW_PATH, Vec::new(), MAX_RESPONSE_BODY).await?;
-        Ok(serde_json::from_slice::<GrantsBody>(&out).map_err(bad)?.grants)
+        let b = serde_json::from_slice::<GrantsBody>(&out).map_err(bad)?;
+        Ok(GrantsPage { grants: b.grants, next: b.next, more: false })
     }
 }
 

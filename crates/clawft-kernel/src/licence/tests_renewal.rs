@@ -124,8 +124,11 @@ impl LicenceClient for LostRenew {
     async fn grants_page(&self, since: u64) -> Result<GrantsPage, LicenceClientError> {
         self.0.grants_page(since).await
     }
-    async fn renew(&self) -> Result<Vec<SignedGrant>, LicenceClientError> {
-        Ok(Vec::new())
+    async fn renew(&self) -> Result<GrantsPage, LicenceClientError> {
+        // The answer arrives, but without the withdrawal an earlier call carried.
+        let mut p = self.0.renew().await?;
+        p.grants.clear();
+        Ok(p)
     }
 }
 
@@ -135,7 +138,7 @@ async fn a_withdrawal_missed_by_renew_is_caught_up_from_the_grants_listing() {
     r.lic.0.store(true, Ordering::SeqCst);
     // The Seed signs (and persists) the withdrawal; this answer never arrives.
     let signed = r.client.renew().await.unwrap();
-    assert_eq!(signed.len(), 1);
+    assert_eq!(signed.grants.len(), 1);
     let rep = renewer(&r, Arc::new(LostRenew(r.client.clone())), None).run_once().await.expect("pass");
     assert_eq!((rep.withdrawn, rep.renewed), (1, 0), "{rep:?}");
     wait_for("B has the withdrawal", || seq_on(&r.b) == 2).await;

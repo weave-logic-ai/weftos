@@ -117,6 +117,10 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "auth.token.validate",
     "project.list",
     "project.show",
+    // ADR-106: machine-level licence status (Read), mesh-wide rather than per
+    // project; `weaver doctor` reads both for its `licence.*` findings.
+    "workload.node.binding",
+    "workload.cog.checkout.status",
 ];
 
 /// User-level operations: callable outside a project, but only by a caller
@@ -157,9 +161,11 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "mesh.register",
     "mesh.heartbeat",
     "mesh.unregister",
-    // ADR-106 phase 3: a Cognitum checkout is a machine-level licence
-    // operation (Admin), not part of any one project.
+    // ADR-106 phase 3: a Cognitum checkout and its operator approval are
+    // machine-level licence operations (Admin), mesh-wide by design, not part
+    // of any one project.
     "workload.cog.checkout",
+    "workload.cog.checkout.approve",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.

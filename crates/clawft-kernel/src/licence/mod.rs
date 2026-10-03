@@ -83,6 +83,8 @@ mod tests_http;
 mod tests_http_e2e;
 #[cfg(all(test, feature = "workload-runtime", unix))]
 mod tests_renewal;
+#[cfg(test)]
+mod tests_renewal_cursor;
 
 use std::sync::{Arc, Mutex, RwLock};
 

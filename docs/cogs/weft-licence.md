@@ -216,6 +216,17 @@ installed renewal is chained as `cog.checkout.renewed`, each withdrawal as
 `cog.checkout.lapsed`. Every active checkout is renewed: releasing unused
 ones automatically is open question W3.
 
+The catch-up cursor never moves past the counter the Seed reported in the
+renew answer plus the grants a page carries; it restarts at 0 after a rebind
+or for another Seed. Until a binding names this node the pull checks again
+every 5 minutes.
+
+On a member, the run gate stays on once the node has accepted a binding: a
+`licence-bound.marker` file beside the licence store survives a deleted store
+file. Deleting the whole `licence/` directory resets that, and the node then
+reads as never bound until a peer re-syncs the binding. That is a known limit:
+anyone who can delete that directory can already tamper with the daemon.
+
 Not built yet: `weaver cog checkout release | renew`.
 
 ## Protocol

@@ -173,6 +173,11 @@ const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "ke
 /// owned by other Phase 1 packages).
 const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe"];
 
+/// Read verbs served under a guard-prefix arm (`workload.`) that were reviewed
+/// one by one for the allow-list: ADR-106 licence status (`licence_rpc`,
+/// `licence_checkout_rpc`), public mesh facts with no secret in them.
+const REVIEWED_UNDER_PREFIX: &[&str] = &["workload.node.binding", "workload.cog.checkout.status"];
+
 fn all_methods() -> Vec<String> {
     let (mut arms, _) = dispatch_arms();
     arms.extend(INTERCEPTS.iter().map(|s| (*s).to_owned()));
@@ -226,6 +231,10 @@ fn population_allow_list_is_read_only_and_real() {
     let (arms, prefixes) = dispatch_arms();
     for m in READ_ONLY_ALLOW {
         assert_eq!(required_capability(m), Capability::Read, "{m} must be a Read method");
+        if REVIEWED_UNDER_PREFIX.contains(m) {
+            assert!(prefixes.iter().any(|p| m.starts_with(p.as_str())), "{m} is served under a prefix arm");
+            continue;
+        }
         assert!(
             arms.iter().any(|a| a == m) || NOT_LEGACY_ARMS.contains(m) || INTERCEPTS.contains(m),
             "{m} is on the allow-list but is not a dispatched method"
@@ -484,5 +493,26 @@ fn mesh_local_routes_pass_for_a_child_inside_a_project_and_not_outside() {
     for m in ["mesh.challenge", "mesh.register", "mesh.heartbeat", "mesh.unregister"] {
         assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || true).is_ok(), "{m} inside a project");
         assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_err(), "{m} without a claim");
+    }
+}
+
+/// ADR-106: the checkout verbs are treated alike outside a project. Checkout
+/// and approve are user-level (Admin only); status and the binding status are
+/// read-only, so `weaver doctor` gets its `licence.*` findings anywhere.
+#[test]
+fn licence_checkout_verbs_are_allowed_alike_outside_a_project() {
+    let ro = OutsideProjectPolicy::ReadOnly;
+    for m in ["workload.cog.checkout", "workload.cog.checkout.approve"] {
+        assert!(decide(ro, m, true, || false).is_ok(), "{m} for an admin");
+        assert!(decide(ro, m, false, || false).is_err(), "{m} needs admin outside a project");
+        assert_eq!(required_capability(m), Capability::Admin, "{m}");
+    }
+    for m in ["workload.cog.checkout.status", "workload.node.binding"] {
+        assert!(decide(ro, m, false, || false).is_ok(), "{m} is read-only and allowed");
+        assert_eq!(required_capability(m), Capability::Read, "{m}");
+    }
+    // The doctor's two calls pass the read-only gate without a project.
+    for m in ["workload.node.binding", "workload.cog.checkout.status"] {
+        assert!(READ_ONLY_ALLOW.contains(&m));
     }
 }

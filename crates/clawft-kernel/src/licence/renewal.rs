@@ -15,7 +15,11 @@
 //! The Seed never connects into the mesh: only the steward pulls. On a node
 //! the binding does not name the client refuses before sending
 //! (`seed_not_bound`, `not_steward`) and the pass is skipped. When the Seed
-//! cannot be reached the next pass backs off (1 min doubling to 1 h). Every
+//! cannot be reached the next pass backs off (1 min doubling to 1 h); a
+//! skipped pass polls again in 5 min, so a binding that arrives later is
+//! renewed soon. The catch-up cursor may not move past the Seed's counter
+//! from the renew answer plus the grants a page carries, and it restarts at
+//! 0 when the binding's `seq` or the Seed's device id changes. Every
 //! response is bounded by the transport caps; a response over them fails the
 //! pass, which is retried with the backoff. W3 (releasing unused checkouts
 //! automatically) is still open, so every active checkout is renewed.
@@ -49,6 +53,9 @@ pub struct RenewalConfig {
     pub backoff_max: Duration,
     /// Most catch-up pages followed in one pass.
     pub max_pages: u32,
+    /// Delay of the next pass while passes are skipped (no binding naming
+    /// this node yet): a binding that arrives later is renewed this soon.
+    pub skip_poll: Duration,
 }
 
 impl Default for RenewalConfig {
@@ -60,6 +67,7 @@ impl Default for RenewalConfig {
             backoff_min: Duration::from_secs(60),
             backoff_max: Duration::from_secs(3600),
             max_pages: 16,
+            skip_poll: Duration::from_secs(5 * 60),
         }
     }
 }
@@ -88,6 +96,8 @@ pub struct Renewer {
     chain: Option<Arc<ChainManager>>,
     cfg: RenewalConfig,
     cursor: Mutex<u64>,
+    /// The (binding seq, seed device id) the cursor belongs to.
+    cursor_for: Mutex<Option<(u64, String)>>,
 }
 
 fn skip(e: &LicenceClientError) -> bool {
@@ -104,23 +114,55 @@ impl Renewer {
         chain: Option<Arc<ChainManager>>,
         cfg: RenewalConfig,
     ) -> Arc<Self> {
-        Arc::new(Self { store, exchange, client, flood, chain, cfg, cursor: Mutex::new(0) })
+        Arc::new(Self { store, exchange, client, flood, chain, cfg, cursor: Mutex::new(0), cursor_for: Mutex::new(None) })
+    }
+
+    /// The catch-up cursor (the Seed's issue counter).
+    pub fn cursor(&self) -> u64 {
+        *self.cursor.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn set_cursor(&self, v: u64) {
+        *self.cursor.lock().unwrap_or_else(|p| p.into_inner()) = v;
+    }
+
+    /// The cursor counts one Seed's issues under one binding: a new binding
+    /// `seq` or another device starts it again from 0.
+    fn reset_cursor_on_rebind(&self) {
+        let now = self.store.held_binding().map(|b| (b.seq, b.device_id));
+        let mut f = self.cursor_for.lock().unwrap_or_else(|p| p.into_inner());
+        if *f != now {
+            *f = now;
+            self.set_cursor(0);
+        }
     }
 
     /// One pass: renew, then catch up. Errors only for a failed call.
     pub async fn run_once(&self) -> Result<RenewalReport, LicenceClientError> {
         let mut report = RenewalReport::default();
+        self.reset_cursor_on_rebind();
         let renewed = match self.client.renew().await {
             Ok(g) => g,
             Err(e) if skip(&e) => return Ok(RenewalReport { skipped: true, ..report }),
             Err(e) => return Err(e),
         };
-        self.apply_all(renewed, &mut report).await;
+        // The Seed's counter after the renewal bounds the cursor: grants issued
+        // since add one each, and they are in the pages that follow.
+        let seed_ctr = renewed.next;
+        self.apply_all(renewed.grants, &mut report).await;
         for _ in 0..self.cfg.max_pages {
-            let since = *self.cursor.lock().unwrap_or_else(|p| p.into_inner());
+            let since = self.cursor();
             let page = self.client.grants_page(since).await?;
+            let bound = seed_ctr.max(since).saturating_add(page.grants.len() as u64);
+            if page.next > bound {
+                // A page may not skip the cursor past grants it does not carry.
+                return Err(LicenceClientError::BadResponse(format!(
+                    "grants page moves the cursor to {} past the bound {bound}",
+                    page.next
+                )));
+            }
             self.apply_all(page.grants, &mut report).await;
-            *self.cursor.lock().unwrap_or_else(|p| p.into_inner()) = page.next.max(since);
+            self.set_cursor(page.next.max(since));
             if !page.more || page.next <= since {
                 break;
             }
@@ -177,26 +219,31 @@ impl Renewer {
         exp.min(self.cfg.backoff_max)
     }
 
-    /// Run passes forever on the current runtime.
+    /// Run passes forever on the current runtime. A skipped pass (no binding
+    /// naming this node) polls again after `skip_poll`, not a full period.
     pub fn spawn(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             tokio::time::sleep(self.cfg.first_delay).await;
             let mut failures = 0u32;
             loop {
-                match self.run_once().await {
+                let delay = match self.run_once().await {
+                    Ok(r) if r.skipped => {
+                        failures = 0;
+                        self.cfg.skip_poll
+                    }
                     Ok(r) => {
                         failures = 0;
-                        if !r.skipped {
-                            tracing::info!(renewed = r.renewed, withdrawn = r.withdrawn, unchanged = r.unchanged,
-                                refused = r.refused, "checkout renewal pass");
-                        }
+                        tracing::info!(renewed = r.renewed, withdrawn = r.withdrawn, unchanged = r.unchanged,
+                            refused = r.refused, "checkout renewal pass");
+                        self.next_delay(0)
                     }
                     Err(e) => {
                         failures = failures.saturating_add(1);
                         tracing::warn!(error = %e, failures, "checkout renewal failed; backing off");
+                        self.next_delay(failures)
                     }
-                }
-                tokio::time::sleep(self.next_delay(failures)).await;
+                };
+                tokio::time::sleep(delay).await;
             }
         })
     }

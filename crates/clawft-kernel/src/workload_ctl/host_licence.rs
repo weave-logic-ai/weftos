@@ -7,11 +7,11 @@
 //!
 //! For such a package the host asks the node's [`CognitumRunGate`]:
 //!
-//! - **at `place` / `load`**, for EVERY binary in the package (hashes computed
-//!   from its bytes), so no binary the gate does not permit is ever staged.
-//!   The arch that will run is the one the runtime's own admission picks
-//!   (native: the host arch; container: its arch order), and the placement is
-//!   refused when that is not the arch of the chosen variant;
+//! - **at `place` / `load`**, for the binary the runtime's own admission
+//!   picks (native: the host arch; container: its arch order), hashes
+//!   computed from its bytes. Only that binary is staged; the package's other
+//!   arches need no grant, but a revoked one refuses the package. The
+//!   placement is refused when the admitted arch is not the chosen variant's;
 //! - **at every `start`**, for the binary that runs, rehashed from the file
 //!   it was staged to when the adapter runs it from disk (native), else from
 //!   the loaded bytes (a container image is tagged by the binary's BLAKE3).
@@ -139,10 +139,15 @@ impl WorkloadHostService {
             ));
         }
         let run = LicensedRun { cog_id, version, arch: adm.arch };
-        // Every binary in the package, the one that runs last (it is chained).
+        // Only the admitted binary is staged and run, so only it needs a grant
+        // and an approval; the package's other arches are refused only when
+        // their hash is revoked.
         let (runs, others): (Vec<_>, Vec<_>) = bins.iter().partition(|(a, _, _)| *a == run.arch);
-        for (arch, s, b) in others {
-            self.licence_decide(gate.as_ref(), &run, arch, (s, b), None)?;
+        if let Some((arch, s, _)) = others.iter().find(|(_, _, b)| gate.revoked(b)) {
+            return Err(gate_refusal(
+                "hash_revoked",
+                format!("the package's {arch} binary (sha256 {}) is revoked", &s[..16]),
+            ));
         }
         let (_, s, b) = runs
             .first()

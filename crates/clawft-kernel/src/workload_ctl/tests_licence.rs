@@ -329,7 +329,7 @@ async fn the_gate_hashes_the_binary_the_runtime_admits_and_refuses_another_varia
         .unwrap()
         .unwrap();
     assert_eq!(run.arch, arch());
-    assert_eq!(gate.asked.lock().unwrap().len(), 2, "both binaries were asked about");
+    assert_eq!(gate.asked.lock().unwrap().len(), 1, "only the binary that runs needs a grant");
 
     // Container: it runs the first arch of its own order; another variant arch is refused.
     let tmp = tempfile::tempdir().unwrap();
@@ -405,4 +405,76 @@ async fn revoking_a_licensed_binary_tears_its_running_instance_down() {
     let forced = r.host.svc.enforce_revocations(&list).await;
     assert_eq!(forced.len(), 1, "{forced:?}");
     assert!(!r.host.svc.instances.lock().await.contains_key(&placed.instance_id));
+}
+
+
+/// Real stores for one member: bound, with a grant listing exactly `listed`
+/// (arch, bytes) and an approval for those sha256s.
+fn real_member(listed: &[(&str, &str)]) -> (tempfile::TempDir, Arc<crate::licence::StoreRunGate>, Arc<crate::revocation::RevocationList>) {
+    use crate::licence::*;
+    use crate::workload_pkg::{KeyOrigin, TrustAnchors};
+    let k = |n: u8| SigningKey::from_bytes(&[n; 32]);
+    let hex = |s: &SigningKey| hex_encode(&s.verifying_key().to_bytes());
+    let now = chrono::Utc::now().timestamp() as u64;
+    let dir = tempfile::tempdir().unwrap();
+    let mesh = MeshId::derive(&[9; 32], &[7; 32]);
+    let mut ops = TrustAnchors::default();
+    ops.push_signer("op", &hex(&k(1)), KeyOrigin::Operator).unwrap();
+    let ops = Arc::new(ops);
+    let local = LocalMeshId::new(mesh);
+    let store = Arc::new(CheckoutGrantStore::open(dir.path(), ops.clone(), local.clone(), system_clock()).unwrap());
+    let approvals = Arc::new(ApprovalStore::open(dir.path(), ops, local).unwrap());
+    let revoked = Arc::new(crate::revocation::RevocationList::new(dir.path().join("revoked.json")));
+    store.attach_revocations(revoked.clone());
+    let rec = BindingRecord {
+        v: 2, device_id: "seed-1".into(), device_pubkey: hex(&k(20)), mesh_id: mesh.to_hex(),
+        grant_pubkey: hex(&k(2)), steward_node_id: "node-steward".into(), steward_pubkey: hex(&k(21)),
+        state: BindState::Bound, seq: 1, bound_at: now,
+    };
+    let posture = AdmissionPosture { enforce: true, verdict_source_bound: true, open_membership: false };
+    store.accept_binding(&sign_binding(&rec, &k(1)).unwrap(), posture, &NoExtraChecks).unwrap();
+    let artifacts = listed
+        .iter()
+        .map(|(a, b)| GrantArtifact {
+            arch: (*a).into(), size: b.len() as u64, sha256: sha256_hex(b.as_bytes()),
+            blake3: hex_encode(blake3::hash(b.as_bytes()).as_bytes()),
+        })
+        .collect::<Vec<_>>();
+    let mut shas: Vec<String> = artifacts.iter().map(|a| a.sha256.clone()).collect();
+    shas.sort();
+    let g = CheckoutGrant {
+        v: 1, grant_id: String::new(), mesh_id: mesh.to_hex(), seed_device_id: "seed-1".into(),
+        grant_key_id: String::new(), source: "cognitum".into(), registry: "registry.example".into(),
+        cog_id: "fall-detect".into(), version: "0.1.0".into(), artifacts,
+        manifest_sha256: sha256_hex(b"manifest"),
+        licence: LicenceRef { ref_sha256: sha256_hex(b"licence"), expires: now + 30 * 86_400 },
+        seq: 1, issued_at: now, expires_at: now + 72 * 3600,
+    };
+    store.accept_grant(&sign_grant(&g, &k(2)).unwrap()).unwrap();
+    let a = Approval { v: 1, mesh_id: mesh.to_hex(), cog_id: "fall-detect".into(), version: "0.1.0".into(), sha256: shas, approved_at: now };
+    approvals.accept(&sign_approval(&a, &k(1)).unwrap()).unwrap();
+    (dir, Arc::new(StoreRunGate { grants: store, approvals: Some(approvals) }), revoked)
+}
+
+/// A multi-arch package with only the running arch checked out and approved
+/// is admitted; a revoked binary of another arch still refuses it.
+#[tokio::test]
+async fn a_multi_arch_package_needs_a_grant_only_for_the_binary_that_runs() {
+    const OTHER: &str = "#!/bin/sh\necho other arch\n";
+    let (_d, real, revoked) = real_member(&[(arch(), SCRIPT)]);
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package_bins(tmp.path(), "fall-detect", &[(arch(), SCRIPT), (other_arch(), OTHER)], Some(COGNITUM_URL));
+    let (vp, w) = verified(&pkg);
+    let key = SigningKey::from_bytes(&[30; 32]);
+    let node = host_node(35, board_caps("pi5"), true, &key);
+    node.svc.set_licence_gate(real);
+    let native = node.svc.routes["native"].clone();
+    let variant = format!("{}-native", arch());
+    let run = node.svc.licence_check_place(&vp, &w, &variant, &native, &ctl_req()).await.expect("admitted").unwrap();
+    assert_eq!(run.arch, arch());
+    revoked
+        .revoke_subject(crate::revocation::RevocationKind::ArtifactHash, &hex_encode(blake3::hash(OTHER.as_bytes()).as_bytes()), "bad")
+        .unwrap();
+    let e = node.svc.licence_check_place(&vp, &w, &variant, &native, &ctl_req()).await.unwrap_err();
+    assert!(e.reason.contains("[hash_revoked]") && e.reason.contains(other_arch()), "{}", e.reason);
 }
