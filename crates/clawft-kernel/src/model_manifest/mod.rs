@@ -25,6 +25,7 @@ pub mod body;
 pub mod check;
 pub mod locality;
 pub mod registry;
+mod resolve;
 #[cfg(feature = "mesh")]
 pub mod sharing;
 
@@ -32,6 +33,8 @@ pub mod sharing;
 mod tests;
 #[cfg(test)]
 mod tests_locality;
+#[cfg(test)]
+mod tests_security;
 
 pub use adopt::{AdoptInput, FileRole, ScannedFile, ScannedModel, hash_file, scan_dir, scan_file, scan_ollama};
 pub use advertise::{StoreTier, TierResolver, model_capabilities};
@@ -44,4 +47,4 @@ pub use locality::{
     locality_preference, model_present_requirement,
 };
 pub use check::{CheckMode, FileOutcome, ModelCheck, ModelState};
-pub use registry::{AdoptedModel, ModelEntry, ModelRegistry, ResolvedModel};
+pub use registry::{AdoptedModel, ModelEntry, ModelRegistry, ModelTrust, ResolvedModel};

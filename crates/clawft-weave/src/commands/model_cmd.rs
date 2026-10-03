@@ -43,6 +43,15 @@ pub enum ModelCommand {
         #[arg(long)]
         full: bool,
     },
+    /// Hide a model from node facts, or advertise it again. Shard hashes
+    /// fingerprint which models this node holds; hidden models are still usable locally.
+    Advertise {
+        /// Model name or package id.
+        model: String,
+        /// `on` to advertise, `off` to hide.
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
     /// Explain the fetch-versus-relocate decision for a model over described nodes.
     Explain(ExplainArgs),
 }
@@ -90,6 +99,9 @@ pub struct AdoptArgs {
     /// Replace an existing model of the same name.
     #[arg(long)]
     pub replace: bool,
+    /// Do not advertise this model in node facts.
+    #[arg(long)]
+    pub no_advertise: bool,
 }
 
 /// `weaver model explain`.
@@ -149,8 +161,12 @@ fn adopt(reg: &ModelRegistry, a: AdoptArgs) -> anyhow::Result<()> {
         scan_dir(&a.path, input)?
     };
     let bytes = scanned.body.total_bytes();
+    let hide = a.no_advertise;
     let shards = scanned.body.shards.len();
     let adopted = reg.adopt(scanned, &key, &key_id, &anchors, a.replace)?;
+    if hide {
+        reg.set_advertised(&adopted.package_id, false)?;
+    }
     println!("adopted {} ({shards} shard(s), {bytes} bytes)", a.name);
     println!("package id {}", adopted.package_id);
     println!(
@@ -208,6 +224,7 @@ fn verify(reg: &ModelRegistry, model: &str, full: bool) -> anyhow::Result<()> {
             FileOutcome::Ok { rehashed: true } => "ok (hashed)".to_string(),
             FileOutcome::Ok { rehashed: false } => "ok (unchanged)".to_string(),
             FileOutcome::Missing => "MISSING".to_string(),
+            FileOutcome::Escapes => "REFUSED (resolves outside the model root)".to_string(),
             FileOutcome::Mismatch { actual } => format!("MISMATCH (found {actual})"),
         };
         println!("{path}: {text}");
@@ -275,6 +292,11 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
         ModelCommand::Adopt(a) => adopt(&reg, a),
         ModelCommand::List => list(&reg),
         ModelCommand::Verify { model, full } => verify(&reg, &model, full),
+        ModelCommand::Advertise { model, state } => {
+            reg.set_advertised(&model, state == "on")?;
+            println!("{model}: advertising {state}");
+            Ok(())
+        }
         ModelCommand::Explain(a) => explain(&reg, &a),
     }
 }
@@ -291,7 +313,9 @@ mod tests {
             format: ModelFormat::Mlx,
             shards: vec![FileRef { path: "a.safetensors".into(), size: 10, blake3: "0".repeat(64) }],
             tokenizer_blake3: None,
+            tokenizer_path: None,
             template_blake3: None,
+            template_path: None,
             source: ModelSource { hf_repo: Some("o/m".into()), ..ModelSource::default() },
             redistributable: false,
         }

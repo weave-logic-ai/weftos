@@ -101,9 +101,18 @@ pub struct ModelPackageBody {
     /// BLAKE3 of the tokenizer file, when the model has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokenizer_blake3: Option<String>,
+    /// Path of the tokenizer file relative to the model root; present
+    /// exactly when `tokenizer_blake3` is, so a node that receives only the
+    /// signed manifest knows which file to check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenizer_path: Option<String>,
     /// BLAKE3 of the chat template (or the config that carries it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template_blake3: Option<String>,
+    /// Path of the template file relative to the model root; present
+    /// exactly when `template_blake3` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_path: Option<String>,
     /// Provenance.
     pub source: ModelSource,
     /// The signer states the weights may be handed to other nodes. Absent
@@ -138,6 +147,16 @@ impl ModelPackageBody {
         for h in [&self.tokenizer_blake3, &self.template_blake3].into_iter().flatten() {
             if !is_lower_hex(h, 64) {
                 return Err(invalid("tokenizer/template hashes are 64 lower-case hex"));
+            }
+        }
+        for (hash, path) in [
+            (&self.tokenizer_blake3, &self.tokenizer_path),
+            (&self.template_blake3, &self.template_path),
+        ] {
+            match (hash, path) {
+                (None, None) => {}
+                (Some(_), Some(p)) => validate_rel_path(p)?,
+                _ => return Err(invalid("a tokenizer/template hash and path come together")),
             }
         }
         self.source.validate()
