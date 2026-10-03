@@ -157,6 +157,7 @@ expression: json
     "cors_origins": [
       "http://localhost:5173"
     ],
+    "dangerously_plain_http": false,
     "heartbeat_interval_minutes": 0,
     "heartbeat_prompt": "heartbeat",
     "host": "127.0.0.1",
