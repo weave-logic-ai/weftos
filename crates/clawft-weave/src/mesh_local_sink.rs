@@ -130,15 +130,37 @@ impl MeshSink {
     }
 }
 
-/// One outbound message for the link task.
-pub struct OutCmd {
-    /// Destination (`weft://<node>/_/_/` from the router, any scoped
-    /// address from [`ServiceForwarder::send_to`]).
-    pub dest: WeftAddr,
-    /// The kernel message as JSON.
-    pub message: Value,
-    /// Result of the `send` request.
-    pub reply: oneshot::Sender<Result<(), String>>,
+/// One command for the link task.
+pub enum OutCmd {
+    /// An outbound message.
+    Send {
+        /// Destination (`weft://<node>/_/_/` from the router, any scoped
+        /// address from [`ServiceForwarder::send_to`]).
+        dest: WeftAddr,
+        /// The kernel message as JSON.
+        message: Value,
+        /// Result of the `send` request.
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// `peers.list`: the service's connected and licensed peers.
+    Peers {
+        /// The reply data.
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
+}
+
+impl OutCmd {
+    /// Fail the command (the link dropped before it ran).
+    pub fn fail(self, why: &str) {
+        match self {
+            OutCmd::Send { reply, .. } => {
+                let _ = reply.send(Err(why.to_owned()));
+            }
+            OutCmd::Peers { reply } => {
+                let _ = reply.send(Err(why.to_owned()));
+            }
+        }
+    }
 }
 
 /// Sends the router's remote-node messages to the service as `send`.
@@ -186,7 +208,7 @@ impl ServiceForwarder {
         let shown = dest.to_string();
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(OutCmd { dest, message, reply })
+            .send(OutCmd::Send { dest, message, reply })
             .await
             .map_err(|_| KernelError::Mesh("the mesh service link has shut down".into()))?;
         match tokio::time::timeout(FORWARD_TIMEOUT, rx).await {
@@ -194,6 +216,26 @@ impl ServiceForwarder {
             Ok(Ok(Err(why))) => Err(KernelError::Mesh(format!("send to '{shown}' failed: {why}"))),
             Ok(Err(_)) => Err(KernelError::Mesh("the mesh service link dropped the message".into())),
             Err(_) => Err(KernelError::Mesh(format!("send to '{shown}' timed out"))),
+        }
+    }
+}
+
+impl ServiceForwarder {
+    /// The service's peer view (`peers.list`): `{connected: [..], licensed:
+    /// [..], ..}`. A service older than ADR-106 phase 3 sends no `licensed`.
+    pub async fn peers(&self) -> Result<Value, String> {
+        if !self.connected.load(Ordering::Acquire) {
+            return Err("the mesh service link is reconnecting".into());
+        }
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(OutCmd::Peers { reply })
+            .await
+            .map_err(|_| "the mesh service link has shut down".to_string())?;
+        match tokio::time::timeout(FORWARD_TIMEOUT, rx).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(_)) => Err("the mesh service link dropped the request".into()),
+            Err(_) => Err("peers.list timed out".into()),
         }
     }
 }

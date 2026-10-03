@@ -9,6 +9,11 @@
 //! - `mesh.cog.checkout`: a member's request to the steward;
 //! - `mesh.cog.checkout.reply`: the steward's answer.
 //!
+//! In service mode it also takes the licence control topics
+//! (`mesh.cog.binding`, `mesh.cog.grant`, `mesh.cog.sync`) and hands them to
+//! the node's [`ServiceLicenceLinks`] (ADR-106 phase 3); they are never passed
+//! on to the router.
+//!
 //! Every one of them is honoured only from a verified `node` peer. The
 //! [`PeerCtx`] is built by the daemon from the service-stamped origin, so
 //! `LocalTenant` and `Unadmitted` deliveries never reach a handler, and are
@@ -26,8 +31,8 @@ use tokio::sync::oneshot;
 use crate::error::KernelResult;
 use crate::ipc::{KernelMessage, MessagePayload, MessageTarget};
 use crate::licence::{
-    CheckoutCaller, CheckoutGrantStore, CheckoutRefusal, CheckoutRelay, CheckoutWire, SignedGrant,
-    install_grant,
+    CheckoutCaller, CheckoutGrantStore, CheckoutRefusal, CheckoutRelay, CheckoutWire,
+    ServiceLicenceLinks, SignedGrant, install_grant, is_licence_topic,
 };
 use crate::mesh_artifact::ArtifactExchange;
 use crate::mesh_artifact_tunnel::{ArtifactTunnel, PeerSender, TOPIC_TUNNEL, licensed_peer};
@@ -285,12 +290,19 @@ impl CogMeshSlot {
 pub struct CogMeshDelivery {
     inner: Arc<dyn LocalDelivery>,
     slot: Arc<CogMeshSlot>,
+    licence: Option<Arc<ServiceLicenceLinks>>,
 }
 
 impl CogMeshDelivery {
     /// Wrap `inner`; feature topics go to whatever `slot` holds.
     pub fn new(inner: Arc<dyn LocalDelivery>, slot: Arc<CogMeshSlot>) -> Self {
-        Self { inner, slot }
+        Self { inner, slot, licence: None }
+    }
+
+    /// Also take the licence control topics, for `links` (service mode).
+    pub fn with_licence(mut self, links: Arc<ServiceLicenceLinks>) -> Self {
+        self.licence = Some(links);
+        self
     }
 }
 
@@ -307,6 +319,13 @@ impl LocalDelivery for CogMeshDelivery {
         dest_scope: Option<&Scope>,
         msg: KernelMessage,
     ) -> KernelResult<()> {
+        if is_licence_topic(&msg) {
+            // Never passed on to the router; dropped without links.
+            if let Some(l) = &self.licence {
+                l.deliver(from, msg).await;
+            }
+            return Ok(());
+        }
         if !is_feature_topic(&msg) {
             return self.inner.deliver(from, dest_scope, msg).await;
         }

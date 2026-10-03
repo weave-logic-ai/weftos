@@ -4,7 +4,8 @@
 //! `workload.unload {instance_id}`.
 //!
 //! The daemon is the controller. It signs with its node key
-//! (`<runtime>/node.key`), chains every decision on the kernel chain, and
+//! (`<runtime>/node.key`), or in service mode with its placement control key
+//! (`placement_boot`, ADR-106 phase 3), chains every decision on the kernel chain, and
 //! reads operator policy from the runtime directory (see
 //! `workload_place_policy`: permits, trust, peers bound to node keys, the
 //! optional container adapter and Seeds). Known targets and placements are
@@ -56,6 +57,9 @@ pub const METHODS: &[&str] = &[
 struct Boot {
     key: SigningKey,
     runtime_dir: PathBuf,
+    /// The node id peers address this node by on the mesh: the key's own id
+    /// when the daemon holds the node key, the machine's in service mode.
+    mesh_node_id: String,
 }
 
 static BOOT: OnceLock<Boot> = OnceLock::new();
@@ -98,7 +102,14 @@ const LIFECYCLE_TICK: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Record the daemon key and runtime dir (call once at daemon boot).
 pub fn init(key: SigningKey, runtime_dir: PathBuf) {
-    let _ = BOOT.set(Boot { key, runtime_dir });
+    let id = clawft_kernel::node_id_from_pubkey(&key.verifying_key().to_bytes());
+    init_with_mesh_id(key, runtime_dir, id);
+}
+
+/// [`init`] where the signing key is not the mesh identity (service mode:
+/// the control key signs, the machine's node id is what peers address).
+pub fn init_with_mesh_id(key: SigningKey, runtime_dir: PathBuf, mesh_node_id: String) {
+    let _ = BOOT.set(Boot { key, runtime_dir, mesh_node_id });
 }
 
 /// The daemon's runtime directory (where the operator's policy files are),
@@ -225,6 +236,94 @@ pub fn licence_exchange() -> Option<Arc<clawft_kernel::licence::LicenceExchange>
     LICENCE_EXCHANGE.get().cloned()
 }
 
+/// The mesh the licence exchange runs over: the kernel's own runtime when it
+/// has one (collapsed), else the machine mesh service's links (service mode),
+/// never both.
+pub(crate) fn licence_links(
+    mesh: Option<Arc<clawft_kernel::mesh_runtime::MeshRuntime>>,
+) -> Option<Arc<dyn clawft_kernel::licence::LicenceLinks>> {
+    match mesh {
+        Some(rt) => Some(rt),
+        None => crate::cog_swarm::service_licence_links()
+            .map(|l| l as Arc<dyn clawft_kernel::licence::LicenceLinks>),
+    }
+}
+
+/// The node's licence exchange, started once over `policy` (the boot-owned
+/// one) and `links`; later calls return the first. Hands it to the steward
+/// relay as its flood.
+/// Serializes [`ensure_licence`]: check, wire and set as one step, so two
+/// concurrent callers cannot each start an exchange (and install its sinks).
+static LICENCE_START: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// `cell`'s value, made by `make` at most once even under concurrent callers
+/// (`lock` held from the check to the set). `None` when `make` declines.
+fn once_guarded<T: Clone>(
+    cell: &OnceLock<T>,
+    lock: &std::sync::Mutex<()>,
+    make: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    if let Some(x) = cell.get() {
+        return Some(x.clone());
+    }
+    let _g = lock.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(x) = cell.get() {
+        return Some(x.clone());
+    }
+    let x = make()?;
+    Some(cell.get_or_init(|| x).clone())
+}
+
+pub(crate) fn ensure_licence(
+    dir: &Path,
+    policy: Option<&Arc<clawft_kernel::licence::MeshCheckoutPolicy>>,
+    anchors: &clawft_kernel::workload_pkg::TrustAnchors,
+    chain: &Arc<ChainManager>,
+    links: Option<Arc<dyn clawft_kernel::licence::LicenceLinks>>,
+    posture: clawft_kernel::licence::PostureFn,
+) -> Option<Arc<clawft_kernel::licence::LicenceExchange>> {
+    let x = once_guarded(&LICENCE_EXCHANGE, &LICENCE_START, || {
+        wire_licence(dir, policy?, anchors, chain, links, posture)
+    })?;
+    crate::cog_swarm::set_grant_flood(x.clone());
+    Some(x)
+}
+
+#[cfg(test)]
+mod ensure_once_tests {
+    use super::once_guarded;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, Mutex, OnceLock};
+
+    #[test]
+    fn concurrent_callers_make_exactly_one() {
+        let cell: Arc<OnceLock<Arc<usize>>> = Arc::default();
+        let lock = Arc::new(Mutex::new(()));
+        let made = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let (cell, lock, made, gate) = (cell.clone(), lock.clone(), made.clone(), gate.clone());
+                std::thread::spawn(move || {
+                    gate.wait();
+                    once_guarded(&cell, &lock, || {
+                        made.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        Some(Arc::new(i))
+                    })
+                    .unwrap()
+                })
+            })
+            .collect();
+        let got: Vec<Arc<usize>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(made.load(Ordering::SeqCst), 1, "one exchange built (and so one set of sinks installed)");
+        assert!(got.iter().all(|x| Arc::ptr_eq(x, &got[0])), "every caller gets that one");
+        // A declined make leaves the cell empty for a later caller.
+        let empty: OnceLock<Arc<usize>> = OnceLock::new();
+        assert!(once_guarded(&empty, &lock, || None).is_none() && empty.get().is_none());
+    }
+}
+
 /// Start the licence exchange (ADR-106 phase 1b) over the boot-owned store
 /// and policy (`licence_boot`; the caller passes them in): open the approval
 /// store, and with a mesh carry bindings, grants
@@ -237,7 +336,7 @@ fn wire_licence(
     policy: &Arc<clawft_kernel::licence::MeshCheckoutPolicy>,
     anchors: &clawft_kernel::workload_pkg::TrustAnchors,
     chain: &Arc<ChainManager>,
-    mesh: Option<Arc<clawft_kernel::mesh_runtime::MeshRuntime>>,
+    links: Option<Arc<dyn clawft_kernel::licence::LicenceLinks>>,
     posture: clawft_kernel::licence::PostureFn,
 ) -> Option<Arc<clawft_kernel::licence::LicenceExchange>> {
     use clawft_kernel::licence as l;
@@ -245,7 +344,7 @@ fn wire_licence(
     // exchange's events (`sync_bad_signature`).
     let sink: Arc<dyn l::LicenceEventSink> = Arc::new(l::ChainLicenceSink::new(chain.clone()));
     let store = policy.store().clone();
-    let runtime = mesh?;
+    let runtime = links?;
     let anchors = Arc::new(anchors.clone());
     let approvals = Arc::new(l::ApprovalStore::open_or_poisoned(
         &dir.join("licence"),
@@ -327,7 +426,8 @@ async fn build(
         redistribution: policy.clone(),
         ..ExchangeConfig::default()
     };
-    let mut ex = ArtifactExchange::new(&id, Arc::new(store), cfg)
+    // Peers address this node's swarm by its mesh id (the machine's in service mode).
+    let mut ex = ArtifactExchange::new(&boot.mesh_node_id, Arc::new(store), cfg)
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
@@ -335,15 +435,7 @@ async fn build(
     // the swarm transport: artifact sessions and checkout over the machine
     // mesh's stamped deliveries (ADR-106 5.4), late-bound behind the link. A
     // steward relay floods the grants it obtains through the exchange.
-    let licence = match (LICENCE_EXCHANGE.get(), &boot_policy) {
-        (Some(x), _) => Some(x.clone()),
-        (None, Some(p)) => wire_licence(dir, p, &anchors, &chain, mesh.clone(), posture)
-            .map(|x| LICENCE_EXCHANGE.get_or_init(|| x).clone()),
-        (None, None) => None,
-    };
-    if let Some(x) = &licence {
-        crate::cog_swarm::set_grant_flood(x.clone());
-    }
+    let _licence = ensure_licence(dir, boot_policy.as_ref(), &anchors, &chain, licence_links(mesh.clone()), posture);
     let cog_mesh = crate::cog_swarm::install(&ex, policy.store());
     // ADR-106 phase 3: the steward relay, from `licence-link.json`.
     crate::licence_steward::wire(crate::licence_steward::WireArgs {

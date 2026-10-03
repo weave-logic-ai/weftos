@@ -275,6 +275,8 @@ async fn start_inner(
     let rt = Arc::new(rt);
     rt.set_enforcing(state.policy.admission() == MeshAdmissionMode::Enforce);
     state.router.set_runtime(&rt);
+    // ADR-106: licence records from licensed peers go to the owner's daemon.
+    crate::licence_forward::install(&rt, &state.router);
 
     if !cfg.listen.parse::<SocketAddr>().is_ok_and(|a| a.ip().is_loopback()) {
         tracing::warn!(

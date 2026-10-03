@@ -741,7 +741,7 @@ pub use node_registry::{
 };
 pub use node_id::{is_node_id, node_id_from_pubkey};
 #[cfg(any(feature = "mesh", feature = "exochain"))]
-pub use node_key::{NODE_KEY_FILE, NodeKeyError, load_or_generate_node_key};
+pub use node_key::{NODE_KEY_FILE, NodeKeyError, load_or_generate_key_file, load_or_generate_node_key};
 #[cfg(feature = "ecc")]
 pub use persistence::PersistenceConfig;
 pub use process::{Pid, ProcessEntry, ProcessState, ProcessTable, ResourceUsage};

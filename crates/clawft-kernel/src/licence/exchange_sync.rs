@@ -41,7 +41,7 @@ pub(super) const SYNC_ENTRIES_PER_SEC: f64 = 8.0;
 /// Sync tokens a connection may spend at once.
 pub(super) const SYNC_BURST: f64 = 600.0;
 /// How long a request stays open for its response.
-const PENDING_TTL: Duration = Duration::from_secs(120);
+pub(super) const PENDING_TTL: Duration = Duration::from_secs(120);
 
 /// Where the grant page stopped: grants are ordered by `(seq, cog, version)`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -192,6 +192,15 @@ impl LicenceExchange {
         }
     }
 
+    /// Forget the requests in flight and ask every connected peer afresh: a
+    /// node that just (re)gained the licence role, whose earlier requests
+    /// the service refused, catches up at once.
+    pub async fn resync_all(&self) {
+        self.pending.clear();
+        self.retries.clear();
+        self.sync_all().await;
+    }
+
     /// [`Self::sync_peer`] with every connected peer.
     pub async fn sync_all(&self) {
         for peer in self.runtime.peer_ids() {
@@ -212,10 +221,19 @@ impl LicenceExchange {
                 me.sync_all().await;
             }
         });
+        let w = self.me.clone();
+        handle.spawn(async move {
+            loop {
+                tokio::time::sleep(super::exchange_retry::RETRY_SCAN).await;
+                let Some(me) = w.upgrade() else { break };
+                me.retry_expired().await;
+            }
+        });
         if !self.config.sync_on_connect {
             return;
         }
-        let (w, mut rx) = (self.me.clone(), self.runtime.subscribe_peer_events());
+        let Some(mut rx) = self.runtime.subscribe_peer_events() else { return };
+        let w = self.me.clone();
         handle.spawn(async move {
             while let Ok(ev) = rx.recv().await {
                 if let MeshPeerEvent::Joined { node_id, .. } = ev {
@@ -417,6 +435,7 @@ impl PeerControlSink for SyncSink {
                     return Vec::new();
                 };
                 if let Some((_, p)) = ex.pending.remove(&ctx.peer_id) {
+                    ex.retries.remove(&ctx.peer_id);
                     self.apply(ctx.peer_id.clone(), conn, p, msg);
                 }
                 Vec::new()

@@ -51,15 +51,25 @@ pub enum NodeKeyError {
 /// to `create_new` + write, and readers retry briefly on a zero-length file.
 /// Stale temp files (they hold the seed) are removed on entry.
 pub fn load_or_generate_node_key(runtime_dir: &Path) -> Result<SigningKey, NodeKeyError> {
-    fs::create_dir_all(runtime_dir)?;
-    remove_stale_temps(runtime_dir);
-    let path = runtime_dir.join(NODE_KEY_FILE);
+    load_or_generate_key_file(runtime_dir, NODE_KEY_FILE)
+}
+
+/// [`load_or_generate_node_key`] for another key file in `dir` (a plain file
+/// name, no path separators), with the same creation and permission rules.
+/// The daemon's placement control key in service mode uses it (ADR-106).
+pub fn load_or_generate_key_file(dir: &Path, file: &str) -> Result<SigningKey, NodeKeyError> {
+    if file.is_empty() || file.contains(['/', '\\']) || file.starts_with('.') {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("bad key file name {file:?}")).into());
+    }
+    fs::create_dir_all(dir)?;
+    remove_stale_temps(dir, file);
+    let path = dir.join(file);
     if fs::symlink_metadata(&path).is_ok() {
         return load_existing(&path);
     }
     let mut seed = [0u8; 32];
     OsRng.fill_bytes(&mut seed);
-    match publish_private(runtime_dir, &path, &seed) {
+    match publish_private(dir, &path, file, &seed) {
         Ok(()) => Ok(SigningKey::from_bytes(&seed)),
         // Lost a race with another process creating the same key.
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => load_existing(&path),
@@ -67,15 +77,16 @@ pub fn load_or_generate_node_key(runtime_dir: &Path) -> Result<SigningKey, NodeK
     }
 }
 
-/// How old a `.node.key.*.tmp` must be before it is treated as abandoned.
+/// How old a `.<file>.*.tmp` must be before it is treated as abandoned.
 const STALE_TMP_AGE: std::time::Duration = std::time::Duration::from_secs(30);
 
-fn remove_stale_temps(dir: &Path) {
+fn remove_stale_temps(dir: &Path, file: &str) {
+    let prefix = format!(".{file}.");
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.filter_map(Result::ok) {
         let name = e.file_name();
         let name = name.to_string_lossy();
-        if !(name.starts_with(".node.key.") && name.ends_with(".tmp")) {
+        if !(name.starts_with(&prefix) && name.ends_with(".tmp")) {
             continue;
         }
         let old = e
@@ -131,11 +142,11 @@ fn private_open_options() -> fs::OpenOptions {
 /// Write `seed` to a 0600 temp file, sync it, hard-link it to `path`
 /// (failing with `AlreadyExists` if present), and remove the temp name.
 /// If linking is unsupported, fall back to `create_new` + write.
-fn publish_private(dir: &Path, path: &Path, seed: &[u8; 32]) -> io::Result<()> {
+fn publish_private(dir: &Path, path: &Path, file: &str, seed: &[u8; 32]) -> io::Result<()> {
     use std::io::Write;
     // Unique per call (pid + random), so concurrent creators never share a temp.
     let tmp = dir.join(format!(
-        ".node.key.{}.{:016x}.tmp",
+        ".{file}.{}.{:016x}.tmp",
         std::process::id(),
         OsRng.next_u64()
     ));

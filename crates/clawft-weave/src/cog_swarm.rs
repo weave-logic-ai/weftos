@@ -14,6 +14,13 @@
 //! relay's [`GrantFlood`] is [`grant_flood`]: the node's `LicenceExchange`
 //! once placement has started it (phase 1b), `NoFlood` before.
 //!
+//! In service mode the licence exchange runs here too (ADR-106 phase 3): the
+//! wrap also takes `mesh.cog.binding`, `mesh.cog.grant` and `mesh.cog.sync`
+//! for the node's [`ServiceLicenceLinks`] ([`licence_links`]), which send
+//! through the service link and read the service's peer view. The exchange is
+//! started over them only when the kernel runs no mesh of its own, so a
+//! record never arrives by two paths.
+//!
 //! The service reserves the `mesh.cog.`, `mesh.artifact.` and `mesh.licence.`
 //! topics for the cluster owner's registration (the only one with no
 //! configured owner): it routes them only there, whatever scope or prefix a
@@ -27,7 +34,10 @@ use async_trait::async_trait;
 use clawft_kernel::a2a::RemoteForwarder;
 use clawft_kernel::error::{KernelError, KernelResult};
 use clawft_kernel::ipc::KernelMessage;
-use clawft_kernel::licence::{CheckoutGrantStore, GrantFlood, NoFlood};
+use clawft_kernel::licence::{
+    CheckoutGrantStore, GrantFlood, NoFlood, PEER_REFRESH, PeerDirectory, PeerSnapshot,
+    ServiceLicenceLinks,
+};
 use clawft_kernel::mesh_artifact::ArtifactExchange;
 use clawft_kernel::mesh_artifact_tunnel::PeerSender;
 use clawft_kernel::mesh_cog::{CogMesh, CogMeshDelivery, CogMeshSlot};
@@ -36,34 +46,100 @@ use clawft_kernel::mesh_delivery::LocalDelivery;
 use crate::mesh_local_sink::ServiceForwarder;
 
 static SLOT: OnceLock<Arc<CogMeshSlot>> = OnceLock::new();
-static FORWARDER: OnceLock<Arc<ServiceForwarder>> = OnceLock::new();
+static LINK: OnceLock<Arc<ForwarderLink>> = OnceLock::new();
+static LICENCE: OnceLock<Arc<ServiceLicenceLinks>> = OnceLock::new();
 static FLOOD: OnceLock<Arc<dyn GrantFlood>> = OnceLock::new();
 
 fn slot() -> &'static Arc<CogMeshSlot> {
     SLOT.get_or_init(Arc::default)
 }
 
-/// Sends through the service link once it is up.
-struct DaemonSender;
+fn link() -> &'static Arc<ForwarderLink> {
+    LINK.get_or_init(Arc::default)
+}
 
-#[async_trait]
-impl PeerSender for DaemonSender {
-    async fn send_to_node(&self, node_id: &str, msg: KernelMessage) -> KernelResult<()> {
-        match FORWARDER.get() {
-            Some(f) => f.forward(node_id, msg).await,
-            None => Err(KernelError::Mesh("the mesh service link is not up".into())),
-        }
+/// The service link as the cog mesh sees it: sends, and the service's peer
+/// view. Late-bound: the link starts after the delivery wrap is built.
+#[derive(Default)]
+pub struct ForwarderLink(OnceLock<Arc<ServiceForwarder>>);
+
+impl ForwarderLink {
+    /// Bind to the link's forwarder (first call wins).
+    pub fn bind(&self, f: Arc<ServiceForwarder>) {
+        let _ = self.0.set(f);
+    }
+
+    fn forwarder(&self) -> Result<&Arc<ServiceForwarder>, String> {
+        self.0.get().ok_or_else(|| "the mesh service link is not up".to_string())
     }
 }
 
-/// Put the cog mesh router in front of `delivery` (the daemon's router).
-pub fn wrap(delivery: Arc<dyn LocalDelivery>) -> Arc<dyn LocalDelivery> {
-    Arc::new(CogMeshDelivery::new(delivery, slot().clone()))
+#[async_trait]
+impl PeerSender for ForwarderLink {
+    async fn send_to_node(&self, node_id: &str, msg: KernelMessage) -> KernelResult<()> {
+        let f = self.forwarder().map_err(KernelError::Mesh)?;
+        f.forward(node_id, msg).await
+    }
 }
 
-/// Remember the service link's forwarder for outbound tunnel frames.
+#[async_trait]
+impl PeerDirectory for ForwarderLink {
+    async fn peers(&self) -> Result<PeerSnapshot, String> {
+        let v = self.forwarder()?.peers().await?;
+        Ok(snapshot_of(&v))
+    }
+}
+
+/// `peers.list` data as a snapshot. A service without the `licensed` list
+/// (older than ADR-106 phase 3) licenses nobody: no floods, sync only.
+pub fn snapshot_of(v: &serde_json::Value) -> PeerSnapshot {
+    let ids = |k: &str| -> Vec<String> {
+        v.get(k)
+            .and_then(serde_json::Value::as_array)
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default()
+    };
+    PeerSnapshot {
+        connected: ids("connected"),
+        licensed: ids("licensed"),
+        reserved_holder: v.get("reserved_holder").and_then(serde_json::Value::as_bool),
+    }
+}
+
+/// True when this daemon's registration holds the service's reserved topics
+/// (the cluster owner's daemon): only it runs the licence path. A service
+/// that does not say (older than ADR-106 phase 3) forwards no licence
+/// records either, so its answer counts as no.
+pub async fn reserved_holder() -> Result<bool, String> {
+    let v = link().forwarder()?.peers().await?;
+    Ok(v.get("reserved_holder").and_then(serde_json::Value::as_bool).unwrap_or(false))
+}
+
+/// The node's licence links over the service link (service mode).
+pub fn licence_links() -> Arc<ServiceLicenceLinks> {
+    LICENCE
+        .get_or_init(|| ServiceLicenceLinks::new(link().clone(), link().clone()))
+        .clone()
+}
+
+/// The licence links, once the service link is up (`None` in collapsed mode).
+pub fn service_licence_links() -> Option<Arc<ServiceLicenceLinks>> {
+    link().0.get()?;
+    Some(licence_links())
+}
+
+/// Put the cog mesh router in front of `delivery` (the daemon's router),
+/// with the node's licence links.
+pub fn wrap(delivery: Arc<dyn LocalDelivery>) -> Arc<dyn LocalDelivery> {
+    Arc::new(CogMeshDelivery::new(delivery, slot().clone()).with_licence(licence_links()))
+}
+
+/// Remember the service link's forwarder for outbound frames and start
+/// refreshing the licence links' peer view.
 pub fn set_forwarder(f: Arc<ServiceForwarder>) {
-    let _ = FORWARDER.set(f);
+    if link().0.set(f).is_ok() {
+        let _ = licence_links().spawn_refresh(PEER_REFRESH);
+    }
 }
 
 /// Set the flood a steward relay hands its grants to (the node's licence
@@ -86,7 +162,7 @@ pub fn install(exchange: &Arc<ArtifactExchange>, store: &Arc<CheckoutGrantStore>
     for v in store.verified_grants() {
         exchange.grant_checkout(&v);
     }
-    let mesh = CogMesh::new(exchange.clone(), store.clone(), Arc::new(DaemonSender), None);
+    let mesh = CogMesh::new(exchange.clone(), store.clone(), link().clone(), None);
     if !slot().install(mesh.clone()) {
         tracing::debug!("cog mesh already installed; keeping the first");
         if let Some(first) = slot().get() {

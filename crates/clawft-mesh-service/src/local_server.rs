@@ -431,8 +431,16 @@ impl Conn {
         let rt = self.st.router.runtime();
         let peers = rt.as_ref().map(|r| r.peer_ids()).unwrap_or_default();
         let known = rt.as_ref().map(|r| r.discover_peers()).unwrap_or_default();
+        // Admission verified and classed `node`: the peers licence floods may
+        // go to (ADR-106). A subset of `connected`.
+        let licensed: Vec<&String> =
+            peers.iter().filter(|p| rt.as_ref().is_some_and(|r| r.peer_licensed(p))).collect();
         serde_json::json!({
             "connected": peers,
+            "licensed": licensed,
+            // This registration holds the reserved licence topics: only its
+            // daemon runs the licence path (ADR-106).
+            "reserved_holder": self.reg.as_ref().is_some_and(|r| self.st.router.holds_reserved(r)),
             "known": known.iter().map(|(n, a)| serde_json::json!({"node_id": n, "addr": a})).collect::<Vec<_>>(),
         })
     }

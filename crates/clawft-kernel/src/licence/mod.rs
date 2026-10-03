@@ -28,12 +28,14 @@ mod chain_sink;
 mod client;
 mod exchange;
 mod exchange_sync;
+mod exchange_retry;
 mod exchange_types;
 mod floor;
 mod floor_preview;
 mod gate;
 #[cfg(all(feature = "workload-runtime", unix))]
 mod http_transport;
+mod links;
 mod mesh_config;
 mod persist;
 mod policy;
@@ -48,6 +50,7 @@ mod store_accept;
 mod store_load;
 mod store_status;
 mod store_sync;
+mod service_links;
 
 #[cfg(test)]
 mod tests_common;
@@ -57,6 +60,8 @@ mod tests_exchange;
 mod tests_fixes;
 #[cfg(test)]
 mod tests_sync;
+#[cfg(test)]
+mod tests_service_links;
 #[cfg(test)]
 mod tests_policy;
 #[cfg(test)]
@@ -111,6 +116,7 @@ pub use exchange::{
     CtxAdmission, ExchangeError, LicenceExchange, LicenceExchangeConfig, LicenceExchangeParts,
     PeerAdmission, PostureFn, Receipt, Spend, sign_unbind,
 };
+pub use exchange_retry::MAX_SYNC_RETRIES;
 pub use exchange_sync::{GrantCursor, SYNC_MAX_BYTES, SYNC_MAX_ENTRIES, SyncMsg};
 pub use floor::FloorState;
 pub use floor_preview::{FloorPreview, RevivedGrant};
@@ -125,6 +131,11 @@ pub use renewal::{
 pub use run_gate::{CognitumRunGate, RunRefusal, RunVerdict, StoreRunGate, check_run};
 pub use steward_client::{SharedTransport, StewardLicenceClient};
 pub use store_status::{ApprovalRow, BOUND_MARKER, GrantRow};
+pub use links::LicenceLinks;
+pub use service_links::{
+    LICENCE_TOPICS, MAX_REPLY_SENDS, MAX_REPLY_SENDS_PER_PEER, PEER_REFRESH, PeerDirectory, PeerSnapshot, ServiceLicenceLinks, ServiceLinksCounters,
+    is_licence_topic,
+};
 pub use weft_licence_wire::{
     APPROVAL_DOMAIN, BINDING_DOMAIN, CheckoutGrant, FAR_FUTURE_CLAMP_SECS, GRANT_DOMAIN,
     GRANT_SKEW_SECS, GrantArtifact, LicenceError, LicenceRef, MAX_APPROVALS, MAX_GRANT_SLOTS,

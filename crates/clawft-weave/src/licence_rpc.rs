@@ -243,6 +243,19 @@ pub async fn dispatch(
     params: Value,
     kernel: Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Response {
+    // Service mode: the licence path is the reserved-topic holder's alone,
+    // and off while that cannot be determined (it may have been on before).
+    if let Some(why) = licence_boot::holder_refusal() {
+        if method == "workload.node.binding" {
+            return Response::success(json!({
+                "installed": licence_boot::runtime().is_some(),
+                "reserved_holder": licence_boot::reserved_holder(),
+                "holder_state": licence_boot::holder_state_name(),
+                "reason": why,
+            }));
+        }
+        return Response::error(why);
+    }
     let Some(rt) = licence_boot::runtime() else {
         if method == "workload.node.binding"
             && let Some(why) = licence_boot::not_installed()

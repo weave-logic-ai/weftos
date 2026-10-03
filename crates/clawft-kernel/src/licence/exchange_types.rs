@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{AdmissionPosture, ApprovalStore, CheckoutGrantStore, LicenceError, LicenceEventSink, SignedApproval, SignedGrant};
 use crate::mesh_delivery::PeerCtx;
-use crate::mesh_runtime::MeshRuntime;
+use super::links::LicenceLinks;
 use crate::workload_pkg::TrustAnchors;
 
 /// Records accepted per second on one connection and kind.
@@ -49,8 +49,8 @@ pub trait PeerAdmission: Send + Sync + 'static {
     fn admitted(&self, ctx: &PeerCtx) -> bool;
 
     /// True when `peer` may be sent bindings and grants: the outbound twin
-    /// of [`Self::admitted`], from the route the runtime holds for it.
-    fn peer_admitted(&self, runtime: &MeshRuntime, peer: &str) -> bool;
+    /// of [`Self::admitted`], from what the mesh knows of its route.
+    fn peer_admitted(&self, links: &dyn LicenceLinks, peer: &str) -> bool;
 }
 
 /// Licensed peers only (ADR-106 phase 1c): verified by admission and of
@@ -65,8 +65,8 @@ impl PeerAdmission for CtxAdmission {
     }
 
     /// A route whose connection admission verified and classed `node`.
-    fn peer_admitted(&self, runtime: &MeshRuntime, peer: &str) -> bool {
-        runtime.peer_licensed(peer)
+    fn peer_admitted(&self, links: &dyn LicenceLinks, peer: &str) -> bool {
+        links.peer_licensed(peer)
     }
 }
 
@@ -108,8 +108,9 @@ pub struct LicenceExchangeParts {
     pub approvals: Arc<ApprovalStore>,
     /// Pinned keys.
     pub anchors: Arc<TrustAnchors>,
-    /// The mesh to flood on.
-    pub runtime: Arc<MeshRuntime>,
+    /// The mesh to flood on: the kernel runtime (collapsed mode) or the
+    /// service links (service mode).
+    pub runtime: Arc<dyn LicenceLinks>,
     /// Admission posture for incoming bindings.
     pub posture: PostureFn,
     /// Who may sync.
