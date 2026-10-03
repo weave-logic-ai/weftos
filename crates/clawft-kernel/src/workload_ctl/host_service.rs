@@ -470,10 +470,8 @@ impl WorkloadHostService {
         // `none`: no ingest wiring on this node. `disabled`: wired, but the
         // bridge could not start; the cog runs with no token and no URL.
         let ingest_state: &'static str = hooks.map_or("none", |h| h.state());
-        let hooks = hooks.filter(|h| h.is_enabled());
-        if ingest_state == "disabled" {
-            contract = contract.without_ingest();
-        }
+        // The project check runs whether or not the bridge is up, so a
+        // degraded placement never records an unverified project id.
         if let Some(hk) = hooks {
             // Instance id unknown yet: the binding only carries the project
             // and the controller for the check.
@@ -486,6 +484,10 @@ impl WorkloadHostService {
                 IngestError::NotRouted(m) => refuse(RefusalCode::Admission, m),
                 other => refuse(RefusalCode::Runtime, format!("ingest bridge: {other}")),
             })?;
+        }
+        let hooks = hooks.filter(|h| h.is_enabled());
+        if ingest_state == "disabled" {
+            contract = contract.without_ingest();
         }
         if let Some(hk) = hooks {
             (contract, listener) = hk

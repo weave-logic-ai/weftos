@@ -370,6 +370,13 @@ async fn with_the_bridge_down_a_cog_is_placed_without_a_token_and_says_so() {
     let r = rig(o).await;
     let report = r.place(None, 15017).await;
     let rec = report.placed.clone().expect("placed degraded");
+    // The place output itself says so (what `weaver workload place` prints).
+    assert_eq!(report.attempts[0].ingest.as_deref(), Some("disabled"));
+    assert!(
+        report.explain.contains("placed with ingest disabled"),
+        "{}",
+        report.explain
+    );
     assert!(r.registry.is_empty(), "no token is issued while ingest is disabled");
     let st = r.plane.instance(method::STATUS, &rec.instance_id).await.unwrap();
     assert_eq!(st["ingest"], "disabled");
@@ -394,4 +401,22 @@ async fn a_malformed_project_id_is_refused_by_the_host() {
     let report = r.place(Some("not-a-project"), 15009).await;
     assert!(report.placed.is_none(), "{}", report.explain);
     assert!(r.registry.is_empty());
+}
+
+#[tokio::test]
+async fn the_project_check_runs_even_when_the_bridge_is_down() {
+    let ctl = SigningKey::from_bytes(&[21; 32]);
+    let mut o = opts(ctl.clone());
+    o.disabled = true;
+    o.controllers = listed(PROJECT, node(&ctl));
+    let r = rig(o).await;
+    // A project this controller is not authorised for: refused, not placed
+    // degraded with an unverified project id.
+    let bad = r.place(Some(OTHER), 15018).await;
+    assert!(bad.placed.is_none(), "{}", bad.explain);
+    assert_eq!(bad.attempts[0].code.as_deref(), Some("unauthorized"));
+    // An authorised project is placed, degraded.
+    let ok = r.place(Some(PROJECT), 15019).await;
+    assert_eq!(ok.attempts[0].ingest.as_deref(), Some("disabled"), "{}", ok.explain);
+    r.plane.instance(method::UNLOAD, &ok.placed.unwrap().instance_id).await.unwrap();
 }

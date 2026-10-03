@@ -93,6 +93,10 @@ pub struct Attempt {
     /// Why, if not placed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The target's ingest state for a placed cog (`enabled`, `disabled` or
+    /// `none`). `disabled`: placed without a token, its vectors go nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingest: Option<String>,
 }
 
 /// Result of `place` (and of a dry run).
@@ -276,6 +280,7 @@ impl PlacementControlPlane {
                 outcome: outcome.to_string(),
                 code,
                 reason,
+                ingest: None,
             };
             if ex == Execution::Emulated
                 && let GateVerdict::Deny { reason } = self.gate_verdict(w, &node, true)
@@ -342,7 +347,9 @@ impl PlacementControlPlane {
                         p.insert(rec.instance_id.clone(), rec.clone());
                     }
                     self.persist();
-                    report.attempts.push(attempt("placed", None, None));
+                    let mut a = attempt("placed", None, None);
+                    a.ingest = result["ingest"].as_str().map(String::from);
+                    report.attempts.push(a);
                     report.placed = Some(rec);
                     return;
                 }
@@ -481,6 +488,11 @@ pub fn render(r: &PlaceReport) -> String {
                     ))
                     .unwrap_or_default()
             ));
+            if a.ingest.as_deref() == Some("disabled") {
+                s.push_str(
+                    "     placed with ingest disabled: the cog has no token and its vectors go nowhere\n",
+                );
+            }
         }
     }
     s
