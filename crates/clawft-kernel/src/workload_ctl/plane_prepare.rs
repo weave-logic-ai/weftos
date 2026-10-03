@@ -2,8 +2,10 @@
 
 use clawft_types::placement::engine::WorkloadSpec;
 
-use crate::workload_kind::peek_manifest_kind;
-use crate::workload_runtime::VerifiedWorkload;
+use crate::workload_kind::peek_kind_in;
+use crate::workload_pkg::verify::read_bounded;
+use crate::workload_pkg::{MANIFEST_FILE, MAX_MANIFEST_BYTES};
+use crate::workload_runtime::{VerifiedWorkload, WorkloadSource};
 
 use super::plane::{PlacementControlPlane, PlaneError};
 use super::plane_place::PlaceOrder;
@@ -16,20 +18,43 @@ impl PlacementControlPlane {
     /// the registered kind; that kind's `load` verifies the package against
     /// the registry and refuses a verified kind that differs. Nothing is
     /// seeded for an unregistered kind.
+    ///
+    /// The manifest is read once here and those bytes serve both the kind
+    /// peek and the seeding (the kind's `load` reads the directory itself).
+    /// The package the kind loaded must be the package that was seeded: a
+    /// directory swapped between the two reads changes the package id and is
+    /// refused.
     pub(super) fn prepare(
         &self,
         order: &PlaceOrder,
     ) -> Result<(VerifiedWorkload, WorkloadSpec, String), PlaneError> {
         // A manifest too broken to name a valid kind falls to the cog path,
         // whose verification reports the real problem.
-        let kind_id = peek_manifest_kind(&order.package_dir)
+        let manifest = read_bounded(
+            &order.package_dir.join(MANIFEST_FILE),
+            MANIFEST_FILE,
+            MAX_MANIFEST_BYTES as u64,
+        )
+        .ok();
+        let kind_id = manifest
+            .as_deref()
+            .and_then(peek_kind_in)
             .unwrap_or_else(|| crate::workload_pkg::KIND_COG.to_string());
         let kind = self.kinds.require(&kind_id)?;
         let w = kind.load(&order.package_dir, &self.anchors, &self.kinds)?;
+        let manifest = manifest
+            .ok_or_else(|| PlaneError::Package(format!("{MANIFEST_FILE} could not be read")))?;
         let seeded = self
             .exchange
-            .seed_package_dir_in(&order.package_dir, &self.anchors, &self.kinds)
+            .seed_package_dir_manifest(&order.package_dir, &manifest, &self.anchors, &self.kinds)
             .map_err(|e| PlaneError::Package(e.to_string()))?;
+        if let WorkloadSource::SignedPackage(p) = &w.source
+            && p.package_id != seeded.package_id
+        {
+            return Err(PlaneError::Package(
+                "the package changed between verification and seeding".into(),
+            ));
+        }
         let spec = kind.spec(&w).map_err(PlaneError::Package)?;
         Ok((w, spec, seeded.manifest_hash))
     }

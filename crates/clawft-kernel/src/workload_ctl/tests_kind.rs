@@ -17,7 +17,7 @@ use crate::workload_pkg::{
 };
 use crate::workload_runtime::{RunMode, VerifiedWorkload};
 
-fn order(pkg: &std::path::Path) -> PlaceOrder {
+pub(super) fn order(pkg: &std::path::Path) -> PlaceOrder {
     PlaceOrder {
         package_dir: pkg.to_path_buf(),
         config: CtlConfig {
@@ -103,7 +103,7 @@ async fn a_registry_without_cog_refuses_cog_packages() {
 }
 
 /// Test-only kind: a cog-shaped body under the id `echo`.
-struct Echo;
+pub(super) struct Echo;
 
 impl WorkloadKind for Echo {
     fn id(&self) -> &'static str {
@@ -132,7 +132,7 @@ impl WorkloadKind for Echo {
 }
 
 /// A signed package re-labelled as kind `echo`.
-fn echo_package(root: &std::path::Path) -> std::path::PathBuf {
+pub(super) fn echo_package(root: &std::path::Path) -> std::path::PathBuf {
     use crate::workload_pkg::{key_id_for, sign_envelope, write_manifest};
     let pkg = package(root, "kind-echo", "#!/bin/sh\nexit 0\n", &[arch()]);
     let mut env =

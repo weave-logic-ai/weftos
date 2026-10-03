@@ -27,10 +27,9 @@ use crate::workload_kind::KindRegistry;
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 use crate::workload_pkg::manifest::{FileRef, MANIFEST_FILE, MAX_MANIFEST_BYTES};
 use crate::workload_pkg::verify::{
-    VerifiedPackage, VerifyError, read_bounded, verify_manifest_signatures,
-    verify_manifest_signatures_in,
+    VerifiedPackage, VerifyError, read_bounded, verify_manifest_signatures_in,
 };
-use crate::workload_pkg::{TrustAnchors, VerifyPolicy, verify_stored};
+use crate::workload_pkg::{TrustAnchors, VerifyPolicy, verify_stored_in};
 
 /// A package this node can serve.
 #[derive(Debug, Clone)]
@@ -191,10 +190,23 @@ impl ArtifactExchange {
             MANIFEST_FILE,
             MAX_MANIFEST_BYTES as u64,
         )?;
+        self.seed_package_dir_manifest(dir, &manifest, anchors, kinds)
+    }
+
+    /// [`Self::seed_package_dir_in`] for a caller that already read the
+    /// manifest bytes from `dir` (so the manifest is read once). `manifest`
+    /// must be the content of `dir`'s `cogpkg.json`; it is verified here.
+    pub fn seed_package_dir_manifest(
+        &self,
+        dir: &Path,
+        manifest: &[u8],
+        anchors: &TrustAnchors,
+        kinds: &KindRegistry,
+    ) -> Result<ExchangedPackage, PackageExchangeError> {
         let root = dir
             .canonicalize()
             .map_err(|e| ExchangeError::Io(e.to_string()))?;
-        self.seed_package_in(&manifest, anchors, kinds, &mut |file| {
+        self.seed_package_in(manifest, anchors, kinds, &mut |file| {
             // Paths were validated as relative and traversal-free; also
             // refuse symlinks that resolve outside the package.
             let real = root.join(&file.path).canonicalize()?;
@@ -215,6 +227,20 @@ impl ArtifactExchange {
         manifest_hash: &str,
         anchors: &TrustAnchors,
     ) -> Result<ExchangedPackage, PackageExchangeError> {
+        self.fetch_package_in(peers, manifest_hash, anchors, &KindRegistry::builtin())
+            .await
+    }
+
+    /// [`Self::fetch_package`] against a caller-supplied kind registry. A
+    /// node that places a registered non-cog kind from a peer must use this:
+    /// with the builtin registry the kind is refused, failing closed.
+    pub async fn fetch_package_in(
+        &self,
+        peers: &mut PeerSet,
+        manifest_hash: &str,
+        anchors: &TrustAnchors,
+        kinds: &KindRegistry,
+    ) -> Result<ExchangedPackage, PackageExchangeError> {
         let mh = hex_decode_exact::<32>(manifest_hash).ok_or_else(|| {
             VerifyError::Manifest("manifest hash must be 64 lower-case hex".into())
         })?;
@@ -223,7 +249,7 @@ impl ArtifactExchange {
             return Err(VerifyError::Manifest("manifest too large".into()).into());
         }
         let manifest = self.read_all(&m.id)?;
-        let verified = verify_manifest_signatures(&manifest, anchors)?;
+        let verified = verify_manifest_signatures_in(&manifest, anchors, kinds)?;
         self.refuse_if_revoked(&verified, anchors, &mh)?;
         // The manifest verified: its pinned content may be served from here
         // on, once each file is verified on this node.
@@ -247,11 +273,12 @@ impl ArtifactExchange {
         }
         if all_small {
             // Everything is held whole: run the full wave-1 verification too.
-            verify_stored(
+            verify_stored_in(
                 self.store(),
                 &hex_encode(&mh),
                 anchors,
                 &VerifyPolicy::default(),
+                kinds,
             )?;
         }
         Ok(ExchangedPackage { files, ..grant })
@@ -283,7 +310,12 @@ impl ArtifactExchange {
     ) -> ExchangedPackage {
         let signers = signer_keys(&verified, anchors);
         let origin = grant_origin(&verified);
-        self.grant_with(manifest_hash, &verified.package_id, signers.clone(), origin.clone());
+        self.grant_with(
+            manifest_hash,
+            &verified.package_id,
+            signers.clone(),
+            origin.clone(),
+        );
         for file in verified.body.files() {
             if let Ok((hash, _)) = pinned(file) {
                 self.grant_with(hash, &verified.package_id, signers.clone(), origin.clone());

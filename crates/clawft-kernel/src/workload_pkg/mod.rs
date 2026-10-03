@@ -46,7 +46,7 @@ pub use manifest::{
 };
 pub use pack::{CogPackInput, PackError, pack_cog, write_manifest, write_source_build_provenance};
 pub use sign::{key_id_for, sign_envelope, signing_key_from_hex};
-pub use store::{StoredPackage, store_package, verify_stored};
+pub use store::{StoredPackage, store_package, verify_stored, verify_stored_in};
 pub use trust::{KeyOrigin, PinnedKey, TrustAnchors, TrustFile};
 pub use verify::{
     AcceptedSigner, DirSource, FileSource, VerifiedPackage, VerifyError, VerifyPolicy, verify_dir,

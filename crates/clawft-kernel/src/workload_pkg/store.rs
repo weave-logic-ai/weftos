@@ -6,12 +6,13 @@
 use std::path::Path;
 
 use crate::artifact_store::{ArtifactStore, ArtifactType};
+use crate::workload_kind::KindRegistry;
 
 use super::manifest::{FileRef, MANIFEST_FILE, MAX_MANIFEST_BYTES};
 use super::trust::TrustAnchors;
 use super::verify::{
     DirSource, FileSource, VerifiedPackage, VerifyError, VerifyPolicy, read_bounded,
-    verify_with_source,
+    verify_with_source, verify_with_source_in,
 };
 
 /// Result of [`store_package`].
@@ -120,6 +121,23 @@ pub fn verify_stored(
     anchors: &TrustAnchors,
     policy: &VerifyPolicy,
 ) -> Result<VerifiedPackage, VerifyError> {
+    verify_stored_in(
+        store,
+        manifest_hash,
+        anchors,
+        policy,
+        &KindRegistry::builtin(),
+    )
+}
+
+/// [`verify_stored`] against a caller-supplied kind registry.
+pub fn verify_stored_in(
+    store: &ArtifactStore,
+    manifest_hash: &str,
+    anchors: &TrustAnchors,
+    policy: &VerifyPolicy,
+    kinds: &KindRegistry,
+) -> Result<VerifiedPackage, VerifyError> {
     if !store.contains(manifest_hash) {
         return Err(VerifyError::FileMissing {
             path: format!("{MANIFEST_FILE} ({manifest_hash})"),
@@ -128,5 +146,5 @@ pub fn verify_stored(
     let manifest = store
         .load(manifest_hash)
         .map_err(|e| store_err(MANIFEST_FILE, e))?;
-    verify_with_source(&manifest, &StoreSource::new(store), anchors, policy)
+    verify_with_source_in(&manifest, &StoreSource::new(store), anchors, policy, kinds)
 }

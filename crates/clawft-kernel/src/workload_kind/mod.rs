@@ -157,7 +157,6 @@ pub fn validate_envelope(
 /// is unauthenticated: it only selects which registered kind verifies the
 /// package, and that kind re-checks the verified envelope.
 pub fn peek_manifest_kind(package_dir: &Path) -> Option<String> {
-    use crate::workload_pkg::manifest::valid_token;
     use crate::workload_pkg::verify::read_bounded;
     use crate::workload_pkg::{MANIFEST_FILE, MAX_MANIFEST_BYTES};
     let bytes = read_bounded(
@@ -166,7 +165,14 @@ pub fn peek_manifest_kind(package_dir: &Path) -> Option<String> {
         MAX_MANIFEST_BYTES as u64,
     )
     .ok()?;
-    let doc: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    peek_kind_in(&bytes)
+}
+
+/// [`peek_manifest_kind`] over manifest bytes the caller already read, so
+/// one read serves the peek and the verification that follows.
+pub fn peek_kind_in(manifest: &[u8]) -> Option<String> {
+    use crate::workload_pkg::manifest::valid_token;
+    let doc: serde_json::Value = serde_json::from_slice(manifest).ok()?;
     let kind = doc.get("kind")?.as_str()?;
     valid_token(kind, MAX_KIND_LEN).then(|| kind.to_string())
 }

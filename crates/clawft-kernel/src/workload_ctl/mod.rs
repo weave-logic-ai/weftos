@@ -48,6 +48,8 @@ mod tests_ingest;
 #[cfg(test)]
 mod tests_kind;
 #[cfg(test)]
+mod tests_kind_followups;
+#[cfg(test)]
 mod tests_link;
 #[cfg(test)]
 mod tests_peers;

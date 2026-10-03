@@ -16,7 +16,8 @@ use crate::workload_kind::{KindRegistry, validate_envelope};
 use super::codec::hex_decode_exact;
 use super::cognitum;
 use super::manifest::{
-    CogPackageBody, FileRef, MANIFEST_FILE, MAX_MANIFEST_BYTES, ManifestEnvelope, ManifestError,
+    CogPackageBody, FileRef, KIND_COG, MANIFEST_FILE, MAX_MANIFEST_BYTES, ManifestEnvelope,
+    ManifestError,
 };
 use super::trust::{KeyOrigin, TrustAnchors};
 
@@ -253,6 +254,15 @@ pub fn verify_with_source_in(
     kinds: &KindRegistry,
 ) -> Result<VerifiedPackage, VerifyError> {
     let (envelope, body, mut signers) = parse_and_check(manifest, anchors, kinds)?;
+    // The Cognitum release-record path trusts a registry attestation of a
+    // cog binary, so it is defined for the cog kind only. Refuse rather than
+    // ignore it: a caller that turned it on for another kind wants a check
+    // that does not exist there.
+    if policy.accept_cognitum_release && envelope.kind != KIND_COG {
+        return Err(VerifyError::Manifest(
+            "the Cognitum release verifier applies only to the cog kind".into(),
+        ));
+    }
 
     // An attached Cognitum record is checked whenever the verifier is on, also
     // on packages an operator already signed: a forged or mismatched record

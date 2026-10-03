@@ -44,6 +44,14 @@ fn invalid(msg: impl Into<String>) -> ManifestError {
     ManifestError::Invalid(msg.into())
 }
 
+/// Longest unauthenticated manifest text echoed into an error.
+const MAX_ECHO_CHARS: usize = 32;
+
+/// `s` cut to [`MAX_ECHO_CHARS`] characters, for error text.
+fn echo(s: &str) -> String {
+    s.chars().take(MAX_ECHO_CHARS).collect()
+}
+
 /// One Ed25519 signature over [`ManifestEnvelope::signed_statement`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -116,10 +124,10 @@ impl ManifestEnvelope {
         let env: Self =
             serde_json::from_slice(bytes).map_err(|e| ManifestError::Parse(e.to_string()))?;
         if env.schema != MANIFEST_SCHEMA {
-            return Err(invalid(format!("unknown schema {:?}", env.schema)));
+            return Err(invalid(format!("unknown schema {:?}", echo(&env.schema))));
         }
         if !valid_token(&env.kind, 32) {
-            return Err(invalid(format!("bad kind {:?}", env.kind)));
+            return Err(invalid(format!("bad kind {:?}", echo(&env.kind))));
         }
         if env.signatures.len() > MAX_SIGNATURES {
             return Err(invalid(format!("more than {MAX_SIGNATURES} signatures")));
