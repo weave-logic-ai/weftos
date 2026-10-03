@@ -633,14 +633,36 @@ cmd_all() {
 # peers, apps, revoked hosts, node key) through RuntimePaths::resolve().
 # Point that at a throwaway dir unless the caller already chose one, so a
 # test run never touches a real project's .weftos/runtime or ~/.clawft.
-isolate_test_runtime() {
-    if [ -z "${WEFTOS_RUNTIME_DIR:-}" ]; then
-        WEFTOS_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/weftos-test-runtime.XXXXXX")"
-        export WEFTOS_RUNTIME_DIR
-        # shellcheck disable=SC2064
-        trap "rm -rf '$WEFTOS_RUNTIME_DIR'" EXIT
-    fi
+#
+# One shared dir for every test binary let binaries trample each other's
+# files and hid the legacy-adoption path (a set WEFTOS_RUNTIME_DIR disables
+# it), so each test process (nextest) or test binary (cargo test) gets its
+# own dir under WEFTOS_TEST_RUNTIME_ROOT through scripts/test-runtime-wrap.sh.
+# A caller-chosen WEFTOS_RUNTIME_DIR still wins and is left alone.
+TEST_RUNTIME_CLEANUP=""
+cleanup_test_runtime() {
+    [ -n "$TEST_RUNTIME_CLEANUP" ] && rm -rf "$TEST_RUNTIME_CLEANUP"
+    return 0
 }
+# One EXIT trap for the whole script (a second `trap ... EXIT` would replace it).
+trap cleanup_test_runtime EXIT
+
+isolate_test_runtime() {
+    [ -n "${WEFTOS_RUNTIME_DIR:-}" ] && return 0
+    if [ -z "${WEFTOS_TEST_RUNTIME_ROOT:-}" ]; then
+        WEFTOS_TEST_RUNTIME_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/weftos-test-runtime.XXXXXX")"
+        export WEFTOS_TEST_RUNTIME_ROOT
+        TEST_RUNTIME_CLEANUP="$WEFTOS_TEST_RUNTIME_ROOT"
+    fi
+    # `cargo test` runs each test binary through the wrapper as its runner.
+    local triple var
+    triple="$(rustc -vV | sed -n 's/^host: //p')"
+    var="CARGO_TARGET_$(printf '%s' "$triple" | tr 'a-z-' 'A-Z_')_RUNNER"
+    export "$var=$ROOT/scripts/test-runtime-wrap.sh"
+}
+
+# nextest config: per-test runtime dirs (see config/nextest.toml).
+NEXTEST_CONFIG=(--config-file "$ROOT/config/nextest.toml")
 
 workspace_test() {
     isolate_test_runtime
@@ -668,7 +690,7 @@ workspace_test() {
     # ${arr[@]+…} guard: macOS bash 3.2 + `set -u` errors on expanding an
     # empty array without it.
     if command -v cargo-nextest >/dev/null 2>&1; then
-        cargo nextest run "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
+        cargo nextest run "${NEXTEST_CONFIG[@]}" "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
             && { [ ${#filter[@]} -gt 0 ] || cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}; }
     else
         cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
@@ -1585,7 +1607,7 @@ check_kernel_diskann_and_bench_matrix() {
 cmd_pipeline_pass_impl() {
     isolate_test_runtime
     if cargo nextest --version >/dev/null 2>&1; then
-        cargo nextest run -p clawft-core -E 'test(pipeline)'
+        cargo nextest run "${NEXTEST_CONFIG[@]}" -p clawft-core -E 'test(pipeline)'
     else
         # Fallback when nextest is missing: cargo test path filter (slower,
         # less precise than nextest, but still package-scoped).

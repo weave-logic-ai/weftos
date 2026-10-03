@@ -1,0 +1,13 @@
+# Used by scripts/build.sh via `cargo nextest run --config-file config/nextest.toml`.
+# Every test process runs under scripts/test-runtime-wrap.sh, which gives it a
+# private WEFTOS_RUNTIME_DIR under $WEFTOS_TEST_RUNTIME_ROOT (a plain exec when
+# that is unset), so no two test binaries share a runtime dir.
+# Wrapper scripts are an experimental nextest feature (stable since 0.9.98's opt-in).
+experimental = ["wrapper-scripts"]
+
+[scripts.wrapper.weftos-test-runtime]
+command = { command-line = "scripts/test-runtime-wrap.sh", relative-to = "workspace-root" }
+
+[[profile.default.scripts]]
+filter = "all()"
+run-wrapper = "weftos-test-runtime"
