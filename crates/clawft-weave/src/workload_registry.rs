@@ -233,9 +233,19 @@ impl WorkloadRegistry {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        // The persist lock makes the tmp name single-writer within this process.
-        let tmp = path.with_extension("json.tmp");
-        if let Err(e) = std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, path)) {
+        // Per-process tmp name (the persist lock serialises writers within this
+        // process; the pid keeps a second daemon on the same path off our file).
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        let write = || -> std::io::Result<()> {
+            use std::io::Write as _;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(json.as_bytes())?;
+            // Data must be durable before the rename makes it the live file.
+            f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp, path)
+        };
+        if let Err(e) = write() {
             warn!(error = %e, path = %path.display(), "failed to persist workloads");
             let _ = std::fs::remove_file(&tmp);
         }
@@ -361,7 +371,7 @@ mod tests {
             }
             let on_disk = WorkloadRegistry::with_persist_path(&path);
             assert_eq!(on_disk.list().len(), 32, "round {round}: disk state lost updates");
-            assert!(!path.with_extension("json.tmp").exists());
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "stray tmp file");
         }
     }
 }

@@ -167,3 +167,25 @@ mod gated {
         assert_eq!(mgr.len(), 1);
     }
 }
+
+#[test]
+fn validation_errors_are_length_capped() {
+    let long = "a".repeat(5000);
+    let dir = app_dir(&format!(
+        "name = \"x\"\nversion = \"1\"\n\n[[agents]]\nid = \"{long}\"\n\n[[agents]]\nid = \"{long}\"\n"
+    ));
+    let err = load_manifest(dir.path().to_str().unwrap()).unwrap_err();
+    assert!(err.len() <= 200, "uncapped: {} bytes", err.len());
+}
+
+#[cfg(unix)]
+#[test]
+fn final_component_symlink_is_not_followed_by_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real.toml");
+    std::fs::write(&real, TOML).unwrap();
+    let link = dir.path().join("weftapp.toml");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(open_manifest_nofollow(&link).is_err());
+    assert!(open_manifest_nofollow(&real).is_ok());
+}

@@ -1305,17 +1305,27 @@ npm_audit_unallowed() {
     printf '%s' "$json" | NPM_ALLOW="$allow" LABEL="$label" LEVEL="$level" TODAY="$today" node -e '
         const rank={info:0,low:1,moderate:2,high:3,critical:4};
         let d=""; process.stdin.on("data",c=>d+=c); process.stdin.on("end",()=>{
-          const j=JSON.parse(d);
+          let j;
+          try { j=JSON.parse(d); } catch(e) { console.log("parse-error"); return; }
+          // Fail closed: an error document or one without a vulnerabilities map
+          // proves nothing about the lockfile.
+          if (!j||j.error||typeof j.vulnerabilities!=="object"||j.vulnerabilities===null) {
+            console.log("parse-error"); return;
+          }
           const floor=rank[process.env.LEVEL]??3;
           const allow=new Map();
           for (const e of (process.env.NPM_ALLOW||"").split(";").filter(Boolean)) {
-            const [l,id,exp]=e.split(" ");
-            if (l===process.env.LABEL && exp>=process.env.TODAY) allow.set(id,exp);
+            const f=e.split(" ");
+            const ok=f.length===3 && /^\d{4}-\d{2}-\d{2}$/.test(f[2]) &&
+              !Number.isNaN(Date.parse(f[2]+"T00:00:00Z")) &&
+              new Date(f[2]+"T00:00:00Z").toISOString().slice(0,10)===f[2];
+            if (!ok) { console.log("bad-allow-entry \""+e+"\""); continue; }
+            if (f[0]===process.env.LABEL && f[2]>=process.env.TODAY) allow.set(f[1],f[2]);
           }
           const seen=new Set();
-          for (const v of Object.values(j.vulnerabilities||{})) {
-            for (const via of v.via) {
-              if (typeof via==="string"||(rank[via.severity]??0)<floor) continue;
+          for (const v of Object.values(j.vulnerabilities)) {
+            for (const via of v.via||[]) {
+              if (typeof via==="string"||(rank[via.severity]??4)<floor) continue;
               const id=(via.url||"").split("/").pop();
               if (allow.has(id)||seen.has(id)) continue;
               seen.add(id);

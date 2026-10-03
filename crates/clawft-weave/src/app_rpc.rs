@@ -10,6 +10,7 @@
 //! built at boot without a gate or chain attached, so the gate check and
 //! the chain events live here.
 
+use std::io::Read as _;
 use std::path::Path;
 
 use clawft_kernel::{AppManager, AppManifest};
@@ -90,11 +91,23 @@ pub fn load_manifest(path: &str) -> Result<AppManifest, String> {
         return Err("manifest file must be named weftapp.toml or weftapp.json".into());
     }
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let len = std::fs::metadata(&file).map_err(|e| format!("cannot read manifest: {}", e.kind()))?.len();
-    if len > MAX_MANIFEST_BYTES {
-        return Err(format!("manifest too large ({len} bytes, max {MAX_MANIFEST_BYTES})"));
+    // Open once and judge/read only through the handle, so the file cannot be
+    // swapped for a symlink or another file between the checks and the read.
+    let mut handle = open_manifest_nofollow(&file)?;
+    let meta = handle.metadata().map_err(|e| format!("cannot read manifest: {}", e.kind()))?;
+    if !meta.is_file() {
+        return Err("manifest must be a regular file".into());
     }
-    let src = std::fs::read_to_string(&file).map_err(|e| format!("cannot read manifest: {}", e.kind()))?;
+    if meta.len() > MAX_MANIFEST_BYTES {
+        return Err(format!("manifest too large ({} bytes, max {MAX_MANIFEST_BYTES})", meta.len()));
+    }
+    let mut src = String::new();
+    (&mut handle).take(MAX_MANIFEST_BYTES + 1)
+        .read_to_string(&mut src)
+        .map_err(|e| format!("cannot read manifest: {}", e.kind()))?;
+    if src.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(format!("manifest too large (max {MAX_MANIFEST_BYTES})"));
+    }
     let parsed = if ext == "toml" {
         AppManifest::from_toml_str(&src)
     } else {
@@ -102,6 +115,21 @@ pub fn load_manifest(path: &str) -> Result<AppManifest, String> {
     };
     parsed.map_err(|e| redact_parse_error(&e.to_string()))
 }
+
+/// Open `file` read-only, refusing a symlink in the final component on unix.
+fn open_manifest_nofollow(file: &Path) -> Result<std::fs::File, String> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits());
+    }
+    opts.open(file).map_err(|e| format!("cannot read manifest: {}", e.kind()))
+}
+
+/// Cap on a validation error relayed to the caller.
+const MAX_VALIDATION_ERR: usize = 160;
 
 /// Reduce a TOML/JSON parse error to its line and column. Parser messages
 /// quote the offending source line or value, which would turn `app.install`
@@ -113,7 +141,11 @@ fn redact_parse_error(reason: &str) -> String {
     } else if reason.contains("JSON parse error") {
         "JSON"
     } else {
-        return reason.to_owned();
+        // Validation error: the file already parsed as a manifest inside a
+        // weftapp.* file, so the quoted values (app name, agent id, tool and
+        // service names) are manifest fields the caller is installing. They are
+        // length-capped so a hostile value cannot flood the response.
+        return reason.chars().take(MAX_VALIDATION_ERR).collect();
     };
     let num_after = |key: &str| -> Option<u64> {
         // TOML puts the location first; serde_json appends it last.
