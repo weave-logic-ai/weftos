@@ -122,8 +122,15 @@ fn config_is_validated_and_defaults_to_off() {
     bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 0}));
     bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 0}));
     bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 61}));
-    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 60}));
+    // The announcement rides the sync tick: sync may not exceed advert
+    // (against the defaults too).
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 2}));
+    bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 30}));
+    bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 11, "advert_secs": 10}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 30}));
     assert!(load_config(dir.path()).is_ok());
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 5}));
+    assert!(load_config(dir.path()).is_ok(), "equal to the default sync");
     let mut r = role(5, Some(6));
     r["on_occupied"] = "bind-anyway".into();
     bad(serde_json::json!({"roles": [r]}));

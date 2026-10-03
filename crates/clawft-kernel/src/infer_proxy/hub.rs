@@ -226,12 +226,23 @@ impl InferHub {
     fn serve(self: &Arc<Self>, ctx: &PeerCtx, id: u64, data: &str) {
         let Some(table) = self.table().cloned() else { return };
         // Cheap standing checks before any work or memory is committed. A
-        // peer that does not qualify is dropped without a word: it gets no
-        // reply task and no audit line from a flood. A qualifying peer that
-        // is simply not listed (or over the intake) is told, a few times per
-        // window.
+        // peer with no verified standing at all (no grant) is dropped without
+        // a word: no reply task, no audit line from a flood. A verified peer
+        // that does not qualify (a leaf), is not listed, or arrives while
+        // intake is full is told, a few times per window, so its consumer
+        // falls back at once instead of waiting out the stall timeout.
         let grant = ctx.grant();
+        if grant.is_none() {
+            return;
+        }
         if !grant.as_ref().is_some_and(qualifies) {
+            if self.refusal_allowed(&ctx.peer_id) {
+                self.note(
+                    "infer.mesh.failed",
+                    json!({"peer": ctx.peer_id, "why": "peer does not qualify"}),
+                );
+                self.spawn_refusal(ctx.peer_id.clone(), id);
+            }
             return;
         }
         if !table.peer_listed_any(&ctx.peer_id) {

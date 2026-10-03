@@ -167,10 +167,12 @@ async fn adverts_are_only_sent_to_listed_qualifying_peers() {
 
 #[tokio::test]
 async fn the_serving_hub_refuses_peers_that_do_not_qualify() {
-    for (name, c) in [
-        ("unverified", ctx("node-a", false, PeerClass::Node)),
-        ("leaf", ctx("node-a", true, PeerClass::Leaf)),
-        ("legacy", ctx("node-a", true, PeerClass::Legacy)),
+    for (name, c, want) in [
+        // No verified standing: dropped silently, the consumer's stall timeout fires.
+        ("unverified", ctx("node-a", false, PeerClass::Node), 504),
+        // Verified but not a full node: refused at once, so the consumer falls back.
+        ("leaf", ctx("node-a", true, PeerClass::Leaf), 502),
+        ("legacy", ctx("node-a", true, PeerClass::Legacy), 502),
     ] {
         let w = world(c, node("node-b")).await;
         // A (consumer) believes B qualifies and has an advert for it.
@@ -180,9 +182,7 @@ async fn the_serving_hub_refuses_peers_that_do_not_qualify() {
         w.a.table.ingest_advertisement("node-b", &ad);
         let p = proxy(&w.a.table).await;
         let resp = raw(p.addr(), &get(p.addr(), "/v1/models")).await;
-        // A peer that does not qualify is dropped silently, so the consumer
-        // sees its stall timeout (504) rather than a refusal (502).
-        assert!(matches!(status(&resp), 502 | 504), "{name}: {resp}");
+        assert_eq!(status(&resp), want, "{name}: {resp}");
         assert_eq!(w.up.count(), 0, "{name}: the model server was reached");
         let _ = (&w.audit_a, &w.audit_b);
     }
@@ -307,18 +307,24 @@ async fn a_flood_of_refused_requests_spawns_nothing() {
         }
         n
     };
-    // A peer that does not qualify: no reply, no audit line, nothing.
-    for (name, c) in [
-        ("unverified", ctx("node-a", false, PeerClass::Node)),
-        ("leaf", ctx("node-a", true, PeerClass::Leaf)),
-    ] {
-        for i in 0..200 {
-            b.hub.on_peer_control(&c, 1, &req_msg(i));
-        }
-        settle().await;
-        assert_eq!(drained(&mut rx), 0, "{name}: replied to a peer that does not qualify");
+    // An unverified peer (no grant): no reply, no audit line, nothing.
+    let c = ctx("node-a", false, PeerClass::Node);
+    for i in 0..200 {
+        b.hub.on_peer_control(&c, 1, &req_msg(i));
     }
+    settle().await;
+    assert_eq!(drained(&mut rx), 0, "replied to an unverified peer");
     assert!(audit.kinds().is_empty(), "{:?}", audit.kinds());
+    // A verified peer that does not qualify (a leaf) is refused, rate-limited,
+    // so its consumer falls back at once.
+    let leaf = ctx("node-a", true, PeerClass::Leaf);
+    for i in 0..200 {
+        b.hub.on_peer_control(&leaf, 1, &req_msg(i));
+    }
+    settle().await;
+    let n = drained(&mut rx);
+    assert!((1..=8).contains(&n), "{n} refusals to a leaf");
+    assert!(audit.kinds().len() <= 8);
     // A qualifying peer that is on no allowlist: refused a few times, then silence.
     let good = node("node-a");
     for i in 0..200 {
@@ -326,6 +332,6 @@ async fn a_flood_of_refused_requests_spawns_nothing() {
     }
     settle().await;
     let n = drained(&mut rx);
-    assert!((1..=8).contains(&n), "{n} refusals sent");
-    assert!(audit.kinds().len() <= 8);
+    assert!((0..=8).contains(&n), "{n} refusals sent");
+    assert!(audit.kinds().len() <= 16);
 }

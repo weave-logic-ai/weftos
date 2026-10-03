@@ -53,6 +53,8 @@ use tracing::{info, warn};
 pub const CONFIG_FILE: &str = "inference.json";
 const MAX_FILE: u64 = 64 * 1024;
 const MAX_ROLES: usize = 16;
+const DEFAULT_SYNC: u64 = 5;
+const DEFAULT_ADVERT: u64 = 20;
 const MAX_LIST: usize = 64;
 
 /// One served role.
@@ -149,6 +151,12 @@ impl FileCfg {
         }
         if self.sync_secs.is_some_and(|s| s == 0 || s > 60) {
             return bad("sync_secs must be 1..=60".into());
+        }
+        // The announcement runs on the sync tick, so its real period is
+        // the larger of the two.
+        let (sync, advert) = (self.sync_secs.unwrap_or(DEFAULT_SYNC), self.advert_secs.unwrap_or(DEFAULT_ADVERT));
+        if sync > advert {
+            return bad(format!("sync_secs ({sync}) must not exceed advert_secs ({advert})"));
         }
         let known = |role: &String| self.roles.iter().any(|r| &r.role == role);
         let nodes_ok = |v: &Vec<String>| v.len() <= MAX_LIST && v.iter().all(|n| valid_token(n, 128));
@@ -391,7 +399,7 @@ pub async fn init(p: InitParts<'_>) -> Result<Option<Arc<InferState>>, String> {
             clawft_core::placement_hook::invalidate_all();
         }
     });
-    let (st, sync, advert) = (state.clone(), cfg.sync_secs.unwrap_or(5).max(1), cfg.advert_secs.unwrap_or(20).max(1));
+    let (st, sync, advert) = (state.clone(), cfg.sync_secs.unwrap_or(DEFAULT_SYNC).max(1), cfg.advert_secs.unwrap_or(DEFAULT_ADVERT).max(1));
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(sync));
         let mut since_advert = 0u64;

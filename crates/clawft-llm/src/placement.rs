@@ -181,16 +181,18 @@ impl PlacedProvider {
         (Some(url), Some(p))
     }
 
-    /// Failures that say the placed endpoint is gone or broken: connect and
-    /// timeout errors, and 502, 503 or 504 (which includes the loopback
-    /// proxy reporting that no instance serves the role). A 4xx, a quota
-    /// 429, an auth failure or a malformed answer is the server's real
-    /// answer and is never replayed elsewhere.
+    /// Failures that say the placed endpoint is gone or broken: a refused or
+    /// timed-out connection, and 502, 503 or 504 (which includes the
+    /// loopback proxy reporting that no instance serves the role). A timeout
+    /// of the whole request is not retried (the endpoint accepted the work;
+    /// asking the base for another full attempt would double the wait), and
+    /// neither is a 4xx, a quota 429, an auth failure or a malformed answer:
+    /// those are the server's real answer.
     fn should_retry(err: &ProviderError) -> bool {
         match err {
-            ProviderError::Timeout | ProviderError::Connect(_) => true,
+            ProviderError::Connect(_) => true,
             ProviderError::ServerError { status, .. } => matches!(status, 502..=504),
-            ProviderError::Http(e) => e.is_connect() || e.is_timeout(),
+            ProviderError::Http(e) => e.is_connect(),
             _ => false,
         }
     }

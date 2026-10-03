@@ -315,3 +315,64 @@ fn the_local_provider_never_replays_a_server_answer() {
         }
     });
 }
+
+async fn slow_server(delay: Duration) -> MockServer {
+    let s = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_delay(delay).set_body_string("{}"))
+        .mount(&s)
+        .await;
+    s
+}
+
+fn fast_timeout_cfg(base: &str) -> LlmProviderConfig {
+    LlmProviderConfig { timeout_secs: Some(1), ..cfg(base) }
+}
+
+#[test]
+fn a_local_request_timeout_is_typed_as_a_plain_failure_with_the_base_url() {
+    run(async {
+        let slow = slow_server(Duration::from_secs(4)).await;
+        let base = format!("{}/v1", slow.uri());
+        let p = crate::local_provider::LocalProvider::from_config(fast_timeout_cfg(&base), None);
+        let e = p.complete(&req()).await.unwrap_err();
+        match e {
+            ProviderError::RequestFailed(m) => assert!(m.contains(&slow.uri()) && m.contains("timed out"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+    });
+}
+
+#[test]
+fn retry_policy_does_not_replay_a_local_request_timeout() {
+    use crate::retry::{RetryConfig, RetryPolicy};
+    run(async {
+        let slow = slow_server(Duration::from_secs(4)).await;
+        let base = format!("{}/v1", slow.uri());
+        let local = crate::local_provider::LocalProvider::from_config(fast_timeout_cfg(&base), None);
+        let p = RetryPolicy::new(local, RetryConfig::default());
+        let t0 = std::time::Instant::now();
+        assert!(p.complete(&req()).await.is_err());
+        assert_eq!(slow.received_requests().await.unwrap().len(), 1, "the wedged request was replayed");
+        assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+    });
+}
+
+#[test]
+fn a_placed_request_timeout_does_not_trigger_a_second_full_attempt() {
+    run(async {
+        for local in [false, true] {
+            let (fallback, slow) = (server("fallback").await, slow_server(Duration::from_secs(4)).await);
+            let r = Fixed::new(Some(&format!("{}/v1", slow.uri())));
+            let cache = Arc::new(CachedResolver::new(r, Duration::from_secs(60)));
+            let fb = fast_timeout_cfg(&format!("{}/v1", fallback.uri()));
+            let factory: ProviderFactory = if local { local_factory() } else { openai_factory() };
+            let p = PlacedProvider::with_factory("hermes".into(), fb, cache, factory);
+            let t0 = std::time::Instant::now();
+            assert!(p.complete(&req()).await.is_err(), "local={local}");
+            assert_eq!(fallback.received_requests().await.unwrap().len(), 0, "local={local}: fell back after a wedge");
+            assert!(t0.elapsed() < Duration::from_secs(3), "local={local}: {:?}", t0.elapsed());
+        }
+    });
+}

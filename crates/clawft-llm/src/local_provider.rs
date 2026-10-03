@@ -159,22 +159,22 @@ impl LocalProvider {
         provider
     }
 
-    /// Classify a failed send: a timeout and a failed connection are typed
-    /// (callers fall back on them); anything else is a plain request failure.
+    /// Classify a failed send. Only a failure to connect (refused, DNS,
+    /// connect timeout) is typed as [`ProviderError::Connect`]: nothing
+    /// reached the server, so trying another endpoint is safe. A timeout of
+    /// the whole request is a server that accepted and then wedged; it is a
+    /// plain, non-retryable failure so neither `RetryPolicy` nor a placed
+    /// fallback waits it out a second time. Messages carry the base URL.
     fn send_error(&self, e: reqwest::Error) -> ProviderError {
-        if e.is_timeout() {
-            return ProviderError::Timeout;
-        }
-        let connect = e.is_connect();
-        let msg = format!(
-            "failed to connect to local LLM server at {}: {}",
-            self.config.base_url,
-            e.without_url()
-        );
+        let (connect, timeout) = (e.is_connect(), e.is_timeout());
+        let base = &self.config.base_url;
+        let detail = e.without_url();
         if connect {
-            ProviderError::Connect(msg)
+            ProviderError::Connect(format!("failed to connect to local LLM server at {base}: {detail}"))
+        } else if timeout {
+            ProviderError::RequestFailed(format!("local LLM server at {base} timed out: {detail}"))
         } else {
-            ProviderError::RequestFailed(msg)
+            ProviderError::RequestFailed(format!("request to local LLM server at {base} failed: {detail}"))
         }
     }
 
