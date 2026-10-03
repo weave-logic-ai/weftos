@@ -63,6 +63,15 @@ pub struct PlaceOrder {
     /// Decide and explain only; dispatch nothing.
     #[serde(default)]
     pub dry_run: bool,
+    /// Project the workload is placed for. The target's ingest bridge
+    /// delivers a cog's vectors to this project's store; `None` delivers
+    /// them to the placing controller's store. The target refuses the order
+    /// unless this controller may place for the project (it is the target
+    /// node itself, is listed for the project in the target's
+    /// `cog-ingest.json`, or is the node of the project's bound key); the
+    /// controller's signature covers the id but does not by itself prove it.
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 fn yes() -> bool {
@@ -282,6 +291,7 @@ impl PlacementControlPlane {
                 variant: variant.clone(),
                 config: order.config.clone(),
                 start: order.start,
+                project_id: order.project_id.clone(),
             })
             .unwrap_or_default();
             let target = match self.target(&node) {
@@ -312,6 +322,7 @@ impl PlacementControlPlane {
                 variant: variant.clone(),
                 decision_id: report.decision_id.clone(),
                 manifest_hash: manifest.to_string(),
+                project_id: order.project_id.clone(),
             };
             match r {
                 Ok((result, _)) => {

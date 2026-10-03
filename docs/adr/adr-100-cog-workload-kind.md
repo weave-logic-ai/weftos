@@ -93,4 +93,36 @@ Cost: package signing, the ingest bridge, container adapters, and Seed integrati
 2. **Emulation**: operator opt-in only, never automatic (ADR-099).
 3. **v1 cog scope**: the 93 cogs that run clean in the conformance sweep. Rationale: they are demonstrated working. `anomaly-detect` is the first cog on nodes we control (native or container path), since the Seed registry lacks it; `fall-detect` or `baby-cry` are the first via a Seed.
 4. **Source of truth**: our fork, ahead of upstream until our PRs merge (section 6).
-5. **Still open**: where ingested vectors live and which node owns the store the ingest bridge forwards to (needs a decision at card 10); whether a live ESP32 feed or a replayed feed is used for the real-hardware acceptance run (the Pi 5 and Seed results above used a synthetic feed).
+5. **Resolved 2026-10-02**: see "Decision 5 resolved" below.
+
+## Decision 5 resolved (2026-10-02)
+
+Ingested vectors belong to the **project that placed the cog**. The ingest
+bridge forwards a cog's batches to the store owned by that project's kernel,
+resolved from the placement's project id (ADR-103: a project kernel owns its
+own chain and stores). When the placement has no project, the batch goes to
+the placing controller's store. A placement whose project has no known store
+owner is refused; it is never redirected to the controller's store, because
+that would put one project's data in another's store.
+
+Acceptance runs for the real-hardware card use a **replayed ESP32 feed**
+(recorded or synthetic packets). A live feed is optional and documented
+where it is used. Mechanics and limits: `docs/cogs/ingest-bridge.md`.
+
+Network egress for ingesting cogs is **deferred**, not solved: native
+egress enforcement waits for landlock, seccomp and nftables on Linux and a
+sandbox profile on macOS (follow-up); container egress is operator network
+configuration following the recipe in `docs/cogs/ingest-bridge.md`. Until
+then the adapters report `egress` to the gate. The ingest bridge itself is
+wired into placement: the placing project id rides `PlaceOrder`,
+`PlaceBody` and `PlacementRecord`, tokens are issued at place and revoked at
+stop and unload.
+
+The target host decides who may place for a project: the controller must be
+the node itself, be listed for the project in the node's `cog-ingest.json`,
+or be the node of the project's bound key. A placement whose vectors have no
+routed store owner is refused at place time, and a node whose ingest bridge
+could not start places cogs without a token and reports `ingest: disabled`.
+Whatever re-creates an instance record without going through `place` (adopt,
+host-restart re-adoption) must issue a new ingest lease for native and
+container instances.

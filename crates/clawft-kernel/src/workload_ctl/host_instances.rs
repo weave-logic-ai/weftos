@@ -64,6 +64,7 @@ impl WorkloadHostService {
                 all.push(json!({
                     "instance_id": id, "workload": p.name, "variant": p.variant,
                     "decision_id": p.decision_id, "status": host.status(&p.handle).await,
+                    "ingest": p.ingest_state,
                 }));
             }
             return Ok(Value::Array(all));
@@ -73,8 +74,20 @@ impl WorkloadHostService {
             .ok_or_else(|| refuse(RefusalCode::UnknownInstance, format!("no instance {iid}")))?;
         let host = self.routes[&p.route].clone();
         match req.method.as_str() {
-            method::START => host.start(&p.handle).await.map(|_| json!({"started": iid})),
+            method::START => {
+                if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
+                    hk.activate(l).map_err(|e| {
+                        refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"))
+                    })?;
+                }
+                host.start(&p.handle).await.map(|_| json!({"started": iid}))
+            }
             method::STOP => {
+                // The token goes first: a stopping cog must not keep a
+                // credential the node no longer vouches for.
+                if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
+                    hk.deactivate(l);
+                }
                 let grace = Duration::from_millis(b.grace_ms.unwrap_or(2_000).min(60_000));
                 host.stop(&p.handle, grace).await.map(|ev| {
                     let audit = ev.audit();
@@ -83,6 +96,9 @@ impl WorkloadHostService {
                 })
             }
             method::UNLOAD => {
+                if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
+                    hk.deactivate(l);
+                }
                 let h = p.handle.clone();
                 let r = host.unload(h).await.map(|_| json!({ "unloaded": iid }));
                 if r.is_ok() {
@@ -91,7 +107,8 @@ impl WorkloadHostService {
                 r
             }
             method::STATUS => {
-                Ok(json!({ "instance_id": iid, "status": host.status(&p.handle).await }))
+                Ok(json!({ "instance_id": iid, "status": host.status(&p.handle).await,
+                           "ingest": p.ingest_state }))
             }
             _ => Ok(match &p.last {
                 Some(ev) => json!({

@@ -199,6 +199,7 @@ impl PlacementControlPlane {
             variant: SEED_ROUTE.to_string(),
             decision_id: decision_id.to_string(),
             manifest_hash: String::new(),
+            project_id: None,
         }
     }
 

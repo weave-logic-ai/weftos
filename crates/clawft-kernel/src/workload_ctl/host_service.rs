@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::chain::{self, ChainManager};
+use crate::cog_ingest::{IngestError, IngestHooks, IngestLease, InstanceBinding};
 use crate::gate::{GateBackend, GateDecision};
 use crate::ipc::GlobalPid;
 use crate::mesh_artifact::ArtifactExchange;
@@ -85,6 +86,9 @@ pub struct PlaceBody {
     /// Start after loading (place only).
     #[serde(default)]
     pub start: bool,
+    /// Project that placed the workload (ingest bridge destination).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 /// Body of the instance verbs.
@@ -106,6 +110,10 @@ pub(super) struct Placed {
     pub(super) variant: String,
     pub(super) decision_id: Option<String>,
     pub(super) last: Option<RunEvidence>,
+    /// The instance's ingest registration (cogs, when ingest is wired).
+    pub(super) ingest: Option<IngestLease>,
+    /// `enabled`, `disabled` (bridge down, no token issued) or `none`.
+    pub(super) ingest_state: &'static str,
 }
 
 /// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
@@ -132,6 +140,8 @@ pub struct WorkloadHostService {
     pub(super) in_flight: Mutex<HashSet<String>>,
     /// Bounds chain writes for requests that failed verification.
     verify_budget: RefusalBudget,
+    /// Ingest bridge wiring: a token per placed cog, revoked on stop.
+    pub(super) ingest: Option<IngestHooks>,
 }
 
 fn now_ms() -> u64 {
@@ -178,7 +188,20 @@ impl WorkloadHostService {
             instances: tokio::sync::Mutex::new(HashMap::new()),
             in_flight: Mutex::new(HashSet::new()),
             verify_budget: RefusalBudget::default(),
+            ingest: None,
         }
+    }
+
+    /// Wire the ingest bridge: placed cogs get a per-instance token,
+    /// bound to the placing project and revoked at stop and unload.
+    pub fn with_ingest(mut self, hooks: IngestHooks) -> Self {
+        self.ingest = Some(hooks);
+        self
+    }
+
+    /// The ingest wiring, if any.
+    pub fn ingest(&self) -> Option<&IngestHooks> {
+        self.ingest.as_ref()
     }
 
     /// Replace the bound on chained refusals of unverified requests.
@@ -245,6 +268,10 @@ impl WorkloadHostService {
         if let Some(a) = &self.address {
             metadata.insert("addr".to_string(), a.clone());
         }
+        metadata.insert(
+            "ingest".to_string(),
+            self.ingest.as_ref().map_or("none", |h| h.state()).to_string(),
+        );
         ServiceAdvertisement {
             name: WORKLOAD_HOST_SERVICE.to_string(),
             methods: method::ALL.iter().map(|m| m.to_string()).collect(),
@@ -429,14 +456,67 @@ impl WorkloadHostService {
                 "package id differs from the placed name",
             ));
         }
+        if let Some(p) = &b.project_id
+            && !crate::cog_ingest::valid_project_id(p)
+        {
+            return Err(refuse(
+                RefusalCode::InvalidRequest,
+                "project_id must be a 26-character project id",
+            ));
+        }
+        let mut contract = HostContract::new(SocketAddr::from(([0, 0, 0, 0], b.config.csi_port)));
+        let mut listener = None;
+        let hooks = self.ingest.as_ref().filter(|_| w.kind == "cog");
+        // `none`: no ingest wiring on this node. `disabled`: wired, but the
+        // bridge could not start; the cog runs with no token and no URL.
+        let ingest_state: &'static str = hooks.map_or("none", |h| h.state());
+        let hooks = hooks.filter(|h| h.is_enabled());
+        if ingest_state == "disabled" {
+            contract = contract.without_ingest();
+        }
+        if let Some(hk) = hooks {
+            // Instance id unknown yet: the binding only carries the project
+            // and the controller for the check.
+            let probe = InstanceBinding::new("", b.project_id.clone(), &req.requester);
+            hk.authorize(&probe).map_err(|e| match e {
+                IngestError::Forbidden => refuse(
+                    RefusalCode::Unauthorized,
+                    "this controller may not place cogs for that project",
+                ),
+                IngestError::NotRouted(m) => refuse(RefusalCode::Admission, m),
+                other => refuse(RefusalCode::Runtime, format!("ingest bridge: {other}")),
+            })?;
+        }
+        if let Some(hk) = hooks {
+            (contract, listener) = hk
+                .prepare(&route, contract)
+                .await
+                .map_err(|e| refuse(RefusalCode::Runtime, format!("ingest bridge: {e}")))?;
+        }
         let cfg = WorkloadConfig {
             mode: b.config.mode.clone(),
             args: b.config.args.clone(),
-            host: HostContract::new(SocketAddr::from(([0, 0, 0, 0], b.config.csi_port))),
+            host: contract.clone(),
             node_id: self.node_id.clone(),
         };
         let h = host.load(&w, &cfg).await.map_err(|e| runtime_refusal(&e))?;
         let iid = h.instance_id.clone();
+        let lease = match hooks {
+            Some(hk) => {
+                let binding = InstanceBinding::new(&iid, b.project_id.clone(), &req.requester);
+                match hk.lease(binding, contract, listener) {
+                    Ok(l) => Some(l),
+                    Err(e) => {
+                        let mut r = refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"));
+                        if let Err(u) = host.unload(h.clone()).await {
+                            r.reason = format!("{}; unload of {iid} failed too ({u})", r.reason);
+                        }
+                        return Err(r);
+                    }
+                }
+            }
+            None => None,
+        };
         self.instances.lock().await.insert(
             iid.clone(),
             Placed {
@@ -446,6 +526,8 @@ impl WorkloadHostService {
                 variant: b.variant.clone(),
                 decision_id: req.decision_id.clone(),
                 last: None,
+                ingest: lease,
+                ingest_state,
             },
         );
         let started = req.method == method::PLACE && b.start;
@@ -465,6 +547,7 @@ impl WorkloadHostService {
         Ok(json!({
             "instance_id": iid, "runtime": h.runtime, "variant": b.variant,
             "package_id": pkg.package_id, "status": status, "node": self.node_id,
+            "ingest": ingest_state,
         }))
     }
 
@@ -480,6 +563,11 @@ impl WorkloadHostService {
     ) -> Refusal {
         let mut r = runtime_refusal(e);
         let iid = h.instance_id.clone();
+        if let (Some(hk), Some(p)) = (&self.ingest, self.instances.lock().await.get(&iid))
+            && let Some(l) = &p.ingest
+        {
+            hk.deactivate(l);
+        }
         match host.unload(h.clone()).await {
             Ok(()) => {
                 self.instances.lock().await.remove(&iid);

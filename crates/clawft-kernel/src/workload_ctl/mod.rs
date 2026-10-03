@@ -43,6 +43,8 @@ mod tests_facts;
 #[cfg(test)]
 mod tests_flood;
 #[cfg(test)]
+mod tests_ingest;
+#[cfg(test)]
 mod tests_kind;
 #[cfg(test)]
 mod tests_link;

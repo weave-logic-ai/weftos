@@ -89,6 +89,7 @@ async fn served_daemon(controller: &SigningKey) -> Daemon {
         facts: source,
         serving: Some(&serving),
         container: None,
+        ingest: None,
     })
     .unwrap();
     let bound = serve(&serving, Arc::new(svc)).await.unwrap();
@@ -144,6 +145,7 @@ async fn another_nodes_controller_reaches_the_served_daemon_host_over_noise_tcp(
             allow_emulated: false,
             start: true,
             dry_run: false,
+            project_id: None,
         })
         .await
         .unwrap();

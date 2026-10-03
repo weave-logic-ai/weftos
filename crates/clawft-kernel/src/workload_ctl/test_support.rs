@@ -186,7 +186,7 @@ pub fn host_node_with(
     let container = caps
         .iter()
         .any(|c| c.id.as_str().starts_with("runtime.container"));
-    host_node_routes(seed, caps, scripts, controller, make_gate, container)
+    host_node_routes(seed, caps, scripts, controller, make_gate, container, None)
 }
 
 /// [`host_node`] serving only its native adapter, whatever its facts say.
@@ -196,7 +196,17 @@ pub fn host_node_native_only(
     scripts: bool,
     controller: &SigningKey,
 ) -> HostNode {
-    host_node_routes(seed, caps, scripts, controller, gate, false)
+    host_node_routes(seed, caps, scripts, controller, gate, false, None)
+}
+
+/// [`host_node_native_only`] with the ingest bridge wired in.
+pub fn host_node_ingest(
+    seed: u8,
+    caps: Vec<Capability>,
+    controller: &SigningKey,
+    ingest: crate::cog_ingest::IngestHooks,
+) -> HostNode {
+    host_node_routes(seed, caps, true, controller, gate, false, Some(ingest))
 }
 
 fn host_node_routes(
@@ -206,6 +216,7 @@ fn host_node_routes(
     controller: &SigningKey,
     make_gate: impl FnOnce(&Arc<ChainManager>) -> Arc<WorkloadGate>,
     container: bool,
+    ingest: Option<crate::cog_ingest::IngestHooks>,
 ) -> HostNode {
     let key = SigningKey::from_bytes(&[seed; 32]);
     let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
@@ -247,6 +258,9 @@ fn host_node_routes(
         )
         .with_chain(chain.clone());
         svc = svc.with_route("container", Arc::new(h));
+    }
+    if let Some(h) = ingest {
+        svc = svc.with_ingest(h);
     }
     let svc = svc
         .with_controllers(vec![controller.verifying_key().to_bytes()])

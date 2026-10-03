@@ -102,6 +102,13 @@ pub fn global() -> Option<Arc<Supervisor>> {
 }
 
 impl Supervisor {
+    /// The identity records (project bindings and revocations) as of now;
+    /// `None` when they cannot be read. Used to check a project id before a
+    /// placement names it (the cog ingest bridge).
+    pub fn identity_view(&self) -> Option<clawft_kernel::project_identity::RevocationView> {
+        crate::project_cert_rpc::current_view(&self.deps.cert_env).ok()
+    }
+
     /// A supervisor over `cfg` and `deps`.
     pub fn new(cfg: SupervisorConfig, deps: Deps) -> Arc<Self> {
         let cfg = Arc::new(cfg);
