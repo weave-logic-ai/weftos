@@ -224,7 +224,10 @@ pub fn managed(flavor: InferFlavor, restart: RestartPolicy) -> Managed {
     std::fs::create_dir_all(&script_dir).unwrap();
     let script = write_script(&script_dir);
     let data = tmp.path().join("data");
-    let reg = Arc::new(ModelRegistry::in_memory());
+    let reg = Arc::new(
+        ModelRegistry::in_memory()
+            .with_trust(crate::model_manifest::ModelTrust::new(operator().2)),
+    );
     let mut cfg = ManagedConfig::new(reg.clone(), data.clone()).with_serve_program(script);
     cfg.restart = restart;
     cfg.env_passthrough = vec![];
