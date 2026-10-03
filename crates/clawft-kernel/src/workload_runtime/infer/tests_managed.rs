@@ -27,6 +27,7 @@ fn fast() -> RestartPolicy {
         max_restarts: 2,
         base: Duration::from_millis(300),
         cap: Duration::from_secs(1),
+        ..RestartPolicy::default()
     }
 }
 

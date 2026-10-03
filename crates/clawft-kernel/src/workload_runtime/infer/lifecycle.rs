@@ -78,6 +78,7 @@ fn spawn(rt: &InferRuntime, inst: &mut Instance) -> Result<(), RuntimeError> {
         proc,
         wanted,
         exited_at,
+        started_at,
         exposed,
         ..
     }) = inst.managed.as_mut()
@@ -100,6 +101,7 @@ fn spawn(rt: &InferRuntime, inst: &mut Instance) -> Result<(), RuntimeError> {
     })?);
     *wanted = true;
     *exited_at = None;
+    *started_at = Some(Instant::now());
     Ok(())
 }
 
@@ -222,47 +224,114 @@ impl InferRuntime {
             }
             Some(false) => {}
         }
-        // Phase 3: act, under the lock (no awaits).
-        let mut g = self.instances.lock().await;
-        let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
-        let Some(mg) = inst.managed.as_mut() else {
-            return Err(unknown(h));
-        };
-        match &mg.plan {
-            ManagedPlan::Process(_) => {
-                if mg.proc.as_mut().is_some_and(|p| p.try_exit().is_none()) {
-                    return Err(RuntimeError::InvalidState("already running".into()));
-                }
-                mg.proc = None;
-                spawn(self, inst)
+        // Unified-memory budget and co-residency (managed only): refuse
+        // before anything is spawned.
+        let mut reserved_new = false;
+        if supervised.is_some()
+            && let Some(ledger) = self.managed_cfg().and_then(|m| m.ledger.clone())
+        {
+            match ledger.reserve(&h.instance_id, &spec) {
+                Ok(newly) => reserved_new = newly,
+                Err(e) => return Err(RuntimeError::AdmissionRefused(e.to_string())),
             }
-            ManagedPlan::Ollama { tag } => {
-                if matches!(&mg.load, Some((s, _))
-                    if matches!(*s.lock().unwrap_or_else(|e| e.into_inner()), LoadState::Loading))
-                {
-                    return Err(RuntimeError::InvalidState("already loading".into()));
+        }
+        let result: Result<(), RuntimeError> = async {
+            // Phase 3: act, under the lock (no awaits).
+            let mut g = self.instances.lock().await;
+            let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
+            let Some(mg) = inst.managed.as_mut() else {
+                return Err(unknown(h));
+            };
+            match &mg.plan {
+                ManagedPlan::Process(_) => {
+                    if mg.proc.as_mut().is_some_and(|p| p.try_exit().is_none()) {
+                        return Err(RuntimeError::InvalidState("already running".into()));
+                    }
+                    mg.proc = None;
+                    spawn(self, inst)
                 }
-                let keep = self
-                    .managed_cfg()
-                    .map_or("5m".to_string(), |m| m.keep_alive.clone());
-                let client =
-                    ServerClient::new(inst.client.base().to_string(), OLLAMA_LOAD_TIMEOUT)?;
-                let state = std::sync::Arc::new(std::sync::Mutex::new(LoadState::Loading));
-                let (s2, tag) = (state.clone(), tag.clone());
-                let task = tokio::spawn(async move {
-                    let r = ollama::load(&client, &tag, &keep).await;
-                    *s2.lock().unwrap_or_else(|e| e.into_inner()) =
-                        r.map_or_else(LoadState::Failed, |()| LoadState::Done);
-                });
-                mg.load = Some((state, task));
-                mg.wanted = true;
-                Ok(())
+                ManagedPlan::Ollama { tag } => {
+                    if matches!(&mg.load, Some((s, _))
+                        if matches!(*s.lock().unwrap_or_else(|e| e.into_inner()), LoadState::Loading))
+                    {
+                        return Err(RuntimeError::InvalidState("already loading".into()));
+                    }
+                    let keep = self
+                        .managed_cfg()
+                        .map_or("5m".to_string(), |m| m.keep_alive.clone());
+                    let client =
+                        ServerClient::new(inst.client.base().to_string(), OLLAMA_LOAD_TIMEOUT)?;
+                    let state = std::sync::Arc::new(std::sync::Mutex::new(LoadState::Loading));
+                    let (s2, tag) = (state.clone(), tag.clone());
+                    let we_loaded = mg.we_loaded.clone();
+                    let ledger = self.managed_cfg().and_then(|m| m.ledger.clone());
+                    let instance = h.instance_id.clone();
+                    let task = tokio::spawn(async move {
+                        // A model somebody else already holds in memory is not
+                        // ours to load or to unload later.
+                        let r = if ollama::resident(&client, &tag).await {
+                            we_loaded.store(false, std::sync::atomic::Ordering::SeqCst);
+                            Ok(())
+                        } else {
+                            // Ours from the moment we ask, so a load that is
+                            // aborted half way is still unloaded at stop.
+                            we_loaded.store(true, std::sync::atomic::Ordering::SeqCst);
+                            let r = ollama::load(&client, &tag, &keep).await;
+                            if r.is_err() {
+                                we_loaded.store(false, std::sync::atomic::Ordering::SeqCst);
+                            }
+                            r
+                        };
+                        if r.is_err()
+                            && let Some(l) = ledger
+                        {
+                            // A failed load holds no memory.
+                            l.release(&instance);
+                        }
+                        *s2.lock().unwrap_or_else(|e| e.into_inner()) =
+                            r.map_or_else(LoadState::Failed, |()| LoadState::Done);
+                    });
+                    mg.load = Some((state, task));
+                    mg.wanted = true;
+                    Ok(())
+                }
             }
+        }
+        .await;
+        if result.is_err()
+            && reserved_new
+            && let Some(ledger) = self.managed_cfg().and_then(|m| m.ledger.clone())
+        {
+            ledger.release(&h.instance_id);
+        }
+        result
+    }
+
+    /// Give a managed instance a fresh restart budget. Only an explicit
+    /// operator start calls this: an automatic restart or drive never does,
+    /// so a server that keeps dying stays given up.
+    pub async fn reset_restarts(&self, h: &InstanceHandle) {
+        if let Some(mg) = self
+            .instances
+            .lock()
+            .await
+            .get_mut(&h.instance_id)
+            .and_then(|i| i.managed.as_mut())
+        {
+            mg.restarts = 0;
+        }
+    }
+
+    /// Give back the instance's budget (no-op without a ledger).
+    fn release_residency(&self, h: &InstanceHandle) {
+        if let Some(l) = self.managed_cfg().and_then(|m| m.ledger.as_ref()) {
+            l.release(&h.instance_id);
         }
     }
 
     /// Stop the instance. For Ollama this unloads the model from Ollama's
-    /// memory, even when another client loaded it or is using it: Ollama
+    /// memory when this adapter loaded it (a model that was already
+    /// resident belongs to whoever loaded it): Ollama
     /// has no per-client ownership of a loaded model.
     pub(super) async fn stop_instance(
         &self,
@@ -271,7 +340,7 @@ impl InferRuntime {
     ) -> Result<RunEvidence, RuntimeError> {
         enum Todo {
             Proc(Supervised),
-            Ollama(ServerClient, String),
+            Ollama(ServerClient, String, bool),
         }
         let todo = {
             let mut g = self.instances.lock().await;
@@ -294,13 +363,19 @@ impl InferRuntime {
                     if let Some((_, t)) = mg.load.take() {
                         t.abort();
                     }
-                    Todo::Ollama(client, tag.clone())
+                    Todo::Ollama(
+                        client,
+                        tag.clone(),
+                        mg.we_loaded.swap(false, std::sync::atomic::Ordering::SeqCst),
+                    )
                 }
             }
         };
+        // The memory is given back only once the server is really gone.
         match todo {
             Todo::Proc(p) => {
                 let ev = p.terminate(grace).await;
+                self.release_residency(h);
                 if let Some(mg) = self
                     .instances
                     .lock()
@@ -316,10 +391,14 @@ impl InferRuntime {
                 ev.instance_id = h.instance_id.clone();
                 Ok(ev)
             }
-            Todo::Ollama(client, tag) => {
-                ollama::unload(&client, &tag)
-                    .await
-                    .map_err(RuntimeError::Backend)?;
+            Todo::Ollama(client, tag, ours) => {
+                // Only a model this adapter loaded is taken out of memory.
+                if ours {
+                    ollama::unload(&client, &tag)
+                        .await
+                        .map_err(RuntimeError::Backend)?;
+                }
+                self.release_residency(h);
                 Ok(RunEvidence {
                     runtime: self.rt_id(),
                     instance_id: h.instance_id.clone(),
@@ -351,11 +430,17 @@ impl InferRuntime {
                     let _ = std::fs::remove_dir_all(&l.dir);
                 }
                 ManagedPlan::Ollama { tag } => {
-                    // Best effort: leave Ollama without our model resident.
-                    let _ = ollama::unload(&inst.client, tag).await;
+                    // Best effort, and only a model this adapter loaded.
+                    if mg.we_loaded.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        let _ = ollama::unload(&inst.client, tag).await;
+                    }
                 }
             }
         }
+        // The instance is forgotten here, so its memory is released even if
+        // the best-effort unload above failed: there is no handle left to
+        // release it later.
+        self.release_residency(h);
         Ok(())
     }
 
@@ -386,6 +471,8 @@ impl InferRuntime {
             let ev = p.terminate(Duration::from_secs(3)).await;
             self.store_last(h, ev).await;
         }
+        // Stopped for good (until reloaded): it holds no memory any more.
+        self.release_residency(h);
         tracing::warn!(instance = %h.instance_id, ?beyond, "model server listened beyond loopback; stopped");
         Some(beyond)
     }
@@ -510,9 +597,10 @@ impl InferRuntime {
                 return Ok(Reconcile::NotManaged);
             }
             if let Some(a) = &mg.exposed {
-                return Ok(Reconcile::StoppedExposed {
-                    reachable_on: a.clone(),
-                });
+                let reachable_on = a.clone();
+                drop(g);
+                self.release_residency(h);
+                return Ok(Reconcile::StoppedExposed { reachable_on });
             }
             if !mg.wanted {
                 return Ok(Reconcile::Healthy);
@@ -541,7 +629,13 @@ impl InferRuntime {
             self.store_last(h, ev).await;
         }
         match next {
-            Next::Done(r) => Ok(r),
+            Next::Done(r) => {
+                // Out of restarts: nothing is running, so nothing is held.
+                if matches!(r, Reconcile::GaveUp { .. }) {
+                    self.release_residency(h);
+                }
+                Ok(r)
+            }
             Next::Restart { ip, port } => {
                 if port_in_use(ip, port).await {
                     return Err(RuntimeError::Backend(format!(
@@ -563,6 +657,9 @@ impl InferRuntime {
                     return Ok(Reconcile::StoppedExposed { reachable_on: a });
                 }
                 let up = client.probe(flavor).await.health;
+                // Healthy for a while, not just once: a server that answers
+                // a probe and then dies keeps its restart count, so a crash
+                // loop still reaches `GaveUp`.
                 if up == Health::Up
                     && let Some(mg) = self
                         .instances
@@ -570,6 +667,7 @@ impl InferRuntime {
                         .await
                         .get_mut(&h.instance_id)
                         .and_then(|i| i.managed.as_mut())
+                    && mg.started_at.is_some_and(|t| t.elapsed() >= policy.stable_after)
                 {
                     mg.restarts = 0;
                 }

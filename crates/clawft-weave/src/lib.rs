@@ -170,11 +170,23 @@ pub mod mic_source;
 /// Node facts probe, signing, cache and `cluster.facts` (mesh-placement-03).
 #[cfg(any(feature = "mesh", feature = "exochain"))]
 #[cfg(all(feature = "placement", unix))]
+pub mod infer_cfg;
+#[cfg(all(feature = "placement", unix))]
+pub mod infer_expose;
+#[cfg(all(feature = "placement", unix))]
+pub mod infer_managed;
+#[cfg(all(feature = "placement", unix))]
 pub mod infer_rpc;
 #[cfg(all(feature = "placement", unix))]
 pub mod infer_wire;
 #[cfg(all(test, feature = "placement", unix))]
-mod infer_wire_tests;
+pub(crate) mod infer_wire_tests;
+#[cfg(all(test, feature = "placement", unix))]
+mod infer_managed_tests;
+#[cfg(all(test, feature = "placement", unix))]
+mod infer_cfg_tests;
+#[cfg(all(test, feature = "placement", unix))]
+mod infer_hardening_tests;
 pub mod node_facts_rpc;
 pub mod protocol;
 pub mod service_units;

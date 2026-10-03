@@ -16,6 +16,10 @@ pub struct RestartPolicy {
     pub base: Duration,
     /// Longest delay.
     pub cap: Duration,
+    /// How long a process must have been up (and answering) before the
+    /// restart count is cleared. A server that answers one probe and then
+    /// dies is still crash-looping and must reach `GaveUp`.
+    pub stable_after: Duration,
 }
 
 impl Default for RestartPolicy {
@@ -24,6 +28,7 @@ impl Default for RestartPolicy {
             max_restarts: 5,
             base: Duration::from_secs(2),
             cap: Duration::from_secs(60),
+            stable_after: Duration::from_secs(60),
         }
     }
 }
@@ -64,6 +69,10 @@ pub struct ManagedConfig {
     pub restart: RestartPolicy,
     /// Ollama `keep_alive` sent when loading a model (`5m`, `30m`, `-1`).
     pub keep_alive: String,
+    /// Unified-memory budget and co-residency, shared by every managed
+    /// adapter on the node. `None`: no check (a single adapter, or the
+    /// operator did not ask for one).
+    pub ledger: Option<Arc<super::residency::ResidencyLedger>>,
 }
 
 impl ManagedConfig {
@@ -79,7 +88,14 @@ impl ManagedConfig {
             run_as: None,
             restart: RestartPolicy::default(),
             keep_alive: "30m".into(),
+            ledger: None,
         }
+    }
+
+    /// Share a residency ledger (budget and co-residency).
+    pub fn with_ledger(mut self, ledger: Arc<super::residency::ResidencyLedger>) -> Self {
+        self.ledger = Some(ledger);
+        self
     }
 
     /// Launcher script.

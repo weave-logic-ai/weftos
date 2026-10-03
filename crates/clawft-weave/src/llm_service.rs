@@ -144,7 +144,15 @@ pub fn resolve_llm_endpoint(
             DEFAULT_LLM_MODEL.to_string(),
         )
     };
-    let llm_url = llm_url_override.unwrap_or(default_url);
+    // Placement (ADR-101 section 5): with no explicit URL and no OpenRouter
+    // takeover, the `local` provider's role may say where the model is now.
+    // A role served on this node resolves to its server directly, so the
+    // request path has no extra hop; an explicit setting always wins.
+    let placed = (llm_url_override.is_none() && !openrouter_takeover)
+        .then(|| clawft_types::placement::roles::resolve_for_provider("local"))
+        .flatten();
+    let using_placement = placed.is_some();
+    let llm_url = llm_url_override.unwrap_or_else(|| placed.unwrap_or(default_url));
     let llm_model = llm_model_override.unwrap_or(default_model);
     let using_openrouter = openrouter_takeover;
     let api_key = if using_openrouter { api_key_env } else { None };
@@ -155,6 +163,8 @@ pub fn resolve_llm_endpoint(
         "config:[kernel.llm].service_url"
     } else if using_openrouter {
         "default:openrouter"
+    } else if using_placement {
+        "placement:local"
     } else {
         "default:local"
     };
@@ -425,6 +435,51 @@ mod tests {
         assert_eq!(resolved.config.base_url, "http://env-host:9000");
         assert_eq!(resolved.url_source, "env:LLM_SERVICE_URL");
         assert!(!resolved.using_openrouter);
+    }
+
+    #[test]
+    fn resolve_follows_a_placed_local_role_but_never_beats_explicit_settings() {
+        use std::collections::HashMap;
+        let _guard = env_lock();
+        let snap = EnvSnapshot::capture();
+        unsafe {
+            std::env::remove_var(LLM_SERVICE_URL_ENV);
+            std::env::remove_var(OPENROUTER_API_KEY_ENV);
+            std::env::remove_var(LLM_MODEL_ENV);
+        }
+        let mut providers = HashMap::new();
+        providers.insert("local".to_string(), "hermes".to_string());
+        clawft_types::placement::roles::install(
+            std::sync::Arc::new(|r| (r == "hermes").then(|| "http://127.0.0.1:18090/v1".to_string())),
+            providers,
+        );
+        // Default: placement answers.
+        let placed = resolve_llm_endpoint(None);
+        assert_eq!(placed.config.base_url, "http://127.0.0.1:18090");
+        assert_eq!(placed.url_source, "placement:local");
+        // [kernel.llm].service_url beats it.
+        let cfg = clawft_types::config::LlmEndpointConfig {
+            service_url: Some("http://local:8090".into()),
+            model: None,
+        };
+        let r = resolve_llm_endpoint(Some(&cfg));
+        assert_eq!(r.config.base_url, "http://local:8090");
+        assert_eq!(r.url_source, "config:[kernel.llm].service_url");
+        // So does the env var, and the OpenRouter takeover.
+        unsafe { std::env::set_var(LLM_SERVICE_URL_ENV, "http://env-host:9000") };
+        assert_eq!(resolve_llm_endpoint(None).url_source, "env:LLM_SERVICE_URL");
+        unsafe {
+            std::env::remove_var(LLM_SERVICE_URL_ENV);
+            std::env::set_var(OPENROUTER_API_KEY_ENV, "sk-test-key");
+        }
+        assert!(resolve_llm_endpoint(None).using_openrouter);
+        // The role stops resolving (placement died): the ADR-060 default again.
+        unsafe { std::env::remove_var(OPENROUTER_API_KEY_ENV) };
+        clawft_types::placement::roles::clear();
+        let back = resolve_llm_endpoint(None);
+        assert_eq!(back.url_source, "default:local");
+        assert_eq!(back.config.base_url, DEFAULT_LLM_SERVICE_URL);
+        snap.restore();
     }
 
     #[test]

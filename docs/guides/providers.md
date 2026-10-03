@@ -530,6 +530,107 @@ off unless `<runtime>/inference.json` exists.
   the daemon deliveries as an unverified peer, so local placement and the
   proxy work but serving or using a remote node does not; the status says so.
 
+### Managed roles, the roster, the memory budget
+
+A role can be `managed` instead of `adopted`: the daemon starts and stops
+the server through the model lab's launcher, so Hermes (`local/`),
+`coder-daily` and Orpheus TTS (an Ollama role named `orpheus-tts`) can be
+placed workloads. Managed roles are governed and off by default.
+
+```json
+{ "roster": { "file": "/path/to/queue.yaml",
+              "overlay": { "excludes": { "planner": ["role:coder-daily"] },
+                           "latency_class": { "voice-llm": "interactive" } } },
+  "serve_programs": { "llamacpp": "/path/to/serve-llamacpp",
+                      "mlx-lm": "/path/to/serve" },
+  "budget_gb": 96,
+  "roles": [
+    { "role": "hermes", "mode": "managed", "flavor": "llamacpp",
+      "model": "Hermes-4.3-36B", "memory_gb": 22,
+      "instance_port": 18090, "proxy_port": 8090, "provider": "local" },
+    { "role": "coder-daily", "mode": "managed", "roster_id": "coder-daily",
+      "instance_port": 18081, "proxy_port": 8081 },
+    { "role": "orpheus-tts", "mode": "managed", "flavor": "ollama",
+      "model": "orpheus-tts", "memory_gb": 4, "instance_port": 11434 } ] }
+```
+
+- The launcher path is configuration (`serve_programs`, absolute paths to
+  executables); it is never guessed from `~/llm`. Weights come only from
+  the model registry (`models/registry.json`, adopted models), by `model`
+  name, never from a path in the file. The model lab's roster is read, not
+  written, and only the file you name is read.
+- `roster_id` takes flavor, port, model name and memory (`ram_gb`) from that
+  roster entry. Explicit fields on the role win. The roster has no
+  co-residency, latency or stickiness facts, so those come from `overlay`
+  (stickiness defaults to on). Entries the adapters cannot run (vision,
+  embeddings, STT, `mlx-audio` TTS) and aliases of an earlier entry are
+  listed under `roster_skipped` in `infer.status`; a role that names one is
+  a boot error with the reason.
+- A managed role starts only when asked: `autostart: true`, or the admin
+  verb `infer.start`; `infer.stop` stops and unloads it, and the daemon
+  stops what it started at shutdown. Every load, start, stop and unload goes
+  through the daemon's workload gate and is chained, so `workload-permits.json`
+  needs a rule for kind `inference` (minimum package trust
+  `operator_attested`). No gate, no launcher entry, or a launcher that is
+  not executable makes the role `unavailable`, with the reason.
+- `budget_gb` is the unified-memory budget, shared by every managed role. A
+  start that would exceed it, or that sits beside a role it `excludes` (or
+  that excludes it), is refused as unplaceable, chained as `workload.refuse`
+  with the reason, shown as the role's `state: unplaceable`, and retried
+  after a pause. Stopping a role gives its memory back.
+- `expose` adds a second proxy listener beyond loopback (`listen`, `port`;
+  `0.0.0.0` for containers that reach this machine). The role's
+  `proxy_port` stays a loopback listener without a token, which is what
+  consumers on this machine use; the exposed listener has its own
+  connection pool and a per-client-address cap (8), so LAN clients cannot
+  starve local ones. The model server itself stays on loopback. Exposure
+  needs a bearer token (`token_file`, relative to the runtime dir) and a
+  chained governance permit. The token file is opened without following a
+  link and checked through the open descriptor: a regular file you own,
+  mode 0600, 32 to 4096 characters, in directories you own that others
+  cannot write to. The gate is asked for a `workload.start` of kind
+  `inference` with `network: lan` and package id `inference-expose:<role>`,
+  so `workload-permits.json` needs a rule whose `max_network` is `lan`.
+  Without both, the exposed listener stays unbound and says why. Clients
+  send `Authorization: Bearer <token>`; it is checked before any body is
+  read, never forwarded to the model server, and never appears in the chain
+  or the logs. Without `expose` nothing listens beyond 127.0.0.1.
+  **The token travels in cleartext on the LAN** (plain HTTP): `network: lan`
+  is meant for trusted segments until TLS lands.
+- The launcher (`serve_programs`) must be an executable owned by the
+  daemon's user or root and not writable by group or others, and the roster
+  must be a regular file of at most 1 MiB; anything else is refused with
+  the reason. The memory a managed role holds is released when it stops
+  (after the process has exited), gives up restarting, is stopped for
+  listening beyond loopback, or fails to load, and the role stops claiming to
+  run. A role whose server gave up restarting, or was stopped for listening
+  beyond loopback, is no longer wanted: it stays down, with that reason in
+  the status, until an explicit `infer.start` (which is also the only thing
+  that gives a server that gave up a fresh restart budget; a running server
+  gets its restart count back only after it has stayed up and answering for
+  60 s, so one good probe before a crash does not hide a crash loop). An Ollama model
+  that was already in memory when asked is never loaded or unloaded by
+  WeftOS. Ollama has no ownership, though: a model WeftOS loaded that
+  another client later evicted and reloaded is still unloaded at stop, and a
+  load WeftOS started and then cut short is unloaded too.
+- Ports must not collide: each `proxy_port` and `expose.port` is used by one
+  listener across all roles and is never a server's port, and two roles
+  share an `instance_port` only when both are Ollama roles (one Ollama
+  serves several models). The check includes the ports a roster supplies.
+- Consumers follow a placed role when nothing explicit chose their
+  endpoint: in-process agents (`provider`), the kernel `llm` service (its
+  endpoint is the `local` role's server, refreshed when the role moves; its
+  health check follows), and the voice TTS (Orpheus follows a role named
+  `orpheus-tts` when its default endpoint is in use; an explicit endpoint
+  wins). Only a `provider` role may resolve to a node elsewhere (through this
+  node's proxy, OpenAI paths only); the TTS speaks Ollama's native API, which
+  the mesh does not carry to peers, so it follows a server on this node or
+  keeps its own endpoint. A role served on this node resolves straight to its server, so the
+  latency path is the same as without placement. Only a role served by
+  another node goes through this node's proxy.
+- Not covered yet: failing a role over to a second node and marking its KV
+  cold, which needs a second inference-capable node.
+
 ## API Key Management
 
 API keys are resolved at request time, not at configuration time. The

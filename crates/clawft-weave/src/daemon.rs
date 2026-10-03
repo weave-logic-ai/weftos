@@ -96,6 +96,25 @@ async fn refresh_daemon_llm_from_env(
     Ok(())
 }
 
+/// Swap the daemon's LLM client when the placed `local` role moved (ADR-101
+/// section 5). Only a placement-sourced endpoint follows the table: an
+/// explicit URL, config or the OpenRouter takeover do not change with it.
+#[cfg(all(feature = "placement", unix))]
+async fn refresh_llm_if_placement_changed(kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>) {
+    let Some(shared) = daemon_llm() else { return };
+    let cfg_llm = kernel.read().await.kernel_config().llm.clone();
+    let resolved = crate::llm_service::resolve_llm_endpoint(cfg_llm.as_ref());
+    if !matches!(resolved.url_source, "placement:local" | "default:local") {
+        return;
+    }
+    let current = shared.read().await.config().base_url.clone();
+    if current != resolved.config.base_url
+        && let Err(e) = refresh_daemon_llm_from_env(kernel).await
+    {
+        warn!(error = %e, "llm client not refreshed after a placement change");
+    }
+}
+
 /// Daemon-wide handle to the PTY-backed terminal manager. Set at boot;
 /// the four `terminal.*` handlers read this. We don't register a
 /// control flag for terminal — sessions are user-initiated (no
@@ -1223,6 +1242,19 @@ pub async fn run(
             });
             (audit, k.a2a_router().mesh_runtime().cloned())
         };
+        // Managed roles and listening beyond loopback are governed: they need
+        // the workload gate (which needs the chain). Without it they stay off.
+        let (gate, chain) = {
+            let chain = kernel.read().await.chain_manager().cloned();
+            let gate = match crate::workload_gate::from_kernel(&kernel, &runtime_dir).await {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    warn!(error = %e, "inference: no workload gate, managed roles stay off");
+                    None
+                }
+            };
+            (gate, chain)
+        };
         let parts = crate::infer_wire::InitParts {
             dir: &runtime_dir,
             node_id: daemon_identity.node_id.clone(),
@@ -1230,9 +1262,22 @@ pub async fn run(
             service_mode: daemon_identity.is_service(),
             audit,
             limits: Default::default(),
+            gate,
+            chain,
         };
-        if let Err(e) = crate::infer_wire::init(parts).await {
-            error!(error = %e, "inference placement not started");
+        match crate::infer_wire::init(parts).await {
+            Ok(Some(st)) => {
+                // The kernel `llm` service follows the placed role.
+                let mut rx = st.table_changes();
+                let k = kernel.clone();
+                tokio::spawn(async move {
+                    while rx.changed().await.is_ok() {
+                        refresh_llm_if_placement_changed(&k).await;
+                    }
+                });
+            }
+            Ok(None) => {}
+            Err(e) => error!(error = %e, "inference placement not started"),
         }
     }
     {
@@ -2851,6 +2896,22 @@ pub async fn run(
     #[cfg(all(unix, feature = "mesh"))]
     if let Some(h) = mesh_handle {
         crate::mesh_boot::stop_on_shutdown(h, shutdown_rx.clone());
+    }
+
+    // Managed inference servers started by this daemon stop with it.
+    #[cfg(all(feature = "placement", unix))]
+    {
+        let mut rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            while !*rx.borrow() {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+            if let Some(st) = crate::infer_wire::state() {
+                st.shutdown().await;
+            }
+        });
     }
 
     // Cron tick loop — fires overdue jobs every second
@@ -6262,7 +6323,7 @@ async fn dispatch(
         "cluster.facts" => crate::node_facts_rpc::handle(params, kernel).await,
         // mesh-placement-19: inference placement (off unless inference.json exists).
         #[cfg(all(feature = "placement", unix))]
-        "infer.status" | "infer.expose" | "infer.allow" => {
+        "infer.status" | "infer.expose" | "infer.allow" | "infer.start" | "infer.stop" => {
             crate::infer_rpc::handle(method.as_str(), params).await
         }
         "cluster.join" => {

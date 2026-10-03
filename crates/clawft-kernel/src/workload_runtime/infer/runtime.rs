@@ -61,11 +61,16 @@ pub(super) struct Managed {
     pub wanted: bool,
     pub restarts: u32,
     pub exited_at: Option<Instant>,
+    /// When the current process was spawned.
+    pub started_at: Option<Instant>,
     pub last: Option<RunEvidence>,
     /// Set when the server was found listening beyond loopback and was
     /// stopped for it; the instance will not start again until reloaded.
     pub exposed: Option<Vec<std::net::IpAddr>>,
     pub load: Option<(SharedLoad, JoinHandle<()>)>,
+    /// Ollama: this adapter brought the model into memory (it was not
+    /// resident when asked), so only then may it take it out again.
+    pub we_loaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// One registered instance.
@@ -341,9 +346,11 @@ impl WorkloadRuntime for InferRuntime {
                 wanted: false,
                 restarts: 0,
                 exited_at: None,
+                started_at: None,
                 last: None,
                 exposed: None,
                 load: None,
+                we_loaded: Default::default(),
             });
         }
         let mut g = self.instances.lock().await;

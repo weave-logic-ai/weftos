@@ -11,6 +11,9 @@
 //!   requirements never share, independent of request order.
 //! - [`engine`]: `WorkloadSpec` and the pure `place()` engine (card
 //!   mesh-placement-04): hard constraints, scoring, pins, explain.
+//! - [`roles`]: the process-wide role resolver consumers ask (voice, LLM
+//!   service client); nothing installed means every consumer keeps its own
+//!   address.
 //! - [`memory`]: the `mem.unified` shared-pool accounting rule.
 //! - [`perf`]: measured-performance capabilities (`perf.cog.cycle_ms`,
 //!   `perf.infer.tok_s`).
@@ -32,6 +35,7 @@ pub mod memory;
 pub mod node_facts;
 pub mod perf;
 pub mod requirement;
+pub mod roles;
 pub mod vocabulary;
 pub mod vocabulary_pin;
 

@@ -22,6 +22,7 @@ onnx = ["dep:ort"]
 # The TtsEngine / TtsChunk / TtsTier traits + VoiceError live in clawft-channels;
 # this is a bridge crate that implements that seam without cpal/llm/kernel.
 clawft-channels = { workspace = true, features = ["voice"] }
+clawft-types = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 # Orpheus token-gen over the Ollama HTTP streaming API. `stream` adds
