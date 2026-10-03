@@ -464,6 +464,22 @@ impl InferRuntime {
             .map(|i| i.client.base().to_string())
     }
 
+    /// The model id the server itself knows the instance by (the Ollama tag,
+    /// the registry name for a launched server, the spec's model when
+    /// adopted). The mesh-serving side pins requests to it.
+    pub async fn served_model(&self, h: &InstanceHandle) -> Option<String> {
+        let g = self.instances.lock().await;
+        let i = g.get(&h.instance_id)?;
+        match &i.managed {
+            Some(Managed {
+                plan: ManagedPlan::Ollama { tag },
+                ..
+            }) => Some(tag.clone()),
+            Some(m) => Some(m.model_name.clone()),
+            None => i.spec.model.clone(),
+        }
+    }
+
     /// The spec of a loaded instance.
     pub async fn spec_of(&self, h: &InstanceHandle) -> Option<InferenceSpec> {
         self.instances

@@ -62,6 +62,13 @@ pub enum FrameType {
     /// signed payload (encoded / consensus / control). Topic lives in the
     /// IPC envelope or publisher metadata; payload is observational-only.
     SensorObservation = 0x0F,
+    /// Inference request (mesh-placement-19, ADR-101 section 5): one
+    /// OpenAI-compatible HTTP request for a role this node serves. See
+    /// `infer_proxy::wire`. Served only to admitted, verified peers.
+    InferRequest = 0x10,
+    /// Inference response (mesh-placement-19): `head`, body `chunk`s,
+    /// `end` or `error`. See `infer_proxy::wire`.
+    InferResponse = 0x11,
 }
 
 /// Wire protocol name for [`FrameType`] (WEFT-115).
@@ -88,6 +95,8 @@ impl FrameType {
         Self::LogAggregation,
         Self::AssessmentSync,
         Self::SensorObservation,
+        Self::InferRequest,
+        Self::InferResponse,
     ];
 
     /// Parse a byte into a known frame type, returning `None` for
@@ -109,6 +118,8 @@ impl FrameType {
             0x0D => Some(Self::LogAggregation),
             0x0E => Some(Self::AssessmentSync),
             0x0F => Some(Self::SensorObservation),
+            0x10 => Some(Self::InferRequest),
+            0x11 => Some(Self::InferResponse),
             _ => None,
         }
     }
@@ -168,17 +179,31 @@ impl MeshFrame {
 
 /// Read a single framed message from a mesh stream.
 ///
-/// Expects the stream to yield the type byte + payload (the length
-/// prefix is handled by the transport layer).
+/// The transport delivers one message per `recv`, carrying exactly what
+/// [`write_frame`] sent: `[4-byte len][type][payload]`. The declared length
+/// must match the message and stay under the mesh cap.
 pub async fn read_frame(stream: &mut dyn MeshStream) -> Result<MeshFrame, MeshError> {
     let data = stream.recv().await?;
-    if data.len() > MAX_MESSAGE_SIZE {
+    if data.len() > MAX_MESSAGE_SIZE + 4 {
         return Err(MeshError::MessageTooLarge {
             size: data.len(),
             max: MAX_MESSAGE_SIZE,
         });
     }
-    MeshFrame::decode(&data)
+    if data.len() < 5 {
+        return Err(MeshError::Transport("short frame".into()));
+    }
+    let declared = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    if declared > MAX_MESSAGE_SIZE {
+        return Err(MeshError::MessageTooLarge {
+            size: declared,
+            max: MAX_MESSAGE_SIZE,
+        });
+    }
+    if declared != data.len() - 4 {
+        return Err(MeshError::Transport("frame length mismatch".into()));
+    }
+    MeshFrame::decode(&data[4..])
 }
 
 /// Write a single framed message to a mesh stream.
@@ -209,16 +234,46 @@ mod tests {
             (0x0D, FrameType::LogAggregation),
             (0x0E, FrameType::AssessmentSync),
             (0x0F, FrameType::SensorObservation),
+            (0x10, FrameType::InferRequest),
+            (0x11, FrameType::InferResponse),
         ];
         for (byte, variant) in expected {
             assert_eq!(FrameType::from_byte(byte), Some(variant));
         }
     }
 
+    #[tokio::test]
+    async fn write_then_read_frame_round_trips_and_checks_the_length() {
+        use crate::mesh_test_support::connected_pair;
+        let (mut a, mut b) = connected_pair().await.unwrap();
+        let f = MeshFrame {
+            frame_type: FrameType::InferRequest,
+            payload: vec![9, 8, 7],
+        };
+        write_frame(&mut a, &f).await.unwrap();
+        let g = read_frame(&mut b).await.unwrap();
+        assert_eq!(g.frame_type, FrameType::InferRequest);
+        assert_eq!(g.payload, vec![9, 8, 7]);
+        // Wrong declared length, short message, and over-cap length are refused.
+        let mut bad = f.encode().unwrap();
+        bad[3] = bad[3].wrapping_add(1);
+        a.send(&bad).await.unwrap();
+        assert!(read_frame(&mut b).await.is_err());
+        a.send(&[0, 0, 0]).await.unwrap();
+        assert!(read_frame(&mut b).await.is_err());
+        let mut huge = vec![0u8; 8];
+        huge[..4].copy_from_slice(&(MAX_MESSAGE_SIZE as u32 + 1).to_be_bytes());
+        a.send(&huge).await.unwrap();
+        assert!(matches!(
+            read_frame(&mut b).await,
+            Err(MeshError::MessageTooLarge { .. })
+        ));
+    }
+
     #[test]
     fn frame_type_from_byte_unknown() {
         assert!(FrameType::from_byte(0x00).is_none());
-        assert!(FrameType::from_byte(0x10).is_none());
+        assert!(FrameType::from_byte(0x12).is_none());
         assert!(FrameType::from_byte(0xFF).is_none());
     }
 

@@ -27,7 +27,7 @@ pub mod runtime;
 pub mod spec;
 
 #[cfg(test)]
-mod fakes;
+pub(crate) mod fakes;
 #[cfg(test)]
 mod tests_adopted;
 #[cfg(test)]

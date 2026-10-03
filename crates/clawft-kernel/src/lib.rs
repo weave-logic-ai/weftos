@@ -94,6 +94,9 @@ pub mod model_manifest;
 // mesh-placement-09: WorkloadRuntime adapters (native, container, Seed API).
 #[cfg(all(feature = "workload-runtime", unix))]
 pub mod workload_runtime;
+// mesh-placement-19: stable inference address, loopback proxy, mesh forwarding.
+#[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
+pub mod infer_proxy;
 // mesh-placement-10: cog ingest bridge and store forwarding.
 #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
 pub mod cog_ingest;

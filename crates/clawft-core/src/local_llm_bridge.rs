@@ -175,6 +175,24 @@ pub fn apply_local_llm_bridge(
     resolution
 }
 
+/// May the `local/` provider follow placement (ADR-101 section 5)?
+///
+/// Precedence is env, then `[kernel.llm]` / `[providers.local]`, then
+/// placement, then the ADR-060 constants. Placement therefore applies only
+/// when nothing explicit chose the endpoint: no `LLM_SERVICE_URL`, no
+/// `[kernel.llm].service_url`, and no `[providers.local].api_base` other
+/// than the ADR-060 default (which the bridge stamps itself). Call after
+/// [`apply_local_llm_bridge`] with its resolution.
+pub fn local_placement_allowed(config: &Config, resolution: &LocalLlmResolution) -> bool {
+    resolution.url_source == "default:local-adr060"
+        && config
+            .providers
+            .local
+            .api_base
+            .as_deref()
+            .is_none_or(|b| b.is_empty() || b.trim_end_matches('/') == DEFAULT_LOCAL_LLM_API_BASE)
+}
+
 /// Human-readable one-liner for logs (agent CLI + status).
 pub fn format_resolution_log(r: &LocalLlmResolution) -> String {
     format!(
@@ -187,6 +205,39 @@ pub fn format_resolution_log(r: &LocalLlmResolution) -> String {
 mod tests {
     use super::*;
     use clawft_types::config::{KernelConfig, LlmEndpointConfig};
+
+    #[test]
+    fn placement_applies_only_when_nothing_explicit_chose_the_endpoint() {
+        let mut config = Config::default();
+        let r = apply_local_llm_bridge(&mut config, "default");
+        if r.url_source == "default:local-adr060" {
+            assert!(local_placement_allowed(&config, &r));
+        }
+        // Explicit providers.local.api_base wins.
+        config.providers.local.api_base = Some("http://127.0.0.1:9100/v1".into());
+        let r = resolve_local_llm(&config, "default");
+        if r.url_source == "default:local-adr060" {
+            assert!(!local_placement_allowed(&config, &r));
+        }
+        // [kernel.llm].service_url wins.
+        let mut config = Config {
+            kernel: KernelConfig {
+                llm: Some(LlmEndpointConfig {
+                    service_url: Some("http://127.0.0.1:9000".into()),
+                    model: None,
+                }),
+                ..KernelConfig::default()
+            },
+            ..Config::default()
+        };
+        let r = apply_local_llm_bridge(&mut config, "default");
+        assert!(!local_placement_allowed(&config, &r));
+        // An env-sourced URL (LLM_SERVICE_URL) wins.
+        let mut r = r;
+        r.url_source = "env:LLM_SERVICE_URL";
+        let config = Config::default();
+        assert!(!local_placement_allowed(&config, &r));
+    }
 
     #[test]
     fn defaults_resolve_to_adr060() {

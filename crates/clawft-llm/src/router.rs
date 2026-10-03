@@ -4,9 +4,12 @@
 //! to their respective providers, enabling a single entry point for any model.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::{self, LlmProviderConfig};
 use crate::openai_compat::OpenAiCompatProvider;
+use crate::placement::{CachedResolver, PlacedProvider, PlacementResolver};
 use crate::provider::Provider;
 
 /// Routes model names to providers based on prefix matching.
@@ -36,6 +39,10 @@ pub struct ProviderRouter {
     prefix_map: Vec<(String, String)>,
     /// The name of the default provider (used when no prefix matches).
     default_provider: String,
+    /// Original configs by provider name (kept to build placed providers).
+    configs: HashMap<String, LlmProviderConfig>,
+    /// TTL cache over the placement resolver, when one is attached.
+    placement: Option<Arc<CachedResolver>>,
 }
 
 impl ProviderRouter {
@@ -48,8 +55,10 @@ impl ProviderRouter {
         let mut providers: HashMap<String, Box<dyn Provider>> = HashMap::new();
         let mut prefix_map: Vec<(String, String)> = Vec::new();
 
+        let mut kept: HashMap<String, LlmProviderConfig> = HashMap::new();
         for config in configs {
             let name = config.name.clone();
+            kept.insert(name.clone(), config.clone());
             if let Some(ref prefix) = config.model_prefix {
                 prefix_map.push((prefix.clone(), name.clone()));
             }
@@ -64,6 +73,48 @@ impl ProviderRouter {
             providers,
             prefix_map,
             default_provider,
+            configs: kept,
+            placement: None,
+        }
+    }
+
+    /// Attach a [`PlacementResolver`] (ADR-101 section 5). Each
+    /// `(provider name, role)` pair makes that provider follow placement:
+    /// its endpoint is resolved per request through a TTL cache, and its
+    /// configured `base_url` remains the fallback.
+    ///
+    /// Precedence is the caller's: leave a provider out of `roles` when its
+    /// endpoint was set explicitly (env or `[kernel.llm]`), and it is never
+    /// placed. Unknown provider names are ignored.
+    pub fn with_placement(
+        mut self,
+        resolver: Arc<dyn PlacementResolver>,
+        ttl: Duration,
+        roles: &[(&str, &str)],
+    ) -> Self {
+        let cache = Arc::new(CachedResolver::new(resolver, ttl));
+        for (provider, role) in roles {
+            if let Some(cfg) = self.configs.get(*provider) {
+                let placed = PlacedProvider::new((*role).to_string(), cfg.clone(), cache.clone());
+                self.providers.insert((*provider).to_string(), Box::new(placed));
+            }
+        }
+        self.placement = Some(cache);
+        self
+    }
+
+    /// Drop cached placement answers for `role` (call on a mesh peer or
+    /// service-advertisement change). No-op without a resolver.
+    pub fn invalidate_placement(&self, role: &str) {
+        if let Some(c) = &self.placement {
+            c.invalidate(role);
+        }
+    }
+
+    /// Drop every cached placement answer. No-op without a resolver.
+    pub fn invalidate_all_placement(&self) {
+        if let Some(c) = &self.placement {
+            c.invalidate_all();
         }
     }
 
