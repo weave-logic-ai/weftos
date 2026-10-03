@@ -4,8 +4,9 @@ No I/O beyond the explicit loaders. Everything here is unit-tested in
 scripts/cogs/test_conformance.py.
 
 Outcomes (per raw harness result):
-  clean          ran, produced >= 1 ingest POST, and exited 0 (--once) or was
-                 still cycling at the deadline (--interval)
+  clean          ran, produced >= 1 ingest POST, and exited 0 (--once); or, for
+                 --interval, was still cycling at the deadline (or stopped by
+                 the launcher's --run-secs) after at least two cycle events
   no-output      ran without error but produced no ingest POST
   cli-error      exited non-zero (unknown flag, missing peer, etc.)
   missing-binary no binary for this arch (e.g. registry 404)
@@ -31,6 +32,9 @@ RUNTIME_CAPABILITY = {
     "ssh": "runtime.native",
 }
 PROVENANCE_RANK = {"claimed": 0, "probed": 1, "measured": 2}
+CONTAINER_RUNTIMES = ("docker", "apple-container", "podman")
+# uname machines that execute a cog binary of each arch without emulation.
+NATIVE_MACHINES = {"aarch64": ("aarch64", "arm64"), "arm": ("armv7l", "armv8l", "armv7")}
 
 
 def valid_cog_id(cid):
@@ -50,7 +54,43 @@ def classify(result):
     if result.get("mode") == "once" and rc != 0:
         # a --once run that had to be killed never completed a cycle
         return "no-output"
-    return "clean" if (result.get("ingest_posts") or 0) >= 1 else "no-output"
+    posts = (result.get("ingest_posts") or 0) >= 1
+    if result.get("mode") == "interval":
+        # An interval cog must keep cycling: still running at the deadline, or
+        # stopped by the launcher (rc 0 with a launcher). One POST and then
+        # silence, or a cog that quit by itself, is not interval behaviour.
+        running = bool(result.get("timed_out")) or (rc == 0 and bool(result.get("launcher")))
+        return "clean" if running and posts and (result.get("cycles") or 0) >= 2 \
+            else "no-output"
+    return "clean" if posts else "no-output"
+
+
+def native_run(result, arch, harness_runtime, driver_machine=None):
+    """True only when the cog demonstrably ran on matching hardware.
+
+    A binary run under emulation (an aarch64 container on an x86 host, an
+    armv7 container on Apple silicon) says nothing about the node's real cycle
+    time, so its result must never become measured provenance. Unknown
+    machines count as not native: nothing is upgraded on a guess.
+
+    `result["host_machine"]` is what the harness saw (inside the container
+    that already reports the emulated machine); for a container harness the
+    machine of the host driving the engine is checked too. A raw node
+    (native / ssh) may run 32-bit arm on an aarch64 kernel.
+    """
+    ok = NATIVE_MACHINES[arch]
+    machines = [result.get("host_machine")]
+    if harness_runtime in CONTAINER_RUNTIMES:
+        machines.append(driver_machine)
+    elif arch == "arm":
+        ok = ok + ("aarch64", "arm64")
+    return all(isinstance(m, str) and m.lower() in ok for m in machines)
+
+
+def emulated_ids(results, arch, harness_runtime, driver_machine=None):
+    """Ids of results that did not run natively (see native_run)."""
+    return sorted(r["id"] for r in results
+                  if not native_run(r, arch, harness_runtime, driver_machine))
 
 
 # ── Expectations ────────────────────────────────────────────────────────────
@@ -180,16 +220,21 @@ def parse_legacy_summary(text):
 
 # ── Capabilities (ADR-099 section 2 shape) ──────────────────────────────────
 
-def cycle_capabilities(results, arch, runtime, measured_at, harness_runtime=None):
+def cycle_capabilities(results, arch, runtime, measured_at, harness_runtime=None,
+                       driver_machine=None):
     """perf.cog.cycle_ms capabilities (provenance measured) for clean results.
 
     `runtime` is the runtime that ran the cog (the WeftOS adapter when a
     launcher was used); `harness_runtime`, when it differs, records where the
     harness itself ran (e.g. an aarch64 container standing in for a Linux node).
+    Results that did not run natively (native_run) emit nothing: an emulated
+    cycle time is not this node's.
     """
     caps = []
     for r in results:
         if classify(r) != "clean" or r.get("cycle_ms") is None:
+            continue
+        if not native_run(r, arch, harness_runtime or runtime, driver_machine):
             continue
         caps.append({
             "id": "perf.cog.cycle_ms",
@@ -204,24 +249,30 @@ def cycle_capabilities(results, arch, runtime, measured_at, harness_runtime=None
     return caps
 
 
-def upgrade_provenance(node_caps, results, arch, runtime, measured_at, harness_runtime=None):
+def upgrade_provenance(node_caps, results, arch, runtime, measured_at, harness_runtime=None,
+                       driver_machine=None):
     """Return node capabilities with the exercised arch/runtime ids upgraded.
 
-    Only upgrades when at least one cog ran clean on that arch + runtime, and
-    never downgrades. Capabilities the run did not exercise are untouched.
+    Only upgrades when at least one cog ran clean and natively (not emulated)
+    on that arch + runtime, and never downgrades. Capabilities the run did not exercise are untouched.
     Adds the perf.cog.cycle_ms capabilities (replacing older ones for the same
     cog / arch / runtime).
     """
     if arch not in ARCH_CAPABILITY or runtime not in RUNTIME_CAPABILITY:
         raise ValueError("unknown arch or runtime")
     exercised = {ARCH_CAPABILITY[arch], RUNTIME_CAPABILITY[runtime]}
-    any_clean = any(classify(r) == "clean" for r in results)
-    fresh = cycle_capabilities(results, arch, runtime, measured_at, harness_runtime)
+    hr = harness_runtime or runtime
+    any_clean = any(classify(r) == "clean" and native_run(r, arch, hr, driver_machine)
+                    for r in results)
+    fresh = cycle_capabilities(results, arch, runtime, measured_at, harness_runtime,
+                               driver_machine)
     fresh_keys = {(c["attrs"]["cog_id"], arch, runtime) for c in fresh}
     out = []
     for cap in node_caps:
         if not isinstance(cap, dict) or not isinstance(cap.get("id"), str):
             raise ValueError("node capability must be an object with an id")
+        if not isinstance(cap.get("attrs") or {}, dict):
+            raise ValueError("node capability %s: attrs must be an object" % cap["id"])
         cap = json.loads(json.dumps(cap))  # deep copy
         a = cap.get("attrs") or {}
         if cap["id"] == "perf.cog.cycle_ms" and (

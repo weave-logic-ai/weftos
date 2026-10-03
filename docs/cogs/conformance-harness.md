@@ -124,6 +124,27 @@ every aarch64 cog `--once`, 15 s cap, features feed). The raw prototype lines ar
 ADR-100 and the card text say "7 need seed peers or other CLI", but 93 + 5 + 7 is
 105, not 107. The raw results list nine, and the harness reports nine.
 
+## Honesty rules
+
+- **Emulation is not measurement.** A result counts as native only when the
+  machine that ran it matches the arch (`aarch64`/`arm64` for aarch64; `armv7l`,
+  `armv8l` for arm, plus an aarch64 kernel on a raw node). For a container
+  harness the driving host's machine is checked as well, because an emulated
+  container reports the emulated machine. An unknown machine is not native. A
+  non-native run emits no `perf.cog.cycle_ms`, upgrades no node capability, and
+  is listed under `emulated` in the sweep summary and the probe output.
+- **Downloaded binaries are hash-checked.** Pass `--sha256-manifest` (a JSON
+  map of `cog-<id>-<arch>` to its sha256, taken from the registry or a package
+  manifest, at the top level or under `binaries`). A download that does not match
+  is never written, a cache entry that does not match is discarded, and the
+  harness compares the hash again on the node just before it runs the binary.
+  Without a manifest only `--binary-dir` runs (listed entries are still checked).
+- **Interval cogs must cycle.** An `--interval` run is clean only when it was
+  still running at the deadline (or stopped by the launcher) after at least two
+  cycle events. One POST and then silence is `no-output`.
+- **Malformed input is a one-line error** (`error: ...`, exit code 2), not a
+  traceback: node facts, results files, expectations and the manifest.
+
 ## Admission probe and provenance
 
 `probe` runs one cog in its expected run mode. It emits a `perf.cog.cycle_ms`

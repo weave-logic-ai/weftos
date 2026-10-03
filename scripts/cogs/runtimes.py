@@ -11,6 +11,8 @@ and produces results.json in it by running harness.py on the target:
                   (remote-node mode; the host comes from --ssh-host or
                   COG_HARNESS_SSH_HOST and is never written into results)
 """
+import hashlib
+import json
 import os
 import re
 import shlex
@@ -53,14 +55,57 @@ def check_elf(data, arch):
     return None
 
 
-def fetch_binary(cid, arch, cache_dir, base=BASE_URL, opener=None):
-    """Return (path, None) for a cached/downloaded binary, or (None, reason)."""
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MANIFEST_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_hash_manifest(path):
+    """Read a package manifest of expected binary hashes.
+
+    JSON object mapping binary file name (`cog-<id>-<arch>`) to its 64 lower-case
+    hex sha256, either at the top level or under `binaries`. Raises ValueError
+    for a manifest of any other shape.
+    """
+    try:
+        with open(path) as f:
+            doc = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ValueError("sha256 manifest %s: %s" % (path, e))
+    if isinstance(doc, dict) and isinstance(doc.get("binaries"), dict):
+        doc = doc["binaries"]
+    if not isinstance(doc, dict):
+        raise ValueError("sha256 manifest %s: expected an object of name -> sha256" % path)
+    for name, digest in doc.items():
+        if not MANIFEST_NAME_RE.match(name) or not isinstance(digest, str) \
+                or not SHA256_RE.match(digest):
+            raise ValueError("sha256 manifest %s: bad entry %r" % (path, name))
+    return doc
+
+
+def fetch_binary(cid, arch, cache_dir, *, expected_sha256, base=BASE_URL, opener=None):
+    """Return (path, None) for a cached/downloaded binary, or (None, reason).
+
+    The binary must hash to `expected_sha256` (from the registry or a package
+    manifest). A cached file that does not is discarded; a download that does
+    not is never written. With no expected hash nothing is fetched or reused.
+    """
+    if not isinstance(expected_sha256, str) or not SHA256_RE.match(expected_sha256):
+        return None, "no expected sha256 for %s; refusing an unverified binary" % \
+            binary_name(cid, arch)
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, binary_name(cid, arch))
     if os.path.isfile(path):
         with open(path, "rb") as f:
             head = f.read(64)
-        if check_elf(head, arch) is None:
+        if check_elf(head, arch) is None and sha256_file(path) == expected_sha256:
             return path, None
         os.remove(path)
     url = binary_url(cid, arch, base)
@@ -77,6 +122,9 @@ def fetch_binary(cid, arch, cache_dir, base=BASE_URL, opener=None):
     why = check_elf(data, arch)
     if why:
         return None, why
+    got = hashlib.sha256(data).hexdigest()
+    if got != expected_sha256:
+        return None, "sha256 mismatch: got %s, expected %s" % (got, expected_sha256)
     tmp = path + ".part"
     with open(tmp, "wb") as f:
         f.write(data)

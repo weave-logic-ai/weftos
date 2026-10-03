@@ -308,6 +308,13 @@ def run_cog(spec, defaults):
         return result
     os.chmod(binary, 0o755)
     result["sha256"] = _sha256(binary)
+    expected = spec.get("sha256")
+    if expected is not None and expected != result["sha256"]:
+        # Checked here too, after staging: the cache or the copy to the node
+        # may not be the file that was verified when it was fetched.
+        result.update(status="exec-error", rc=None, timed_out=False,
+                      stderr_tail="sha256 mismatch: expected %s" % expected)
+        return result
     with Fixtures(feed, defaults["udp_port"], defaults["ingest_port"],
                   defaults["ingest_bind"]) as fx:
         time.sleep(0.1)  # let the feed and stub come up
