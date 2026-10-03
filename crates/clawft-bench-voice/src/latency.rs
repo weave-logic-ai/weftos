@@ -264,13 +264,12 @@ impl VoicePipeline for MockPipeline {
     }
 
     fn run_turn(&mut self) -> Result<(), String> {
-        if let Some(limit) = self.fail_after {
-            if self.turns >= limit {
+        if let Some(limit) = self.fail_after
+            && self.turns >= limit {
                 return Err(format!(
                     "mock pipeline forced failure after {limit} turn(s)"
                 ));
             }
-        }
         self.turns += 1;
         if !self.delay.is_zero() {
             std::thread::sleep(self.delay);

@@ -303,11 +303,11 @@ impl SensorTopicBus {
             local_deliveries += 1;
         }
         let base = env.topic.as_str();
-        if base != topic {
-            if let Some(q) = self.local_subs.get_mut(base) {
-                q.push(payload.clone());
-                local_deliveries += 1;
-            }
+        if base != topic
+            && let Some(q) = self.local_subs.get_mut(base)
+        {
+            q.push(payload.clone());
+            local_deliveries += 1;
         }
 
         self.last_by_topic.insert(topic.clone(), payload);

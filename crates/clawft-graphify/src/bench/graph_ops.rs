@@ -251,7 +251,7 @@ impl GraphOpsHarness {
 
     /// Time subgraph extraction for first `take` entities.
     pub fn subgraph(&mut self, kg: &KnowledgeGraph, take: usize) -> GraphOpsSample {
-        let ids: Vec<EntityId> = kg.entity_ids().cloned().take(take).collect();
+        let ids: Vec<EntityId> = kg.entity_ids().take(take).cloned().collect();
         let start = Instant::now();
         let sub = kg.subgraph(&ids);
         std::hint::black_box(sub.entity_count());

@@ -350,6 +350,8 @@ pub(crate) fn compute_payload_hash(payload: &Option<serde_json::Value>) -> [u8; 
 ///
 /// The null-byte separators between `source` and `kind` prevent
 /// domain collisions (e.g. "foo" + "bar.baz" vs "foo.bar" + "baz").
+// The positional arguments are the hash preimage fields in wire order; a params struct would only restate them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_event_hash(
     sequence: u64,
     chain_id: u32,
@@ -1564,15 +1566,13 @@ impl ChainManager {
         let start = chain.events.partition_point(|e| e.sequence < from);
         let mut out = Vec::new();
         let mut next = from;
-        let mut scanned = 0;
-        for e in &chain.events[start..] {
+        for (scanned, e) in chain.events[start..].iter().enumerate() {
             if e.sequence >= end {
                 return (out, end);
             }
             if scanned >= scan || out.len() >= limit {
                 return (out, next);
             }
-            scanned += 1;
             next = e.sequence + 1;
             if prefix.is_none_or(|p| e.kind.starts_with(p)) {
                 out.push(e.clone());
@@ -3022,13 +3022,13 @@ impl ChainLoggable for GovernanceDecisionEvent {
             "evaluated_rules": self.evaluated_rules,
             "timestamp": self.timestamp.to_rfc3339(),
         });
-        if let Some(p) = &self.principal {
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert(
-                    "principal".into(),
-                    serde_json::to_value(p).unwrap_or(serde_json::Value::Null),
-                );
-            }
+        if let Some(p) = &self.principal
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert(
+                "principal".into(),
+                serde_json::to_value(p).unwrap_or(serde_json::Value::Null),
+            );
         }
         payload
     }

@@ -44,11 +44,10 @@ pub fn build_voice_chat_params(
         "provenance".into(),
         serde_json::json!({"impulse_source": "voice.stt", "path": "WEFT-350"}),
     );
-    if let Some(ref a) = audio {
-        if let Ok(v) = serde_json::to_value(a) {
+    if let Some(ref a) = audio
+        && let Ok(v) = serde_json::to_value(a) {
             metadata.insert(voice_meta::AUDIO.into(), v);
         }
-    }
     AgentChatParams {
         messages: vec![AgentChatMessage {
             role: "user".into(),
@@ -74,14 +73,13 @@ pub fn tts_units_from_frames(frames: &[AgentChatStreamFrame]) -> Vec<String> {
         .filter_map(|f| f.speakable.clone())
         .filter(|s| !s.trim().is_empty())
         .collect();
-    if units.is_empty() {
-        if let Some(last) = frames.iter().rev().find(|f| f.done && f.error.is_none()) {
+    if units.is_empty()
+        && let Some(last) = frames.iter().rev().find(|f| f.done && f.error.is_none()) {
             let t = last.text.trim();
             if !t.is_empty() {
                 units.push(t.to_string());
             }
         }
-    }
     units
 }
 
@@ -99,7 +97,7 @@ pub fn resolve_input_audio(params: &AgentChatParams) -> Option<AudioRef> {
     params
         .metadata
         .as_ref()
-        .and_then(|m| audio_from_metadata(m))
+        .and_then(audio_from_metadata)
 }
 
 /// Build the [`TurnContent`] the substrate sink will persist for a

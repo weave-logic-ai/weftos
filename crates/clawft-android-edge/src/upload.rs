@@ -138,11 +138,10 @@ pub fn health_check(pair: &HostPair) -> Result<String, EdgeError> {
 fn extract_sog_url(pair: &HostPair, v: &serde_json::Value, job_id: &str) -> String {
     // Prefer explicit fields if host provides them.
     for key in ["sog_url", "result_url", "viewer_url"] {
-        if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
-            if !s.is_empty() {
+        if let Some(s) = v.get(key).and_then(|x| x.as_str())
+            && !s.is_empty() {
                 return s.to_string();
             }
-        }
     }
     // splatd serves artifacts at /v1/jobs/{id}/artifacts/{name}
     if let Some(arts) = v.get("artifacts").and_then(|a| a.as_object()) {

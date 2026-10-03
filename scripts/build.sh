@@ -1157,9 +1157,9 @@ cmd_clippy() {
     else
         # Always show full output — tail -5 hides warnings
         if [ -n "$FEATURES" ]; then
-            cargo clippy "${scope[@]}" --features "$FEATURES" -- -D warnings 2>&1
+            cargo clippy --keep-going "${scope[@]}" --features "$FEATURES" -- -D warnings 2>&1
         else
-            cargo clippy "${scope[@]}" -- -D warnings 2>&1
+            cargo clippy --keep-going "${scope[@]}" -- -D warnings 2>&1
         fi
     fi
     timer_end
@@ -2013,9 +2013,9 @@ cmd_gate() {
     if [ "${GATE_RELEASE_DRY_RUN:-}" = "1" ] || [ "${GATE_RELEASE_DRY_RUN:-}" = "true" ]; then
         WITH_RELEASE_DRY_RUN=true
     fi
-    local total=21
+    local total=22
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        total=22
+        total=23
     fi
     header "Phase Gate — ${total} checks"
     local passed=0 failed=0 skipped=0
@@ -2212,12 +2212,17 @@ cmd_gate() {
     run_gate_check 21 "daemon does not enable clawft-mesh-local testing (check-daemon-no-mesh-testing)" \
         cmd_check_daemon_no_mesh_testing
 
-    # 22. WEFT-460 — optional cargo-dist host-triple release rehearsal.
+    # 22. Workspace clippy, warnings as errors (same invocation as `clippy`).
+    #     Debt cleared in cards 8dfd7ed5 / 0f92a3ca; this keeps it from returning.
+    run_gate_check 22 "workspace clippy (warnings as errors)" \
+        cargo clippy --keep-going --workspace -- -D warnings
+
+    # 23. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
     #   scripts/build.sh gate --with-release-dry-run
     #   GATE_RELEASE_DRY_RUN=1 scripts/build.sh gate
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 22 "$total" "release-dry-run (cargo-dist host triple)"
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 23 "$total" "release-dry-run (cargo-dist host triple)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   scripts/build.sh release-dry-run\n"
@@ -2376,7 +2381,7 @@ ${BOLD}Commands:${NC}
                   Linux check that another user cannot read or list the
                   weft-licence grant key (runs the licence-cross aarch64
                   binary as real users in the cogs cross image).
-  gate            Run full phase gate (19 checks, includes cargo audit +
+  gate            Run full phase gate (22 checks, includes cargo audit +
                   npm audit critical/high / WEFT-598 +
                   kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56 +
                   agents/ validate + catalog + leak-check / AD-1 + AD-2).

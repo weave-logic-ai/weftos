@@ -238,7 +238,7 @@ impl CronService {
     pub fn list_jobs(&self) -> Vec<CronJob> {
         let jobs = self.jobs.lock().unwrap();
         let mut list: Vec<CronJob> = jobs.values().cloned().collect();
-        list.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        list.sort_by_key(|a| a.created_at);
         list
     }
 

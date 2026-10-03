@@ -57,6 +57,7 @@ impl BranchId {
 
 /// Metadata attached when deriving a branch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct BranchMeta {
     /// Human-readable branch name (audit / CLI).
     pub name: String,
@@ -64,14 +65,6 @@ pub struct BranchMeta {
     pub priority_tier: u8,
 }
 
-impl Default for BranchMeta {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            priority_tier: 0,
-        }
-    }
-}
 
 /// One leaf that differs between two branches inside a region.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

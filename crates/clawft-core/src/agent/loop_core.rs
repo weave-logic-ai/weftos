@@ -2322,6 +2322,8 @@ impl<P: Platform> AgentLoop<P> {
     /// (unit tests of the deny envelope) may pass `""` and a fresh token.
     /// `tool_call_id` is stored on ObservationPack ledger rows (empty in
     /// tests that do not have a model-issued id).
+    // Public AgentLoop entry point with ~9 call sites (loop + tests); the guard inputs are independent, so a params struct would only move the arguments.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_tool_with_guards(
         &self,
         agent_id: &str,

@@ -412,11 +412,10 @@ async fn load_records_from_daemon() -> anyhow::Result<LoadedSource> {
         }
         match RouterDecisionRecord::from_substrate_value(&value) {
             Ok(mut rec) => {
-                if rec.decision_id.is_empty() {
-                    if let Some(id) = decision_id_from_path(&child.path) {
+                if rec.decision_id.is_empty()
+                    && let Some(id) = decision_id_from_path(&child.path) {
                         rec.decision_id = id;
                     }
-                }
                 records.push(rec);
             }
             Err(_) => continue,
@@ -506,11 +505,10 @@ fn print_selected_route(rec: &RouterDecisionRecord) {
     if let Some(arch) = rec.selected_archetype() {
         println!("  archetype:    {arch}");
     }
-    if let Some(tools) = rec.selected_route.get("tool_subset") {
-        if !tools.is_null() {
+    if let Some(tools) = rec.selected_route.get("tool_subset")
+        && !tools.is_null() {
             println!("  tool_subset:  {tools}");
         }
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

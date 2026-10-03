@@ -75,12 +75,11 @@ where
     for ev in events {
         match ev.kind.as_str() {
             k if k == EVENT_KIND_CAUSAL_NODE_ADD => {
-                if let Some(payload) = ev.payload.as_ref() {
-                    if let Some(id) = payload.get("node_id").and_then(|v| v.as_u64()) {
-                        if let Some(state) = payload.get("state").and_then(|v| v.as_str()) {
-                            map.insert(id, state.to_string());
-                        }
-                    }
+                if let Some(payload) = ev.payload.as_ref()
+                    && let Some(id) = payload.get("node_id").and_then(|v| v.as_u64())
+                    && let Some(state) = payload.get("state").and_then(|v| v.as_str())
+                {
+                    map.insert(id, state.to_string());
                 }
             }
             k if k == EVENT_KIND_CAUSAL_NODE_STATE => {
@@ -89,10 +88,10 @@ where
                 }
             }
             k if k == EVENT_KIND_CAUSAL_NODE_REMOVE => {
-                if let Some(payload) = ev.payload.as_ref() {
-                    if let Some(id) = payload.get("node_id").and_then(|v| v.as_u64()) {
-                        map.remove(&id);
-                    }
+                if let Some(payload) = ev.payload.as_ref()
+                    && let Some(id) = payload.get("node_id").and_then(|v| v.as_u64())
+                {
+                    map.remove(&id);
                 }
             }
             _ => {}

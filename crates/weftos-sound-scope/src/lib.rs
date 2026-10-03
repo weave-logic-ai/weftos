@@ -52,8 +52,8 @@ impl SensorApp for SoundApp {
     fn tick(&mut self, ctx: &egui::Context, cog: &mut CogClient) {
         let trace = self.trace.clone();
         cog.poll_export("/raw", 400, ctx, move |r| {
-            if let (Ok(v), Ok(mut t)) = (r, trace.lock()) {
-                if let Some(arr) = v["samples"].as_array() {
+            if let (Ok(v), Ok(mut t)) = (r, trace.lock())
+                && let Some(arr) = v["samples"].as_array() {
                     t.clear();
                     for s in arr {
                         if let (Some(tm), Some(vv)) = (s["t_ms"].as_u64(), s["v"].as_f64()) {
@@ -61,7 +61,6 @@ impl SensorApp for SoundApp {
                         }
                     }
                 }
-            }
         });
     }
 

@@ -292,11 +292,10 @@ fn close_truncated(input: &str) -> String {
         match c {
             '{' => stack.push('}'),
             '[' => stack.push(']'),
-            '}' | ']' => {
-                if stack.last() == Some(&c) {
+            '}' | ']'
+                if stack.last() == Some(&c) => {
                     stack.pop();
                 }
-            }
             _ => {}
         }
     }

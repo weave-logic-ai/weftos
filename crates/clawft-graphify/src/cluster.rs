@@ -3,7 +3,7 @@
 //!
 //! Ported from Python `graphify/cluster.py`. Default path is label propagation
 //! (deterministic, matches WeftOS `causal.rs`). SASE (k-order graph convolution
-//! + RFF + k-means; WEFT-516 / arXiv:2408.05765) is available via
+//! with RFF and k-means; WEFT-516 / arXiv:2408.05765) is available via
 //! [`ClusterMethod::Sase`] / [`cluster_with`]. Enable Cargo feature
 //! `sase-cluster` to make SASE the default for [`cluster`].
 
@@ -111,7 +111,7 @@ fn cluster_with_config(
     if kg.edge_count() == 0 {
         let mut result = HashMap::new();
         let mut ids: Vec<EntityId> = kg.entity_ids().cloned().collect();
-        ids.sort_by(|a, b| a.0.cmp(&b.0));
+        ids.sort_by_key(|a| a.0);
         for (i, id) in ids.into_iter().enumerate() {
             result.insert(i, vec![id]);
         }
@@ -137,10 +137,9 @@ fn cluster_with_config(
         }
     }
 
-    let mut next_cid = raw.keys().copied().max().unwrap_or(0) + 1;
-    for node in isolates {
-        raw.insert(next_cid, vec![node]);
-        next_cid += 1;
+    let first_isolate_cid = raw.keys().copied().max().unwrap_or(0) + 1;
+    for (cid, node) in (first_isolate_cid..).zip(isolates) {
+        raw.insert(cid, vec![node]);
     }
 
     let max_size = std::cmp::max(min_split, (kg.node_count() as f64 * max_fraction) as usize);
@@ -159,7 +158,7 @@ fn cluster_with_config(
         .into_iter()
         .enumerate()
         .map(|(i, mut nodes)| {
-            nodes.sort_by(|a, b| a.0.cmp(&b.0));
+            nodes.sort_by_key(|a| a.0);
             (i, nodes)
         })
         .collect()
@@ -187,7 +186,7 @@ fn label_propagation(kg: &KnowledgeGraph, nodes: &[EntityId]) -> HashMap<EntityI
 
     // Initialize: each node gets its own label (index-based for determinism)
     let mut sorted_nodes: Vec<&EntityId> = nodes.iter().collect();
-    sorted_nodes.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted_nodes.sort_by_key(|a| a.0);
 
     let _node_to_idx: HashMap<&EntityId, usize> = sorted_nodes
         .iter()
@@ -298,7 +297,7 @@ fn split_community(
     sub_communities
         .into_values()
         .map(|mut v| {
-            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v.sort_by_key(|a| a.0);
             v
         })
         .collect()

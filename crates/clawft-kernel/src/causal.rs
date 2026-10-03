@@ -325,18 +325,16 @@ impl CausalGraph {
                 drop(node);
 
                 #[cfg(feature = "exochain")]
-                if changed {
-                    if let Some(ref cm) = self.chain_manager {
-                        cm.append(
-                            "causal",
-                            crate::chain::EVENT_KIND_CAUSAL_NODE_STATE,
-                            Some(serde_json::json!({
-                                "node_id": id,
-                                "from": previous,
-                                "to": state,
-                            })),
-                        );
-                    }
+                if changed && let Some(ref cm) = self.chain_manager {
+                    cm.append(
+                        "causal",
+                        crate::chain::EVENT_KIND_CAUSAL_NODE_STATE,
+                        Some(serde_json::json!({
+                            "node_id": id,
+                            "from": previous,
+                            "to": state,
+                        })),
+                    );
                 }
 
                 let _ = previous; // silence unused when exochain is off
@@ -1255,7 +1253,7 @@ impl CausalGraph {
         let m = alpha.len();
         let (evals, evecs) = tridiag_eigen(
             &alpha,
-            &beta[..m.saturating_sub(1).max(0).min(beta.len())],
+            &beta[..m.saturating_sub(1).min(beta.len())],
             m,
         );
 

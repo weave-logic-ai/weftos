@@ -23,6 +23,10 @@
 //! a boundary against a hostile local process (Phase 3 peer credentials,
 //! Phase 4 sandboxes).
 
+// `clawft_rpc::Response` is the ready-made refusal returned as the `Err` early-out of these
+// handlers; it is built once per refused request, so its size is not on a hot path.
+#![allow(clippy::result_large_err)]
+
 use clawft_rpc::{ForwardHeader, Response};
 
 use crate::project_forward::ForwardError;

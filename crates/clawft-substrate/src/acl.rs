@@ -517,7 +517,7 @@ impl AclTable {
         let mut matches: Vec<MatchRef<'_>> = Vec::new();
         collect_matches(&self.root, &segs, 0, 0, &mut matches);
         // Most specific first: higher score first; stable by insertion order.
-        matches.sort_by(|a, b| b.score.cmp(&a.score));
+        matches.sort_by_key(|b| std::cmp::Reverse(b.score));
 
         for m in &matches {
             let rule = m.rule;

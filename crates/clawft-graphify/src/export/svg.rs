@@ -76,8 +76,8 @@ pub struct VowlStyle {
 ///
 /// Attribute flags: `"deprecated"`, `"external"`.
 pub fn vowl_style(owl_type: &str, attributes: &[&str]) -> VowlStyle {
-    let deprecated = attributes.iter().any(|a| *a == "deprecated");
-    let external = attributes.iter().any(|a| *a == "external");
+    let deprecated = attributes.contains(&"deprecated");
+    let external = attributes.contains(&"external");
 
     let mut base = match owl_type {
         "owl:Class" => VowlStyle {

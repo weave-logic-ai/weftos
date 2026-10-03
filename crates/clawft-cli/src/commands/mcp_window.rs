@@ -56,6 +56,7 @@ impl WindowIntentSink for ExternalIntentTx {
 pub struct LocalWindowIntentBus {
     tx: ExternalIntentTx,
     /// Shared receive half — polled by tests or a future GUI attach bridge.
+    #[allow(dead_code)] // read only by `poll`, which the non-test binary does not call yet
     source: Mutex<ExternalIntentSource>,
 }
 
@@ -75,6 +76,7 @@ impl LocalWindowIntentBus {
     }
 
     /// Drain all intents submitted since the last poll (FIFO).
+    #[allow(dead_code)] // test / headless drain; the GUI attach bridge will call it
     pub fn poll(&self) -> Vec<IntentEnvelope> {
         self.source
             .lock()

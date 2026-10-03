@@ -117,7 +117,7 @@ pub struct SignedCapabilityAdvertisement {
 
 /// Return `Ok(())` if `cap` is on the allow-list.
 pub fn validate_capability(cap: &str) -> Result<(), CapabilityClaimError> {
-    if CAPABILITY_ALLOWLIST.iter().any(|&a| a == cap) {
+    if CAPABILITY_ALLOWLIST.contains(&cap) {
         Ok(())
     } else {
         Err(CapabilityClaimError::UnknownCapability(cap.to_string()))

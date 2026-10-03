@@ -226,8 +226,8 @@ async fn mcp_post_handler(
     };
 
     // Prefer clientInfo.name on initialize for label.
-    if msg.get("method").and_then(|m| m.as_str()) == Some("initialize") {
-        if let Some(name) = msg
+    if msg.get("method").and_then(|m| m.as_str()) == Some("initialize")
+        && let Some(name) = msg
             .pointer("/params/clientInfo/name")
             .and_then(|v| v.as_str())
         {
@@ -238,7 +238,6 @@ async fn mcp_post_handler(
                 *g = label.as_str().to_string();
             }
         }
-    }
 
     let mut shell = state.shell.lock().await;
     match shell.handle_message(msg, Some(&cap.scopes)).await {

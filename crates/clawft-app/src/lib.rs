@@ -3,7 +3,7 @@
 //! Implements the subset of [ADR-015][adr] required for milestone M1.5:
 //! TOML manifest schema, structural validation rules 1–9, a JSON-backed
 //! [`registry::AppRegistry`], the [`install`] pipeline (ADR-015 §Install
-//! + OOB first-boot seeding, WEFT-440), and the lifecycle types the
+//! and OOB first-boot seeding, WEFT-440), and the lifecycle types the
 //! desktop compositor will consume when launching apps.
 //!
 //! Out of scope (lands in sibling crates / later milestones):

@@ -342,7 +342,7 @@ impl TieredRouter {
             .iter()
             .filter(|t| t.ordinal < selected.ordinal)
             .collect();
-        candidates.sort_by(|a, b| b.ordinal.cmp(&a.ordinal)); // highest first
+        candidates.sort_by_key(|b| std::cmp::Reverse(b.ordinal)); // highest first
 
         for candidate in candidates {
             let candidate_cost = candidate.cost_per_1k_tokens;
@@ -464,7 +464,7 @@ impl TieredRouter {
             .iter()
             .filter(|t| t.ordinal < primary_tier.ordinal)
             .collect();
-        lower_tiers.sort_by(|a, b| b.ordinal.cmp(&a.ordinal));
+        lower_tiers.sort_by_key(|b| std::cmp::Reverse(b.ordinal));
 
         for tier in lower_tiers {
             if tier.ordinal > max_ordinal {

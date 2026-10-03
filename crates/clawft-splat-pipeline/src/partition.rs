@@ -435,7 +435,7 @@ fn cluster_objects(points: &[Point3], params: &PartitionParams) -> Vec<ObjectHit
         })
         .collect();
     // Prefer larger clusters.
-    objects.sort_by(|a, b| b.point_count.cmp(&a.point_count));
+    objects.sort_by_key(|b| std::cmp::Reverse(b.point_count));
     objects.truncate(params.max_objects);
     objects
 }
@@ -459,14 +459,13 @@ fn free_space_volumes(
         a.max[1] = a.max[1].max(b.max[1]);
         a.max[2] = a.max[2].max(b.max[2]);
         a
-    }) {
-        if occ.volume() > 0.0 {
+    })
+        && occ.volume() > 0.0 {
             volumes.push(VolumeHit {
                 kind: "occupied".into(),
                 bound: occ,
             });
         }
-    }
 
     // Free slab: from floor (if known) up to scene max, otherwise upper half of scene.
     let floor_y = surfaces

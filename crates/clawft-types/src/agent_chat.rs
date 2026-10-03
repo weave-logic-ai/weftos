@@ -976,21 +976,21 @@ pub fn cascade_stream_frames(full: &str, chunk_chars: usize) -> Vec<AgentChatStr
         seq = seq.saturating_add(1);
     }
     // Terminal flush of any trailing clause without punctuation.
-    if let Some(tail) = tracker.flush(full) {
-        if let Some(last) = frames.last_mut() {
-            // Attach residual speakable onto the last generating frame
-            // if it had none; otherwise emit an extra frame.
-            if last.speakable.is_none() {
-                last.speakable = Some(tail);
-            } else {
-                frames.push(AgentChatStreamFrame::generating_voice(
-                    seq,
-                    full,
-                    "",
-                    Some(tail),
-                ));
-                seq = seq.saturating_add(1);
-            }
+    if let Some(tail) = tracker.flush(full)
+        && let Some(last) = frames.last_mut()
+    {
+        // Attach residual speakable onto the last generating frame
+        // if it had none; otherwise emit an extra frame.
+        if last.speakable.is_none() {
+            last.speakable = Some(tail);
+        } else {
+            frames.push(AgentChatStreamFrame::generating_voice(
+                seq,
+                full,
+                "",
+                Some(tail),
+            ));
+            seq = seq.saturating_add(1);
         }
     }
     frames.push(AgentChatStreamFrame::done_ok(seq, full));

@@ -132,7 +132,7 @@ pub fn split_levels(keywords: &[String]) -> (Vec<String>, Vec<String>) {
     for kw in keywords {
         // Exact theme-hint match only — do not classify "AuthService" as
         // high merely because it contains the substring "auth".
-        if THEME_HINTS.iter().any(|t| *t == kw.as_str()) {
+        if THEME_HINTS.contains(&kw.as_str()) {
             high.push(kw.clone());
         } else {
             low.push(kw.clone());
@@ -140,11 +140,10 @@ pub fn split_levels(keywords: &[String]) -> (Vec<String>, Vec<String>) {
     }
     // Always promote at least one high-level token so dual-level is
     // meaningful even for pure entity queries: reuse the longest low token.
-    if high.is_empty() {
-        if let Some(longest) = low.iter().max_by_key(|s| s.len()) {
+    if high.is_empty()
+        && let Some(longest) = low.iter().max_by_key(|s| s.len()) {
             high.push(longest.clone());
         }
-    }
     (low, high)
 }
 

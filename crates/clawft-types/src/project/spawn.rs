@@ -94,6 +94,8 @@ pub enum SpawnError {
 
 impl SpawnFile {
     /// A spawn file valid for [`SPAWN_TTL_SECS`] from `now_unix`.
+    // Public constructor with three callers across crates; a params struct would change the public API.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         nonce: String,
         parent_socket: PathBuf,

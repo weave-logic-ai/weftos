@@ -134,8 +134,8 @@ impl WelfordSigRegMonitor {
         let mut v = zero_latent();
         if self.n >= 2 {
             let denom = (self.n - 1) as f32;
-            for i in 0..LATENT_DIM {
-                v[i] = self.m2[i] / denom;
+            for (vi, m2) in v.iter_mut().zip(self.m2.iter()) {
+                *vi = *m2 / denom;
             }
         }
         v
@@ -157,10 +157,10 @@ impl WelfordSigRegMonitor {
         // Welford online update.
         self.n = self.n.saturating_add(1);
         let n_f = self.n as f32;
-        for i in 0..LATENT_DIM {
-            let delta = z[i] - self.mean[i];
+        for (i, &zi) in z.iter().enumerate() {
+            let delta = zi - self.mean[i];
             self.mean[i] += delta / n_f;
-            let delta2 = z[i] - self.mean[i];
+            let delta2 = zi - self.mean[i];
             self.m2[i] += delta * delta2;
         }
 
@@ -195,9 +195,9 @@ impl WelfordSigRegMonitor {
         let mut mean_term = 0.0f32;
         let mut var_term = 0.0f32;
         let var = self.variance();
-        for i in 0..LATENT_DIM {
-            mean_term += self.mean[i] * self.mean[i];
-            let dv = var[i] - 1.0;
+        for (m, v) in self.mean.iter().zip(var.iter()) {
+            mean_term += m * m;
+            let dv = v - 1.0;
             var_term += dv * dv;
         }
         mean_term /= LATENT_DIM as f32;
@@ -211,7 +211,7 @@ impl WelfordSigRegMonitor {
         let secs = (self.ms_below_threshold / 1000) as u32;
         SigRegHealth {
             score: self.score,
-            seconds_below_threshold: secs.min(u32::MAX),
+            seconds_below_threshold: secs,
             version_tag: self.version_tag,
         }
     }

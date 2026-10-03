@@ -55,11 +55,10 @@ impl InteractState {
     }
 
     pub fn node_dimmed(&self, n: &GNode) -> bool {
-        if let Some(intent) = n.classification.intent.as_deref() {
-            if self.dim_intents.contains(intent) {
+        if let Some(intent) = n.classification.intent.as_deref()
+            && self.dim_intents.contains(intent) {
                 return true;
             }
-        }
         false
     }
 

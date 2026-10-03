@@ -22,18 +22,15 @@ pub use model::{GraphModel, GEdge, GNode, NodeRole, NodeStateTag};
 
 /// Follow-live vs scrubbed history (ADR-067 D4).
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum ViewTime {
     /// Pin scrubber to now; poll head.
+    #[default]
     Live,
     /// Rebuild graph-state-at-T (ms wall time or mapped chain_seq).
     Pinned(u64),
 }
 
-impl Default for ViewTime {
-    fn default() -> Self {
-        Self::Live
-    }
-}
 
 /// Implementation status for one GUI phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -53,7 +53,7 @@ fn cross_community_links(
     }
 
     let mut result: Vec<(String, usize)> = counts.into_iter().collect();
-    result.sort_by(|a, b| b.1.cmp(&a.1));
+    result.sort_by_key(|b| std::cmp::Reverse(b.1));
     result
 }
 
@@ -79,7 +79,7 @@ fn community_article(
 ) -> String {
     let mut top_nodes: Vec<(&EntityId, usize)> =
         nodes.iter().map(|id| (id, kg.degree(id))).collect();
-    top_nodes.sort_by(|a, b| b.1.cmp(&a.1));
+    top_nodes.sort_by_key(|b| std::cmp::Reverse(b.1));
     top_nodes.truncate(25);
 
     let cross = cross_community_links(kg, nodes, cid, labels);
@@ -258,7 +258,7 @@ fn index_md(
     ];
 
     let mut sorted: Vec<(&usize, &Vec<EntityId>)> = communities.iter().collect();
-    sorted.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
     for (cid, nodes) in &sorted {
         let label = labels
             .get(cid)

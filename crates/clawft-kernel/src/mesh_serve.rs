@@ -297,7 +297,7 @@ async fn serve_connection(
     );
 
     // Optionally wrap in Noise encryption.
-    let mut channel: Box<dyn EncryptedChannel> = match &nc {
+    let channel: Box<dyn EncryptedChannel> = match &nc {
         Some(cfg) => match tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
             NoiseChannel::respond(stream, cfg),

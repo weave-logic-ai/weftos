@@ -60,7 +60,7 @@ pub fn build(gaps: &GapReport, mut scores: Vec<StoreCoherence>, top_n: usize) ->
         .filter(|g| g.severity == GapSeverity::Critical || g.severity == GapSeverity::High)
         .cloned()
         .collect();
-    top_alerts.sort_by(|a, b| b.severity.cmp(&a.severity));
+    top_alerts.sort_by_key(|b| std::cmp::Reverse(b.severity));
     top_alerts.truncate(top_n);
 
     let worst_stores: Vec<_> = scores.iter().take(top_n).cloned().collect();

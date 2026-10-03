@@ -171,7 +171,7 @@ fn channel_covers(channel: &AdapterChannel, permission: &Permission) -> bool {
             if domains.is_empty() {
                 true
             } else {
-                domains.iter().any(|d| *d == need.as_str())
+                domains.contains(&need.as_str())
             }
         }
         _ => false,

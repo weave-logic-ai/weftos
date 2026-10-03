@@ -22,12 +22,12 @@ pub const NO_USER_DAEMON: &str =
 pub fn user_socket() -> anyhow::Result<PathBuf> {
     let profile = std::env::var("WEAVER_PROFILE").ok();
     let runtime = std::env::var("WEFTOS_RUNTIME_DIR").ok();
-    Ok(user_socket_with(
+    user_socket_with(
         home_dir().as_deref(),
         crate::user_daemon::is_active() || profile.as_deref() == Some("user"),
         runtime.as_deref(),
     )
-    .ok_or_else(|| anyhow::anyhow!("cannot determine the home directory to find the user daemon"))?)
+    .ok_or_else(|| anyhow::anyhow!("cannot determine the home directory to find the user daemon"))
 }
 
 /// [`user_socket`] over explicit inputs.

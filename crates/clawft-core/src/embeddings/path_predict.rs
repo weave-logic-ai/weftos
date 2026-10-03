@@ -180,11 +180,11 @@ impl RegionEntryTable {
 
         // Build RegionEntry rows: members + entry nodes nearest centroid.
         let mut regions = Vec::with_capacity(k);
-        for c in 0..k {
+        for (c, centroid) in centroids.iter().enumerate().take(k) {
             let mut members: Vec<(String, f32)> = Vec::new();
             for (i, (id, emb)) in entries.iter().enumerate() {
                 if assignment[i] == c {
-                    let sim = cosine_similarity(emb, &centroids[c]);
+                    let sim = cosine_similarity(emb, centroid);
                     members.push((id.clone(), sim));
                 }
             }

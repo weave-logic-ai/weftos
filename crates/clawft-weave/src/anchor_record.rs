@@ -111,7 +111,8 @@ fn retired_seal_corroborated(env: &CertEnv, a: &Accepted, signer: &[u8; 32]) -> 
         let old = e.payload.as_ref()?.get("record")?.get("old_key_id")?.as_str()?;
         (is_rotation && old == signer_id).then_some(e.sequence)
     });
-    let found = rotated_at.is_some_and(|r| {
+    
+    rotated_at.is_some_and(|r| {
         events.iter().any(|e| {
             e.source == ANCHOR_SOURCE
                 && e.kind == KIND_ANCHOR
@@ -125,8 +126,7 @@ fn retired_seal_corroborated(env: &CertEnv, a: &Accepted, signer: &[u8; 32]) -> 
                         && p.get("project_id").and_then(|v| v.as_str()) == Some(a.statement.project_id.as_str())
                 })
         })
-    });
-    found
+    })
 }
 
 /// The statement still verifies under some certificate ever issued for the

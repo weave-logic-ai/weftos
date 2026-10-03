@@ -158,12 +158,13 @@ impl MicroLoraRouter {
         let err = target - current;
         for i in 0..g.rank {
             let mut act = 0.0f32;
-            for j in 0..FEATURE_DIM {
-                act += g.w_down[i][j] * q[j];
+            for (w, x) in g.w_down[i].iter().zip(q.iter()).take(FEATURE_DIM) {
+                act += w * x;
             }
             g.w_up[i] += lr * err * act;
-            for j in 0..FEATURE_DIM {
-                g.w_down[i][j] += lr * err * g.w_up[i] * q[j] * 0.1;
+            let w_up_i = g.w_up[i];
+            for (w, x) in g.w_down[i].iter_mut().zip(q.iter()).take(FEATURE_DIM) {
+                *w += lr * err * w_up_i * x * 0.1;
             }
         }
     }
@@ -231,11 +232,10 @@ impl Default for MicroLoraRouter {
 impl ContextRouter for MicroLoraRouter {
     async fn route(&self, request: &ContextRequest) -> ContextDecision {
         let decision = self.route_inner(request);
-        if let Ok(mut g) = self.state.lock() {
-            if g.shadow {
+        if let Ok(mut g) = self.state.lock()
+            && g.shadow {
                 g.last_shadow = Some(decision.clone());
             }
-        }
         // Shadow mode still returns the decision so HybridRouter can chain;
         // operators log `last_shadow_decision` for WITNESS-style audits.
         decision

@@ -218,7 +218,7 @@ pub fn run_calibration(
     let tick_interval_ms = (tick_us / 1000).max(1) as u32;
 
     // Log the auto-computed band for diagnostics.
-    let tick_hz = if tick_us > 0 { 1_000_000 / tick_us } else { 0 };
+    let tick_hz = 1_000_000u64.checked_div(tick_us).unwrap_or(0);
     tracing::info!(
         p95_us = p95,
         required_us = required_us,

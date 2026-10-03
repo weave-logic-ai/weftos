@@ -300,7 +300,7 @@ impl WindowManager {
         match mode {
             ArrangeMode::Grid => {
                 let cols = (n as f32).sqrt().ceil() as usize;
-                let rows = (n + cols - 1) / cols;
+                let rows = n.div_ceil(cols);
                 let cell_w = 1.0 / cols as f32;
                 let cell_h = 1.0 / rows as f32;
                 let margin = 0.01;
@@ -340,8 +340,8 @@ impl WindowManager {
         if !self.panes.iter().any(|p| &p.id == agent_id) {
             return false;
         }
-        if let Some(p) = self.get_mut(tool_id) {
-            if let PaneKind::Tool {
+        if let Some(p) = self.get_mut(tool_id)
+            && let PaneKind::Tool {
                 tool,
                 attached_to: _,
             } = &p.kind
@@ -354,7 +354,6 @@ impl WindowManager {
                 self.dirty = true;
                 return true;
             }
-        }
         false
     }
 
@@ -633,8 +632,8 @@ impl WindowManager {
         }
         let Some(pos) = pointer else { return };
 
-        if let Some(drag) = self.drag.clone() {
-            if let Some(p) = self.get_mut(&drag.id) {
+        if let Some(drag) = self.drag.clone()
+            && let Some(p) = self.get_mut(&drag.id) {
                 let abs = p.rect.to_abs(stage);
                 let new_min = pos - drag.grab_offset;
                 let mut moved = egui::Rect::from_min_size(new_min, abs.size());
@@ -654,10 +653,9 @@ impl WindowManager {
                 p.rect = NormRect::from_abs(moved, stage);
                 self.dirty = true;
             }
-        }
 
-        if let Some(rs) = self.resize.clone() {
-            if let Some(p) = self.get_mut(&rs.id) {
+        if let Some(rs) = self.resize.clone()
+            && let Some(p) = self.get_mut(&rs.id) {
                 let mut abs = p.rect.to_abs(stage);
                 let min_w = MIN_NORM_W * stage.width();
                 let min_h = MIN_NORM_H * stage.height();
@@ -680,7 +678,6 @@ impl WindowManager {
                 p.rect = NormRect::from_abs(abs, stage);
                 self.dirty = true;
             }
-        }
     }
 
     pub fn is_dragging(&self) -> bool {

@@ -44,10 +44,8 @@ pub(crate) fn splice_graft_block(messages: &mut Vec<LlmMessage>, block: Vec<LlmM
         return;
     }
     let head_len = messages.iter().take_while(|m| m.role == "system").count();
-    let mut idx = head_len;
-    for gm in block {
+    for (idx, gm) in (head_len..).zip(block) {
         messages.insert(idx, gm);
-        idx += 1;
     }
 }
 

@@ -79,9 +79,9 @@ pub fn write_refused(sentinel: &Path, reason: &str) {
 /// successor may already be booting. Taking the lock here proves it is not,
 /// and holds it while the file is written.
 pub fn write_refused_if_unowned(paths: &clawft_types::runtime_paths::RuntimePaths, reason: &str) {
-    match crate::instance_lock::InstanceLock::acquire(paths) {
-        Ok(_lock) => write_refused(&paths.refused(), reason),
-        Err(_) => {} // a successor (or any other kernel) owns it
+    // An `Err` means a successor (or any other kernel) owns the dir: leave it alone.
+    if let Ok(_lock) = crate::instance_lock::InstanceLock::acquire(paths) {
+        write_refused(&paths.refused(), reason);
     }
 }
 

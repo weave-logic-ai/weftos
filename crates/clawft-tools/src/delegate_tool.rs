@@ -206,13 +206,12 @@ impl DelegateTaskTool {
                         handle.status,
                         TaskStatus::Completed | TaskStatus::Exhausted | TaskStatus::Running
                     );
-                    if !ok {
-                        if let Some(err) = handle.outcome.as_ref().and_then(|o| o.error.as_ref()) {
+                    if !ok
+                        && let Some(err) = handle.outcome.as_ref().and_then(|o| o.error.as_ref()) {
                             return Err(ToolError::ExecutionFailed(format!(
                                 "specialist `{agent_name}` failed: {err}"
                             )));
                         }
-                    }
                     return Ok(json!({
                         "status": "delegated",
                         "target": "specialist",

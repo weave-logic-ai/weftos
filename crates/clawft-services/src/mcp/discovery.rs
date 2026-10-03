@@ -822,14 +822,13 @@ pub fn start_config_watcher_with_debounce(
                             match ev.kind {
                                 EventKind::Create(_)
                                 | EventKind::Modify(_)
-                                | EventKind::Remove(_) => {
-                                    if event_affects_target(&ev, &watched_path) {
+                                | EventKind::Remove(_)
+                                    if event_affects_target(&ev, &watched_path) => {
                                         pending = true;
                                         debounce_deadline = Some(
                                             tokio::time::Instant::now() + debounce,
                                         );
                                     }
-                                }
                                 _ => {}
                             }
                         }

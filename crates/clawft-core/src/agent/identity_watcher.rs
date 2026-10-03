@@ -181,14 +181,13 @@ pub fn start_watching<P: Platform + 'static>(
                             match ev.kind {
                                 EventKind::Create(_)
                                 | EventKind::Modify(_)
-                                | EventKind::Remove(_) => {
-                                    if event_touches_identity(&ev) {
+                                | EventKind::Remove(_)
+                                    if event_touches_identity(&ev) => {
                                         pending_invalidate = true;
                                         debounce_deadline = Some(
                                             tokio::time::Instant::now() + debounce,
                                         );
                                     }
-                                }
                                 _ => {}
                             }
                         }

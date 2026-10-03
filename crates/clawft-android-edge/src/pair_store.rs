@@ -107,11 +107,10 @@ pub fn parse_pair_input(input: &str, token_override: Option<&str>) -> Result<Hos
     let mut token = token_override.unwrap_or("").to_string();
     if let Some((head, query)) = base.split_once('?') {
         for part in query.split('&') {
-            if let Some((k, v)) = part.split_once('=') {
-                if k == "token" && token.is_empty() {
+            if let Some((k, v)) = part.split_once('=')
+                && k == "token" && token.is_empty() {
                     token = urlencoding_decode(v);
                 }
-            }
         }
         base = head.to_string();
     }

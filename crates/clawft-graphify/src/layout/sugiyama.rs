@@ -209,8 +209,8 @@ fn assign_layers(n: usize, adj: &[Vec<usize>], rev: &[Vec<usize>]) -> Vec<usize>
 
     // Any remaining nodes (shouldn't happen for a true DAG after cycle
     // removal, but be defensive) go at the end in index order.
-    for i in 0..n {
-        if !seen[i] {
+    for (i, &was_seen) in seen.iter().enumerate() {
+        if !was_seen {
             order.push(i);
         }
     }
@@ -303,7 +303,7 @@ fn reduce_crossings(
 
 /// Stable sort of a layer by barycenter; nodes with no median keep relative order
 /// at the end of the computed positions (use previous index as fallback).
-fn barycenter_sort(layer: &mut Vec<usize>, bary: impl Fn(usize) -> Option<f64>) {
+fn barycenter_sort(layer: &mut [usize], bary: impl Fn(usize) -> Option<f64>) {
     let indexed: Vec<(usize, usize, f64)> = layer
         .iter()
         .enumerate()

@@ -213,11 +213,10 @@ impl WorkDelegationCert {
         if self.revoked {
             return Err(DelegationError::Revoked);
         }
-        if let Some(exp) = self.expires_unix {
-            if now_unix > exp {
+        if let Some(exp) = self.expires_unix
+            && now_unix > exp {
                 return Err(DelegationError::Expired);
             }
-        }
         self.verify_signature()
     }
 

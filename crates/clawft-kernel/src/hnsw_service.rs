@@ -346,16 +346,16 @@ impl HnswService {
         let ef_used = store.ef_search();
         if used_guided {
             let pool = path_pred.candidate_ids.len();
-            eml.record_guided_search(
+            eml.record_guided_search(crate::hnsw_eml::GuidedSearch {
                 query,
-                results.len(),
+                result_count: results.len(),
                 top_score,
                 ef_used,
-                elapsed_us,
+                search_time_us: elapsed_us,
                 store_size,
-                &path_pred,
-                pool,
-            );
+                prediction: &path_pred,
+                candidate_pool_size: pool,
+            });
         } else {
             eml.record_search(
                 query,

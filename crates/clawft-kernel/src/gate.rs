@@ -496,10 +496,10 @@ impl GateBackend for GovernanceGate {
         // WEFT-634: ensure tool identity is available for tool_selector matching.
         // Chat path uses `tool.{name}` action strings; callers may also pass
         // an explicit `"tool"` context field.
-        if !ctx_map.contains_key("tool") {
-            if let Some(tool) = action.strip_prefix("tool.") {
-                ctx_map.insert("tool".into(), tool.to_owned());
-            }
+        if !ctx_map.contains_key("tool")
+            && let Some(tool) = action.strip_prefix("tool.")
+        {
+            ctx_map.insert("tool".into(), tool.to_owned());
         }
 
         // WEFT-636: build attributed principal from agent_id + optional

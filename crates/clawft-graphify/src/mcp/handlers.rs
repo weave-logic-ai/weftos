@@ -186,13 +186,11 @@ fn load_graph_json(path: &Path) -> Result<KnowledgeGraph, GraphifyError> {
 
 /// Remap legacy `"links"` key to `"edges"` expected by `build_from_json`.
 fn normalize_graph_json(mut value: Value) -> Value {
-    if value.get("edges").is_none() {
-        if let Some(links) = value.get("links").cloned() {
-            if let Some(obj) = value.as_object_mut() {
+    if value.get("edges").is_none()
+        && let Some(links) = value.get("links").cloned()
+            && let Some(obj) = value.as_object_mut() {
                 obj.insert("edges".into(), links);
             }
-        }
-    }
     value
 }
 
@@ -327,15 +325,14 @@ pub fn query_graph(
             traverse_bfs(&kg, seed, depth)
         };
         for id in visited {
-            if seen.insert(id.clone()) {
-                if let Some(e) = kg.entity(&id) {
+            if seen.insert(id.clone())
+                && let Some(e) = kg.entity(&id) {
                     neighbourhood.push(format!(
                         "{} ({})",
                         e.label,
                         e.source_file.as_deref().unwrap_or("-")
                     ));
                 }
-            }
         }
     }
 

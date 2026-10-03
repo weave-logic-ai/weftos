@@ -272,12 +272,12 @@ fn provenance_decision(
     }
     // A provenance beside a binary must also describe that binary.
     for f in &found {
-        if let (Some(arch), Some(want)) = (&f.beside, &f.sha256) {
-            if bin_sha.get(arch).is_none_or(|h| !h.eq_ignore_ascii_case(want)) {
-                return Err(PackError::Input(format!(
-                    "{PROVENANCE_FILE} beside the {arch} binary does not match it; --redistributable is refused"
-                )));
-            }
+        if let (Some(arch), Some(want)) = (&f.beside, &f.sha256)
+            && bin_sha.get(arch).is_none_or(|h| !h.eq_ignore_ascii_case(want))
+        {
+            return Err(PackError::Input(format!(
+                "{PROVENANCE_FILE} beside the {arch} binary does not match it; --redistributable is refused"
+            )));
         }
     }
     Ok(ProvenanceDecision::default())

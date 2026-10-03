@@ -78,6 +78,10 @@ pub struct TreeManager {
     signing_key: Option<ed25519_dalek::SigningKey>,
 }
 
+/// `(operation, path, timestamp, signature)` extracted from a mutation event.
+#[cfg(feature = "exochain")]
+pub type MutationSignParts = (String, String, chrono::DateTime<Utc>, Option<Vec<u8>>);
+
 impl TreeManager {
     /// Create a new TreeManager with an empty tree and mutation log.
     pub fn new(chain: Arc<ChainManager>) -> Self {
@@ -140,7 +144,7 @@ impl TreeManager {
     #[cfg(feature = "exochain")]
     pub fn mutation_sign_parts(
         event: &MutationEvent,
-    ) -> Option<(String, String, chrono::DateTime<Utc>, Option<Vec<u8>>)> {
+    ) -> Option<MutationSignParts> {
         match event {
             MutationEvent::Create {
                 id,
@@ -1297,29 +1301,26 @@ impl TreeManager {
 
         // Replay defense: reject exact duplicate of the latest event
         // for the same operation identity (kind + id + timestamp).
-        if let Some(last) = log.events().last() {
-            if mutation_event_eq(last, &event) {
-                return Err("mutation replay rejected: exact duplicate of last event".into());
-            }
+        if let Some(last) = log.events().last()
+            && mutation_event_eq(last, &event)
+        {
+            return Err("mutation replay rejected: exact duplicate of last event".into());
         }
 
         // Apply based on mutation type
         match &event {
+            // Only insert if not already present (idempotent); otherwise
+            // fall through to the no-op arm below.
             MutationEvent::Create {
                 id, kind, parent, ..
-            } => {
-                // Only insert if not already present (idempotent)
-                if tree.get(id).is_none() {
-                    tree.insert(id.clone(), kind.clone(), parent.clone())?;
-                    tree.recompute_path(id);
-                }
+            } if tree.get(id).is_none() => {
+                tree.insert(id.clone(), kind.clone(), parent.clone())?;
+                tree.recompute_path(id);
             }
-            MutationEvent::Remove { id, .. } => {
-                if tree.get(id).is_some() {
-                    let removed = tree.remove(id.clone())?;
-                    if let Some(parent) = removed.parent {
-                        tree.recompute_path(&parent);
-                    }
+            MutationEvent::Remove { id, .. } if tree.get(id).is_some() => {
+                let removed = tree.remove(id.clone())?;
+                if let Some(parent) = removed.parent {
+                    tree.recompute_path(&parent);
                 }
             }
             MutationEvent::UpdateMeta { id, key, value, .. } => {
@@ -1333,11 +1334,9 @@ impl TreeManager {
                 }
                 tree.recompute_path(id);
             }
-            MutationEvent::UpdateScoring { id, new, .. } => {
-                // K6.4 (WEFT-106): apply scoring so Merkle roots converge.
-                if tree.get(id).is_some() {
-                    tree.update_scoring(id, *new);
-                }
+            // K6.4 (WEFT-106): apply scoring so Merkle roots converge.
+            MutationEvent::UpdateScoring { id, new, .. } if tree.get(id).is_some() => {
+                tree.update_scoring(id, *new);
             }
             MutationEvent::Move { .. } => {
                 // Structural move still deferred (no ResourceTree::move yet).
@@ -1478,10 +1477,10 @@ impl TreeManager {
                     continue;
                 }
                 // Ensure node exists (Create may have been in the event set).
-                if tree.get(&payload.id).is_none() {
-                    if let Some(parent) = &payload.parent {
-                        let _ = tree.insert(payload.id.clone(), payload.kind.clone(), parent.clone());
-                    }
+                if tree.get(&payload.id).is_none()
+                    && let Some(parent) = &payload.parent
+                {
+                    let _ = tree.insert(payload.id.clone(), payload.kind.clone(), parent.clone());
                 }
                 if let Some(node) = tree.get_mut(&payload.id) {
                     node.metadata = payload.metadata.clone();

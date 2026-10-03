@@ -314,6 +314,28 @@ pub struct PathPrediction {
     pub eml_path_quality: Option<f64>,
 }
 
+/// One guided (path-predicted) search, as recorded by
+/// [`HnswEmlManager::record_guided_search`].
+#[derive(Debug, Clone, Copy)]
+pub struct GuidedSearch<'a> {
+    /// The query vector.
+    pub query: &'a [f32],
+    /// Number of results returned.
+    pub result_count: usize,
+    /// Score of the best result.
+    pub top_score: f32,
+    /// `ef` the search ran with.
+    pub ef_used: usize,
+    /// Wall-clock search time in microseconds.
+    pub search_time_us: u64,
+    /// Store size at search time.
+    pub store_size: usize,
+    /// The path prediction that guided the search.
+    pub prediction: &'a PathPrediction,
+    /// Candidate pool size (stands in for hop count).
+    pub candidate_pool_size: usize,
+}
+
 impl From<RegionPathPrediction> for PathPrediction {
     fn from(p: RegionPathPrediction) -> Self {
         Self {
@@ -469,17 +491,17 @@ impl HnswEmlManager {
     ///
     /// `candidate_pool_size` stands in for hop count: smaller pools that still
     /// hit a high top score mean the entry/region prediction was better.
-    pub fn record_guided_search(
-        &mut self,
-        query: &[f32],
-        result_count: usize,
-        top_score: f32,
-        ef_used: usize,
-        search_time_us: u64,
-        store_size: usize,
-        prediction: &PathPrediction,
-        candidate_pool_size: usize,
-    ) {
+    pub fn record_guided_search(&mut self, search: GuidedSearch<'_>) {
+        let GuidedSearch {
+            query,
+            result_count,
+            top_score,
+            ef_used,
+            search_time_us,
+            store_size,
+            prediction,
+            candidate_pool_size,
+        } = search;
         if !self.config.enabled {
             return;
         }
@@ -2577,16 +2599,16 @@ mod tests {
             .collect();
         m.rebuild_path_table(&entries);
         let pred = m.predict_path(&[1.0, 0.0, 1.0], 20);
-        m.record_guided_search(
-            &[1.0, 0.0, 1.0],
-            3,
-            0.9,
-            50,
-            100,
-            20,
-            &pred,
-            pred.candidate_ids.len(),
-        );
+        m.record_guided_search(GuidedSearch {
+            query: &[1.0, 0.0, 1.0],
+            result_count: 3,
+            top_score: 0.9,
+            ef_used: 50,
+            search_time_us: 100,
+            store_size: 20,
+            prediction: &pred,
+            candidate_pool_size: pred.candidate_ids.len(),
+        });
         assert_eq!(m.total_searches, 1);
         assert!(m.path_training[0].guided);
         assert_eq!(m.path_training[0].region_id, pred.region_id);
