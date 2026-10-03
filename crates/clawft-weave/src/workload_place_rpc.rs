@@ -112,6 +112,11 @@ pub fn init_with_mesh_id(key: SigningKey, runtime_dir: PathBuf, mesh_node_id: St
     let _ = BOOT.set(Boot { key, runtime_dir, mesh_node_id });
 }
 
+/// This node's in-process `workload-host`, once placement is built.
+pub fn in_process_host() -> Option<Arc<WorkloadHostService>> {
+    HOST.get().cloned()
+}
+
 /// The daemon's runtime directory (where the operator's policy files are),
 /// once [`init`] ran.
 pub fn runtime_dir() -> Option<PathBuf> {

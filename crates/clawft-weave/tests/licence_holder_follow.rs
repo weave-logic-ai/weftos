@@ -75,7 +75,8 @@ async fn boot_before_link_then_owner_flips_and_a_service_restart_are_followed() 
     // Boot before the link is bound to the daemon's wiring: unknown, nothing runs.
     placement_boot::start(&kernel, &identity, &runtime).await;
     assert_eq!(licence_boot::holder_state(), HolderState::Unknown);
-    assert!(licence_boot::runtime().is_none() && workload_place_rpc::licence_exchange().is_none());
+    // The local licence runtime exists from boot; the exchange waits for the role.
+    assert!(licence_boot::runtime().is_some() && workload_place_rpc::licence_exchange().is_none());
     assert!(bind_error(&kernel).await.contains("holder status unknown"));
 
     // The link is bound: its first refresh says holder, and the path comes up.

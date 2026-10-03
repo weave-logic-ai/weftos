@@ -228,6 +228,7 @@ pub fn run_gate(store: &Arc<CheckoutGrantStore>) -> Arc<dyn clawft_kernel::licen
     Arc::new(LateRunGate {
         grants: store.clone(),
         approvals: Arc::new(|| crate::workload_place_rpc::licence_exchange().map(|x| x.approvals().clone())),
+        holder: Arc::new(crate::licence_boot::holder_state),
     })
 }
 
@@ -240,11 +241,33 @@ pub struct LateRunGate {
     pub grants: Arc<CheckoutGrantStore>,
     /// Where the approval store is, when there is one.
     pub approvals: ApprovalSource,
+    /// This daemon's licence role, read on every check.
+    pub holder: Arc<dyn Fn() -> crate::licence_boot::HolderState + Send + Sync>,
 }
 
 impl LateRunGate {
     fn now(&self) -> clawft_kernel::licence::StoreRunGate {
         clawft_kernel::licence::StoreRunGate { grants: self.grants.clone(), approvals: (self.approvals)() }
+    }
+
+    /// One licence covers the whole mesh, local tenants included: on a
+    /// machine of a Seed-licensed mesh (this daemon has a mesh id) a daemon
+    /// that is not the licence holder runs no Cognitum cog, and does not fall
+    /// back to the ADR-105 path. While the role is unknown the same holds for
+    /// a daemon whose own store was never bound (a tenant), so a holder's
+    /// link blip does not stop its restarts.
+    fn role_refusal(&self) -> Option<clawft_kernel::licence::RunRefusal> {
+        use crate::licence_boot::HolderState;
+        self.grants.local_mesh_id().get()?;
+        match (self.holder)() {
+            HolderState::NotHolder => Some(clawft_kernel::licence::RunRefusal::NotHolder(
+                "this is not the cluster owner's daemon".into(),
+            )),
+            HolderState::Unknown if !self.grants.was_ever_bound() => Some(clawft_kernel::licence::RunRefusal::NotHolder(
+                "the licence holder could not be determined (mesh service query failed)".into(),
+            )),
+            _ => None,
+        }
     }
 }
 
@@ -253,6 +276,9 @@ impl clawft_kernel::licence::CognitumRunGate for LateRunGate {
         &self,
         req: &clawft_kernel::licence::RunRequest<'_>,
     ) -> Result<clawft_kernel::licence::RunVerdict, clawft_kernel::licence::RunRefusal> {
+        if let Some(r) = self.role_refusal() {
+            return Err(r);
+        }
         self.now().check(req)
     }
 

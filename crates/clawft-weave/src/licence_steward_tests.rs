@@ -185,7 +185,11 @@ fn the_run_gate_sees_approvals_from_an_exchange_that_started_after_it() {
     );
     let cell: Arc<OnceLock<Arc<ApprovalStore>>> = Arc::default();
     let c = cell.clone();
-    let gate = LateRunGate { grants, approvals: Arc::new(move || c.get().cloned()) };
+    let gate = LateRunGate {
+        grants,
+        approvals: Arc::new(move || c.get().cloned()),
+        holder: Arc::new(|| crate::licence_boot::HolderState::NotApplicable),
+    };
     let sha = sha256_hex(b"cog");
     let b3 = hex_encode(blake3::hash(b"cog").as_bytes());
     let req = RunRequest { cog_id: "fall-detect", version: "1.2.0", sha256: &sha, blake3: &b3 };
@@ -204,4 +208,45 @@ fn the_run_gate_sees_approvals_from_an_exchange_that_started_after_it() {
     approvals.accept(&sign_approval(&a, &sk(1)).unwrap()).unwrap();
     let _ = cell.set(approvals);
     assert_ne!(gate.check(&req), Ok(RunVerdict::NotSeedBound), "the approvals now count (this node is Seed-bound)");
+}
+
+#[test]
+fn a_non_holder_tenant_refuses_cognitum_cogs_in_a_seed_licensed_mesh() {
+    use crate::licence_boot::HolderState;
+    use std::sync::atomic::AtomicU8;
+    let tmp = tempfile::tempdir().unwrap();
+    // A tenant's own store: a mesh id (Seed-licensed mesh), never bound.
+    let grants = Arc::new(CheckoutGrantStore::open(tmp.path(), anchors(), LocalMeshId::new(mesh()), system_clock()).unwrap());
+    let role = Arc::new(AtomicU8::new(0));
+    let r = role.clone();
+    let gate = LateRunGate {
+        grants: grants.clone(),
+        approvals: Arc::new(|| None),
+        holder: Arc::new(move || match r.load(Ordering::SeqCst) {
+            0 => HolderState::NotHolder,
+            1 => HolderState::Unknown,
+            2 => HolderState::Holder,
+            _ => HolderState::NotApplicable,
+        }),
+    };
+    let sha = sha256_hex(b"cog");
+    let b3 = hex_encode(blake3::hash(b"cog").as_bytes());
+    let req = RunRequest { cog_id: "fall-detect", version: "1.2.0", sha256: &sha, blake3: &b3 };
+    let e = gate.check(&req).unwrap_err();
+    assert_eq!(e.code(), "not_holder", "no ADR-105 fallback on a tenant: {e}");
+    assert!(e.remedy("fall-detect", "1.2.0").contains("cluster owner's daemon"));
+    role.store(1, Ordering::SeqCst);
+    assert_eq!(gate.check(&req).unwrap_err().code(), "not_holder", "unknown, never bound: still refused");
+    role.store(2, Ordering::SeqCst);
+    assert_eq!(gate.check(&req), Ok(RunVerdict::NotSeedBound), "the holder decides by its store");
+    role.store(3, Ordering::SeqCst);
+    assert_eq!(gate.check(&req), Ok(RunVerdict::NotSeedBound), "collapsed: unchanged");
+    // Without a mesh id (no Seed licence configured) a tenant keeps the ADR-105 path.
+    let tmp2 = tempfile::tempdir().unwrap();
+    let plain = LateRunGate {
+        grants: Arc::new(CheckoutGrantStore::open(tmp2.path(), anchors(), LocalMeshId::unset(), system_clock()).unwrap()),
+        approvals: Arc::new(|| None),
+        holder: Arc::new(|| HolderState::NotHolder),
+    };
+    assert_eq!(plain.check(&req), Ok(RunVerdict::NotSeedBound));
 }

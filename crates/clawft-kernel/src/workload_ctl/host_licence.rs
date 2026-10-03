@@ -74,6 +74,11 @@ impl WorkloadHostService {
         self.licence_gate.set(gate).is_ok()
     }
 
+    /// The licence run gate in use, if one was set.
+    pub fn licence_gate(&self) -> Option<&std::sync::Arc<dyn CognitumRunGate>> {
+        self.licence_gate.get()
+    }
+
     /// Ask the gate for one binary; `record` chains a permit.
     fn licence_decide(
         &self,

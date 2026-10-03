@@ -43,7 +43,8 @@ async fn the_licence_path_comes_up_when_the_link_reconnects() {
     let kernel = Arc::new(RwLock::new(kernel));
     placement_boot::start(&kernel, &identity, &tmp.path().join("runtime")).await;
     assert_eq!(licence_boot::holder_state(), HolderState::Unknown);
-    assert!(licence_boot::runtime().is_none() && workload_place_rpc::licence_exchange().is_none());
+    // The local licence runtime exists from boot; the exchange waits for the role.
+    assert!(licence_boot::runtime().is_some() && workload_place_rpc::licence_exchange().is_none());
 
     // The service is back; the link reconnects and the next refresh answers.
     svc.next_uid.store(OTHER_UID, Ordering::SeqCst);
@@ -58,6 +59,6 @@ async fn the_licence_path_comes_up_when_the_link_reconnects() {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     assert_eq!(licence_boot::holder_state(), HolderState::Holder);
-    assert!(licence_boot::runtime().is_some(), "the licence runtime came up after the reconnect");
+    assert!(licence_boot::runtime().is_some(), "the licence runtime is there");
     assert!(workload_place_rpc::licence_exchange().is_some(), "and the exchange");
 }
