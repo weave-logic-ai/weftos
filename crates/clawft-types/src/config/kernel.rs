@@ -915,7 +915,9 @@ pub struct MeshConfig {
     #[serde(default)]
     pub discovery: bool,
 
-    /// Seed peers to connect to on startup.
+    /// Seed peers to connect to on startup. Each entry is an address, or
+    /// `address#node-id` to pin the node id the seed must claim (a seed sends
+    /// no hello, so without a pin it is bound to the first id it names).
     #[serde(default)]
     pub seed_peers: Vec<String>,
 

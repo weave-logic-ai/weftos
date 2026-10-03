@@ -1143,6 +1143,14 @@ noise = true
 seed_peers = ["quic://10.0.0.2:9489"]
 ```
 
+A seed sends no admission hello, so its node id is only what it claims. Without
+more, a dialled seed is bound to the first id it names (in an envelope or an
+assessment frame; a frame that names none is dropped) and can claim no id another
+connection routes. To pin the id instead, write the entry as
+`address#node-id`, for example `"quic://10.0.0.2:9489#n-0123abcd"`: frames
+naming any other id are then dropped from the first byte. The pin is your word
+about the seed, not a proof; the seed's peer is still held as `unverified`.
+
 Admission and the machine mesh service (ADR-103 Phase 3):
 
 | Key | Default | Meaning |

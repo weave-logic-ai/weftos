@@ -80,12 +80,15 @@ async fn verified_peer_registers_under_admitted_id_and_delivery_sees_identity() 
 #[tokio::test]
 async fn unverified_connection_cannot_take_over_a_verified_route() {
     let (rt, _sink) = runtime(true);
+    let mut events = rt.subscribe_peer_events();
     let (good_tx, mut good_rx) = chan();
     rt.handle_incoming_peer(&text("n1", "t"), good_tx, Some(&verified("n1"))).await.unwrap();
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Joined { verified: true, .. })));
 
     let (bad_tx, mut bad_rx) = chan();
     let r = rt.handle_incoming_from(&text("n1", "t"), bad_tx).await;
     assert!(r.is_err());
+    assert!(events.try_recv().is_err(), "a refused claim is not a join, recovery or leave");
 
     let msg = KernelMessage::text(0, MessageTarget::Topic("back".into()), "hi");
     rt.send_to_peer("n1", MeshIpcEnvelope::new("local".into(), "n1".into(), msg)).await.unwrap();
@@ -233,4 +236,23 @@ async fn admitted_route_loses_its_subscriptions_on_close() {
     rt.handle_incoming_peer(&sub, tx.clone(), Some(&verified("n1"))).await.unwrap();
     assert_eq!(rt.disconnect_channel(&tx), 1);
     assert!(rt.peers_for_topic("push.n1").is_empty());
+}
+
+#[tokio::test]
+async fn join_and_recover_events_say_whether_the_id_was_verified() {
+    let (rt, _) = runtime(true);
+    let mut events = rt.subscribe_peer_events();
+    let (a, _ra) = chan();
+    rt.handle_incoming_peer(&text("v", "t"), a, Some(&verified("v"))).await.unwrap();
+    let (b, _rb) = chan();
+    rt.handle_incoming_from(&text("legacy", "t"), b).await.unwrap();
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Joined { node_id, verified: true, .. }) if node_id == "v"));
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Joined { node_id, verified: false, .. }) if node_id == "legacy"));
+    // A reconnect on a fresh channel keeps the flag of the new connection.
+    let (b2, _rb2) = chan();
+    rt.handle_incoming_from(&text("legacy", "t"), b2).await.unwrap();
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Recovered { verified: false, .. })));
+    let (a2, _ra2) = chan();
+    rt.handle_incoming_peer(&text("v", "t"), a2, Some(&verified("v"))).await.unwrap();
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Recovered { verified: true, .. })));
 }

@@ -385,6 +385,91 @@ async fn dialled_connection_binds_to_the_first_id_and_cannot_claim_a_routed_one(
     }
 }
 
+fn assessment_frame(src: &str) -> Vec<u8> {
+    use crate::mesh_assess::AssessmentEnvelope;
+    use crate::assessment::mesh::AssessmentMessage;
+    AssessmentEnvelope {
+        source_node: src.into(),
+        sequence: 1,
+        message: AssessmentMessage::RequestReport { requesting_node: src.into() },
+    }
+    .to_frame()
+    .unwrap()
+    .encode()
+    .unwrap()
+}
+
+#[test]
+fn a_frame_is_attributed_to_the_id_it_names_whatever_its_kind() {
+    assert_eq!(claimed_source(&frame("env-id", "t")).as_deref(), Some("env-id"));
+    assert_eq!(claimed_source(&assessment_frame("assess-id")).as_deref(), Some("assess-id"));
+    assert_eq!(claimed_source(b"\x00\x01 not a frame"), None);
+    assert_eq!(claimed_source(b""), None);
+}
+
+#[tokio::test]
+async fn a_dialled_connection_binds_on_an_assessment_frame_and_drops_unattributable_ones() {
+    use crate::mesh_noise::{EncryptedChannel, PassthroughChannel};
+    let mut l = crate::mesh_tcp::TcpTransport.listen("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    let (dialer, drec) = runtime("dialer");
+    let handles = connect_seeds_with(&dialer, std::slice::from_ref(&addr), "tcp", None, None, quick());
+    let (stream, _) = l.accept().await.unwrap();
+    let mut seed = PassthroughChannel::new(stream);
+    // Garbage first (names no id), then an assessment frame naming "a"
+    // (binds), then an envelope for "b" (not the bound id), then one for "a".
+    seed.send_encrypted(b"\x00\x01 not a frame").await.unwrap();
+    seed.send_encrypted(&assessment_frame("a")).await.unwrap();
+    seed.send_encrypted(&frame("b", "t.b")).await.unwrap();
+    seed.send_encrypted(&frame("a", "t.a")).await.unwrap();
+    assert!(seen(&drec, "t.a").await);
+    assert_eq!(drec.0.lock().unwrap().clone(), vec!["t.a".to_string()], "'b' must not ride a connection bound to 'a'");
+    for h in &handles {
+        h.abort();
+    }
+}
+
+#[test]
+fn seed_entries_parse_with_an_optional_pinned_id() {
+    assert_eq!(
+        parse_seed("10.0.0.2:9489").unwrap(),
+        SeedSpec { addr: "10.0.0.2:9489".into(), node_id: None }
+    );
+    assert_eq!(
+        parse_seed(" quic://10.0.0.2:9489#n-abc123 ").unwrap(),
+        SeedSpec { addr: "quic://10.0.0.2:9489".into(), node_id: Some("n-abc123".into()) }
+    );
+    for bad in ["", "#n-1", "host:1#", "host:1#has space", "host:1#a#b", "host :1", &format!("host:1#{}", "x".repeat(129))] {
+        assert!(parse_seed(bad).is_err(), "{bad:?}");
+    }
+    // One entry per address: the first wins, a repeat with another pin is not honoured.
+    let specs = seed_specs(&["a:1#n-1".into(), "b:2".into(), "a:1#n-2".into(), "a:1#n-1".into(), "bad#".into()]);
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].node_id.as_deref(), Some("n-1"));
+}
+
+#[tokio::test]
+async fn a_pinned_seed_may_only_speak_for_its_own_id() {
+    use crate::mesh_noise::{EncryptedChannel, PassthroughChannel};
+    let mut l = crate::mesh_tcp::TcpTransport.listen("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    let (dialer, drec) = runtime("dialer");
+    let entry = format!("{addr}#seed-id");
+    let handles = connect_seeds_with(&dialer, &[entry], "tcp", None, None, quick());
+    let (stream, _) = l.accept().await.unwrap();
+    let mut seed = PassthroughChannel::new(stream);
+    // The very first frame is for an offline id the seed wants to impersonate.
+    for (src, topic) in [("offline-victim", "t.1"), ("seed-id", "t.2"), ("other", "t.3"), ("seed-id", "t.4")] {
+        seed.send_encrypted(&frame(src, topic)).await.unwrap();
+    }
+    assert!(seen(&drec, "t.4").await);
+    assert_eq!(drec.0.lock().unwrap().clone(), vec!["t.2".to_string(), "t.4".to_string()]);
+    assert!(!dialer.peer_ids().contains(&"offline-victim".to_string()));
+    for h in &handles {
+        h.abort();
+    }
+}
+
 #[test]
 fn backoff_grows_is_capped_and_jittered() {
     let (base, max) = (Duration::from_secs(1), Duration::from_secs(60));

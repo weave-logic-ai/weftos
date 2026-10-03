@@ -239,6 +239,12 @@ impl MeshServiceConfig {
         if self.verdict_timeout_s == 0 {
             return bad("verdict_timeout_s must be at least 1 second");
         }
+        // `seed_peers` entries are `addr` or `addr#node-id` (pin the id the
+        // seed must claim); an entry that does not parse is a mistake, not a
+        // seed to skip silently.
+        for seed in &self.seed_peers {
+            clawft_kernel::mesh_serve::parse_seed(seed).map_err(ConfigError::Invalid)?;
+        }
         if self.admission == MeshAdmissionMode::Enforce {
             if self.genesis_hash.is_none() {
                 return bad("admission = \"enforce\" requires genesis_hash");
@@ -343,6 +349,22 @@ mod tests {
         let l = c.mesh_limits();
         assert_eq!((l.per_ip, l.first_frame), (3, Duration::from_secs(2)));
         assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn seed_peers_may_pin_the_node_id_and_a_malformed_pin_is_rejected() {
+        let mut c = MeshServiceConfig::default();
+        c.apply_toml(r#"seed_peers = ["10.0.0.2:9489", "10.0.0.3:9489#n-0123abcd"]"#, "t").unwrap();
+        assert!(c.validate().is_ok());
+        let pins: Vec<_> = clawft_kernel::mesh_serve::seed_specs(&c.seed_peers)
+            .into_iter()
+            .map(|s| s.node_id)
+            .collect();
+        assert_eq!(pins, vec![None, Some("n-0123abcd".to_string())]);
+        for bad in ["10.0.0.4:9489#", "10.0.0.4:9489#two words", "#n-1"] {
+            let c = MeshServiceConfig { seed_peers: vec![bad.into()], ..Default::default() };
+            assert!(c.validate().is_err(), "{bad:?}");
+        }
     }
 
     #[test]

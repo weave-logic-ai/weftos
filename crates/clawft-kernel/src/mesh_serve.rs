@@ -215,6 +215,19 @@ async fn admit_first_frame(
     }
 }
 
+/// The node id a frame says it comes from: an envelope's `source_node`, or an
+/// assessment frame's. `None` for anything else.
+pub(crate) fn claimed_source(data: &[u8]) -> Option<String> {
+    if let Ok(env) = MeshIpcEnvelope::from_bytes(data) {
+        return Some(env.source_node);
+    }
+    AssessmentTransport::try_extract_payload(data)
+        .ok()
+        .flatten()
+        .and_then(|p| AssessmentEnvelope::from_bytes(&p).ok())
+        .map(|e| e.source_node)
+}
+
 /// Apply post-admission rules to one frame. `None` drops it.
 ///
 /// - `source_node` must equal the verified node id (envelopes and
@@ -432,17 +445,24 @@ async fn pump(
                     if dialled
                         && let Some(act) = active.as_mut()
                         && act.bound.is_none()
-                        && let Ok(env) = MeshIpcEnvelope::from_bytes(&frame)
                     {
                         // The seed's id is not authenticated, so bind the
-                        // connection to the first id it claims and never let
-                        // it claim an id another connection already routes.
-                        if rt.route_is_foreign(&env.source_node, &out_tx) {
-                            tracing::warn!(peer = %peer_addr, claimed = %env.source_node,
+                        // connection to the first id it claims (in an
+                        // envelope or an assessment frame) and never let it
+                        // claim an id another connection already routes. A
+                        // frame that names no id cannot be attributed to
+                        // anyone: it is dropped, not passed on unbound.
+                        let Some(claimed) = claimed_source(&frame) else {
+                            tracing::warn!(peer = %peer_addr,
+                                "dialled peer sent a frame naming no node id before binding, dropping");
+                            continue;
+                        };
+                        if rt.route_is_foreign(&claimed, &out_tx) {
+                            tracing::warn!(peer = %peer_addr, claimed = %claimed,
                                 "dialled peer claims an id routed elsewhere, dropping frame");
                             continue;
                         }
-                        act.bound = Some(env.source_node);
+                        act.bound = Some(claimed);
                     }
                     let Some(act) = active.as_ref() else { break };
                     // A revocation after admission: the next frame must not
@@ -528,8 +548,72 @@ impl Default for SeedTiming {
     }
 }
 
+/// One configured seed: the address to dial and, when the operator pinned
+/// it, the node id the seed must claim. Written `addr` or `addr#node-id`.
+///
+/// A seed sends no hello, so its id is otherwise whatever it claims first.
+/// A pin binds the connection to that id from the start: frames naming any
+/// other id are dropped, so a seed cannot speak for (or impersonate while
+/// offline) another node. The pin is the operator's word, not a proof: the
+/// seed's peer is still held as unverified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeedSpec {
+    /// Address to dial (`host:port`, or a URL for the transport).
+    pub addr: String,
+    /// Node id the seed is expected to be, if pinned.
+    pub node_id: Option<String>,
+}
+
+/// Parse one `seed_peers` entry (`addr` or `addr#node-id`).
+pub fn parse_seed(entry: &str) -> Result<SeedSpec, String> {
+    let entry = entry.trim();
+    let (addr, id) = match entry.rsplit_once('#') {
+        Some((a, i)) => (a, Some(i)),
+        None => (entry, None),
+    };
+    if addr.is_empty() || addr.chars().any(|c| c.is_whitespace() || c.is_control() || c == '#') {
+        return Err(format!("seed address {addr:?} is not usable"));
+    }
+    let node_id = match id {
+        None => None,
+        Some(i) if i.is_empty() || i.len() > 128 => {
+            return Err(format!("seed {addr}: pinned node id must be 1 to 128 characters"));
+        }
+        Some(i) if !i.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-')) => {
+            return Err(format!("seed {addr}: pinned node id has characters a node id cannot"));
+        }
+        Some(i) => Some(i.to_owned()),
+    };
+    Ok(SeedSpec { addr: addr.to_owned(), node_id })
+}
+
+/// The seeds to dial: parsed, unusable entries skipped with a warning, and
+/// one entry per address (the first wins; a different pin on a repeat is
+/// reported, not honoured).
+pub fn seed_specs(entries: &[String]) -> Vec<SeedSpec> {
+    let mut seen: std::collections::HashMap<String, Option<String>> = Default::default();
+    let mut out = Vec::new();
+    for e in entries {
+        match parse_seed(e) {
+            Err(why) => tracing::warn!(seed = %e.split('#').next().unwrap_or(""), "{why}; seed skipped"),
+            Ok(spec) => match seen.get(&spec.addr) {
+                None => {
+                    seen.insert(spec.addr.clone(), spec.node_id.clone());
+                    out.push(spec);
+                }
+                Some(first) if *first != spec.node_id => tracing::warn!(peer = %spec.addr,
+                    "seed listed twice with different pinned ids; the first is used"),
+                Some(_) => {}
+            },
+        }
+    }
+    out
+}
+
 /// Dial each seed peer in its own task (Noise initiator when `noise` is
 /// set) and register it with `runtime`. Returns immediately.
+///
+/// Entries are `addr` or `addr#node-id` (see [`SeedSpec`]).
 ///
 /// Connections are bidirectional (inbound frames from the seed reach the
 /// runtime) and are redialled with jittered exponential backoff when they
@@ -553,12 +637,9 @@ pub(crate) fn connect_seeds_with(
     identity: Option<Arc<DialIdentity>>,
     timing: SeedTiming,
 ) -> Vec<tokio::task::JoinHandle<()>> {
-    let mut seen = std::collections::HashSet::new();
-    seed_peers
-        .iter()
-        .filter(|a| seen.insert(a.as_str()))
-        .map(|addr| {
-            let addr = addr.clone();
+    seed_specs(seed_peers)
+        .into_iter()
+        .map(|SeedSpec { addr, node_id: expected }| {
             // Weak: an idle dial loop does not keep a dropped runtime alive
             // (an established connection still holds it until it ends).
             let rt = Arc::downgrade(runtime);
@@ -570,7 +651,7 @@ pub(crate) fn connect_seeds_with(
                 loop {
                     let Some(rt) = rt.upgrade() else { return };
                     let started = tokio::time::Instant::now();
-                    dial_seed_once(&rt, &addr, &transport_name, nc.clone(), identity.clone(), timing.idle).await;
+                    dial_seed_once(&rt, &addr, expected.as_deref(), &transport_name, nc.clone(), identity.clone(), timing.idle).await;
                     drop(rt);
                     if started.elapsed() >= timing.stable {
                         failures = 0;
@@ -591,6 +672,7 @@ pub(crate) fn connect_seeds_with(
 async fn dial_seed_once(
     rt: &Arc<MeshRuntime>,
     addr: &str,
+    expected: Option<&str>,
     transport_name: &str,
     nc: Option<Arc<NoiseConfig>>,
     identity: Option<Arc<DialIdentity>>,
@@ -646,11 +728,12 @@ async fn dial_seed_once(
     let tally = RouteTally::default();
     rt.add_peer_tallied(addr.to_owned(), out_tx.clone(), &tally);
     tracing::info!(peer = %addr, noise = nc.is_some(), "connected to seed peer");
-    // No hello comes back from a seed, so `bound` stays unset until its first
-    // envelope names an id (see the pump); frames then go through
-    // `screen_frame` and the runtime's identity rules like any other.
+    // No hello comes back from a seed, so `bound` is the id the operator
+    // pinned for it, or unset until its first frame names an id (see the
+    // pump); frames then go through `screen_frame` and the runtime's identity
+    // rules like any other.
     let active = Active {
-        bound: None,
+        bound: expected.map(str::to_owned),
         limits: PeerLimits::None,
         trust_scope: false,
         admitted: false,

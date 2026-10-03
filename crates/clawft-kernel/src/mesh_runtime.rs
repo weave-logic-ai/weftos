@@ -469,12 +469,14 @@ impl MeshRuntime {
             self.peer_events.emit(MeshPeerEvent::Recovered {
                 node_id,
                 address,
+                verified,
             });
         } else {
             self.peer_events.emit(MeshPeerEvent::Joined {
                 node_id,
                 address,
                 platform: None,
+                verified,
             });
         }
         true
@@ -909,6 +911,7 @@ impl MeshRuntime {
                             .peer_addresses
                             .get(node_id)
                             .map(|a| a.value().clone()),
+                        verified: self.peers.get(node_id).is_some_and(|p| p.verified),
                     });
                 }
                 _ => {
@@ -1340,9 +1343,17 @@ mod tests {
         let rt = MeshRuntime::new("local".into());
         membership.spawn_mesh_peer_listener(rt.subscribe_peer_events());
 
+        // A legacy route (`add_peer`: a seed, a leaf, a test harness) is a
+        // claimed id, held as Unverified; an admitted one is Active.
+        let (utx, _urx) = tokio::sync::mpsc::channel(16);
+        rt.add_peer("legacy-peer".into(), utx);
         let (tx, _rx) = tokio::sync::mpsc::channel(16);
-        rt.add_peer("mesh-peer".into(), tx);
+        assert!(rt.register_authenticated("mesh-peer".into(), tx, true, &RouteTally::default()));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            membership.get_peer("legacy-peer").unwrap().state,
+            NodeState::Unverified
+        );
         assert_eq!(
             membership.get_peer("mesh-peer").unwrap().state,
             NodeState::Active
@@ -1360,7 +1371,7 @@ mod tests {
         // Reconnect after partition.
         let (tx2, _rx2) = tokio::sync::mpsc::channel(16);
         // Still in peers map from first add — re-add emits Recovered.
-        rt.add_peer("mesh-peer".into(), tx2);
+        assert!(rt.register_authenticated("mesh-peer".into(), tx2, true, &RouteTally::default()));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(
             membership.get_peer("mesh-peer").unwrap().state,
