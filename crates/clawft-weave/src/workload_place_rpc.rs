@@ -111,20 +111,15 @@ fn governance_changed(built: Option<&Option<String>>, now: Option<&str>) -> Resu
 /// built from the effective rules (parent policy plus overlay) as of this
 /// build, so an overlay deny on `workload.*` applies. It does not follow a
 /// later push: [`dispatch`] refuses (`governance_changed`) until restart.
+/// Permits, the revocation list and the chain are attached by
+/// [`crate::workload_gate::build`], shared with the catalog verbs.
 fn gate(
     dir: &Path,
     chain: &Arc<ChainManager>,
     effective: Option<(Vec<clawft_kernel::governance::GovernanceRule>, f64, bool)>,
+    revocations: Arc<clawft_kernel::revocation::RevocationList>,
 ) -> Result<Arc<WorkloadGate>, String> {
-    let base = match effective {
-        Some((rules, threshold, human)) => WorkloadGate::with_rules(threshold.min(0.95), human, rules),
-        None => WorkloadGate::new(0.95, false),
-    };
-    let mut g = base.with_chain(chain.clone());
-    for p in load_permits(dir)? {
-        g = g.with_permit(p)?;
-    }
-    Ok(Arc::new(g))
+    crate::workload_gate::build(dir, chain, effective, revocations)
 }
 
 /// Give the exchange this node's revocation list (a revoked package, signer
@@ -181,7 +176,7 @@ async fn build(
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
     let anchors = load_anchors(dir)?;
-    let gate = gate(dir, &chain, effective)?;
+    let gate = gate(dir, &chain, effective, revocations.clone())?;
     // `open_file` indexes the blobs already on disk (installed workloads'
     // files from earlier runs), so the exchange finds them present and never
     // takes ownership of, or evicts, bytes it did not create.

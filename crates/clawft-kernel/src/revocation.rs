@@ -18,7 +18,8 @@ mod subjects;
 #[cfg(test)]
 mod subjects_tests;
 pub use subjects::{
-    MAX_PACKAGE_ID_LEN, RevocationError, RevocationKind, RevokedSubject, SUBJECTS_FILE_NAME,
+    AUDIT_REVOKE_KIND, AUDIT_UNREVOKE_KIND, AuditSink, MAX_PACKAGE_ID_LEN, RevocationError,
+    RevocationKind, RevokedSubject, SUBJECTS_FILE_NAME,
 };
 
 /// A single revocation entry.
@@ -38,6 +39,9 @@ pub struct RevokedHost {
 /// on disk so that bans survive kernel restarts.
 pub struct RevocationList {
     inner: Mutex<RevocationInner>,
+    /// Where every subject revocation and un-revocation is recorded (the
+    /// kernel chain, set at boot). Held here so no caller can skip it.
+    audit: std::sync::OnceLock<AuditSink>,
 }
 
 struct RevocationInner {
@@ -55,6 +59,7 @@ impl RevocationList {
                 subjects: subjects::SubjectState::empty(&path),
                 path,
             }),
+            audit: std::sync::OnceLock::new(),
         }
     }
 
@@ -89,6 +94,7 @@ impl RevocationList {
                 subjects: subjects::SubjectState::load(&path),
                 path,
             }),
+            audit: std::sync::OnceLock::new(),
         }
     }
 

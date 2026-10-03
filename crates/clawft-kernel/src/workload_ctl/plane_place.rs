@@ -121,15 +121,14 @@ impl PlacementControlPlane {
             .get(node_id, now_ms() / 1000)
             .map(|c| governance_tier(c.trust_tier))
             .unwrap_or(crate::workload_governance::NodeTrustTier::Discovered);
-        let (pid, keys, hashes, cost) = match w.signed("placement") {
-            Ok(p) => (
-                Some(p.package_id.clone()),
-                p.signer_keys.clone(),
-                p.artifact_hashes.clone(),
-                (f64::from(p.spec.resources.cpu_pct) / 400.0).clamp(0.0, 1.0),
-            ),
-            Err(_) => (None, vec![], vec![], 0.25),
-        };
+        // Every workload names something the revocation list can be checked
+        // against (a store pin or project gets a synthetic package id): the
+        // gate refuses a request that names nothing.
+        let (pid, keys, hashes) = w.revocation_refs();
+        let cost = w
+            .signed("placement")
+            .map(|p| (f64::from(p.spec.resources.cpu_pct) / 400.0).clamp(0.0, 1.0))
+            .unwrap_or(0.25);
         json!({ "node_id": node_id, "workload": {
             "kind": w.kind, "package_trust": "pinned_signer", "node_tier": tier,
             // A native cog has the host's network (ADR-100 s4): say so.
@@ -273,6 +272,7 @@ impl PlacementControlPlane {
         manifest: &str,
         report: &mut PlaceReport,
     ) {
+        let refs = w.revocation_refs();
         for (node, variant, ex) in Self::dispatch_order(&report.decision) {
             let attempt = |outcome: &str, code: Option<String>, reason: Option<String>| Attempt {
                 node_id: node.clone(),
@@ -328,6 +328,9 @@ impl PlacementControlPlane {
                 decision_id: report.decision_id.clone(),
                 manifest_hash: manifest.to_string(),
                 project_id: order.project_id.clone(),
+                package_id: Some(refs.0.clone()),
+                signer_keys: refs.1.clone(),
+                artifact_hashes: refs.2.clone(),
             };
             match r {
                 Ok((result, _)) => {
@@ -426,12 +429,17 @@ impl PlacementControlPlane {
         }
         self.ensure_described(&rec.node_id).await;
         let decision_id = if method::mutates(m) {
+            let (package_id, signer_keys, artifact_hashes) = rec.revocation_refs();
             let ctx = json!({ "workload": {
                 "kind": rec.kind, "package_trust": "pinned_signer",
                 "node_tier": self.facts.get(&rec.node_id, now_ms() / 1000)
                     .map(|c| governance_tier(c.trust_tier))
                     .unwrap_or(crate::workload_governance::NodeTrustTier::Discovered),
                 "network": "egress", "resource_cost": 0.0,
+                // A start names the package so the revocation list can be
+                // checked; a stop or unload is never blocked by it.
+                "package_id": package_id, "signer_keys": signer_keys,
+                "artifact_hashes": artifact_hashes,
             }});
             // Stop and unload only shrink what is running: a denial caused
             // by the node's trust tier alone (a demoted peer) is waived by

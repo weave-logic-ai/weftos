@@ -121,6 +121,9 @@ impl Supervisor {
                 io: Arc::clone(&deps.io),
             },
         ));
+        // revocation-exempt: a `project` workload is authorised by a project
+        // certificate, and the certificate's revocation is the project
+        // identity record (`project_identity`), not the subject list.
         let gate: Arc<dyn GateBackend> = deps.gate.clone().unwrap_or_else(|| {
             Arc::new(
                 WorkloadGate::new(0.95, false)

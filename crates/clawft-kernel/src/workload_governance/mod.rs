@@ -17,7 +17,9 @@ pub mod policy;
 mod tests;
 
 pub use effect::{NetworkPolicy, NodeTrustTier, PackageTrust, WorkloadEffect, WorkloadRefs, WorkloadRequest};
-pub use gate::{WorkloadGate, event_kind_for, revoke_and_record};
+pub use gate::{
+    WorkloadGate, chain_revocations, event_kind_for, revoke_and_record, unrevoke_and_record,
+};
 pub use policy::{
     DEFAULT_DENY_RULE_ID, EFFECT_CEILING_RULE_ID, GOVERNED_ACTIONS, SUPERVISOR_PRINCIPAL,
     WorkloadPermitRule, default_rules, project_supervisor_permit, install_default_rules, is_governed_action,

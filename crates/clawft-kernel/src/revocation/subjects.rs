@@ -20,6 +20,14 @@ use super::{RevocationInner, RevocationList};
 
 /// File name of the subject revocation list, next to the host ban file.
 pub const SUBJECTS_FILE_NAME: &str = "revoked_subjects.json";
+/// Chain event kind of a subject revocation (`chain::EVENT_KIND_WORKLOAD_REVOKE`).
+pub const AUDIT_REVOKE_KIND: &str = "workload.revoke";
+/// Chain event kind of a lifted revocation (`chain::EVENT_KIND_WORKLOAD_UNREVOKE`).
+pub const AUDIT_UNREVOKE_KIND: &str = "workload.unrevoke";
+
+/// Records an audit event: `(kind, payload)`.
+pub type AuditSink = std::sync::Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+
 /// Maximum package id length.
 pub const MAX_PACKAGE_ID_LEN: usize = 128;
 
@@ -174,6 +182,13 @@ impl SubjectState {
     }
 }
 
+fn persist_message(e: RevocationError) -> String {
+    match e {
+        RevocationError::Persist(m) => m,
+        other => other.to_string(),
+    }
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -187,22 +202,68 @@ impl RevocationList {
         f(&mut inner.subjects)
     }
 
-    /// Revoke a package id, signer key or artifact hash and persist it.
-    ///
-    /// Returns `Ok(true)` if newly added, `Ok(false)` if already revoked.
+    /// Install the sink every revocation and un-revocation is recorded in
+    /// (first call wins). The kernel points it at the chain at boot, so a
+    /// revocation applied by the operator, by a mesh notice or by any other
+    /// caller is chained without that caller having to remember to.
+    pub fn set_audit(&self, sink: AuditSink) -> bool {
+        self.audit.set(sink).is_ok()
+    }
+
+    fn emit(&self, over: Option<&dyn Fn(&str, serde_json::Value)>, kind: &str, p: serde_json::Value) {
+        match (over, self.audit.get()) {
+            (Some(f), _) => f(kind, p),
+            (None, Some(sink)) => sink(kind, p),
+            (None, None) => {}
+        }
+    }
+
+    /// Revoke a package id, signer key or artifact hash and persist it,
+    /// recorded as revoked by `local`. See [`Self::revoke_subject_by`].
     pub fn revoke_subject(
         &self,
         kind: RevocationKind,
         id: &str,
         reason: &str,
     ) -> Result<bool, RevocationError> {
+        self.revoke_subject_by(kind, id, reason, "local")
+    }
+
+    /// [`Self::revoke_subject`] naming who revoked it, for the audit record.
+    ///
+    /// Returns `Ok(true)` if newly added, `Ok(false)` if already revoked.
+    /// A new revocation is audited before the persistence result is
+    /// returned: if the write fails the entry still holds in memory
+    /// (fail-closed) and the record says `persisted: false`, so the event
+    /// is never lost with the write. The caller still gets the error.
+    pub fn revoke_subject_by(
+        &self,
+        kind: RevocationKind,
+        id: &str,
+        reason: &str,
+        by: &str,
+    ) -> Result<bool, RevocationError> {
+        self.revoke_audited(kind, id, reason, by, None)
+    }
+
+    /// [`Self::revoke_subject_by`] recording to `sink` instead of the
+    /// installed one.
+    pub fn revoke_audited(
+        &self,
+        kind: RevocationKind,
+        id: &str,
+        reason: &str,
+        by: &str,
+        sink: Option<&dyn Fn(&str, serde_json::Value)>,
+    ) -> Result<bool, RevocationError> {
         let id = kind.normalize(id)?;
-        self.with_subjects(|s| {
+        // `Some(None)`: added and saved; `Some(Some(e))`: added, save failed.
+        let added: Option<Option<String>> = self.with_subjects(|s| {
             if let Some(p) = &s.poisoned {
                 return Err(RevocationError::Poisoned(p.clone()));
             }
             if s.subjects.iter().any(|e| e.kind == kind && e.id == id) {
-                return Ok(false);
+                return Ok(None);
             }
             s.subjects.push(RevokedSubject {
                 kind,
@@ -210,28 +271,89 @@ impl RevocationList {
                 revoked_at: now_secs(),
                 reason: reason.to_owned(),
             });
-            s.save()?;
-            info!(%kind, id, reason, "subject revoked");
-            Ok(true)
-        })
+            Ok(Some(s.save().err().map(persist_message)))
+        })?;
+        let Some(save_err) = added else {
+            return Ok(false);
+        };
+        info!(%kind, id, reason, "subject revoked");
+        self.emit(
+            sink,
+            AUDIT_REVOKE_KIND,
+            serde_json::json!({
+                "decision": "revoked",
+                "subject_kind": kind,
+                "subject_id": id,
+                "reason": reason,
+                "revoked_by": by,
+                "persisted": save_err.is_none(),
+                "persist_error": save_err,
+            }),
+        );
+        match save_err {
+            None => Ok(true),
+            Some(e) => Err(RevocationError::Persist(e)),
+        }
     }
 
-    /// Remove a subject revocation. Returns `Ok(true)` if it was present.
+    /// Remove a subject revocation, recorded as lifted by `local`.
+    /// Returns `Ok(true)` if it was present.
     pub fn unrevoke_subject(&self, kind: RevocationKind, id: &str) -> Result<bool, RevocationError> {
+        self.unrevoke_subject_by(kind, id, "local")
+    }
+
+    /// [`Self::unrevoke_subject`] naming who lifted it. Chained like a
+    /// revocation (`workload.unrevoke`), including when the write fails.
+    pub fn unrevoke_subject_by(
+        &self,
+        kind: RevocationKind,
+        id: &str,
+        by: &str,
+    ) -> Result<bool, RevocationError> {
+        self.unrevoke_audited(kind, id, by, None)
+    }
+
+    /// [`Self::unrevoke_subject_by`] recording to `sink` instead of the
+    /// installed one.
+    pub fn unrevoke_audited(
+        &self,
+        kind: RevocationKind,
+        id: &str,
+        by: &str,
+        sink: Option<&dyn Fn(&str, serde_json::Value)>,
+    ) -> Result<bool, RevocationError> {
         let id = kind.normalize(id)?;
-        self.with_subjects(|s| {
+        let removed: Option<Option<String>> = self.with_subjects(|s| {
             if let Some(p) = &s.poisoned {
                 return Err(RevocationError::Poisoned(p.clone()));
             }
             let before = s.subjects.len();
             s.subjects.retain(|e| !(e.kind == kind && e.id == id));
             if s.subjects.len() == before {
-                return Ok(false);
+                return Ok(None);
             }
-            s.save()?;
-            info!(%kind, id, "subject unrevoked");
-            Ok(true)
-        })
+            Ok(Some(s.save().err().map(persist_message)))
+        })?;
+        let Some(save_err) = removed else {
+            return Ok(false);
+        };
+        info!(%kind, id, "subject unrevoked");
+        self.emit(
+            sink,
+            AUDIT_UNREVOKE_KIND,
+            serde_json::json!({
+                "decision": "unrevoked",
+                "subject_kind": kind,
+                "subject_id": id,
+                "unrevoked_by": by,
+                "persisted": save_err.is_none(),
+                "persist_error": save_err,
+            }),
+        );
+        match save_err {
+            None => Ok(true),
+            Some(e) => Err(RevocationError::Persist(e)),
+        }
     }
 
     /// Whether a subject is revoked. Invalid ids are never revoked.

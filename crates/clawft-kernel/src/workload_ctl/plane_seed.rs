@@ -200,6 +200,9 @@ impl PlacementControlPlane {
             decision_id: decision_id.to_string(),
             manifest_hash: String::new(),
             project_id: None,
+            package_id: Some(w.revocation_refs().0),
+            signer_keys: Vec::new(),
+            artifact_hashes: Vec::new(),
         }
     }
 

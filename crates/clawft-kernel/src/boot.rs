@@ -1223,6 +1223,15 @@ impl<P: Platform> Kernel<P> {
             }
         };
 
+        // Every subject revocation and un-revocation the list takes, from the
+        // operator verb or a mesh notice, is chained (`workload.revoke`,
+        // `workload.unrevoke`): the list records it itself, so no caller can
+        // skip it.
+        #[cfg(feature = "exochain")]
+        if let Some(ref cm) = chain_manager {
+            crate::workload_governance::chain_revocations(&revocation_list, Arc::clone(cm));
+        }
+
         // 8b′. External chain-head anchoring controller (WEFT-137 / ADR-041).
         // Built from `kernel.chain.external_anchor` when present. Backend
         // `file` is the useful default; `external` wires an intent-log stub.

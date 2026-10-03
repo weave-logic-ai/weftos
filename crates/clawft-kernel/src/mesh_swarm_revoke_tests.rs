@@ -251,3 +251,60 @@ async fn unpinned_signers_cost_no_budget() {
     // The connection still has its whole budget.
     assert_eq!(l.a.rev.accept_from(&notice(&l, &key(1)), Some(5)), Ok(true));
 }
+
+#[tokio::test]
+async fn an_applied_notice_is_chained_and_runs_the_hook_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let l = line();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let h = hits.clone();
+    let pkg_id = l.pkg.package_id.clone();
+    assert!(l.b.rev.set_on_applied(Arc::new(move |n| {
+        assert_eq!(n.kind, RevocationKind::Package);
+        assert_eq!(n.id, pkg_id);
+        h.fetch_add(1, Ordering::SeqCst);
+    })));
+    assert!(!l.b.rev.set_on_applied(Arc::new(|_| {})), "first hook wins");
+
+    let n = notice(&l, &key(1));
+    assert!(l.a.rev.issue(n.clone()).await.unwrap());
+    wait_for("B's hook", || hits.load(Ordering::SeqCst) == 1).await;
+    // A notice B already knows neither re-runs the hook nor re-chains.
+    assert!(!l.b.rev.accept(&n).unwrap());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    // Every node chained the revocation itself, by the signer, once.
+    for p in [&l.a, &l.b, &l.c] {
+        let ev = events(&p.node.chain, crate::chain::EVENT_KIND_WORKLOAD_REVOKE);
+        assert_eq!(ev.len(), 1, "{}", p.id);
+        assert_eq!(ev[0]["subject_id"], l.pkg.package_id.as_str());
+        assert!(ev[0]["revoked_by"].as_str().unwrap().starts_with("mesh:"), "{}", ev[0]);
+        assert_eq!(ev[0]["persisted"], true);
+    }
+}
+
+#[tokio::test]
+async fn a_notice_whose_write_fails_is_still_applied_chained_and_forwarded() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let l = line();
+    // B's list cannot write: a file where its directory should be.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("blocker"), "x").unwrap();
+    let broken = Arc::new(RevocationList::new(tmp.path().join("blocker").join("r.json")));
+    let anchors = anchors_for(&key(1));
+    let rt = Arc::new(MeshRuntime::new("node-d".into()));
+    let node = node_with("node-d", ArtifactStore::new_memory(), ExchangeConfig::default());
+    let rev = RevocationExchange::start(node.ex.clone(), broken.clone(), anchors, rt);
+    let hits = Arc::new(AtomicUsize::new(0));
+    let h = hits.clone();
+    rev.set_on_applied(Arc::new(move |_| {
+        h.fetch_add(1, Ordering::SeqCst);
+    }));
+    assert!(rev.accept(&notice(&l, &key(1))).unwrap(), "in force, so new");
+    assert!(broken.is_subject_revoked(RevocationKind::Package, &l.pkg.package_id));
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "the hook still runs");
+    let ev = events(&node.chain, crate::chain::EVENT_KIND_WORKLOAD_REVOKE);
+    assert_eq!(ev.len(), 1);
+    assert_eq!(ev[0]["persisted"], false);
+}

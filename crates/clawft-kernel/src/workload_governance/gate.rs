@@ -5,8 +5,10 @@
 //! 1. The action must be one of [`GOVERNED_ACTIONS`]; an unknown
 //!    `workload.*` action is refused and chained as `workload.refuse`.
 //! 2. The `workload` context object must parse and validate.
-//! 3. The subject revocation list must be readable, and no package id,
-//!    signer key or artifact hash in the request may be revoked.
+//! 3. The subject revocation list must be readable, a request that installs,
+//!    places, loads, starts or migrates must name a package, signer key or
+//!    artifact hash, and none of those may be revoked. Teardown (stop,
+//!    unload, re-adoption) is never blocked by a revocation.
 //! 4. Workloads carrying secrets need a `pinned` node (ADR-099 s8.3).
 //! 5. A [`WorkloadPermitRule`] must match; otherwise the default deny holds.
 //!    This is enforced in code as well as by the `WORKLOAD-DEFAULT-DENY`
@@ -176,6 +178,18 @@ impl WorkloadGate {
     }
 
     fn decide(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> Outcome {
+        self.decide_with(agent_id, action, context, false)
+    }
+
+    /// [`Self::decide`]; with `skip_revocation` the revocation list is not
+    /// consulted (teardown only: see [`GateBackend::check_teardown`]).
+    fn decide_with(
+        &self,
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+        skip_revocation: bool,
+    ) -> Outcome {
         let mut out = Outcome::new();
         let req = match WorkloadRequest::from_context(context) {
             Ok(r) => r,
@@ -188,10 +202,26 @@ impl WorkloadGate {
         let vector = req.effect.to_effect_vector();
         out.effect = serde_json::to_value(&vector).ok();
 
-        if let Some(list) = &self.revocations {
+        if let Some(list) = self.revocations.as_ref().filter(|_| !skip_revocation) {
             if let Some(err) = list.subjects_error() {
                 out.decision =
                     Self::deny(format!("revocation list unreadable (fail closed): {err}"));
+                return out;
+            }
+            // A request that names nothing cannot be checked, so it cannot be
+            // trusted: without this a caller (or a builder that lost the
+            // refs) could omit all three and carry only a `package_trust`
+            // claim past the list. Teardown actions are exempt: a stop or
+            // unload names the placed instance, not a package.
+            if NEEDS_REFS.contains(&action)
+                && req.refs.package_id.is_none()
+                && req.refs.signer_keys.is_empty()
+                && req.refs.artifact_hashes.is_empty()
+            {
+                out.decision = Self::deny(format!(
+                    "'{action}' names no package, signer key or artifact hash, so it cannot be \
+                     checked against the revocation list (fail closed)"
+                ));
                 return out;
             }
             let hit = list.first_revoked(
@@ -257,6 +287,15 @@ impl WorkloadGate {
         out
     }
 }
+
+/// Actions that carry a package and so must name it (see `decide`).
+const NEEDS_REFS: &[&str] = &[
+    "workload.install",
+    "workload.place",
+    "workload.load",
+    "workload.start",
+    "workload.migrate",
+];
 
 /// Actions [`GateBackend::check_teardown`] accepts: stop, unload, and
 /// re-adoption of a placed instance (gated as `workload.load`).
@@ -362,24 +401,30 @@ impl GateBackend for WorkloadGate {
         let GateDecision::Deny { reason, .. } = &first else {
             return first;
         };
-        // Would the same request pass on a node of the highest tier? Then
-        // the denial was the node tier alone, which never blocks taking
-        // something down. Revoked packages, default deny, rule and threshold
-        // denials do not depend on the tier and stay denials.
+        // Would the same request pass on a node of the highest tier, with the
+        // revocation list set aside? Then the denial was the node tier, a
+        // revocation, or both, and none of those blocks taking something
+        // down: stopping a revoked package is the point of revoking it.
+        // Default deny, rule and threshold denials do not depend on either
+        // and stay denials.
         let mut raised = context.clone();
         let Some(w) = raised.get_mut("workload").and_then(|w| w.as_object_mut()) else {
             return first;
         };
         w.insert("node_tier".into(), serde_json::json!(NodeTrustTier::Pinned));
-        if !self.decide(agent_id, action, &raised).decision.is_permit() {
+        if !self.decide_with(agent_id, action, &raised, true).decision.is_permit() {
             return first;
         }
+        let tier_waived = !self.decide_with(agent_id, action, context, true).decision.is_permit();
+        let revoked = self.decide(agent_id, action, context).revoked;
         let kind = event_kind_for(action).unwrap_or(chain::EVENT_KIND_WORKLOAD_REFUSE);
         self.record(
             kind,
             serde_json::json!({
                 "decision": "permit", "agent_id": agent_id, "action": action,
-                "teardown_node_tier_waived": true, "waived_denial": reason,
+                "teardown_node_tier_waived": tier_waived,
+                "teardown_revocation_waived": revoked,
+                "waived_denial": reason,
                 "node_tier": context.pointer("/workload/node_tier"),
             }),
         );
@@ -387,9 +432,23 @@ impl GateBackend for WorkloadGate {
     }
 }
 
+/// Chain every revocation and un-revocation `list` takes from now on, from
+/// any caller (the operator verb, a mesh notice, kernel code), as
+/// `workload.revoke` / `workload.unrevoke` events from source
+/// [`CHAIN_SOURCE`]. First call wins; returns whether this one did.
+pub fn chain_revocations(list: &RevocationList, chain: Arc<ChainManager>) -> bool {
+    list.set_audit(Arc::new(move |kind, payload| {
+        chain.append(CHAIN_SOURCE, kind, Some(payload));
+    }))
+}
+
 /// Revoke a subject and chain a `workload.revoke` event when newly added.
 ///
-/// Returns `Ok(true)` if newly revoked, `Ok(false)` if it already was.
+/// Returns `Ok(true)` if newly revoked, `Ok(false)` if it already was. The
+/// event is chained even when persisting the list fails (the entry holds in
+/// memory, the event says `persisted: false`, and the error is returned).
+/// With `chain` `None` the list's own audit sink ([`chain_revocations`])
+/// records it, if one is installed.
 pub fn revoke_and_record(
     list: &RevocationList,
     chain: Option<&ChainManager>,
@@ -398,20 +457,27 @@ pub fn revoke_and_record(
     reason: &str,
     revoked_by: &str,
 ) -> Result<bool, crate::revocation::RevocationError> {
-    let added = list.revoke_subject(kind, id, reason)?;
-    if added && let Some(cm) = chain {
-        let canonical = kind.normalize(id)?;
-        cm.append(
-            CHAIN_SOURCE,
-            chain::EVENT_KIND_WORKLOAD_REVOKE,
-            Some(serde_json::json!({
-                "decision": "revoked",
-                "subject_kind": kind,
-                "subject_id": canonical,
-                "reason": reason,
-                "revoked_by": revoked_by,
-            })),
-        );
+    match chain {
+        Some(cm) => list.revoke_audited(kind, id, reason, revoked_by, Some(&|k, p| {
+            cm.append(CHAIN_SOURCE, k, Some(p));
+        })),
+        None => list.revoke_subject_by(kind, id, reason, revoked_by),
     }
-    Ok(added)
+}
+
+/// Lift a revocation and chain a `workload.unrevoke` event when one was
+/// removed. Same chain rules as [`revoke_and_record`].
+pub fn unrevoke_and_record(
+    list: &RevocationList,
+    chain: Option<&ChainManager>,
+    kind: RevocationKind,
+    id: &str,
+    unrevoked_by: &str,
+) -> Result<bool, crate::revocation::RevocationError> {
+    match chain {
+        Some(cm) => list.unrevoke_audited(kind, id, unrevoked_by, Some(&|k, p| {
+            cm.append(CHAIN_SOURCE, k, Some(p));
+        })),
+        None => list.unrevoke_subject_by(kind, id, unrevoked_by),
+    }
 }

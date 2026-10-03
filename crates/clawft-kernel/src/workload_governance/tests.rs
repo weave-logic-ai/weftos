@@ -425,23 +425,31 @@ fn teardown_waives_a_node_tier_denial_and_chains_the_waiver() {
 }
 
 #[test]
-fn teardown_never_waives_a_revocation_or_a_default_deny() {
+fn teardown_waives_a_revocation_but_never_a_default_deny() {
     let dir = tempfile::tempdir().unwrap();
     let list = Arc::new(RevocationList::new(dir.path().join("revoked_hosts.json")));
     list.revoke_subject(RevocationKind::Package, "cog.fall-detect", "bad")
         .unwrap();
+    let cm = chain();
     let gate = WorkloadGate::new(0.8, false)
+        .with_chain(cm.clone())
         .with_permit(stop_permit())
         .unwrap()
         .with_revocations(list);
     let demoted = with(cog_ctx(), "node_tier", json!("discovered"));
     let paired = cog_ctx();
-    // Revoked: denied on a paired node and on a demoted one.
-    assert!(gate.check_teardown("a", "workload.stop", &paired).is_deny());
-    assert!(
-        gate.check_teardown("a", "workload.stop", &demoted)
-            .is_deny()
-    );
+    // The gate still denies a plain check on a revoked package ...
+    assert!(gate.check("a", "workload.stop", &paired).is_deny());
+    // ... but taking it down is allowed, on a paired node and a demoted one:
+    // a revoked package must stay stoppable. The waiver is chained.
+    assert!(gate.check_teardown("a", "workload.stop", &paired).is_permit());
+    let p = last_payload(&cm);
+    assert_eq!(p["teardown_revocation_waived"]["id"], "cog.fall-detect");
+    assert_eq!(p["teardown_node_tier_waived"], false);
+    assert!(gate.check_teardown("a", "workload.stop", &demoted).is_permit());
+    let p = last_payload(&cm);
+    assert_eq!(p["teardown_revocation_waived"]["id"], "cog.fall-detect");
+    assert_eq!(p["teardown_node_tier_waived"], true);
     // No permit for the action at all: a default deny stays a deny.
     let bare = WorkloadGate::new(0.8, false);
     assert!(
@@ -484,4 +492,151 @@ fn check_teardown_refuses_any_action_that_is_not_a_teardown() {
         Ok(d) => assert!(d.is_deny()),
         Err(_) => assert!(cfg!(debug_assertions)),
     }
+}
+
+// ── card 08f1bcff: revocation cannot be bypassed and is always chained ──
+
+fn place_gate(list: &Arc<RevocationList>, cm: &Arc<ChainManager>) -> WorkloadGate {
+    WorkloadGate::new(0.8, false)
+        .with_chain(cm.clone())
+        .with_revocations(list.clone())
+        .with_permit(WorkloadPermitRule::new(
+            "all-cog",
+            ["workload.*"],
+            ["cog"],
+        ))
+        .unwrap()
+}
+
+fn without_refs(mut ctx: Value) -> Value {
+    for k in ["package_id", "signer_keys", "artifact_hashes"] {
+        ctx["workload"].as_object_mut().unwrap().remove(k);
+    }
+    ctx
+}
+
+/// (a) A caller that omits the package, signer and artifact refs and claims
+/// `pinned_signer` must not get past the revocation list.
+#[test]
+fn omitted_refs_cannot_bypass_revocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = Arc::new(RevocationList::new(dir.path().join("revoked_hosts.json")));
+    let cm = chain();
+    let gate = place_gate(&list, &cm);
+    list.revoke_subject(RevocationKind::Package, "cog.fall-detect", "bad").unwrap();
+    list.revoke_subject(RevocationKind::SignerKey, KEY, "leaked").unwrap();
+
+    // With refs the revoked package is denied, as before.
+    assert!(gate.check("a", "workload.place", &cog_ctx()).is_deny());
+    // Without any, the same request used to carry only its trust claim past
+    // the list and be permitted. It is denied now, for every action that
+    // carries a package, and the denial is chained with its reason.
+    for action in ["workload.install", "workload.place", "workload.load", "workload.start"] {
+        assert!(
+            gate.check("a", action, &without_refs(cog_ctx())).is_deny(),
+            "{action} with omitted refs must be denied"
+        );
+        let p = last_payload(&cm);
+        assert_eq!(p["decision"], "deny");
+        assert!(p["reason"].as_str().unwrap().contains("names no package"), "{p}");
+    }
+    // Empty lists and a null package id are the same as omitting them.
+    let mut empty = cog_ctx();
+    empty["workload"]["package_id"] = Value::Null;
+    empty["workload"]["signer_keys"] = json!([]);
+    empty["workload"]["artifact_hashes"] = json!([]);
+    assert!(gate.check("a", "workload.place", &empty).is_deny());
+
+    // The check is not a blanket deny: a request that names an unrevoked
+    // package is permitted, and a teardown (which names the instance, not a
+    // package) is not held to it.
+    let mut other = cog_ctx();
+    other["workload"]["package_id"] = json!("cog.other");
+    other["workload"]["signer_keys"] = json!([]);
+    other["workload"]["artifact_hashes"] = json!([HASH]);
+    assert!(gate.check("a", "workload.place", &other).is_permit());
+    assert!(
+        gate.check_teardown("a", "workload.stop", &without_refs(cog_ctx()))
+            .is_permit()
+    );
+}
+
+/// (b) A failed write of the list must not lose the audit event.
+#[test]
+fn the_revocation_event_survives_a_persistence_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    // A file where the list's directory should be: every save fails.
+    std::fs::write(dir.path().join("blocker"), "x").unwrap();
+    let bad = dir.path().join("blocker").join("revoked_hosts.json");
+    let list = Arc::new(RevocationList::new(bad));
+    let cm = chain();
+    let gate = place_gate(&list, &cm);
+    assert!(gate.check("a", "workload.place", &cog_ctx()).is_permit());
+
+    let err = revoke_and_record(&list, Some(&cm), RevocationKind::Package, "cog.fall-detect", "bad", "operator")
+        .unwrap_err();
+    assert!(matches!(err, crate::revocation::RevocationError::Persist(_)), "{err}");
+    let ev: Vec<_> = workload_events(&cm).into_iter().filter(|e| e.kind == "workload.revoke").collect();
+    assert_eq!(ev.len(), 1, "the event was chained although the write failed");
+    let p = ev[0].payload.as_ref().unwrap();
+    assert_eq!(p["subject_id"], "cog.fall-detect");
+    assert_eq!(p["revoked_by"], "operator");
+    assert_eq!(p["persisted"], false);
+    assert!(p["persist_error"].is_string());
+    // And the revocation is in force (fail closed), not dropped with the write.
+    assert!(gate.check("a", "workload.place", &cog_ctx()).is_deny());
+    // Asking again does not chain it a second time.
+    assert!(!revoke_and_record(&list, Some(&cm), RevocationKind::Package, "cog.fall-detect", "bad", "operator").unwrap());
+    assert_eq!(workload_events(&cm).iter().filter(|e| e.kind == "workload.revoke").count(), 1);
+
+    // The same holds for a caller that never passed a chain (a mesh notice,
+    // kernel code): the list's own sink records it.
+    let dir2 = tempfile::tempdir().unwrap();
+    std::fs::write(dir2.path().join("blocker"), "x").unwrap();
+    let list2 = RevocationList::new(dir2.path().join("blocker").join("r.json"));
+    let cm2 = chain();
+    assert!(chain_revocations(&list2, cm2.clone()));
+    assert!(list2.revoke_subject(RevocationKind::SignerKey, KEY, "leaked").is_err());
+    let ev = workload_events(&cm2);
+    assert_eq!(ev.len(), 1);
+    assert_eq!(ev[0].kind, "workload.revoke");
+    assert_eq!(ev[0].payload.as_ref().unwrap()["persisted"], false);
+}
+
+/// (c) Lifting a revocation is chained, whoever does it.
+#[test]
+fn unrevoke_is_chained() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = Arc::new(RevocationList::new(dir.path().join("revoked_hosts.json")));
+    let cm = chain();
+    let gate = place_gate(&list, &cm);
+    revoke_and_record(&list, Some(&cm), RevocationKind::Package, "cog.fall-detect", "bad", "operator").unwrap();
+    assert!(gate.check("a", "workload.place", &cog_ctx()).is_deny());
+
+    assert!(unrevoke_and_record(&list, Some(&cm), RevocationKind::Package, "cog.fall-detect", "operator").unwrap());
+    let ev = workload_events(&cm).pop().unwrap();
+    assert_eq!(ev.kind, "workload.unrevoke");
+    assert_eq!(ev.kind, crate::chain::EVENT_KIND_WORKLOAD_UNREVOKE);
+    let p = ev.payload.unwrap();
+    assert_eq!(p["subject_kind"], json!(RevocationKind::Package));
+    assert_eq!(p["subject_id"], "cog.fall-detect");
+    assert_eq!(p["unrevoked_by"], "operator");
+    assert_eq!(p["persisted"], true);
+    assert!(gate.check("a", "workload.place", &cog_ctx()).is_permit());
+
+    // Nothing to lift: nothing chained.
+    let before = workload_events(&cm).len();
+    assert!(!unrevoke_and_record(&list, Some(&cm), RevocationKind::Package, "cog.fall-detect", "operator").unwrap());
+    assert_eq!(workload_events(&cm).len(), before);
+
+    // A caller with no chain of its own (the list's sink records it).
+    let sink_cm = chain();
+    assert!(chain_revocations(&list, sink_cm.clone()));
+    list.revoke_subject(RevocationKind::ArtifactHash, HASH, "bad").unwrap();
+    assert!(list.unrevoke_subject_by(RevocationKind::ArtifactHash, HASH, "mesh:abcd").unwrap());
+    let kinds: Vec<_> = workload_events(&sink_cm).into_iter().map(|e| e.kind).collect();
+    assert_eq!(kinds, ["workload.revoke", "workload.unrevoke"]);
+    // The chain constants and the list's audit kinds are one vocabulary.
+    assert_eq!(crate::revocation::AUDIT_REVOKE_KIND, crate::chain::EVENT_KIND_WORKLOAD_REVOKE);
+    assert_eq!(crate::revocation::AUDIT_UNREVOKE_KIND, crate::chain::EVENT_KIND_WORKLOAD_UNREVOKE);
 }
