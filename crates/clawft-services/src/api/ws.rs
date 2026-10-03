@@ -24,6 +24,13 @@
 //! - `{"type":"ping"}` -- server-initiated heartbeat (client must reply
 //!   with `{"type":"pong"}` within [`HEARTBEAT_TIMEOUT`] or be evicted)
 //!
+//! # Authentication lifetime
+//!
+//! The bearer (or `?token=`) is checked once, when the socket upgrades. An
+//! open socket is **not** closed when its token later expires or is revoked;
+//! it lives until the client disconnects or misses its heartbeat. Revoking a
+//! token stops new connections and REST calls, not sockets already open.
+//!
 //! # Heartbeat (WEFT-300)
 //!
 //! The server pings each socket every [`HEARTBEAT_INTERVAL`]. If a client

@@ -175,6 +175,19 @@ caching a positive answer for at most 30 seconds.
   an upgrade.
 - A token expires after its TTL (default 15 minutes, at most 24 hours).
   `weft token list` shows live tokens and `weft token revoke <id>` kills one.
+- **Revocation latency.** `POST /api/auth/revoke` takes effect at once. A
+  token revoked with `weft token revoke` can keep working on a running gateway
+  for up to 30 seconds (the positive cache). An unknown or revoked bearer is
+  remembered for about 3 seconds so a flood of bad tokens is one daemon call.
+- **Open WebSockets are not closed** when their token is revoked or expires;
+  the check happens once, at upgrade.
+- Only the path is logged for a request, never the query string, so a
+  `?token=` on `/ws` stays out of the logs. Every response carries
+  `Referrer-Policy: no-referrer`. The `Bearer` scheme is matched case-insensitively.
+- `weft token issue` and `weft ui` print a sign-in link of the form
+  `http://<host>:<api_port>/#token=<token>`. The fragment is never sent to the
+  server. `weft ui` prints it rather than passing it to the browser, so the
+  secret is not on a command line.
 
 ### Revoke Token
 
@@ -200,7 +213,9 @@ A bearer token is owner-equivalent, so on a LAN it is as good as shell
 access. The gateway has no TLS of its own and **refuses to bind a
 non-loopback address** unless the operator says TLS is terminated in front of
 it: `weft gateway --dangerously-plain-http`, or `gateway.dangerously_plain_http`
-in the config. Loopback binds need nothing.
+in the config. Loopback means `localhost` or any loopback IP address
+(`127.0.0.0/8`, `::1`, and their IPv4-mapped forms); the check runs before the
+gateway starts anything.
 
 ### Client-side token lifecycle (`use-auth`)
 
@@ -294,6 +309,7 @@ URL or runtime path appears.
 | `daemon.version_skew` | `true` when the daemon's version differs from the gateway's |
 | `chain.verify` | `chain.verify` result, reused for 60 s rather than recomputed per request |
 | `mcp` | This gateway's `/mcp` surface: `{"mounted":false}` when not mounted. Upstream servers are not listed (their definitions carry commands and URLs) |
+| `build.binary` | File name of the gateway binary, never its directory |
 | `providers[].configured` | A key is set. Never the key or base URL |
 
 `GET /api/status` (a stub) was removed; this route replaces it.

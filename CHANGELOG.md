@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Changed — gateway auth uses daemon tokens; no HTTP token mint (ADR-102)
+
+- **Breaking:** `POST /api/auth/token` is gone (404). The gateway no longer
+  hands out tokens or keeps a token store. Every `/api/*` route, `/ws`, `/mcp`
+  and `/api/openapi.json` needs a bearer issued by the kernel daemon: run
+  `weft token issue` (the daemon must be running). It prints a sign-in link
+  `http://<host>:<api_port>/#token=<token>`; `weft ui` prints one too. Scripts
+  that called the mint route must switch to `weft token issue`. Without a
+  daemon, authenticated requests get 503, not 401.
+- Project tokens (ADR-103) are refused by the gateway.
+- `GET /api/health` is tiered: anonymous callers get only `{"status":"ok"}`
+  (or 503 `degraded`); a valid token gets the full status document. The
+  `/api/status` route is removed.
+- New: `POST /mcp` (full MCP profile) and `GET /api/openapi.json` on the
+  gateway, both behind the token.
+- The gateway refuses to bind a non-loopback API address over plain HTTP
+  unless `--dangerously-plain-http` or `gateway.dangerously_plain_http` is set
+  (it has no TLS of its own). Loopback now means any loopback IP, including
+  `127.0.0.0/8` and IPv4-mapped `::ffff:127.0.0.1`; this also tightens
+  `weft mcp-server --listen`'s loopback test.
+- A token revoked with `weft token revoke` can keep working on a running
+  gateway for up to 30 seconds. Open WebSockets are not closed on revoke or
+  expiry.
+
 ### Added — cog manifest `redistributable` flag (ADR-100 amendment, ADR-099 section 6)
 
 - The signed cog manifest has an optional `redistributable` field (default

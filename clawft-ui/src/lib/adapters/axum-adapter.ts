@@ -49,9 +49,10 @@ export class AxumAdapter implements BackendAdapter {
   }
 
   async init(): Promise<void> {
-    // Tokens are issued by the daemon (`weft token issue`) and arrive via
-    // the URL fragment or the constructor; the gateway no longer mints them
-    // (ADR-102 D5). Without one, API calls fail with 401.
+    // The gateway no longer mints tokens (ADR-102 D5). A token reaches the
+    // dashboard through the constructor or the `#token=` URL fragment that
+    // `weft ui` and `weft token issue` print; `use-auth.ts` consumes it.
+    // Without one, API calls fail with 401.
 
     // Connect WebSocket
     this.ws.connect();

@@ -149,6 +149,23 @@ async fn run_with_channels(args: GatewayArgs) -> anyhow::Result<()> {
     .await
 }
 
+/// Refuse to serve the API on a non-loopback address over plain HTTP unless
+/// the operator opted in (ADR-102). Runs first in [`run_with_config`].
+#[cfg(feature = "channels")]
+fn check_api_bind(config: &clawft_types::config::Config) -> anyhow::Result<()> {
+    #[cfg(feature = "api")]
+    if config.gateway.api_enabled {
+        clawft_services::api::auth::validate_bind_policy(
+            &config.gateway.host,
+            config.gateway.dangerously_plain_http,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+    }
+    #[cfg(not(feature = "api"))]
+    let _ = config;
+    Ok(())
+}
+
 /// Run the gateway with a pre-loaded [`Config`].
 ///
 /// This is the shared inner function used by both `weft gateway` and
@@ -170,6 +187,9 @@ pub async fn run_with_config(
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
     config_watch_path: Option<PathBuf>,
 ) -> anyhow::Result<()> {
+    // Refuse an unsafe API bind before anything is started or touched.
+    check_api_bind(&config)?;
+
     info!("starting weft gateway");
 
     let platform = Arc::new(NativePlatform::new());
@@ -301,11 +321,6 @@ pub async fn run_with_config(
         let cors_origins = config.gateway.cors_origins.clone();
         let api_host = config.gateway.host.clone();
         let port = config.gateway.api_port;
-        clawft_services::api::auth::validate_bind_policy(
-            &api_host,
-            config.gateway.dangerously_plain_http,
-        )
-        .map_err(|e| anyhow::anyhow!(e))?;
         let addr = format!("{api_host}:{port}");
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
@@ -877,6 +892,43 @@ mod tests {
             dangerously_plain_http: false,
         };
         assert!(args.config.is_none());
+    }
+
+    fn bind_config(host: &str, plain: bool) -> clawft_types::config::Config {
+        let mut c = clawft_types::config::Config::default();
+        c.gateway.api_enabled = true;
+        c.gateway.host = host.into();
+        c.gateway.dangerously_plain_http = plain;
+        c
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn api_bind_guard_classifies_loopback_by_ip() {
+        for h in ["127.0.0.1", "127.0.0.2", "::1", "[::1]", "::ffff:127.0.0.1", "localhost"] {
+            assert!(check_api_bind(&bind_config(h, false)).is_ok(), "{h}");
+        }
+        for h in ["0.0.0.0", "::", "192.0.2.10", "::ffff:192.0.2.10", "gw.example"] {
+            let e = check_api_bind(&bind_config(h, false)).unwrap_err().to_string();
+            assert!(e.contains("--dangerously-plain-http"), "{h}: {e}");
+            assert!(check_api_bind(&bind_config(h, true)).is_ok(), "{h}");
+        }
+        // Not serving the API: nothing to guard.
+        let mut off = bind_config("0.0.0.0", false);
+        off.gateway.api_enabled = false;
+        assert!(check_api_bind(&off).is_ok());
+    }
+
+    /// `run_with_config` itself enforces the guard, before it boots anything
+    /// (so this touches no state): an unsafe bind returns the refusal.
+    #[cfg(feature = "api")]
+    #[tokio::test]
+    async fn run_with_config_refuses_plain_http_off_loopback() {
+        let err = run_with_config(bind_config("0.0.0.0", false), false, None, None, None, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("plain HTTP") && err.contains("--dangerously-plain-http"), "{err}");
     }
 
     #[test]

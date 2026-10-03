@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -23,7 +24,13 @@ use super::daemon_facade::DaemonKernelFacade;
 /// `weft token revoke` is refused within this window.
 pub const POSITIVE_CACHE_TTL: Duration = Duration::from_secs(30);
 
-/// Upper bound on cached validations; the oldest are dropped past this.
+/// How long an *invalid* result is remembered. Short and bounded: it stops a
+/// flood of bad bearers from becoming a flood of daemon calls, while a token
+/// issued a moment ago is usable again within this window.
+pub const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(3);
+
+/// Upper bound on cached validations (positive and negative each); the
+/// oldest are dropped past this.
 const CACHE_MAX_ENTRIES: usize = 1024;
 
 /// Public metadata of a validated token (never the secret).
@@ -74,6 +81,11 @@ pub struct DaemonTokenValidator {
     ttl: Duration,
     keys: RandomState,
     cache: Mutex<HashMap<u64, (Instant, TokenMeta)>>,
+    /// Invalid results by keyed hash, for [`NEGATIVE_CACHE_TTL`].
+    negative: Mutex<HashMap<u64, Instant>>,
+    /// Bumped on every revoke. A validation that began before a revoke does
+    /// not populate the cache, so it cannot resurrect the revoked token.
+    revocations: AtomicU64,
 }
 
 impl DaemonTokenValidator {
@@ -84,6 +96,8 @@ impl DaemonTokenValidator {
             ttl: POSITIVE_CACHE_TTL,
             keys: RandomState::new(),
             cache: Mutex::new(HashMap::new()),
+            negative: Mutex::new(HashMap::new()),
+            revocations: AtomicU64::new(0),
         }
     }
 
@@ -110,6 +124,39 @@ impl DaemonTokenValidator {
             }
             None => None,
         }
+    }
+
+    fn recently_invalid(&self, key: u64) -> bool {
+        let mut neg = self.negative.lock().unwrap_or_else(|e| e.into_inner());
+        match neg.get(&key) {
+            Some(at) if at.elapsed() < NEGATIVE_CACHE_TTL => true,
+            Some(_) => {
+                neg.remove(&key);
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn remember_invalid(&self, key: u64) {
+        let mut neg = self.negative.lock().unwrap_or_else(|e| e.into_inner());
+        if neg.len() >= CACHE_MAX_ENTRIES {
+            neg.retain(|_, at| at.elapsed() < NEGATIVE_CACHE_TTL);
+        }
+        if neg.len() >= CACHE_MAX_ENTRIES
+            && let Some(oldest) = neg.iter().min_by_key(|(_, at)| **at).map(|(k, _)| *k)
+        {
+            neg.remove(&oldest);
+        }
+        neg.insert(key, Instant::now());
+    }
+
+    #[cfg(test)]
+    fn cache_len(&self) -> (usize, usize) {
+        (
+            self.cache.lock().unwrap().len(),
+            self.negative.lock().unwrap().len(),
+        )
     }
 
     fn remember(&self, key: u64, meta: TokenMeta) {
@@ -158,6 +205,10 @@ impl TokenValidator for DaemonTokenValidator {
         if let Some(meta) = self.cached(key) {
             return TokenCheck::Valid(meta);
         }
+        if self.recently_invalid(key) {
+            return TokenCheck::Invalid;
+        }
+        let generation = self.revocations.load(Ordering::SeqCst);
         // `read` is enough to validate; never send `admin` for this.
         let resp = match self
             .facade
@@ -177,20 +228,31 @@ impl TokenValidator for DaemonTokenValidator {
         }
         let result = resp.result.unwrap_or(serde_json::Value::Null);
         if result.get("valid").and_then(|v| v.as_bool()) != Some(true) {
+            self.remember_invalid(key);
             return TokenCheck::Invalid;
         }
         match result.get("token").and_then(parse_meta) {
             Some(meta) if !is_expired(&meta) => {
-                self.remember(key, meta.clone());
+                // Cache only if no revoke ran while the daemon call was in
+                // flight; this request itself began earlier and still passes.
+                if self.revocations.load(Ordering::SeqCst) == generation {
+                    self.remember(key, meta.clone());
+                }
                 TokenCheck::Valid(meta)
             }
-            _ => TokenCheck::Invalid,
+            _ => {
+                self.remember_invalid(key);
+                TokenCheck::Invalid
+            }
         }
     }
 
     async fn revoke(&self, id: &str) -> RevokeOutcome {
         // Drop cached validations for this id first, so a revoke that races
-        // a daemon failure still cannot be served from cache afterwards.
+        // a daemon failure still cannot be served from cache afterwards, and
+        // bump the generation so a validation already in flight cannot
+        // re-cache the token after this point.
+        self.revocations.fetch_add(1, Ordering::SeqCst);
         self.cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -410,7 +472,7 @@ fn credentials(request: &axum::extract::Request, allow_query: bool) -> Credentia
             .headers()
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|h| h.strip_prefix("Bearer "))
+            .and_then(bearer_token)
             .map(str::to_owned),
         query: if allow_query { query_token(request) } else { None },
     }
@@ -429,6 +491,15 @@ async fn check_request(state: &super::ApiState, creds: Credentials) -> TokenChec
         return state.auth.validate(tok).await;
     }
     TokenCheck::Invalid
+}
+
+/// The token in an `Authorization` header value. The scheme is matched
+/// case-insensitively (RFC 7235); the token itself is not trimmed beyond the
+/// separating whitespace.
+fn bearer_token(header: &str) -> Option<&str> {
+    let (scheme, rest) = header.split_once(' ')?;
+    let token = rest.trim_start();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
 }
 
 /// The `?token=<token>` query value, if any. Tokens are `wft_` plus hex, so
@@ -504,6 +575,58 @@ mod tests {
             assert!(e.contains("--dangerously-plain-http"), "{h}: {e}");
             assert!(validate_bind_policy(h, true).is_ok(), "{h}");
         }
+    }
+
+    #[test]
+    fn bearer_scheme_is_case_insensitive() {
+        assert_eq!(bearer_token("Bearer abc"), Some("abc"));
+        assert_eq!(bearer_token("bearer abc"), Some("abc"));
+        assert_eq!(bearer_token("BEARER  abc"), Some("abc"));
+        assert_eq!(bearer_token("Basic abc"), None);
+        assert_eq!(bearer_token("Bearer"), None);
+        assert_eq!(bearer_token("Bearer "), None);
+    }
+
+    fn offline_validator() -> DaemonTokenValidator {
+        let dir = std::env::temp_dir().join("clawft-auth-unit-no-daemon.sock");
+        DaemonTokenValidator::new(Arc::new(DaemonKernelFacade::with_socket(dir)))
+    }
+
+    fn meta(id: &str) -> TokenMeta {
+        TokenMeta {
+            id: id.into(),
+            label: "l".into(),
+            issued_at: "2026-01-01T00:00:00+00:00".into(),
+            expires_at: "2099-01-01T00:00:00+00:00".into(),
+        }
+    }
+
+    /// Neither cache can grow past its bound, however many bearers arrive.
+    #[test]
+    fn caches_are_bounded() {
+        let v = offline_validator();
+        for i in 0..(CACHE_MAX_ENTRIES as u64 + 300) {
+            v.remember(i, meta(&i.to_string()));
+            v.remember_invalid(1_000_000 + i);
+        }
+        let (pos, neg) = v.cache_len();
+        assert_eq!(pos, CACHE_MAX_ENTRIES);
+        assert_eq!(neg, CACHE_MAX_ENTRIES);
+    }
+
+    #[test]
+    fn invalid_results_are_remembered_only_briefly() {
+        let v = offline_validator();
+        let key = v.key("wft_bad");
+        assert!(!v.recently_invalid(key));
+        v.remember_invalid(key);
+        assert!(v.recently_invalid(key));
+        // Age the entry past the TTL.
+        v.negative
+            .lock()
+            .unwrap()
+            .insert(key, Instant::now() - NEGATIVE_CACHE_TTL - Duration::from_millis(1));
+        assert!(!v.recently_invalid(key));
     }
 
     #[test]

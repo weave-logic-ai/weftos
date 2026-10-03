@@ -402,10 +402,66 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
             rate_limit_state,
             middleware::rate_limit_middleware,
         ))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .layer(cors)
         // CSP outermost so every response (including 401/429/static)
         // carries the header.
         .layer(axum::middleware::from_fn(middleware::csp_middleware))
         .with_state(state)
+}
+
+/// Span for one request. It records the method and the path only: the full
+/// URI can carry `?token=` on `/ws`, and a secret must not reach the logs.
+fn request_span(req: &axum::http::Request<axum::body::Body>) -> tracing::Span {
+    tracing::info_span!("request", method = %req.method(), path = %req.uri().path())
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::request_span;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+
+    /// Collects every recorded field value of every span it sees.
+    struct Capture(Arc<Mutex<String>>);
+
+    struct Out<'a>(&'a mut String);
+    impl Visit for Out<'_> {
+        fn record_debug(&mut self, f: &Field, v: &dyn std::fmt::Debug) {
+            self.0.push_str(&format!("{}={v:?};", f.name()));
+        }
+    }
+
+    impl Subscriber for Capture {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, a: &Attributes<'_>) -> Id {
+            a.record(&mut Out(&mut self.0.lock().unwrap()));
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, _: &Event<'_>) {}
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+    }
+
+    #[test]
+    fn request_span_has_the_path_but_never_the_query() {
+        let seen = Arc::new(Mutex::new(String::new()));
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/ws?token=wft_supersecret&x=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        tracing::subscriber::with_default(Capture(seen.clone()), || {
+            let _ = request_span(&req);
+        });
+        let out = seen.lock().unwrap().clone();
+        assert!(out.contains("/ws"), "{out}");
+        assert!(!out.contains("wft_supersecret") && !out.contains("token"), "{out}");
+    }
 }

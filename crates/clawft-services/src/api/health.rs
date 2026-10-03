@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse, response::Response};
+use clawft_kernel::http_facade::FacadeResponse;
 use serde_json::{Value, json};
 
 use super::ApiState;
@@ -21,6 +22,10 @@ use super::auth::TokenMeta;
 /// How long a `chain.verify` result is reused. Verifying walks the whole
 /// chain, so it is not recomputed per request.
 const CHAIN_VERIFY_TTL: Duration = Duration::from_secs(60);
+
+/// How long a `kernel.status` probe is reused. Anonymous health is
+/// unauthenticated, so each hit must not become a daemon call.
+const PROBE_TTL: Duration = Duration::from_millis(1500);
 
 /// Process start, for gateway uptime. Set when the router is built.
 static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -38,6 +43,7 @@ fn uptime_secs() -> u64 {
 #[derive(Default)]
 pub struct HealthCache {
     chain_verify: Mutex<Option<(Instant, Value)>>,
+    probe: Mutex<Option<(Instant, FacadeResponse)>>,
 }
 
 impl HealthCache {
@@ -47,6 +53,18 @@ impl HealthCache {
             Some((at, v)) if at.elapsed() < CHAIN_VERIFY_TTL => Some(v.clone()),
             _ => None,
         }
+    }
+
+    fn probe(&self) -> Option<FacadeResponse> {
+        let guard = self.probe.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some((at, r)) if at.elapsed() < PROBE_TTL => Some(r.clone()),
+            _ => None,
+        }
+    }
+
+    fn store_probe(&self, r: FacadeResponse) {
+        *self.probe.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), r));
     }
 
     fn store_verify(&self, v: Value) {
@@ -61,10 +79,17 @@ pub async fn health_check(
 ) -> Response {
     let caller = request.extensions().get::<TokenMeta>().cloned();
 
-    let status = state
-        .kernel_facade
-        .call_rpc("kernel.status", json!({}))
-        .await;
+    let status = match state.health_cache.probe() {
+        Some(r) => r,
+        None => {
+            let r = state
+                .kernel_facade
+                .call_rpc("kernel.status", json!({}))
+                .await;
+            state.health_cache.store_probe(r.clone());
+            r
+        }
+    };
     let daemon_up = status.status == 200;
 
     let Some(meta) = caller else {
@@ -112,7 +137,11 @@ async fn full_status(state: &ApiState, meta: &TokenMeta, daemon: Option<Value>) 
         "uptime_secs": uptime_secs(),
         "build": {
             "version": gateway_version,
-            "binary": std::env::current_exe().ok().map(|p| p.display().to_string()),
+            // File name only: the directory would disclose the install path
+            // and the user's home.
+            "binary": std::env::current_exe()
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())),
         },
         "gateway": { "uptime_secs": uptime_secs() },
         "daemon": daemon_section,
@@ -203,7 +232,7 @@ async fn chain_section(state: &ApiState) -> Value {
                 json!({
                     "valid": r.body.get("valid").cloned().filter(Value::is_boolean),
                     "event_count": r.body.get("event_count").cloned().filter(Value::is_number),
-                    "signature_verified": r.body.get("signature_verified").cloned(),
+                    "signature_verified": r.body.get("signature_verified").cloned().filter(Value::is_boolean),
                     // Error text can name paths; only the count is shown.
                     "error_count": r.body.get("errors").and_then(Value::as_array).map(Vec::len),
                 })

@@ -73,6 +73,11 @@ frame-ancestors 'none'";
 pub async fn csp_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
+    // Never send the page URL (which may carry `#token=` in the browser or a
+    // `?token=` on /ws) to another origin as a Referer.
+    headers
+        .entry(HeaderName::from_static("referrer-policy"))
+        .or_insert(HeaderValue::from_static("no-referrer"));
     if !headers.contains_key("content-security-policy") {
         headers.insert(
             HeaderName::from_static("content-security-policy"),
@@ -287,7 +292,7 @@ mod tests {
     fn rate_class_classifies_paths() {
         assert_eq!(RateClass::from_path("/ws"), Some(RateClass::Ws));
         assert_eq!(
-            RateClass::from_path("/api/auth/token"),
+            RateClass::from_path("/api/auth/revoke"),
             Some(RateClass::Auth)
         );
         assert_eq!(

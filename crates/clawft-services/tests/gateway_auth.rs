@@ -260,9 +260,21 @@ async fn health_with_token_leaks_no_secrets() {
     let token = auth.generate_token(3600).unwrap();
     let (_, body) = get(&app, "/api/health", Some(&token)).await;
     let text = body.to_string();
-    for needle in ["sk-secret-do-not-leak", "hunter2", "llm.example.test", "api_key", "api_base", &token] {
+    let exe = std::env::current_exe().unwrap();
+    let exe_dir = exe.parent().unwrap().to_string_lossy().into_owned();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut needles: Vec<&str> = vec![
+        "sk-secret-do-not-leak", "hunter2", "llm.example.test", "api_key", "api_base", &token, &exe_dir,
+    ];
+    if home.len() > 1 {
+        needles.push(&home);
+    }
+    for needle in needles {
         assert!(!text.contains(needle), "leaked {needle}: {text}");
     }
+    // The binary is reported by file name only.
+    let name = exe.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(body["build"]["binary"], name.as_str());
 }
 
 #[tokio::test]
@@ -285,6 +297,97 @@ async fn nothing_but_health_is_anonymous() {
         let (code, body) = get(&app, path, None).await;
         assert_eq!(code, StatusCode::UNAUTHORIZED, "{path}");
         assert_eq!(body, serde_json::Value::Null, "{path} leaked a body");
+    }
+}
+
+/// `?token=` is a WebSocket-only transport. On every other route it is
+/// ignored, so a token pasted into a REST or `/mcp` URL (and thus into logs)
+/// does not authenticate.
+#[tokio::test]
+async fn query_token_is_ignored_off_ws() {
+    let (app, auth) = memory_app();
+    let token = auth.generate_token(3600).unwrap();
+    for path in ["/api/agents", "/api/config", "/events", "/api/openapi.json"] {
+        let (code, _) = get(&app, &format!("{path}?token={token}"), None).await;
+        assert_eq!(code, StatusCode::UNAUTHORIZED, "{path}");
+    }
+    // Nor does it upgrade health to the full document.
+    let (_, body) = get(&app, &format!("/api/health?token={token}"), None).await;
+    assert_eq!(body, serde_json::json!({ "status": "ok" }));
+}
+
+#[tokio::test]
+async fn bearer_scheme_is_case_insensitive_end_to_end() {
+    let (app, auth) = memory_app();
+    let token = auth.generate_token(3600).unwrap();
+    for scheme in ["Bearer", "bearer", "BEARER"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/agents")
+                    .header(header::AUTHORIZATION, format!("{scheme} {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{scheme}");
+    }
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents")
+                .header(header::AUTHORIZATION, format!("Basic {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Path-normalisation tricks must not reach a protected handler, nor turn
+/// the anonymous health view into the full one.
+#[tokio::test]
+async fn path_variants_do_not_bypass_auth() {
+    let (app, _auth) = memory_app();
+    for path in [
+        "/api/agents/", "/api//agents", "//api/agents", "/api/./agents", "/api/../api/agents",
+        "/api/%61gents", "/api/agents%2F", "/API/agents", "/api/agents;x", "/api/agents/.",
+        "/api/Agents", "/api/auth/./revoke", "/%2e%2e/api/agents", "/api/agents%00",
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let code = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        assert!(
+            !code.is_success() && bytes.is_empty() || code == StatusCode::NOT_FOUND || code == StatusCode::UNAUTHORIZED,
+            "{path}: {code} {}", String::from_utf8_lossy(&bytes)
+        );
+        assert_ne!(code, StatusCode::OK, "{path}");
+    }
+    for path in ["/api/health/", "/api//health", "//api/health", "/api/./health", "/api/%68ealth", "/api/health;x", "/api/health?x=1"] {
+        let (code, body) = get(&app, path, None).await;
+        let ok_minimal = code == StatusCode::OK && body == serde_json::json!({ "status": "ok" });
+        assert!(ok_minimal || code == StatusCode::NOT_FOUND || code == StatusCode::UNAUTHORIZED || code.is_redirection(), "{path}: {code} {body}");
+    }
+}
+
+#[tokio::test]
+async fn responses_forbid_referrers() {
+    let (app, _auth) = memory_app();
+    for (path, _) in [("/api/health", ()), ("/api/agents", ()), ("/nope", ())] {
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.headers()["referrer-policy"], "no-referrer", "{path}");
     }
 }
 
@@ -325,6 +428,8 @@ mod daemon {
         revoke_auth: Mutex<Vec<(String, Option<String>)>>,
         verify_calls: AtomicUsize,
         up: AtomicBool,
+        /// Milliseconds the daemon sits on a validate reply (after deciding it).
+        validate_delay_ms: AtomicUsize,
     }
 
     fn info(id: &str, scope: &str, project: &Option<String>) -> serde_json::Value {
@@ -362,6 +467,10 @@ mod daemon {
                                 .iter()
                                 .find(|(s, id, _, _)| s == secret && !revoked.contains(id))
                                 .cloned();
+                            let delay = f.validate_delay_ms.load(Ordering::SeqCst) as u64;
+                            if delay > 0 {
+                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                            }
                             match hit {
                                 Some((_, id, scope, project)) => clawft_rpc::Response::success(
                                     serde_json::json!({ "valid": true, "token": info(&id, &scope, &project) }),
@@ -562,7 +671,8 @@ mod daemon {
 
         // Daemon fields outside the allow-list never reach the response.
         let text = body.to_string();
-        for needle in ["/home/someone", "u-secret", "k-secret", "/secret/path", "memory_bytes", "wft_good"] {
+        let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_string_lossy().into_owned();
+        for needle in ["/home/someone", "u-secret", "k-secret", "/secret/path", "memory_bytes", "wft_good", exe_dir.as_str()] {
             assert!(!text.contains(needle), "leaked {needle}: {text}");
         }
     }
@@ -579,7 +689,56 @@ mod daemon {
         }
         assert_eq!(fake.verify_calls.load(Ordering::SeqCst), 1);
     }
+
+    /// Bad bearers are remembered for a moment only, so a flood of them is
+    /// one daemon call, but a token issued right after is usable soon.
+    #[tokio::test]
+    async fn invalid_results_are_negatively_cached_briefly() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("k.sock");
+        let fake = spawn(&sock);
+        let app = app(&sock, TTL);
+        for _ in 0..10 {
+            assert_eq!(get(&app, "/api/agents", Some("wft_junk")).await.0, StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(fake.validate_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A validate already in flight when its token is revoked must not
+    /// re-cache the token: the next request is refused, not served from cache.
+    #[tokio::test]
+    async fn revoke_during_inflight_validate_does_not_resurrect_the_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("k.sock");
+        let fake = spawn(&sock);
+        add(&fake, "wft_good", "id-good", "owner", None);
+        fake.validate_delay_ms.store(400, Ordering::SeqCst);
+        let app = app(&sock, TTL);
+
+        // Validation starts and the daemon decides "valid", then stalls.
+        let inflight = {
+            let app = app.clone();
+            tokio::spawn(async move { get(&app, "/api/agents", Some("wft_good")).await.0 })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // Revoke through the gateway while that reply is still in flight. It
+        // needs a valid bearer itself, so use a second token.
+        add(&fake, "wft_admin", "id-admin", "owner", None);
+        fake.validate_delay_ms.store(0, Ordering::SeqCst);
+        // The revoke targets the caller's own id; revoke id-good directly via
+        // the daemon-side effect plus a gateway revoke of the same id.
+        add(&fake, "wft_good2", "id-good", "owner", None);
+        assert_eq!(post(&app, "/api/auth/revoke", "wft_good2").await, StatusCode::NO_CONTENT);
+        // The in-flight request began before the revoke and may complete.
+        let _ = inflight.await.unwrap();
+
+        // Afterwards the token must be refused, not served from a cache that
+        // the stale in-flight reply populated.
+        assert_eq!(get(&app, "/api/agents", Some("wft_good")).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(fake.revoke_auth.lock().unwrap().len(), 1);
+    }
 }
+
 
 // ─── /mcp mounted in the gateway (ADR-102 D2) ───────────────────────────
 

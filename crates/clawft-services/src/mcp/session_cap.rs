@@ -500,14 +500,24 @@ pub enum BindKind {
 }
 
 /// Classify `host` from `--listen host:port`.
+///
+/// Loopback means the name `localhost` or an IP address that is itself
+/// loopback: all of `127.0.0.0/8`, `::1`, and an IPv4-mapped `::ffff:` form
+/// of those. Brackets and an IPv6 zone-less literal are accepted. Anything
+/// else, including a hostname that merely resolves to loopback, is public.
 pub fn classify_bind_host(host: &str) -> BindKind {
     let h = host.trim().trim_start_matches('[').trim_end_matches(']');
-    let lower = h.to_ascii_lowercase();
-    if lower == "127.0.0.1"
-        || lower == "localhost"
-        || lower == "::1"
-        || lower == "0:0:0:0:0:0:0:1"
-    {
+    if h.eq_ignore_ascii_case("localhost") {
+        return BindKind::Loopback;
+    }
+    let loopback = match h.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_loopback(),
+        Ok(std::net::IpAddr::V6(v6)) => {
+            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+        Err(_) => false,
+    };
+    if loopback {
         BindKind::Loopback
     } else {
         BindKind::Public
@@ -684,6 +694,22 @@ mod tests {
             .validate_with_label(Some("t"), Some("grok-build"))
             .unwrap();
         assert_eq!(cap.client_label, ClientLabel::Grok);
+    }
+
+    #[test]
+    fn classify_uses_ip_semantics() {
+        for h in [
+            "127.0.0.1", "127.0.0.2", "127.255.255.254", "localhost", "LOCALHOST", "::1", "[::1]",
+            "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1", "[::ffff:127.0.0.1]",
+        ] {
+            assert_eq!(classify_bind_host(h), BindKind::Loopback, "{h}");
+        }
+        for h in [
+            "0.0.0.0", "::", "[::]", "192.0.2.1", "::ffff:192.0.2.1", "::ffff:0.0.0.0",
+            "128.0.0.1", "localhost.example", "127.0.0.1.example", "",
+        ] {
+            assert_eq!(classify_bind_host(h), BindKind::Public, "{h}");
+        }
     }
 
     #[test]

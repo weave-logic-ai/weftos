@@ -66,6 +66,21 @@ pub async fn run(args: UiArgs) -> anyhow::Result<()> {
         info!(url = %url, "starting web dashboard");
         eprintln!("starting web dashboard at {url}");
 
+        // The API needs a daemon-issued token (ADR-102). Print the link
+        // rather than put the secret on a browser command line, where other
+        // local users could read it from the process list.
+        match super::token_cmd::issue_dashboard_link(&host, port).await {
+            Ok((link, expires)) => {
+                eprintln!("sign in (token expires {expires}): {link}");
+            }
+            Err(e) => {
+                eprintln!(
+                    "no dashboard token issued ({e}); start the daemon and run \
+                     `weft token issue` for a sign-in link"
+                );
+            }
+        }
+
         // Spawn a background task to open the browser after a short delay.
         if !args.no_open {
             let open_url = url.clone();
