@@ -102,9 +102,13 @@ impl VocabularyPin {
             return Err(bad("signature", "must be 128 lowercase hex characters"));
         }
         if let Some(id) = &self.key_id
-            && (id.is_empty() || id.len() > 128 || !id.is_ascii() || id.contains('\n'))
+            && (id.is_empty()
+                || id.len() > 128
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'.' | b'_' | b'-')))
         {
-            return Err(bad("key_id", "must be 1-128 printable ASCII characters"));
+            return Err(bad("key_id", "must be 1-128 characters of [A-Za-z0-9:._-]"));
         }
         if let Some(ev) = &self.event_hash
             && ev != GENESIS_EVENT

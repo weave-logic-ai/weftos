@@ -67,12 +67,7 @@ impl ArtifactExchange {
             ..opts.clone()
         };
         let m = self
-            .swarm_fetch(
-                dialer.clone(),
-                candidates.to_vec(),
-                ArtifactKey::Content(mh),
-                &mopts,
-            )
+            .swarm_fetch(dialer.clone(), candidates.to_vec(), ArtifactKey::Content(mh), &mopts)
             .await?;
         if m.descriptor.total_size > MAX_MANIFEST_BYTES as u64 {
             return Err(VerifyError::Manifest("manifest too large".into()).into());
@@ -99,12 +94,7 @@ impl ArtifactExchange {
                 ..opts.clone()
             };
             let got = self
-                .swarm_fetch(
-                    dialer.clone(),
-                    candidates.to_vec(),
-                    ArtifactKey::Content(hash),
-                    &fopts,
-                )
+                .swarm_fetch(dialer.clone(), candidates.to_vec(), ArtifactKey::Content(hash), &fopts)
                 .await?;
             if got.descriptor.total_size != size {
                 return Err(VerifyError::HashMismatch {

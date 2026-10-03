@@ -310,12 +310,7 @@ impl ArtifactExchange {
     ) -> ExchangedPackage {
         let signers = signer_keys(&verified, anchors);
         let origin = grant_origin(&verified);
-        self.grant_with(
-            manifest_hash,
-            &verified.package_id,
-            signers.clone(),
-            origin.clone(),
-        );
+        self.grant_with(manifest_hash, &verified.package_id, signers.clone(), origin.clone());
         for file in verified.body.files() {
             if let Ok((hash, _)) = pinned(file) {
                 self.grant_with(hash, &verified.package_id, signers.clone(), origin.clone());

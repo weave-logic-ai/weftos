@@ -19,6 +19,18 @@
 //!   and `Defer` issue nothing, and a governor without a chain or a signing
 //!   key refuses to issue a pin at all.
 //! - [`verify_pin_event`] checks a pin against the chain it claims.
+//! - A **version floor** stops rollback: once a signed pin of version N has
+//!   been accepted, the baseline and any pin below N are refused. The floor
+//!   comes from `capabilities.floor` next to the pin (written on each signed
+//!   load) and, where a chain is available, from the highest pin version on
+//!   the chain ([`chain_version_floor`]).
+//!
+//! Which entry point enforces what: [`load_governed_dir_with`] checks the
+//! signature and the file floor only; the chain binding and the chain floor
+//! are enforced by [`load_governed_dir_on_chain`]. No production caller loads
+//! the vocabulary yet, so until one passes its `ChainManager` the binding to
+//! a chain event is signature-only. The floor file is local state: whoever can
+//! delete it can reset the file floor, which is why the chain floor exists.
 //!
 //! The vocabulary reuses the config governance action and chain event kind
 //! rather than a new name: it is a config file, and the `workload.*` action
@@ -57,6 +69,8 @@ pub const VOCABULARY_GATE_ACTION: &str = "config.set";
 pub const VOCABULARY_FILE: &str = "capabilities.toml";
 /// Pin file name inside a config directory.
 pub const VOCABULARY_PIN_FILE: &str = "capabilities.pin.toml";
+/// Version floor file name inside a config directory.
+pub const VOCABULARY_FLOOR_FILE: &str = "capabilities.floor";
 
 fn config_err(e: impl std::fmt::Display) -> KernelError {
     KernelError::Config(format!("capability vocabulary: {e}"))
@@ -114,10 +128,17 @@ pub fn verify_pin_event(pin: &VocabularyPin, chain: &ChainManager) -> Result<(),
         .and_then(|p| p.pointer("/pin/digest"))
         .and_then(|d| d.as_str())
         == Some(pin.digest.as_str());
+    let version_ok = ev
+        .payload
+        .as_ref()
+        .and_then(|p| p.pointer("/pin/version"))
+        .and_then(|v| v.as_u64())
+        == Some(u64::from(pin.version));
     if hex_encode(&ev.hash) != hash
         || ev.source != "placement"
         || ev.kind != EVENT_KIND_CONFIG_SET
         || !digest_ok
+        || !version_ok
     {
         return Err(config_err(format!(
             "chain event {seq} does not match the pin"
@@ -126,16 +147,59 @@ pub fn verify_pin_event(pin: &VocabularyPin, chain: &ChainManager) -> Result<(),
     Ok(())
 }
 
-/// Load a vocabulary only if its pin is authentic ([`verify_pin`]) and it
-/// matches that pin.
+/// Load a vocabulary only if its pin is authentic ([`verify_pin`]), is not
+/// below `floor`, and it matches that pin. `floor` is the highest signed pin
+/// version already accepted (0 when none): the baseline is version 1, so a
+/// floor of 2 or more refuses it.
 pub fn load_governed(
     vocab_text: &str,
     pin_text: &str,
     anchors: &TrustAnchors,
+    floor: u32,
 ) -> Result<Vocabulary, KernelError> {
     let pin = VocabularyPin::from_toml_str(pin_text).map_err(config_err)?;
     verify_pin(&pin, anchors)?;
+    if pin.version < floor {
+        return Err(config_err(format!(
+            "pin version {} is below the accepted floor {floor}; refusing a rollback",
+            pin.version
+        )));
+    }
     Vocabulary::from_toml_pinned(vocab_text, &pin).map_err(config_err)
+}
+
+/// Highest vocabulary pin version recorded on `chain` (0 when none).
+pub fn chain_version_floor(chain: &ChainManager) -> u32 {
+    chain
+        .tail(chain.len())
+        .iter()
+        .filter(|e| e.source == "placement" && e.kind == EVENT_KIND_CONFIG_SET)
+        .filter_map(|e| {
+            let p = e.payload.as_ref()?;
+            (p.get("key")?.as_str()? == VOCABULARY_CONFIG_KEY)
+                .then(|| p.pointer("/pin/version")?.as_u64())
+                .flatten()
+        })
+        .max()
+        .map_or(0, |v| u32::try_from(v).unwrap_or(u32::MAX))
+}
+
+fn read_floor(dir: &Path) -> Result<u32, KernelError> {
+    match std::fs::read_to_string(dir.join(VOCABULARY_FLOOR_FILE)) {
+        Ok(t) => t
+            .trim()
+            .parse()
+            .map_err(|_| config_err("capabilities.floor is not a version number")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(e) => Err(config_err(format!("capabilities.floor: {e}"))),
+    }
+}
+
+fn record_floor(dir: &Path, version: u32) -> Result<(), KernelError> {
+    let tmp = dir.join(format!(".{VOCABULARY_FLOOR_FILE}.tmp"));
+    std::fs::write(&tmp, format!("{version}\n"))
+        .and_then(|_| std::fs::rename(&tmp, dir.join(VOCABULARY_FLOOR_FILE)))
+        .map_err(|e| config_err(format!("capabilities.floor: {e}")))
 }
 
 fn read_bounded(path: &Path, max: usize) -> Result<String, KernelError> {
@@ -166,9 +230,41 @@ pub fn load_governed_dir_with(
     config_dir: &Path,
     anchors: &TrustAnchors,
 ) -> Result<Vocabulary, KernelError> {
+    load_dir(config_dir, anchors, None)
+}
+
+/// [`load_governed_dir_with`] that also checks a signed pin against `chain`:
+/// the pin's event must be on the chain with the same hash and digest and
+/// the same version, and the floor is the higher of the file's and the
+/// chain's.
+pub fn load_governed_dir_on_chain(
+    config_dir: &Path,
+    anchors: &TrustAnchors,
+    chain: &ChainManager,
+) -> Result<Vocabulary, KernelError> {
+    load_dir(config_dir, anchors, Some(chain))
+}
+
+fn load_dir(
+    config_dir: &Path,
+    anchors: &TrustAnchors,
+    chain: Option<&ChainManager>,
+) -> Result<Vocabulary, KernelError> {
     let vocab = read_bounded(&config_dir.join(VOCABULARY_FILE), MAX_VOCAB_BYTES)?;
-    let pin = read_bounded(&config_dir.join(VOCABULARY_PIN_FILE), MAX_PIN_BYTES)?;
-    load_governed(&vocab, &pin, anchors)
+    let pin_text = read_bounded(&config_dir.join(VOCABULARY_PIN_FILE), MAX_PIN_BYTES)?;
+    let file_floor = read_floor(config_dir)?;
+    let floor = file_floor.max(chain.map_or(0, chain_version_floor));
+    let v = load_governed(&vocab, &pin_text, anchors, floor)?;
+    let pin = VocabularyPin::from_toml_str(&pin_text).map_err(config_err)?;
+    if pin.signature.is_some() {
+        if let Some(chain) = chain {
+            verify_pin_event(&pin, chain)?;
+        }
+        if pin.version > file_floor {
+            record_floor(config_dir, pin.version)?;
+        }
+    }
+    Ok(v)
 }
 
 /// An approved vocabulary change.

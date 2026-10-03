@@ -48,12 +48,20 @@ impl PlacementControlPlane {
             .exchange
             .seed_package_dir_manifest(&order.package_dir, &manifest, &self.anchors, &self.kinds)
             .map_err(|e| PlaneError::Package(e.to_string()))?;
-        if let WorkloadSource::SignedPackage(p) = &w.source
-            && p.package_id != seeded.package_id
-        {
-            return Err(PlaneError::Package(
-                "the package changed between verification and seeding".into(),
-            ));
+        match &w.source {
+            WorkloadSource::SignedPackage(p) if p.package_id == seeded.package_id => {}
+            WorkloadSource::SignedPackage(_) => {
+                return Err(PlaneError::Package(
+                    "the package changed between verification and seeding".into(),
+                ));
+            }
+            // A package kind must load a signed package; anything else
+            // cannot be tied to what was seeded, so it is not seeded.
+            _ => {
+                return Err(PlaneError::Package(
+                    "the kind loaded a workload that is not a signed package".into(),
+                ));
+            }
         }
         let spec = kind.spec(&w).map_err(PlaneError::Package)?;
         Ok((w, spec, seeded.manifest_hash))

@@ -14,6 +14,7 @@ use super::transport::MeshConnector;
 use crate::workload_kind::{CogKind, KindRegistry, WorkloadKind};
 use crate::workload_pkg::{
     MANIFEST_FILE, ManifestEnvelope, TrustAnchors, VerifyError, VerifyPolicy, verify_dir_in,
+    verify_stored_in,
 };
 use crate::workload_runtime::VerifiedWorkload;
 
@@ -207,4 +208,29 @@ async fn a_registered_kind_fetches_across_nodes_only_with_its_registry() {
     drop(peers);
     let _ = server.await;
     assert_eq!(got.package_id, seeded.package_id);
+
+    // The Cognitum verifier is refused for that kind on the stored path of
+    // both the seeding node and the fetching node.
+    let on = VerifyPolicy {
+        accept_cognitum_release: true,
+        ..VerifyPolicy::default()
+    };
+    for ex in [&a.ex, &b.ex] {
+        let err =
+            verify_stored_in(ex.store(), &seeded.manifest_hash, &anchors(), &on, &reg).unwrap_err();
+        assert!(
+            matches!(&err, VerifyError::Manifest(m) if m.contains("only to the cog kind")),
+            "{err:?}"
+        );
+        assert!(
+            verify_stored_in(
+                ex.store(),
+                &seeded.manifest_hash,
+                &anchors(),
+                &VerifyPolicy::default(),
+                &reg
+            )
+            .is_ok()
+        );
+    }
 }

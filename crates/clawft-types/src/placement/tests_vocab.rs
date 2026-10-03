@@ -250,6 +250,9 @@ fn signed_pin_round_trips_and_statement_covers_every_field() {
         "signature = \"abcd\"\n".to_string(),
         "event_hash = \"nope\"\n".to_string(),
         "key_id = \"\"\n".to_string(),
+        "key_id = \"a b\"\n".to_string(),
+        "key_id = \"a\\\"b\"\n".to_string(),
+        "key_id = \"a\\u0007b\"\n".to_string(),
     ] {
         let text = format!("version = 1\ndigest = \"{}\"\n{bad}", pin.digest);
         assert!(VocabularyPin::from_toml_str(&text).is_err(), "{bad:?}");
