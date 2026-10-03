@@ -372,6 +372,8 @@ pub mod mesh_swarm_picker;
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod mesh_swarm_rate;
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_revoke;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod mesh_swarm_state;
 #[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 mod mesh_swarm_tests;
