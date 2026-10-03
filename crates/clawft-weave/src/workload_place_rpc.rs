@@ -435,11 +435,13 @@ async fn build(
     // the swarm transport: artifact sessions and checkout over the machine
     // mesh's stamped deliveries (ADR-106 5.4), late-bound behind the link. A
     // steward relay floods the grants it obtains through the exchange.
-    let licence = ensure_licence(dir, boot_policy.as_ref(), &anchors, &chain, licence_links(mesh.clone()), posture);
+    ensure_licence(dir, boot_policy.as_ref(), &anchors, &chain, licence_links(mesh.clone()), posture);
     let cog_mesh = crate::cog_swarm::install(&ex, policy.store());
     // ADR-106 phase 3: the steward relay, from `licence-link.json`.
     crate::licence_steward::wire(crate::licence_steward::WireArgs {
-        dir, key: &boot.key, node_id: id.clone(), store: policy.store(), exchange: &ex,
+        // The mesh id, which the binding names as steward (the machine's in
+        // service mode); `id` is the signer's own id (the control key's there).
+        dir, key: &boot.key, node_id: boot.mesh_node_id.clone(), store: policy.store(), exchange: &ex,
         chain: &chain, gate: kgate, mesh: &cog_mesh,
     });
     // The revoker exists before the first notice can arrive: a notice that
@@ -496,7 +498,7 @@ async fn build(
         revocations: revocations.clone(),
     })?);
     // ADR-106 phase 3: grant plus approval before a Cognitum-origin cog runs here.
-    local.set_licence_gate(crate::licence_steward::run_gate(policy.store(), licence.as_ref()));
+    local.set_licence_gate(crate::licence_steward::run_gate(policy.store()));
     let _ = HOST.set(local.clone());
     let conn = Arc::new(MeshConnector::new(true));
     let local_addr = conn.register_local("local", local);

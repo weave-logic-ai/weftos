@@ -26,6 +26,15 @@
 //! not name this node the relay refuses with `not_steward` and sends nothing.
 //! A node without the file answers `no_steward`.
 //!
+//! In service mode the relay and the renewer act only while this daemon holds
+//! the service's reserved licence topics: the client checks the holder state
+//! on every call (`not_holder`, nothing sent), so a role that comes or goes
+//! after placement started is followed without a rebuild. They sign as the
+//! mesh node id (the machine's, which the binding names as steward) with the
+//! placement signer (the control key in service mode). Their grant flood and
+//! the run gate's approval store are looked up on each use, so an exchange
+//! that starts after placement is used as soon as it exists.
+//!
 //! The same client drives the renewal pull ([`clawft_kernel::licence::Renewer`]):
 //! `POST /licence/v1/renew` every 12 h plus jitter, then the
 //! `GET /licence/v1/grants` catch-up; renewed grants and withdrawals are
@@ -108,6 +117,9 @@ pub struct RelayState {
     pub link_security: Option<&'static str>,
     /// Why no relay was built although a link file is present.
     pub error: Option<String>,
+    /// The node id the relay signs as (the mesh node id: the machine's in
+    /// service mode, which the binding names as `steward_node_id`).
+    pub node_id: String,
 }
 
 static STATE: OnceLock<RelayState> = OnceLock::new();
@@ -121,9 +133,12 @@ pub fn state() -> Option<RelayState> {
 pub struct WireArgs<'a> {
     /// The runtime dir.
     pub dir: &'a Path,
-    /// The node key (the binding's `steward_pubkey` when this node is the steward).
+    /// The placement signer (the binding's `steward_pubkey` when this node is
+    /// the steward; the control key in service mode).
     pub key: &'a SigningKey,
-    /// This node's id.
+    /// This node's mesh id (the binding's `steward_node_id` when this node is
+    /// the steward; the machine's node id in service mode, never the control
+    /// key's id).
     pub node_id: String,
     /// The boot-owned grant store.
     pub store: &'a Arc<CheckoutGrantStore>,
@@ -147,14 +162,13 @@ fn build(a: &WireArgs<'_>, link: LicenceLinkConfig) -> Result<Built, String> {
         _ => "lab_opt_in",
     };
     let transport: Arc<dyn LicenceTransport> = Arc::new(transport);
-    let client: Arc<dyn clawft_kernel::licence::LicenceClient> =
-        StewardLicenceClient::new(a.store.clone(), a.key.clone(), a.node_id.clone(), transport, system_clock_ms());
+    let client = steward_client(a.store, a.key, &a.node_id, transport, Arc::new(holder_allows));
     let relay = CheckoutRelay::new(
         a.store.clone(),
         a.exchange.clone(),
         client.clone(),
         gate,
-        crate::cog_swarm::grant_flood(),
+        crate::cog_swarm::late_grant_flood(),
         Some(a.chain.clone()),
     );
     Ok((Arc::new(relay), client, security))
@@ -171,7 +185,7 @@ fn spawn_renewal(a: &WireArgs<'_>, client: Arc<dyn clawft_kernel::licence::Licen
         a.store.clone(),
         a.exchange.clone(),
         client,
-        crate::cog_swarm::grant_flood(),
+        crate::cog_swarm::late_grant_flood(),
         Some(a.chain.clone()),
         clawft_kernel::licence::RenewalConfig::default(),
     );
@@ -182,23 +196,24 @@ fn spawn_renewal(a: &WireArgs<'_>, client: Arc<dyn clawft_kernel::licence::Licen
 /// No file: no relay (the node answers `no_steward`). A bad file or link is
 /// logged and reported by `weaver doctor`; the node runs without a relay.
 pub fn wire(a: WireArgs<'_>) -> RelayState {
+    let node_id = a.node_id.clone();
     let st = match load_link(a.dir) {
-        Ok(None) => RelayState { link_configured: false, relay_installed: false, link_security: None, error: None },
+        Ok(None) => RelayState { link_configured: false, relay_installed: false, link_security: None, error: None, node_id },
         Ok(Some(link)) => match build(&a, link) {
             Ok((relay, client, security)) => {
                 a.mesh.set_relay(Some(relay));
                 spawn_renewal(&a, client);
                 tracing::info!(security, "steward checkout relay installed (relays while the binding names this node)");
-                RelayState { link_configured: true, relay_installed: true, link_security: Some(security), error: None }
+                RelayState { link_configured: true, relay_installed: true, link_security: Some(security), error: None, node_id }
             }
             Err(e) => {
                 tracing::warn!(error = %e, "steward checkout relay NOT installed");
-                RelayState { link_configured: true, relay_installed: false, link_security: None, error: Some(e) }
+                RelayState { link_configured: true, relay_installed: false, link_security: None, error: Some(e), node_id }
             }
         },
         Err(e) => {
             tracing::warn!(error = %e, "licence link file unreadable; no steward relay");
-            RelayState { link_configured: true, relay_installed: false, link_security: None, error: Some(e) }
+            RelayState { link_configured: true, relay_installed: false, link_security: None, error: Some(e), node_id }
         }
     };
     let _ = STATE.set(st.clone());
@@ -206,16 +221,120 @@ pub fn wire(a: WireArgs<'_>) -> RelayState {
 }
 
 /// The run gate a `workload-host` asks for Cognitum-origin cogs: the
-/// boot-owned grant store and the licence exchange's approval store (none
-/// without a mesh: every Cognitum run in a Seed-bound mesh is then refused).
-pub fn run_gate(
-    store: &Arc<CheckoutGrantStore>,
-    licence: Option<&Arc<clawft_kernel::licence::LicenceExchange>>,
-) -> Arc<dyn clawft_kernel::licence::CognitumRunGate> {
-    Arc::new(clawft_kernel::licence::StoreRunGate {
+/// boot-owned grant store and the licence exchange's approval store, looked
+/// up on every check (none while no exchange runs: every Cognitum run in a
+/// Seed-bound mesh is then refused).
+pub fn run_gate(store: &Arc<CheckoutGrantStore>) -> Arc<dyn clawft_kernel::licence::CognitumRunGate> {
+    Arc::new(LateRunGate {
         grants: store.clone(),
-        approvals: licence.map(|x| x.approvals().clone()),
+        approvals: Arc::new(|| crate::workload_place_rpc::licence_exchange().map(|x| x.approvals().clone())),
     })
+}
+
+type ApprovalSource = Arc<dyn Fn() -> Option<Arc<clawft_kernel::licence::ApprovalStore>> + Send + Sync>;
+
+/// [`clawft_kernel::licence::StoreRunGate`] whose approval store is looked up
+/// on each call, so an exchange that starts after placement counts at once.
+pub struct LateRunGate {
+    /// The boot-owned grant store.
+    pub grants: Arc<CheckoutGrantStore>,
+    /// Where the approval store is, when there is one.
+    pub approvals: ApprovalSource,
+}
+
+impl LateRunGate {
+    fn now(&self) -> clawft_kernel::licence::StoreRunGate {
+        clawft_kernel::licence::StoreRunGate { grants: self.grants.clone(), approvals: (self.approvals)() }
+    }
+}
+
+impl clawft_kernel::licence::CognitumRunGate for LateRunGate {
+    fn check(
+        &self,
+        req: &clawft_kernel::licence::RunRequest<'_>,
+    ) -> Result<clawft_kernel::licence::RunVerdict, clawft_kernel::licence::RunRefusal> {
+        self.now().check(req)
+    }
+
+    fn claims(&self, sha256: &str, blake3: &str) -> bool {
+        self.now().claims(sha256, blake3)
+    }
+
+    fn revoked(&self, blake3: &str) -> bool {
+        self.now().revoked(blake3)
+    }
+}
+
+/// The licence path may act here: collapsed mode, or the service's
+/// reserved-topic holder.
+fn holder_allows() -> bool {
+    crate::licence_boot::holder_refusal().is_none()
+}
+
+/// The steward client the relay and the renewer use: bound to the binding in
+/// effect, signing as `node_id` with `key`, and refusing `not_holder` (with
+/// nothing sent) while `allowed` says this daemon may not act.
+pub fn steward_client(
+    store: &Arc<CheckoutGrantStore>,
+    key: &SigningKey,
+    node_id: &str,
+    transport: Arc<dyn LicenceTransport>,
+    allowed: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Arc<dyn clawft_kernel::licence::LicenceClient> {
+    let inner = StewardLicenceClient::new(store.clone(), key.clone(), node_id.to_owned(), transport, system_clock_ms());
+    Arc::new(HolderGated { inner, allowed })
+}
+
+struct HolderGated {
+    inner: Arc<StewardLicenceClient>,
+    allowed: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl HolderGated {
+    fn check(&self) -> Result<(), clawft_kernel::licence::LicenceClientError> {
+        if (self.allowed)() {
+            Ok(())
+        } else {
+            Err(clawft_kernel::licence::LicenceClientError::Refused { status: 0, code: "not_holder".into() })
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl clawft_kernel::licence::LicenceClient for HolderGated {
+    async fn checkout(
+        &self,
+        req: &clawft_kernel::licence::CheckoutWire,
+    ) -> Result<clawft_kernel::licence::SignedGrant, clawft_kernel::licence::LicenceClientError> {
+        self.check()?;
+        self.inner.checkout(req).await
+    }
+
+    async fn artifact(&self, blake3_hex: &str, max_len: u64) -> Result<Vec<u8>, clawft_kernel::licence::LicenceClientError> {
+        self.check()?;
+        self.inner.artifact(blake3_hex, max_len).await
+    }
+
+    async fn grants_since(
+        &self,
+        since: u64,
+    ) -> Result<Vec<clawft_kernel::licence::SignedGrant>, clawft_kernel::licence::LicenceClientError> {
+        self.check()?;
+        self.inner.grants_since(since).await
+    }
+
+    async fn grants_page(
+        &self,
+        since: u64,
+    ) -> Result<clawft_kernel::licence::GrantsPage, clawft_kernel::licence::LicenceClientError> {
+        self.check()?;
+        self.inner.grants_page(since).await
+    }
+
+    async fn renew(&self) -> Result<clawft_kernel::licence::GrantsPage, clawft_kernel::licence::LicenceClientError> {
+        self.check()?;
+        self.inner.renew().await
+    }
 }
 
 /// `{link_configured, relay_installed, link_security, error}` for status.
@@ -228,6 +347,10 @@ pub fn status_json(st: Option<&RelayState>) -> Value {
         }),
     }
 }
+
+#[cfg(test)]
+#[path = "licence_steward_tests.rs"]
+mod late_tests;
 
 #[cfg(test)]
 mod tests {
