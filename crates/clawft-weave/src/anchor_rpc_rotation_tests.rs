@@ -8,7 +8,7 @@ use clawft_kernel::project_identity::{RevocationView, RotationLog, RotationRecor
 use clawft_types::project::cert::key_id;
 use ed25519_dalek::SigningKey;
 
-use super::record::{anchor_file, read_file, seal, write_file};
+use super::record::{anchor_file, append_event, read_file, seal, write_file};
 use super::tests::{Fx, fixture, later, project_key, stmt, user_key};
 use super::*;
 use clawft_types::project::cert::PopOp;
@@ -63,20 +63,51 @@ fn an_anchor_record_and_a_certificate_sealed_by_the_old_key_verify_across_a_rota
 fn a_record_the_old_key_seals_after_the_rotation_point_is_refused() {
     let f = fixture();
     submit(&f.env, &stmt(&f, 1, None, 10, later(5)), later(10)).unwrap();
+    // A genuine anchor event, chained before the rotation.
+    let genuine = append_event(&f.env, &stmt(&f, 1, None, 10, later(50)), None, 0);
     let env = rotated(&f);
     let old_env = CertEnv { chain: env.chain.clone(), user_key: user_key(), manifests_dir: env.manifests_dir.clone() };
     let view = current_view(&env).unwrap();
 
-    // Control: an old-key seal on a statement dated before the point is read.
-    let early = seal(&old_env, stmt(&f, 1, None, 10, later(50)), 3, "ab".repeat(32), 0);
-    write_file(&env, &early).unwrap();
+    // Control: an old-key seal on a statement dated before the point, naming
+    // a chain event below the rotation, is read.
+    write_file(&env, &genuine).unwrap();
     assert!(read_file(&env, &f.id, &view).is_some());
 
     // After the point: refused, so it cannot set the baseline.
-    let late = seal(&old_env, stmt(&f, 1, None, 10, later(300)), 3, "ab".repeat(32), 0);
+    let late = seal(&old_env, stmt(&f, 1, None, 10, later(300)), genuine.user_seq, genuine.user_event_hash.clone(), 0);
     write_file(&env, &late).unwrap();
     assert!(read_file(&env, &f.id, &view).is_none());
     assert!(anchor_file(&env.manifests_dir, &f.id).exists());
+}
+
+/// A backdated record sealed with the stolen old key passes the time rule, so
+/// the chain must be what refuses it (review follow-up: corroboration).
+#[test]
+fn an_old_key_record_without_a_chain_event_below_the_rotation_is_refused() {
+    let f = fixture();
+    submit(&f.env, &stmt(&f, 1, None, 10, later(5)), later(10)).unwrap();
+    let genuine = append_event(&f.env, &stmt(&f, 1, None, 10, later(50)), None, 0);
+    let env = rotated(&f);
+    let old_env = CertEnv { chain: env.chain.clone(), user_key: user_key(), manifests_dir: env.manifests_dir.clone() };
+    let view = current_view(&env).unwrap();
+
+    // Dated before the point, signed by the old key, but naming no chain event.
+    let invented = seal(&old_env, stmt(&f, 1, None, 10, later(50)), 3, "ab".repeat(32), 0);
+    write_file(&env, &invented).unwrap();
+    assert!(read_file(&env, &f.id, &view).is_none(), "no event with that seq and hash");
+
+    // Right sequence, wrong hash.
+    let wrong_hash = seal(&old_env, stmt(&f, 1, None, 10, later(50)), genuine.user_seq, "cd".repeat(32), 0);
+    write_file(&env, &wrong_hash).unwrap();
+    assert!(read_file(&env, &f.id, &view).is_none(), "the event hash must match");
+
+    // A real event the daemon appended AFTER the rotation, back-dated and sealed
+    // with the old key: the chain position is above the rotation point.
+    let after = append_event(&old_env, &stmt(&f, 1, None, 10, later(60)), None, 0);
+    assert!(after.user_seq > genuine.user_seq);
+    write_file(&env, &after).unwrap();
+    assert!(read_file(&env, &f.id, &view).is_none(), "an event above the rotation is not corroboration");
 }
 
 #[test]

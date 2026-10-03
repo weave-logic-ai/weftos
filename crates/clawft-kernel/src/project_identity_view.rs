@@ -159,7 +159,13 @@ impl RevocationView {
     }
 
     fn ingest_cert(&mut self, c: &ProjectCert) {
-        if self.verify_historic(c).is_err() {
+        if let Some(cause) = self.rejection_cause(c) {
+            tracing::warn!(
+                project = %c.project_id,
+                user_key = %c.user_key_id,
+                serial = c.serial,
+                "project certificate rejected: {cause}"
+            );
             self.rejected += 1;
             return;
         }
@@ -172,6 +178,8 @@ impl RevocationView {
         }
     }
 
+    /// Why `c` cannot be trusted, or `None` when it can.
+    ///
     /// Signature and shape under the user key that sealed `c`. A certificate
     /// sealed by the key in use needs nothing more. One sealed by a RETIRED
     /// key counts only when it is dated at or before the rotation point AND
@@ -180,19 +188,24 @@ impl RevocationView {
     /// key. A journal line or certificate file alone, however it is dated,
     /// is not evidence (whoever holds the old private key can backdate; only
     /// the daemon appends to the reserved chain source).
-    fn verify_historic(&self, c: &ProjectCert) -> Result<(), IdentityError> {
-        verify_cert_historic(c, &self.trust)?;
-        let current = key_id(self.trust.current());
-        if c.user_key_id != current {
-            let before_rotation = matches!(
-                (self.anchored.get(&c.sig), self.rotated_seq.get(&c.user_key_id)),
-                (Some(s), Some(r)) if s < r
-            );
-            if !before_rotation {
-                return Err(clawft_types::project::CertError::UntrustedUser.into());
-            }
+    pub(crate) fn rejection_cause(&self, c: &ProjectCert) -> Option<String> {
+        if let Err(e) = verify_cert_historic(c, &self.trust) {
+            return Some(format!("it does not verify under the user key history ({e})"));
         }
-        Ok(())
+        if c.user_key_id == key_id(self.trust.current()) {
+            return None;
+        }
+        let anchored = self.anchored.get(&c.sig);
+        let rotated = self.rotated_seq.get(&c.user_key_id);
+        match (anchored, rotated) {
+            (Some(s), Some(r)) if s < r => None,
+            _ => Some(format!(
+                "it is sealed by retired user key {} but the user chain does not corroborate it \
+                 (certificate event at chain seq {anchored:?}, key rotated at chain seq {rotated:?}); \
+                 a journal line or certificate file alone is not evidence",
+                c.user_key_id
+            )),
+        }
     }
 
     fn ingest_revoke(&mut self, project_id: &str, key_id: &str) {

@@ -59,8 +59,28 @@ pub(crate) fn note_group(pgid: u32) {
 /// See [`Launcher::supervised_pids`].
 pub(crate) fn supervised_groups() -> Vec<u32> {
     let mut g = GROUPS.lock().unwrap_or_else(|e| e.into_inner());
-    g.retain(|pgid| !matches!(killpg(Pid::from_raw(*pgid as i32), None), Err(nix::errno::Errno::ESRCH)));
+    g.retain(|pgid| !group_gone(*pgid));
     g.iter().copied().collect()
+}
+
+fn group_gone(pgid: u32) -> bool {
+    matches!(killpg(Pid::from_raw(pgid as i32), None), Err(nix::errno::Errno::ESRCH))
+}
+
+/// Drop `pgid` from the set now if its group is empty. Called when a waiter
+/// sees the leader exit: pruning only at the next accept would leave a window
+/// in which an unrelated same-uid group that recycled the number is still
+/// classed as a child (fail closed, but wrong). A group that still has
+/// members (orphaned grandchildren) stays until it is gone.
+pub(crate) fn prune_if_gone(pgid: u32) {
+    if group_gone(pgid) {
+        GROUPS.lock().unwrap_or_else(|e| e.into_inner()).remove(&pgid);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn group_noted(pgid: u32) -> bool {
+    GROUPS.lock().unwrap_or_else(|e| e.into_inner()).contains(&pgid)
 }
 
 static EXE_SHA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -293,6 +313,7 @@ impl Launcher {
                 while adopted_alive(pid) {
                     tokio::time::sleep(self.cfg.exit_poll).await;
                 }
+                prune_if_gone(pid);
                 // A clean shutdown removes kernel.pid; a crash leaves it.
                 let clean = !self.run_dir(id).join("kernel.pid").exists();
                 ExitInfo { code: None, signal: None, clean_hint: clean }
@@ -504,6 +525,7 @@ impl Launcher {
         let (tx, rx) = watch::channel(None);
         std::thread::spawn(move || {
             let info = child.wait().map(exit_info).unwrap_or_default();
+            prune_if_gone(pid);
             let _ = tx.send(Some(info));
         });
         note_group(pid);

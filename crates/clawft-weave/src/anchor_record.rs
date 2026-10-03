@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use clawft_kernel::chain_anchor::{ANCHOR_SOURCE, KIND_ANCHOR};
 use clawft_kernel::project_identity::{self as ident, IdentityError, RevocationView};
 use clawft_types::project::canon::{canonical_json, hex_decode, hex_encode};
-use clawft_types::project::cert::ProjectAnchorStmt;
+use clawft_types::project::cert::{ProjectAnchorStmt, key_id};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use serde_json::json;
@@ -56,9 +56,13 @@ pub(super) fn seal(
 
 /// Sealed by the key in use, or by a user key rotated out since, provided the
 /// statement it seals is dated at or before that key's rotation point
-/// (ADR-103 A13). A record the old key sealed after the rotation point is
-/// refused: the daemon seals only with the key in use, so the old key's
-/// signature on a later statement is not the daemon's.
+/// (ADR-103 A13) AND the user chain corroborates the record: an anchor event
+/// with this `user_seq` and event hash exists below the sequence of that
+/// key's `user.key.rotated` event. A record the old key sealed after the
+/// rotation point is refused: the daemon seals only with the key in use, so
+/// the old key's signature on a later statement is not the daemon's. The
+/// date alone is not evidence (whoever holds the old private key can
+/// backdate); only the daemon appends to the reserved chain source.
 fn seal_ok(env: &CertEnv, a: &Accepted) -> bool {
     let Some(sig) = hex_decode::<64>(&a.rec_sig) else { return false };
     let Ok(history) = crate::project_cert_rpc::user_history(env) else { return false };
@@ -67,11 +71,41 @@ fn seal_ok(env: &CertEnv, a: &Accepted) -> bool {
     };
     let bytes = record_bytes(&a.statement.hash(), a.user_seq, &a.user_event_hash, a.epoch);
     let sig = Signature::from_bytes(&sig);
-    std::iter::once(*history.current())
+    let Some(signer) = std::iter::once(*history.current())
         .chain(history.retired_keys())
         .filter(|pk| history.accepts(pk, at))
-        .filter_map(|pk| VerifyingKey::from_bytes(&pk).ok())
-        .any(|vk| vk.verify_strict(&bytes, &sig).is_ok())
+        .find(|pk| VerifyingKey::from_bytes(pk).is_ok_and(|vk| vk.verify_strict(&bytes, &sig).is_ok()))
+    else {
+        return false;
+    };
+    signer == *history.current() || retired_seal_corroborated(env, a, &signer)
+}
+
+/// The chain holds the anchor event `a` names, below the rotation of `signer`.
+fn retired_seal_corroborated(env: &CertEnv, a: &Accepted, signer: &[u8; 32]) -> bool {
+    let events = env.chain.tail(0);
+    let signer_id = key_id(signer);
+    let rotated_at = events.iter().find_map(|e| {
+        let is_rotation = e.source == ident::SOURCE && e.kind == ident::KIND_ROTATED;
+        let old = e.payload.as_ref()?.get("record")?.get("old_key_id")?.as_str()?;
+        (is_rotation && old == signer_id).then_some(e.sequence)
+    });
+    let found = rotated_at.is_some_and(|r| {
+        events.iter().any(|e| {
+            e.source == ANCHOR_SOURCE
+                && e.kind == KIND_ANCHOR
+                && e.sequence == a.user_seq
+                && e.sequence < r
+                && ident::hex(&e.hash) == a.user_event_hash
+        })
+    });
+    if !found {
+        warn!(
+            project = %a.statement.project_id,
+            "anchor record sealed by a retired user key is not corroborated by the user chain; ignored"
+        );
+    }
+    found
 }
 
 /// The statement still verifies under some certificate ever issued for the
