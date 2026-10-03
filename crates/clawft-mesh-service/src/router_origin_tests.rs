@@ -147,23 +147,75 @@ async fn inbound_reserved_topics_reach_only_the_owner_whatever_the_scope_or_pref
     assert!(t[1].rx.try_recv().is_err() && t[2].rx.try_recv().is_err(), "nobody else gets any");
 }
 
-#[tokio::test]
-async fn with_no_owner_the_only_registration_holds_the_reserved_topics() {
+fn bare_router() -> (Arc<TenantRouter>, Arc<Registry>) {
     let registry = Arc::new(Registry::new());
     let policy = PolicyCell::new(None, MeshAdmissionMode::Observe);
-    let router = TenantRouter::new(Arc::clone(&registry), policy, "node-local".into());
-    let (reg, mut rx, _) =
-        Registration::new(1, Principal::Uid(501), "u1".into(), [1; 32], 501, String::new(), vec![], 0);
+    (TenantRouter::new(Arc::clone(&registry), policy, "node-local".into()), registry)
+}
+
+fn register(registry: &Registry, uid: u32) -> (Arc<Registration>, mpsc::Receiver<Frame>) {
+    let (reg, rx, _) = Registration::new(
+        u64::from(uid),
+        Principal::Uid(uid),
+        format!("user-{uid}"),
+        [uid as u8; 32],
+        uid,
+        String::new(),
+        vec![],
+        0,
+    );
     registry.register(&reg, &[], &[]).unwrap();
-    let m = KernelMessage::text(0, MessageTarget::Topic("mesh.cog.checkout".into()), "x");
-    router.deliver(&ctx(true, PeerClass::Node), None, m).await.unwrap();
-    assert!(rx.try_recv().is_ok());
-    // A second registration means there is no unambiguous holder: refused.
-    let (reg2, _rx2, _) =
-        Registration::new(2, Principal::Uid(502), "u2".into(), [2; 32], 502, String::new(), vec![], 0);
-    registry.register(&reg2, &[], &[]).unwrap();
-    let m = KernelMessage::text(0, MessageTarget::Topic("mesh.cog.checkout".into()), "x");
-    router.deliver(&ctx(true, PeerClass::Node), None, m).await.unwrap();
-    assert!(rx.try_recv().is_err());
-    assert_eq!(router.counters.reserved_refused.load(Ordering::Relaxed), 1);
+    (reg, rx)
+}
+
+fn reserved_msg() -> KernelMessage {
+    KernelMessage::text(0, MessageTarget::Topic("mesh.cog.checkout".into()), "x")
+}
+
+#[tokio::test]
+async fn with_no_owner_and_no_service_uid_nobody_holds_the_reserved_topics() {
+    let (router, registry) = bare_router();
+    // The only registration is not trusted for being the only one.
+    let (reg, mut rx) = register(&registry, 501);
+    router.deliver(&ctx(true, PeerClass::Node), None, reserved_msg()).await.unwrap();
+    assert!(rx.try_recv().is_err(), "a lone registration does not become the holder");
+    assert_eq!(router.reserved_holder_source(), "none");
+    let remote = remote("mesh.cog.checkout");
+    assert!(matches!(router.route_outbound(&reg, &remote, reserved_msg()).await, Err(SendError::Forbidden(_))));
+    assert_eq!(router.counters.reserved_refused.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn a_squatter_registering_first_at_boot_is_not_the_holder() {
+    let (router, registry) = bare_router();
+    router.set_fallback_uid(501); // the service's own uid
+    assert_eq!(router.reserved_holder_source(), "service_uid");
+    // Another uid gets in before the service uid's daemon does.
+    let (squatter, mut sq_rx) = register(&registry, 777);
+    router.deliver(&ctx(true, PeerClass::Node), None, reserved_msg()).await.unwrap();
+    assert!(sq_rx.try_recv().is_err(), "the squatter receives nothing reserved");
+    assert!(matches!(
+        router.route_outbound(&squatter, &remote("mesh.cog.checkout"), reserved_msg()).await,
+        Err(SendError::Forbidden(_))
+    ));
+    // The real holder registers later and gets the topics; a third registration
+    // does not disable them (the holder is by uid, not by being alone).
+    let (_holder, mut h_rx) = register(&registry, 501);
+    let (_third, mut t_rx) = register(&registry, 888);
+    router.deliver(&ctx(true, PeerClass::Node), None, reserved_msg()).await.unwrap();
+    assert!(h_rx.try_recv().is_ok());
+    assert!(sq_rx.try_recv().is_err() && t_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn a_configured_cluster_owner_wins_over_the_service_uid() {
+    let registry = Arc::new(Registry::new());
+    let policy = PolicyCell::new(Some(502), MeshAdmissionMode::Observe);
+    let router = TenantRouter::new(Arc::clone(&registry), policy, "node-local".into());
+    router.set_fallback_uid(501);
+    assert_eq!((router.reserved_holder_uid(), router.reserved_holder_source()), (Some(502), "cluster_owner_uid"));
+    let (_a, mut a_rx) = register(&registry, 501);
+    let (_b, mut b_rx) = register(&registry, 502);
+    router.deliver(&ctx(true, PeerClass::Node), None, reserved_msg()).await.unwrap();
+    assert!(a_rx.try_recv().is_err() && b_rx.try_recv().is_ok());
 }

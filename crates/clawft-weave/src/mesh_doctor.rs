@@ -174,6 +174,16 @@ pub fn findings(p: &MeshProbe, home: &std::path::Path) -> Vec<Finding> {
         Some(a) if !a.is_empty() => out.push(f("leaf_unsigned", Severity::Warn, format!("{} leaf peer(s) connected without signed admission: {a:?}", a.len()))),
         _ => {}
     }
+    if st["reserved_topics"]["holder_uid"].is_null() && st["reserved_topics"].is_object() {
+        out.push(
+            f(
+                "reserved_topics",
+                Severity::Warn,
+                "cluster_owner_uid required for the licence/artifact mesh: no uid may send or receive the reserved mesh.cog. / mesh.artifact. topics, so cog checkout and artifact transfer are off",
+            )
+            .remedy("set cluster_owner_uid in mesh.toml and restart the service"),
+        );
+    }
     for r in st["force_revoked"].as_array().into_iter().flatten() {
         out.push(
             f("force_revoked", Severity::Warn, format!("uid {} is force-revoked (enforced from force-revoked.json; the journal could not record it)", r["id"]))
@@ -455,5 +465,21 @@ mod tests {
         assert_eq!(sev(&v, "force_revoked"), Severity::Warn);
         p.service_exe = Some(PathBuf::from(SERVICE_EXE));
         assert!(!findings(&p, Path::new("/Users/a")).iter().any(|x| x.id == "mesh.exe"));
+    }
+
+    #[test]
+    fn reserved_topics_without_a_holder_are_reported() {
+        let mut p = MeshProbe { record_present: true, ..MeshProbe::default() };
+        let base = serde_json::json!({"node_id": "n", "proto": {"min": 1, "max": 2}});
+        let mut none = base.clone();
+        none["reserved_topics"] = serde_json::json!({"holder_uid": null, "source": "none", "refused": 3});
+        p.status = Some(none);
+        let v = findings(&p, std::path::Path::new("/home/x"));
+        let hit = v.iter().find(|f| f.id.ends_with("reserved_topics")).expect("a finding");
+        assert!(hit.message.contains("cluster_owner_uid required"), "{}", hit.message);
+        let mut held = base;
+        held["reserved_topics"] = serde_json::json!({"holder_uid": 501, "source": "service_uid", "refused": 0});
+        p.status = Some(held);
+        assert!(!findings(&p, std::path::Path::new("/home/x")).iter().any(|f| f.id.ends_with("reserved_topics")));
     }
 }

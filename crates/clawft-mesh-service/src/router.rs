@@ -73,6 +73,10 @@ pub struct TenantRouter {
     policy: Arc<PolicyCell>,
     node_id: String,
     runtime: OnceLock<Weak<MeshRuntime>>,
+    /// The uid that holds the reserved topics when no `cluster_owner_uid` is
+    /// set: the service's own. Never "whoever registered first".
+    fallback_uid: OnceLock<u32>,
+    warned_no_holder: std::sync::atomic::AtomicBool,
     pub counters: RouterCounters,
 }
 
@@ -90,6 +94,8 @@ impl TenantRouter {
             policy,
             node_id,
             runtime: OnceLock::new(),
+            fallback_uid: OnceLock::new(),
+            warned_no_holder: std::sync::atomic::AtomicBool::new(false),
             counters: RouterCounters::default(),
         })
     }
@@ -118,13 +124,42 @@ impl TenantRouter {
         self.counters.unknown_scope.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The registration allowed to send and receive the reserved topics: the
-    /// cluster owner's, or, with no owner configured, the only registration.
-    fn reserved_holder(&self) -> Option<Arc<Registration>> {
-        match self.policy.owner_uid() {
-            Some(uid) => self.registry.by_principal(&clawft_mesh_local::Principal::Uid(uid)),
-            None => self.registry.sole(),
+    /// Set the uid that holds the reserved topics when no cluster owner is configured.
+    pub fn set_fallback_uid(&self, uid: u32) {
+        let _ = self.fallback_uid.set(uid);
+    }
+
+    /// The uid allowed to send and receive the reserved topics: the cluster
+    /// owner, else the service's own uid, else nobody. It is never inferred
+    /// from who registered (a squatter at boot, or a second registration,
+    /// must not move it).
+    pub fn reserved_holder_uid(&self) -> Option<u32> {
+        self.policy.owner_uid().or_else(|| self.fallback_uid.get().copied())
+    }
+
+    /// Where [`Self::reserved_holder_uid`] came from, for status and the doctor.
+    pub fn reserved_holder_source(&self) -> &'static str {
+        if self.policy.owner_uid().is_some() {
+            "cluster_owner_uid"
+        } else if self.fallback_uid.get().is_some() {
+            "service_uid"
+        } else {
+            "none"
         }
+    }
+
+    /// The registration of [`Self::reserved_holder_uid`], if it is registered.
+    fn reserved_holder(&self) -> Option<Arc<Registration>> {
+        let Some(uid) = self.reserved_holder_uid() else {
+            if !self.warned_no_holder.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "cluster_owner_uid required for the licence/artifact mesh: no uid holds the \
+                     reserved mesh.cog./mesh.artifact. topics, so they are refused"
+                );
+            }
+            return None;
+        };
+        self.registry.by_principal(&clawft_mesh_local::Principal::Uid(uid))
     }
 
     /// Choose the registration for an inbound message and the scope to report.

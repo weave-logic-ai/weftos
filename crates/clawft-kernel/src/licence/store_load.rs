@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::binding::verify_binding_signature;
 use super::floor::FloorState;
-use super::grant::verify_grant_signature;
+use super::verify_grant_signature;
 use super::persist::read_capped;
 use super::store::{Held, Inner, Slot};
 use super::{

@@ -366,6 +366,9 @@ async fn a_local_tenant_is_neither_served_nor_accepted_for_checkout() {
     assert!(!got.verified, "a local tenant never becomes a verified peer: {got:?}");
     assert_eq!(got.class, PeerClass::Legacy);
 
+    let st = r.svc.admin(clawft_mesh_local::proto::Message::Status {}).await;
+    assert_eq!(st["reserved_topics"]["source"], "cluster_owner_uid");
+    assert_eq!(st["reserved_topics"]["holder_uid"], OTHER_UID);
     assert_eq!(r.svc.running().state.router.counters.reserved_refused.load(Ordering::SeqCst), 2);
     assert_eq!(r.cog.counters.refused_unverified.load(Ordering::SeqCst), 0, "they never reached the daemon");
     assert_eq!(r.licence.checkouts.load(Ordering::SeqCst), 0, "no checkout was relayed");

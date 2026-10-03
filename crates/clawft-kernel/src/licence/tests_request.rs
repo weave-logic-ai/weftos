@@ -26,21 +26,76 @@ fn verify(r: &LicenceRequest, now: u64, g: &mut ReplayGuard) -> Result<(), Reque
     verify_request(r, &pk(), NODE, AUD, now, g)
 }
 
+/// A kernel request as `weft-licence`'s parsed HTTP request (headers as sent).
+fn as_seed_request(r: &LicenceRequest) -> weft_licence::request::Request {
+    let a = r.auth.as_ref().unwrap();
+    weft_licence::request::Request {
+        method: r.method.clone(),
+        target: r.path.clone(),
+        headers: [
+            ("x-licence-node", a.node.clone()),
+            ("x-licence-ts", a.timestamp_ms.to_string()),
+            ("x-licence-nonce", a.nonce.clone()),
+            ("x-licence-sig", a.signature.clone()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect(),
+        body: r.body.clone(),
+    }
+}
+
 #[test]
-fn golden_vector_matches_weft_licence() {
-    // The exact string `weft-licence` (crates/weft-licence/src/request.rs,
-    // `signing_string`, 0eeffd88e) builds for these inputs: method, target,
-    // node, seed_device_id (audience), timestamp in milliseconds, nonce,
-    // sha256 of the body.
-    let s = signing_string("POST", "/licence/v1/checkout", "node-steward", "seed-1", 1_790_000_000_000, "abcdefghijklmnop", b"{\"a\":1}");
-    assert_eq!(
-        s,
-        "weft-licence-v1/request\nPOST\n/licence/v1/checkout\nnode-steward\nseed-1\n1790000000000\n\
-         abcdefghijklmnop\n015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862"
-    );
+fn what_the_kernel_client_signs_verifies_under_weft_licences_verifier() {
+    // Both sides use the one builder in weft-licence-wire; this proves the
+    // pieces fit end to end, including the audience.
+    let r = sign_request(&steward(), NODE, AUD, "POST", "/licence/v1/checkout?x=1", b"{\"a\":1}".to_vec(), NOW_MS, NONCE);
+    let seed = as_seed_request(&r);
+    let ok = weft_licence::request::verify(&seed, &pk(), NODE, AUD, NOW_MS, REQUEST_WINDOW_MS);
+    assert!(ok.is_ok(), "{ok:?}");
+    // Another Seed (audience), another node, a tampered body and a stale clock all fail there.
+    use weft_licence::request::AuthError;
+    let v = |req: &weft_licence::request::Request, aud: &str, node: &str, now| {
+        weft_licence::request::verify(req, &pk(), node, aud, now, REQUEST_WINDOW_MS).map(|_| ())
+    };
+    assert_eq!(v(&seed, "another-seed", NODE, NOW_MS), Err(AuthError::BadSignature));
+    assert_eq!(v(&seed, AUD, "another-node", NOW_MS), Err(AuthError::WrongNode));
+    assert_eq!(v(&seed, AUD, NODE, NOW_MS + REQUEST_WINDOW_MS + 1), Err(AuthError::Stale));
+    let mut tampered = seed.clone();
+    tampered.body = b"x".to_vec();
+    assert_eq!(v(&tampered, AUD, NODE, NOW_MS), Err(AuthError::BadSignature));
+}
+
+#[test]
+fn what_weft_licence_signs_verifies_under_the_kernel_verifier() {
+    let hdr = weft_licence::request::sign_request(&steward(), NODE, AUD, "GET", "/licence/v1/grants?since=0", b"", NOW_MS, NONCE);
+    let req = LicenceRequest {
+        method: "GET".into(),
+        path: "/licence/v1/grants?since=0".into(),
+        auth: Some(RequestAuth {
+            node: hdr["x-licence-node"].clone(),
+            timestamp_ms: hdr["x-licence-ts"].parse().unwrap(),
+            nonce: hdr["x-licence-nonce"].clone(),
+            signature: hdr["x-licence-sig"].clone(),
+        }),
+        body: vec![],
+    };
+    assert_eq!(verify(&req, NOW_MS, &mut ReplayGuard::default()), Ok(()));
+}
+
+#[test]
+fn the_shared_constants_are_the_bridges() {
     assert_eq!(REQUEST_DOMAIN, "weft-licence-v1/request");
     assert_eq!(REQUEST_WINDOW_MS, 120_000);
     assert_eq!(CLOCK_FLOOR_SECS, 1_780_000_000);
+    assert_eq!(weft_licence::CLOCK_FLOOR, CLOCK_FLOOR_SECS, "one definition");
+    let s = signing_string("POST", "/p", "n", "seed-1", 1_791_000_000_123, "abcdef0123456789", b"x");
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(
+        &lines[..7],
+        ["weft-licence-v1/request", "POST", "/p", "n", "seed-1", "1791000000123", "abcdef0123456789"]
+    );
+    assert_eq!(lines[7], sha256_hex(b"x"));
 }
 
 #[test]
@@ -48,7 +103,7 @@ fn nonces_are_16_to_64_alphanumerics() {
     assert!(valid_nonce(&"a".repeat(16)) && valid_nonce(&"Z9".repeat(32)));
     assert!(!valid_nonce(&"a".repeat(15)) && !valid_nonce(&"a".repeat(65)));
     assert!(!valid_nonce("abcdefghijklmnop-"));
-    assert!(valid_nonce(&super::request_nonce()), "generated nonces are accepted");
+    assert!(valid_nonce(&super::client::request_nonce_for_tests()), "generated nonces are accepted");
 }
 
 #[test]

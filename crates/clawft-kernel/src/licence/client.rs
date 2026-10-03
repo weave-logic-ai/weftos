@@ -156,6 +156,17 @@ impl<T: LicenceTransport> SignedLicenceClient<T> {
         Arc::new(Self { key, node: node.into(), seed_device_id: seed_device_id.into(), transport, clock })
     }
 
+    /// A client for the bound Seed: the audience is the binding's `device_id`
+    /// and the node is its `steward_node_id`.
+    pub fn for_binding(
+        key: SigningKey,
+        binding: &super::BindingRecord,
+        transport: T,
+        clock: ClockMs,
+    ) -> Arc<Self> {
+        Self::new(key, binding.steward_node_id.clone(), binding.device_id.clone(), transport, clock)
+    }
+
     async fn signed(
         &self,
         method: &str,
@@ -171,7 +182,7 @@ impl<T: LicenceTransport> SignedLicenceClient<T> {
         if ts_ms / 1000 < CLOCK_FLOOR_SECS {
             return Err(LicenceClientError::Refused { status: 0, code: "clock_not_set".into() });
         }
-        let nonce = super::request_nonce();
+        let nonce = request_nonce();
         let req = sign_request(&self.key, &self.node, &self.seed_device_id, method, path, body, ts_ms, &nonce);
         let resp = self.transport.call(req).await?;
         if resp.status != 200 {
@@ -212,4 +223,17 @@ impl<T: LicenceTransport> LicenceClient for SignedLicenceClient<T> {
         let out = self.signed("GET", &path, Vec::new(), MAX_RESPONSE_BODY).await?;
         Ok(serde_json::from_slice::<GrantsBody>(&out).map_err(bad)?.grants)
     }
+}
+
+/// A fresh request nonce: 32 lower-case hex chars (inside the server's 16 to 64 alphanumerics).
+#[cfg(test)]
+pub(super) fn request_nonce_for_tests() -> String {
+    request_nonce()
+}
+
+fn request_nonce() -> String {
+    use rand::RngCore;
+    let mut b = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut b);
+    crate::workload_pkg::codec::hex_encode(&b)
 }
