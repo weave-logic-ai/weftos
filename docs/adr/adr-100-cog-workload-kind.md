@@ -4,7 +4,7 @@
 - **Numbering**: This ADR was briefly filed as "COG-001" on 2026-09-29 and moved back to ADR-100 the same day. The COG-NNN series now belongs to the cogs project repo, which is private (`weave-logic-ai/cognitum-cogs`; its `docs/decisions/`), and holds cog-project decisions. This ADR stays in WeftOS because it defines how WeftOS hosts cogs.
 - **Cogs project**: operational detail on Seeds, the Pi 5, fleets, tooling and upstream work now lives in the cogs repo (`docs/devices/`, `docs/testing.md`, `docs/upstream.md`). This ADR keeps only what WeftOS implements.
 - **Date**: 2026-09-28
-- **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
+- **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status is Accepted (2026-09-29) and the decisions below are settled, with implementation tracked on the cards named in Status.
 - **Depends-On**: ADR-099 (governed workload placement)
 - **Relates-To**: ADR-025, ADR-092, ADR-101, ADR-105 (cog sources, per-project catalog and licences), `docs/research/mesh-placement/README.md`
 
