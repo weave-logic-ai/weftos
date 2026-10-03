@@ -25,6 +25,10 @@
 # host/announce a publishing run unless local+global builds succeeded.
 # Re-apply this patch if you regenerate release.yml via `dist generate`.
 #
+# Card a8dbfb3b (hand-patch): the host job runs scripts/release/sign-release.sh
+# before `gh release create`, adding weftos-release.json(.sig). `weaver update`
+# refuses a release without them. Re-apply after `dist generate` too.
+#
 # WEFT-476 (hand-patch): parallel `build-wasi` job calls the reusable
 # release-wasi.yml workflow and stages wasm32-wasip2 artefacts under the
 # `artifacts-*` name pattern. The host job requires build-wasi success on
@@ -386,6 +390,15 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      # Card a8dbfb3b: sign the hash list of every file about to be uploaded
+      # (dist-manifest.json included) with the WeaveLogic release key, the
+      # COG-008 key `weaver update` pins. No secret, no release: the script
+      # fails, and with it this job, before `gh release create` runs.
+      - name: Sign release (weftos-release.json + .sig)
+        env:
+          WEAVELOGIC_RELEASE_KEY: ${{ secrets.WEAVELOGIC_RELEASE_KEY }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: scripts/release/sign-release.sh artifacts "$RELEASE_TAG"
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ steps.host.outputs.is_prerelease == 'true' && '--prerelease' || '' }}"

@@ -1,11 +1,12 @@
 //! `weaver update` / `weft update` — verified, receipt-aware self-update.
 //!
-//! Fetches the latest GitHub Release, verifies every archive against its
-//! published sha256 and `dist-manifest.json`, then replaces every binary of
+//! Fetches the latest GitHub Release, verifies its Ed25519 signature with the
+//! compiled-in WeaveLogic release key and every archive against the signed
+//! sha256 list and `dist-manifest.json`, then replaces every binary of
 //! the release set together, with rollback. It refuses to touch Homebrew,
 //! `cargo install` and source-build copies and prints their own update
 //! command instead. See [`super::update_flow`] for the sequence and
-//! `docs/guides/updating.md` for the user-facing behaviour.
+//! `docs/deployment/install.md#updating` for the user-facing behaviour.
 
 use std::io::{IsTerminal, Write};
 
@@ -15,6 +16,7 @@ use clawft_rpc::doctor::DoctorEnv;
 use super::daemon_restart::{self, RealHost};
 use super::update_flow::{Ctx, Opts, Outcome, execute};
 use super::update_release::Source;
+use super::update_signature::Trust;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -36,6 +38,9 @@ pub struct UpdateFlags {
     /// Never restart or ask; print the restart command.
     #[arg(long)]
     pub no_restart: bool,
+    /// Install a release without checking its WeaveLogic signature (sha256 still checked). Unsafe.
+    #[arg(long)]
+    pub insecure_skip_signature: bool,
 }
 
 /// `weaver update` arguments.
@@ -91,6 +96,7 @@ fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
     let ctx = Ctx {
         src: Source::github(),
+        trust: if flags.insecure_skip_signature { Trust::Skip } else { Trust::pinned() },
         triple: detect_target_triple().to_string(),
         current_version: CURRENT_VERSION.to_string(),
         dirty: option_env!("BUILD_VERSION").is_some_and(|v| v.contains("-dirty")),

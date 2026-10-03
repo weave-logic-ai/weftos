@@ -299,14 +299,14 @@ The daemon side is `kernel.mesh.service = "auto" | "required" | "off"` in
 
 ## weaver update
 
-Self-update from GitHub Releases with sha256 verification (integrity, not authenticity). Replaces `weft`, `weaver` and
+Self-update from GitHub Releases. The release must be Ed25519-signed by the WeaveLogic release key (compiled in; the COG-008 key), and every archive must match the signed sha256 list. Replaces `weft`, `weaver` and
 `weftos` together with rollback, honours the install method, and handles the
 per-user daemon restart. Full behaviour: [Updating](../deployment/install.md#updating).
 
 ### Usage
 
 ```
-weaver update [--check] [--dry-run] [--force] [--restart | --no-restart]
+weaver update [--check] [--dry-run] [--force] [--restart | --no-restart] [--insecure-skip-signature]
 ```
 
 ### Options
@@ -318,8 +318,10 @@ weaver update [--check] [--dry-run] [--force] [--restart | --no-restart]
 | `--force` | Reinstall even when already on the latest release; also confirms overwriting an install with no receipt, and allows a downgrade (with a warning). |
 | `--restart` | Restart the per-user daemon after installing, without asking. |
 | `--no-restart` | Never ask; print the restart command. |
+| `--insecure-skip-signature` | Install without checking the release signature (warns; sha256 still checked). For emergencies only. |
 
-Homebrew, `cargo install` and source-build installs are refused with their own
+An unsigned or badly signed release is refused (non-zero exit), with nothing
+downloaded. Homebrew, `cargo install` and source-build installs are refused with their own
 update command (exit code non-zero). The older `weaver update check` and
 `weaver update install` forms still work.
 

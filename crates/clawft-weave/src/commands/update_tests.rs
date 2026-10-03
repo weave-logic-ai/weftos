@@ -13,7 +13,7 @@ use clawft_rpc::doctor::env::RuntimeSource;
 use super::daemon_restart::{Action, DaemonStatus, Host, Inputs};
 use super::update_flow::{Ctx, Opts, Outcome, execute};
 use super::update_install::Inject;
-use super::update_test_support::{Mock, Rel, publish, script, TRIPLE};
+use super::update_test_support::{Mock, Rel, publish, script, test_trust, TRIPLE};
 
 pub(super) fn env_for(root: &Path) -> DoctorEnv {
     let home = root.join("home");
@@ -121,6 +121,7 @@ impl World {
         std::fs::create_dir_all(&rt).unwrap();
         Ctx {
             src: self.mock.source(),
+            trust: test_trust(),
             triple: TRIPLE.into(),
             current_version: "0.8.0".into(),
             current_exe: exe.clone(),

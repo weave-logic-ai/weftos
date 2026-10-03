@@ -18,6 +18,7 @@ use clawft_rpc::doctor::probe::parse_semver;
 use super::daemon_restart::{Host, Inputs, restart_with};
 use super::update_install::{self as install, Decision, Inject, Method, Plan};
 use super::update_release::{self as release, Release, Source};
+use super::update_signature::Trust;
 use crate::service_units::{LAUNCHD_LABEL, SYSTEMD_UNIT};
 
 /// What the user asked for.
@@ -38,6 +39,9 @@ pub struct Opts {
 /// Everything the update reads from the outside world.
 pub struct Ctx<'a> {
     pub src: Source,
+    /// Release key the signed hash list must verify under. Production passes
+    /// [`Trust::pinned`]; only tests pass anything else.
+    pub trust: Trust,
     pub triple: String,
     pub current_version: String,
     pub current_exe: PathBuf,
@@ -167,10 +171,17 @@ fn print_plan(plan: &Plan, rel: &Release, out: &mut dyn Write) -> anyhow::Result
 /// Run the update.
 pub fn execute(ctx: &Ctx<'_>, opts: &Opts, out: &mut dyn Write) -> anyhow::Result<Outcome> {
     let scratch = tempfile::tempdir()?;
-    let rel = release::fetch_latest(&ctx.src, &ctx.triple, scratch.path())?;
+    if matches!(ctx.trust, Trust::Skip) {
+        writeln!(out, "WARNING: --insecure-skip-signature: the release signature is NOT checked.")?;
+        writeln!(out, "WARNING: anyone who can change the GitHub release can choose what gets installed.")?;
+    }
+    let rel = release::fetch_latest(&ctx.src, &ctx.triple, scratch.path(), &ctx.trust)?;
     writeln!(out, "Current: v{}", ctx.current_version)?;
     writeln!(out, "Latest:  v{}", rel.version)?;
     writeln!(out, "Platform: {}", ctx.triple)?;
+    if rel.signed.is_some() {
+        writeln!(out, "Signature: verified (WeaveLogic release key)")?;
+    }
 
     let (cur, new) = (parse_semver(&ctx.current_version), parse_semver(&rel.version));
     let newer = match (&cur, &new) {

@@ -81,19 +81,45 @@ weaver update --no-restart # never ask; print the restart command
 weaver update --force      # reinstall even when already on the latest release
 ```
 
-`weaver update` reads `dist-manifest.json` from the latest GitHub Release,
-downloads the archive for this platform, and checks each archive's sha256
-against the published `.sha256` (and `sha256.sum`, when the release has one)
-before anything is installed. A missing, malformed or mismatching checksum
-aborts the update with nothing changed. Archives are unpacked by `weaver`
+`--insecure-skip-signature` also exists; see below before using it.
+
+`weaver update` reads `dist-manifest.json` from the latest GitHub Release
+and checks that the release is signed before it believes anything in it (see
+below). It then downloads the archive for this platform and checks each
+archive's sha256 against the signed list and against the published `.sha256`
+(and `sha256.sum`, when the release has one) before anything is installed. A
+missing, malformed or mismatching checksum aborts the update with nothing
+changed. Archives are unpacked by `weaver`
 itself: only regular files and directories are written, links, `..` and
 absolute paths are refused, and the unpacked size is capped. Each extracted
 binary is also run once with `--version` to confirm it matches the release.
 
-**The sha256 check gives integrity, not authenticity.** The checksums come
-from the same GitHub release as the archives, so they catch corruption and a
-tampered download, not a compromised release or account. Signature and
-attestation verification are not done yet. Downloads use `curl -q` (your
+**Release signature.** Every release carries `weftos-release.json`, which
+lists the sha256 of every file in the release (`dist-manifest.json`
+included), and `weftos-release.json.sig`, an Ed25519 signature over it by
+the WeaveLogic release key. Release CI makes both. `weaver` has the public key
+compiled in. It is the same key that signs cogs (COG-008), and no file,
+variable or setting replaces it. Before downloading any archive, `weaver
+update` requires:
+
+- the signature to verify under that key;
+- the signed tag to be the manifest's tag;
+- `dist-manifest.json` to hash to its signed entry.
+
+Each archive must then hash to its own signed entry. The `.sha256` files only
+prove integrity: they come from the same release as the archives, so anyone
+who can replace an archive can also rehash it. The signature is what proves
+the release came from WeaveLogic. An unsigned release, a bad signature, a
+signature for another tag, or an archive or manifest that does not match the
+signed list is refused, with nothing downloaded or installed. `--check`
+refuses too, so an unverified version is never reported as available.
+
+`--insecure-skip-signature` installs without checking the signature. It
+prints a warning, and the sha256 and archive checks still run. It exists for
+an emergency, such as a release published before signing existed or a lost
+key, and means trusting whoever controls the GitHub release.
+
+Downloads use `curl -q` (your
 `.curlrc` is ignored), https only, at most 5 redirects, and ignore
 `CURL_CA_BUNDLE`, `SSL_CERT_FILE` and `SSL_CERT_DIR`. Standard proxy variables
 (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) still apply.

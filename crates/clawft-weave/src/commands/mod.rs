@@ -41,12 +41,15 @@ pub mod update_cmd;
 pub mod update_flow;
 pub mod update_install;
 pub mod update_release;
+pub mod update_signature;
 #[cfg(test)]
 mod update_test_support;
 #[cfg(test)]
 mod update_tests;
 #[cfg(test)]
 mod update_tests_hardening;
+#[cfg(test)]
+mod update_tests_signature;
 pub mod vault_cmd;
 #[cfg(all(feature = "ecc", feature = "exochain"))]
 pub mod model_cmd;

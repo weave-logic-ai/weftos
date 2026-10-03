@@ -87,6 +87,9 @@ Before pushing the release tag:
       cargo-dist host-triple packaging locally before the tag push
       (WEFT-460). See [Local release dry-run](#local-release-dry-run)
       below.
+- [ ] Confirm the `WEAVELOGIC_RELEASE_KEY` repository secret exists.
+      The `host` job signs the release with it and fails without it (see
+      [Release signature](#release-signature)).
 
 The release tag should point at the commit that contains the dated
 changelog entry, not the version-bump commit immediately before it.
@@ -174,6 +177,33 @@ contains `weft-gui-egui` (production shell only — `weft-demo-lab` is
 opt-in and not packaged). `github-attestations = true` is set, so each
 archive ships with a sigstore provenance attestation that can be
 verified with `gh attestation verify`.
+
+#### Release signature
+
+Before `gh release create`, the `host` job runs
+`scripts/release/sign-release.sh artifacts <tag>`. It writes two more
+release assets:
+
+| Asset | Content |
+|---|---|
+| `weftos-release.json` | `{"schema":1,"kind":"weftos-release","tag":"v…","assets":{"<file>":"<sha256>",…}}` covering every file uploaded, `dist-manifest.json` included |
+| `weftos-release.json.sig` | Hex Ed25519 signature over `weftos-release-v1\n` followed by the bytes of `weftos-release.json` |
+
+The key is the `WEAVELOGIC_RELEASE_KEY` secret: the raw 32-byte Ed25519 seed
+as hex, the same key that signs cogs (COG-008). Before signing, the script
+checks that the key's public half equals the pinned
+`WEAVELOGIC_PUBKEY_HEX` in `crates/weftos-cog-repo/src/lib.rs` (`6aae63e0…`).
+It then verifies the signature it made. If the secret is missing or wrong,
+the job fails and nothing is published, because `weaver update` refuses an
+unsigned release anyway. To check a release by hand with OpenSSL 3, put the
+pinned key in `pub.pem` (`MCowBQYDK2VwAyEA` followed by the base64 of the 32
+key bytes, inside PEM `PUBLIC KEY` armour), then:
+
+```bash
+{ printf 'weftos-release-v1\n'; cat weftos-release.json; } > msg
+xxd -r -p weftos-release.json.sig > sig
+openssl pkeyutl -verify -pubin -inkey pub.pem -rawin -in msg -sigfile sig
+```
 
 Local GUI build (not just release CI):
 
@@ -568,6 +598,11 @@ scripts/build.sh gate                # full 12-check gate including audit
 it, change the dep, run it again, and diff.
 
 ## Troubleshooting a Failed Release
+
+**`host` failed at "Sign release".** `WEAVELOGIC_RELEASE_KEY` is missing,
+is not 64 hex characters, or does not match the pinned public key. Fix the
+secret and re-run the workflow. Do not publish an unsigned release by
+hand: `weaver update` refuses it.
 
 **`Publish Crates` failed.** Most common causes: a crate has
 `publish = false` but a dependent expects it published, or a crate was

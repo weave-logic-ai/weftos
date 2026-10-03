@@ -9,14 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Security — `weaver update` verifies release signatures (fail closed)
+
+- Release CI now signs every release: `scripts/release/sign-release.sh`
+  writes `weftos-release.json` (the sha256 of every uploaded file,
+  `dist-manifest.json` included) and `weftos-release.json.sig` (Ed25519, key
+  from the `WEAVELOGIC_RELEASE_KEY` secret). With no key, the job fails and
+  nothing is published.
+- `weaver update` checks that signature against the compiled-in WeaveLogic
+  release key (the COG-008 key, `6aae63e0…`) before reading anything else from
+  the release. The signed tag must match the manifest, the manifest must match
+  its signed hash, and every archive must match its signed hash. Unsigned or
+  badly signed releases are refused, and so is a tampered archive with
+  rehashed `.sha256` files. `--check` refuses them too.
+- New flag `--insecure-skip-signature` (warns; sha256 checks still run) for
+  emergencies. There is no runtime way to change the trusted key.
+
 ### Changed — `weaver update` is sha256-checked, all-binary and install-method aware
 
 - `weaver update` checks every archive's sha256 against the published `.sha256`
   (and `sha256.sum`) and `dist-manifest.json`, failing closed, then replaces
   `weft`, `weaver` and `weftos` together with per-file atomic renames and full
-  rollback. The sha256 check gives integrity, not authenticity: it does not
-  protect against a compromised release or account (signature and attestation
-  verification are not done yet).
+  rollback. The sha256 check alone gives integrity, not authenticity; release
+  signatures (above) add authenticity.
 - Archives are unpacked in-process: links, `..` and absolute paths are
   refused and unpacked size is capped. Downloads ignore `.curlrc` and CA
   environment overrides, accept https only, and follow at most 5 redirects.
