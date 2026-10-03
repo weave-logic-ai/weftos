@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -145,6 +145,9 @@ struct WorkloadsFile {
 pub struct WorkloadRegistry {
     records: RwLock<BTreeMap<String, WorkloadRecord>>,
     persist_path: Option<PathBuf>,
+    /// Serialises persists so the snapshot taken under it is always newer
+    /// than the one written before it (no lost update on disk).
+    persist_lock: Mutex<()>,
 }
 
 impl WorkloadRegistry {
@@ -170,6 +173,7 @@ impl WorkloadRegistry {
         Self {
             records: RwLock::new(map),
             persist_path: Some(path),
+            persist_lock: Mutex::new(()),
         }
     }
 
@@ -214,6 +218,10 @@ impl WorkloadRegistry {
         let Some(path) = &self.persist_path else {
             return;
         };
+        // Snapshot only after taking the persist lock: a snapshot taken before
+        // it can be stale by the time it is written, and a later mutation's
+        // file would then be overwritten by an older one.
+        let _guard = self.persist_lock.lock().unwrap_or_else(|p| p.into_inner());
         let file = WorkloadsFile {
             version: 1,
             workloads: self.list(),
@@ -225,6 +233,7 @@ impl WorkloadRegistry {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        // The persist lock makes the tmp name single-writer within this process.
         let tmp = path.with_extension("json.tmp");
         if let Err(e) = std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, path)) {
             warn!(error = %e, path = %path.display(), "failed to persist workloads");
@@ -323,5 +332,36 @@ mod tests {
         let names: Vec<_> = again.list().into_iter().map(|x| x.name).collect();
         assert_eq!(names, ["keep"]);
         assert_eq!(again.get("keep").unwrap().state, WorkloadState::Installed);
+    }
+
+    /// WEFT card 46ea52d3: concurrent mutations must all be on disk afterwards.
+    /// Many short rounds, because the lost update needs a narrow interleaving
+    /// (snapshot taken, then another mutation persists, then the stale
+    /// snapshot is written last).
+    #[test]
+    fn concurrent_mutations_all_persist() {
+        for round in 0..150 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("workloads.json");
+            let reg = std::sync::Arc::new(WorkloadRegistry::with_persist_path(&path));
+            let start = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let handles: Vec<_> = (0..8)
+                .map(|t| {
+                    let (reg, start) = (reg.clone(), start.clone());
+                    std::thread::spawn(move || {
+                        start.wait();
+                        for i in 0..4 {
+                            reg.insert(record(&format!("w{t}-{i}"))).unwrap();
+                        }
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap();
+            }
+            let on_disk = WorkloadRegistry::with_persist_path(&path);
+            assert_eq!(on_disk.list().len(), 32, "round {round}: disk state lost updates");
+            assert!(!path.with_extension("json.tmp").exists());
+        }
     }
 }

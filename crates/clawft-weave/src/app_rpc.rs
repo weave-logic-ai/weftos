@@ -57,9 +57,13 @@ pub fn gate_check(gate: AppGate<'_>, action: &str, ctx: &Value) -> Result<(), St
 
 /// Load and validate an app manifest from an absolute path.
 ///
-/// `path` is a directory holding `weftapp.toml` / `weftapp.json`, or a
-/// `.toml` / `.json` manifest file. Relative paths are refused because
-/// the daemon's working directory is not the caller's.
+/// `path` is a directory holding `weftapp.toml` / `weftapp.json`, or one of
+/// those two files directly. Relative paths are refused because the
+/// daemon's working directory is not the caller's. Only files named in
+/// [`MANIFEST_NAMES`] are read, after symlinks are resolved, so the RPC
+/// cannot be used to read or probe arbitrary `.toml` / `.json` files.
+/// Parse errors are redacted to a location: the daemon never echoes file
+/// content back to the caller.
 pub fn load_manifest(path: &str) -> Result<AppManifest, String> {
     if path.trim().is_empty() || path.contains('\0') {
         return Err("app.install requires a non-empty 'path'".into());
@@ -68,31 +72,60 @@ pub fn load_manifest(path: &str) -> Result<AppManifest, String> {
     if !p.is_absolute() {
         return Err(format!("app.install path must be absolute: {path}"));
     }
-    let meta = std::fs::metadata(p).map_err(|e| format!("cannot read {path}: {e}"))?;
-    let file = if meta.is_dir() {
+    let resolved = std::fs::canonicalize(p).map_err(|e| format!("cannot read {path}: {}", e.kind()))?;
+    let file = if resolved.is_dir() {
         MANIFEST_NAMES
             .iter()
-            .map(|n| p.join(n))
+            .map(|n| resolved.join(n))
             .find(|f| f.is_file())
             .ok_or_else(|| format!("no weftapp.toml or weftapp.json in {path}"))?
     } else {
-        p.to_path_buf()
+        resolved
     };
-    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-    if !matches!(ext, "toml" | "json") {
-        return Err(format!("manifest must be .toml or .json: {}", file.display()));
+    // Re-canonicalize so a `weftapp.toml` symlink to another file is judged by
+    // its real name, not the link's.
+    let file = std::fs::canonicalize(&file).map_err(|e| format!("cannot read manifest: {}", e.kind()))?;
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !MANIFEST_NAMES.contains(&name) {
+        return Err("manifest file must be named weftapp.toml or weftapp.json".into());
     }
-    let len = std::fs::metadata(&file).map_err(|e| e.to_string())?.len();
+    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let len = std::fs::metadata(&file).map_err(|e| format!("cannot read manifest: {}", e.kind()))?.len();
     if len > MAX_MANIFEST_BYTES {
         return Err(format!("manifest too large ({len} bytes, max {MAX_MANIFEST_BYTES})"));
     }
-    let src = std::fs::read_to_string(&file).map_err(|e| format!("cannot read manifest: {e}"))?;
+    let src = std::fs::read_to_string(&file).map_err(|e| format!("cannot read manifest: {}", e.kind()))?;
     let parsed = if ext == "toml" {
         AppManifest::from_toml_str(&src)
     } else {
         AppManifest::from_json_str(&src)
     };
-    parsed.map_err(|e| e.to_string())
+    parsed.map_err(|e| redact_parse_error(&e.to_string()))
+}
+
+/// Reduce a TOML/JSON parse error to its line and column. Parser messages
+/// quote the offending source line or value, which would turn `app.install`
+/// into a file-content oracle. Validation errors (the file parsed as a
+/// manifest) pass through unchanged.
+fn redact_parse_error(reason: &str) -> String {
+    let kind = if reason.contains("TOML parse error") {
+        "TOML"
+    } else if reason.contains("JSON parse error") {
+        "JSON"
+    } else {
+        return reason.to_owned();
+    };
+    let num_after = |key: &str| -> Option<u64> {
+        // TOML puts the location first; serde_json appends it last.
+        let at = if kind == "TOML" { reason.find(key)? } else { reason.rfind(key)? };
+        let rest = &reason[at + key.len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    };
+    match (num_after("line "), num_after("column ")) {
+        (Some(l), Some(c)) => format!("manifest {kind} parse error at line {l}, column {c} (details withheld)"),
+        _ => format!("manifest {kind} parse error (details withheld)"),
+    }
 }
 
 fn name_param(params: &Value, method: &str) -> Result<String, String> {

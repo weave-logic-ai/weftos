@@ -39,12 +39,54 @@ fn rejects_bad_paths_and_content() {
     assert!(load_manifest(empty.path().to_str().unwrap()).unwrap_err().contains("no weftapp"));
     let other = empty.path().join("manifest.yaml");
     std::fs::write(&other, "name: x").unwrap();
-    assert!(load_manifest(other.to_str().unwrap()).unwrap_err().contains(".toml or .json"));
-    let big = empty.path().join("big.json");
+    assert!(load_manifest(other.to_str().unwrap()).unwrap_err().contains("must be named"));
+    let big = empty.path().join("weftapp.json");
     std::fs::write(&big, vec![b' '; (MAX_MANIFEST_BYTES + 1) as usize]).unwrap();
     assert!(load_manifest(big.to_str().unwrap()).unwrap_err().contains("too large"));
     let bad = app_dir("name = \"\"\nversion = \"1\"\n");
     assert!(load_manifest(bad.path().to_str().unwrap()).is_err());
+}
+
+/// WEFT card 46ea52d3: `app.install` must not read arbitrary `.toml` / `.json`
+/// files or quote their content back in errors.
+#[test]
+fn install_does_not_disclose_arbitrary_files() {
+    const SECRET: &str = "SUPER-SECRET-TOKEN-4242";
+    let dir = tempfile::tempdir().unwrap();
+
+    // An arbitrary readable .json / .toml file is refused by name.
+    let creds = dir.path().join("credentials.json");
+    std::fs::write(&creds, format!("{{\"token\": \"{SECRET}\"")).unwrap();
+    let err = load_manifest(creds.to_str().unwrap()).unwrap_err();
+    assert!(err.contains("must be named"), "{err}");
+    assert!(!err.contains(SECRET), "{err}");
+    let cfg = dir.path().join("config.toml");
+    std::fs::write(&cfg, format!("token = \"{SECRET}\"\n")).unwrap();
+    assert!(!load_manifest(cfg.to_str().unwrap()).unwrap_err().contains(SECRET));
+
+    // A weftapp.* symlink pointing at such a file is judged by its real name.
+    #[cfg(unix)]
+    {
+        let app = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(&creds, app.path().join("weftapp.json")).unwrap();
+        let err = load_manifest(app.path().to_str().unwrap()).unwrap_err();
+        assert!(err.contains("must be named") && !err.contains(SECRET), "{err}");
+    }
+}
+
+#[test]
+fn manifest_parse_errors_do_not_quote_file_content() {
+    const SECRET: &str = "SUPER-SECRET-TOKEN-4242";
+    // Malformed TOML whose offending line carries the secret.
+    let toml_dir = app_dir(&format!("name = \"demo\"\nversion = {SECRET}\n"));
+    let err = load_manifest(toml_dir.path().to_str().unwrap()).unwrap_err();
+    assert!(!err.contains(SECRET), "{err}");
+    assert!(err.contains("line 2"), "location kept: {err}");
+    // Well-formed JSON of the wrong shape: serde quotes the value.
+    let json_dir = tempfile::tempdir().unwrap();
+    std::fs::write(json_dir.path().join("weftapp.json"), format!("{{\"name\": [\"{SECRET}\"]}}")).unwrap();
+    let err = load_manifest(json_dir.path().to_str().unwrap()).unwrap_err();
+    assert!(!err.contains(SECRET), "{err}");
 }
 
 #[test]
