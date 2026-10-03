@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use weftos_cog_sources::config::{CogLicence, CogSource, LicensedCogs, SourceKind};
 use weftos_cog_sources::fetch::{Reader, MAX_BINARY_BYTES};
 use weftos_cog_sources::resolve::{load_source, Listing, LoadedSource};
-use weftos_cog_sources::{fetch_verified, FetchCtx, SourceError};
+use weftos_cog_sources::{fetch_verified, FetchCtx, RevokedKeys, SourceError};
 
 use crate::providers::{CogEntry, CogFetcher, EntryArtifact, FetchError};
 
@@ -92,7 +92,15 @@ impl CogFetcher for RegistryFetcher {
             account: "weft-licence".into(),
             expires: None,
         };
-        let ctx = FetchCtx { reader: &self.reader, licences: &[lic], now: chrono::Utc::now(), extra_weftos_keys: &[] };
+        // The Seed holds no kernel revocation list; signer revocation is the
+        // mesh node's job at install (`weaver cog install`, the exchange).
+        let ctx = FetchCtx {
+            reader: &self.reader,
+            licences: &[lic],
+            now: chrono::Utc::now(),
+            extra_weftos_keys: &[],
+            revoked: &RevokedKeys::none(),
+        };
         fetch_verified(&loaded, &entry.cog_id, "arm", &ctx).map(|f| f.bytes).map_err(|e| match e {
             SourceError::Verify { reason, .. } => FetchError::Verify(reason),
             other => FetchError::Failed(other.to_string()),
