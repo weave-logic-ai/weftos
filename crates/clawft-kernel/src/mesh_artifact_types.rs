@@ -237,6 +237,14 @@ pub struct ExchangeConfig {
     /// Longest a serve session waits for the fetcher's next request
     /// before closing the stream.
     pub serve_idle_timeout: Duration,
+    /// Cap on bytes sent to peers per second (`None` = unlimited).
+    pub upload_bytes_per_sec: Option<u64>,
+    /// Cap on bytes received from peers per second (`None` = unlimited).
+    pub download_bytes_per_sec: Option<u64>,
+    /// Most peers a swarm fetch pulls from at once.
+    pub max_sources: usize,
+    /// Corrupt pieces from one peer before it is banned (1 = first).
+    pub ban_after_corrupt: u32,
 }
 
 impl Default for ExchangeConfig {
@@ -249,6 +257,10 @@ impl Default for ExchangeConfig {
             materialize_limit: MAX_FILE_BYTES,
             recv_timeout: Duration::from_secs(30),
             serve_idle_timeout: Duration::from_secs(120),
+            upload_bytes_per_sec: None,
+            download_bytes_per_sec: None,
+            max_sources: 4,
+            ban_after_corrupt: 1,
         }
     }
 }
@@ -271,6 +283,14 @@ impl ExchangeConfig {
         }
         if self.recv_timeout.is_zero() || self.serve_idle_timeout.is_zero() {
             return Err(ExchangeError::Config("timeouts must be > 0".into()));
+        }
+        if self.upload_bytes_per_sec == Some(0) || self.download_bytes_per_sec == Some(0) {
+            return Err(ExchangeError::Config("bandwidth caps must be > 0".into()));
+        }
+        if self.max_sources == 0 || self.ban_after_corrupt == 0 {
+            return Err(ExchangeError::Config(
+                "max_sources and ban_after_corrupt must be > 0".into(),
+            ));
         }
         Ok(())
     }
@@ -297,6 +317,12 @@ pub enum ExchangeError {
     /// Unknown artifact.
     #[error("unknown artifact {0}")]
     Unknown(String),
+    /// The peer is banned (it served a corrupt piece).
+    #[error("peer {0} is banned")]
+    Banned(String),
+    /// The package, signer or content hash is revoked.
+    #[error("revoked: {0}")]
+    Revoked(String),
 }
 
 #[cfg(test)]

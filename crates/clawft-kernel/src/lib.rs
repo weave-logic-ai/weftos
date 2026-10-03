@@ -356,6 +356,25 @@ pub mod mesh_artifact_transfer;
 pub mod mesh_artifact_types;
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod mesh_artifact_wire;
+// mesh-placement-25: swarm distribution (multi-source fetch, seeding, cache, bans, revocation).
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_cache;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_fetch;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_governance;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_lookup;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_pkg;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_picker;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_rate;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_swarm_state;
+#[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+mod mesh_swarm_tests;
 #[cfg(feature = "mesh")]
 pub mod mesh_admit;
 #[cfg(feature = "mesh")]

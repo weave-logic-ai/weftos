@@ -22,17 +22,25 @@ use crate::mesh_kad::KademliaTable;
 
 /// Control topic carrying signed node facts between peers (card
 /// mesh-placement-03). Consumed by the runtime: handed to the installed
-/// [`PeerFactsSink`], never routed to local subscribers.
+/// [`PeerControlSink`], never routed to local subscribers.
 pub const FACTS_TOPIC: &str = "mesh.node_facts";
 
-/// Receiver of `mesh.node_facts` control messages.
+/// Control topic carrying signed artifact revocations (card
+/// mesh-placement-25). Handled like [`FACTS_TOPIC`].
+pub const REVOKE_TOPIC: &str = "mesh.artifact.revoke";
+
+/// Control topics the runtime consumes instead of routing locally.
+const CONTROL_TOPICS: [&str; 2] = [FACTS_TOPIC, REVOKE_TOPIC];
+
+/// Receiver of a runtime control topic ([`FACTS_TOPIC`], [`REVOKE_TOPIC`]).
 ///
 /// The sink decides what to trust: it is handed the connection's
 /// authenticated identity ([`PeerCtx`]) and returns payloads to send back
 /// to the same peer (for example a re-send request).
-pub trait PeerFactsSink: Send + Sync + 'static {
-    /// Handle one facts payload from `ctx.peer_id`; return replies.
-    fn on_peer_facts(&self, ctx: &PeerCtx, payload: &serde_json::Value) -> Vec<serde_json::Value>;
+pub trait PeerControlSink: Send + Sync + 'static {
+    /// Handle one control payload from `ctx.peer_id`; return replies.
+    fn on_peer_control(&self, ctx: &PeerCtx, payload: &serde_json::Value)
+    -> Vec<serde_json::Value>;
 }
 
 /// A handle to a connected peer, holding the sender half of an mpsc
@@ -132,8 +140,8 @@ pub struct MeshRuntime {
     /// `ClusterService` / `ClusterMembership` subscribe so cluster
     /// membership tracks live mesh state.
     peer_events: MeshPeerEventBus,
-    /// Sink for `mesh.node_facts` control messages ([`FACTS_TOPIC`]).
-    facts_sink: std::sync::OnceLock<Arc<dyn PeerFactsSink>>,
+    /// Sinks for control topics (`mesh.node_facts`, `mesh.artifact.revoke`).
+    control_sinks: DashMap<String, Arc<dyn PeerControlSink>>,
 }
 
 impl MeshRuntime {
@@ -150,7 +158,7 @@ impl MeshRuntime {
             mesh_subscriptions: DashMap::new(),
             assessment_transport: std::sync::OnceLock::new(),
             peer_events: MeshPeerEventBus::new(),
-            facts_sink: std::sync::OnceLock::new(),
+            control_sinks: DashMap::new(),
         }
     }
 
@@ -174,13 +182,14 @@ impl MeshRuntime {
             mesh_subscriptions: DashMap::new(),
             assessment_transport: std::sync::OnceLock::new(),
             peer_events: MeshPeerEventBus::new(),
-            facts_sink: std::sync::OnceLock::new(),
+            control_sinks: DashMap::new(),
         }
     }
 
-    /// Install the sink for `mesh.node_facts` messages (first call wins).
-    pub fn set_facts_sink(&self, sink: Arc<dyn PeerFactsSink>) {
-        let _ = self.facts_sink.set(sink);
+    /// Install the sink for the control topic `topic` (first call wins).
+    /// Only [`FACTS_TOPIC`] and [`REVOKE_TOPIC`] are control topics.
+    pub fn set_control_sink(&self, topic: &str, sink: Arc<dyn PeerControlSink>) {
+        self.control_sinks.entry(topic.to_string()).or_insert(sink);
     }
 
     /// Subscribe to live mesh peer membership / health events (WEFT-120).
@@ -750,22 +759,21 @@ impl MeshRuntime {
             return Ok(());
         }
 
-        // `mesh.node_facts` is a runtime control topic: handed to the facts
-        // sink with the connection's authenticated identity, never routed.
+        // Control topics are handed to their sink with the connection's
+        // authenticated identity and never routed.
         if let MessageTarget::Topic(ref t) = message.target
-            && t == FACTS_TOPIC
+            && CONTROL_TOPICS.contains(&t.as_str())
         {
-            if let (Some(sink), MessagePayload::Json(payload)) =
-                (self.facts_sink.get(), &message.payload)
-            {
-                for reply in sink.on_peer_facts(ctx, payload) {
+            let sink = self.control_sinks.get(t.as_str()).map(|s| s.clone());
+            if let (Some(sink), MessagePayload::Json(payload)) = (sink, &message.payload) {
+                for reply in sink.on_peer_control(ctx, payload) {
                     let msg = KernelMessage::new(
                         0,
-                        MessageTarget::Topic(FACTS_TOPIC.to_string()),
+                        MessageTarget::Topic(t.clone()),
                         MessagePayload::Json(reply),
                     );
                     if let Err(e) = self.route_to_remote(&ctx.peer_id, msg).await {
-                        warn!(peer = %ctx.peer_id, error = %e, "node facts reply failed");
+                        warn!(peer = %ctx.peer_id, topic = %t, error = %e, "control reply failed");
                     }
                 }
             }

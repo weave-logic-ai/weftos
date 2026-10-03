@@ -39,26 +39,29 @@ use crate::artifact_store::{ArtifactStore, ArtifactType};
 use crate::chain::ChainManager;
 pub use crate::mesh_artifact_types::{ExchangeConfig, ExchangeError};
 use crate::mesh_artifact_wire::{ArtifactDescriptor, ArtifactId, ArtifactKey, Bitfield};
+use crate::mesh_swarm_state::{GrantInfo, SwarmState};
 use crate::workload_pkg::codec::hex_encode;
 
 /// Node-local state of the artifact piece protocol.
 pub struct ArtifactExchange {
     node_id: String,
-    store: Arc<ArtifactStore>,
+    pub(crate) store: Arc<ArtifactStore>,
     config: ExchangeConfig,
     /// Verified descriptors: pieces assemble to `content_hash`.
-    descriptors: DashMap<ArtifactId, ArtifactDescriptor>,
+    pub(crate) descriptors: DashMap<ArtifactId, ArtifactDescriptor>,
     /// Descriptors received from peers, not yet verified (resume state).
-    pending: DashMap<ArtifactId, ArtifactDescriptor>,
+    pub(crate) pending: DashMap<ArtifactId, ArtifactDescriptor>,
     /// Content hash -> id, verified descriptors only.
-    by_content: DashMap<[u8; 32], ArtifactId>,
-    /// Content hash -> package id of the signed manifest that allows it.
-    grants: DashMap<[u8; 32], String>,
+    pub(crate) by_content: DashMap<[u8; 32], ArtifactId>,
+    /// Content hash -> the verified signed manifest that allows it.
+    pub(crate) grants: DashMap<[u8; 32], GrantInfo>,
     /// `(artifact, peer)` pairs already chained as `artifact.serve`.
     served: DashMap<(ArtifactId, String), ()>,
     /// Last `have` each peer announced (input for card 25's scheduler).
-    peer_haves: DashMap<(ArtifactId, String), Bitfield>,
-    chain: Option<Arc<ChainManager>>,
+    pub(crate) peer_haves: DashMap<(ArtifactId, String), Bitfield>,
+    pub(crate) chain: Option<Arc<ChainManager>>,
+    /// Swarm state: bandwidth caps, bans, link stats, revocations, cache hook.
+    pub(crate) swarm: SwarmState,
 }
 
 impl ArtifactExchange {
@@ -72,6 +75,7 @@ impl ArtifactExchange {
         Ok(Self {
             node_id: node_id.into(),
             store,
+            swarm: SwarmState::new(&config),
             config,
             descriptors: DashMap::new(),
             pending: DashMap::new(),
@@ -163,8 +167,10 @@ impl ArtifactExchange {
         d.validate()?;
         let id = d.id();
         self.pending.remove(&id);
-        self.by_content.insert(d.content_hash, id);
+        let content_hash = d.content_hash;
+        self.by_content.insert(content_hash, id);
         self.descriptors.insert(id, d);
+        self.on_verified(&id, &content_hash);
         Ok(id)
     }
 
@@ -319,16 +325,35 @@ impl ArtifactExchange {
     }
 
     /// Allow serving `content_hash` under a verified package.
+    #[cfg(test)]
     pub(crate) fn grant(&self, content_hash: [u8; 32], package_id: &str) {
-        self.grants.insert(content_hash, package_id.to_string());
+        self.grant_with(content_hash, package_id, Vec::new());
+    }
+
+    /// [`Self::grant`], recording the hex public keys of the package's
+    /// signers so a signer revocation can find what they allowed.
+    pub(crate) fn grant_with(&self, content_hash: [u8; 32], package_id: &str, signers: Vec<String>) {
+        if self.is_revoked_subject(package_id, &signers, &content_hash) {
+            return; // a revoked package, signer or hash is never allowed to seed
+        }
+        self.grants.insert(
+            content_hash,
+            GrantInfo {
+                package_id: package_id.to_string(),
+                signers,
+            },
+        );
+        self.on_granted(&content_hash);
     }
 
     /// Governance: served only when `d` is verified on this node (its
-    /// pieces assemble to its `content_hash`) and a signed manifest that
-    /// verified here lists that content hash.
+    /// pieces assemble to its `content_hash`), a signed manifest that
+    /// verified here lists that content hash, and neither the package,
+    /// its signers nor the content hash has been revoked.
     pub fn is_servable(&self, d: &ArtifactDescriptor) -> bool {
         self.descriptors.get(&d.id()).is_some_and(|v| *v == *d)
             && self.grants.contains_key(&d.content_hash)
+            && !self.is_revoked(&d.content_hash)
     }
 
     /// Record the `have` a peer announced.

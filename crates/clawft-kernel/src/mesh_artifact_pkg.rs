@@ -58,7 +58,24 @@ pub enum PackageExchangeError {
     Fetch(#[from] FetchError),
 }
 
-fn pinned(file: &FileRef) -> Result<([u8; 32], u64), VerifyError> {
+/// Lower-case hex public keys of the manifest's accepted signers, looked up
+/// in `anchors` (a signer revocation names the key, not the key id).
+pub(crate) fn signer_keys(verified: &VerifiedPackage, anchors: &TrustAnchors) -> Vec<String> {
+    verified
+        .signers
+        .iter()
+        .filter_map(|s| {
+            anchors
+                .signers
+                .iter()
+                .chain(anchors.cognitum.iter())
+                .find(|k| k.key_id == s.key_id)
+        })
+        .map(|k| hex_encode(&k.public_key))
+        .collect()
+}
+
+pub(crate) fn pinned(file: &FileRef) -> Result<([u8; 32], u64), VerifyError> {
     let hash = hex_decode_exact::<32>(&file.blake3)
         .ok_or_else(|| VerifyError::Manifest(format!("{}: bad blake3", file.path)))?;
     Ok((hash, file.size))
@@ -85,6 +102,7 @@ impl ArtifactExchange {
         open: &mut dyn FnMut(&FileRef) -> std::io::Result<Box<dyn Read>>,
     ) -> Result<ExchangedPackage, PackageExchangeError> {
         let verified = verify_manifest_signatures_in(manifest, anchors, kinds)?;
+        self.refuse_if_revoked(&verified, anchors, blake3::hash(manifest).as_bytes())?;
         let mut files = Vec::new();
         for file in verified.body.files() {
             let expect = pinned(file)?;
@@ -111,7 +129,7 @@ impl ArtifactExchange {
         for (_, id) in &files {
             self.materialize(id)?;
         }
-        Ok(self.authorize(verified, m.content_hash, files))
+        Ok(self.authorize(verified, m.content_hash, files, anchors))
     }
 
     /// [`Self::seed_package`] from an unpacked package directory.
@@ -168,9 +186,10 @@ impl ArtifactExchange {
         }
         let manifest = self.read_all(&m.id)?;
         let verified = verify_manifest_signatures(&manifest, anchors)?;
+        self.refuse_if_revoked(&verified, anchors, &mh)?;
         // The manifest verified: its pinned content may be served from here
         // on, once each file is verified on this node.
-        let grant = self.authorize(verified.clone(), mh, Vec::new());
+        let grant = self.authorize(verified.clone(), mh, Vec::new(), anchors);
 
         let mut files = Vec::new();
         let mut all_small = true;
@@ -200,16 +219,35 @@ impl ArtifactExchange {
         Ok(ExchangedPackage { files, ..grant })
     }
 
-    fn authorize(
+    /// Refuse a package whose id, signers or manifest hash is revoked.
+    pub(crate) fn refuse_if_revoked(
+        &self,
+        verified: &VerifiedPackage,
+        anchors: &TrustAnchors,
+        manifest_hash: &[u8; 32],
+    ) -> Result<(), ExchangeError> {
+        let signers = signer_keys(verified, anchors);
+        if self.is_revoked_subject(&verified.package_id, &signers, manifest_hash) {
+            return Err(ExchangeError::Revoked(format!(
+                "package {} (or its signer or manifest) is revoked",
+                verified.package_id
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authorize(
         &self,
         verified: VerifiedPackage,
         manifest_hash: [u8; 32],
         files: Vec<(String, ArtifactId)>,
+        anchors: &TrustAnchors,
     ) -> ExchangedPackage {
-        self.grant(manifest_hash, &verified.package_id);
+        let signers = signer_keys(&verified, anchors);
+        self.grant_with(manifest_hash, &verified.package_id, signers.clone());
         for file in verified.body.files() {
             if let Ok((hash, _)) = pinned(file) {
-                self.grant(hash, &verified.package_id);
+                self.grant_with(hash, &verified.package_id, signers.clone());
             }
         }
         ExchangedPackage {

@@ -164,7 +164,8 @@ uuid = { workspace = true, features = ["js"] }
 libc = "0.2"
 
 [dev-dependencies]
-tokio = { workspace = true }
+# test-util: paused-time tests (swarm bandwidth and throughput).
+tokio = { workspace = true, features = ["test-util"] }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 clawft-platform = { workspace = true }

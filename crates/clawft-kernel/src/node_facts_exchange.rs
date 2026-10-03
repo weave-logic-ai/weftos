@@ -10,7 +10,7 @@
 //!   that joins, or that reports a missing base, is sent the current base
 //!   and latest delta.
 //! - **Receive.** Facts arrive as `mesh.node_facts` control messages
-//!   ([`FACTS_TOPIC`]) and are handled through [`PeerFactsSink`] with the
+//!   ([`FACTS_TOPIC`]) and are handled through [`PeerControlSink`] with the
 //!   connection's authenticated identity. Nothing is trusted on arrival:
 //!   the signature, the key-to-node-id binding, the TTL window and the
 //!   `seq` ordering are all checked by [`NodeFactsCache`], and a peer can
@@ -38,7 +38,7 @@ use crate::cluster::ClusterMembership;
 use crate::ipc::{KernelMessage, MessagePayload, MessageTarget};
 use crate::mesh_delivery::PeerCtx;
 use crate::mesh_discovery::MeshPeerEvent;
-pub use crate::mesh_runtime::{FACTS_TOPIC, PeerFactsSink};
+pub use crate::mesh_runtime::{FACTS_TOPIC, PeerControlSink};
 use crate::mesh_runtime::MeshRuntime;
 use crate::node_facts::{CacheError, InsertOutcome};
 use crate::node_facts_advert::{
@@ -207,7 +207,7 @@ impl FactsExchange {
     /// Install as the runtime's facts sink and announce the current facts to
     /// every peer that joins or recovers. Call once.
     pub fn start(self: &Arc<Self>) {
-        self.runtime.set_facts_sink(self.clone());
+        self.runtime.set_control_sink(FACTS_TOPIC, self.clone());
         let me = self.clone();
         let mut events = self.runtime.subscribe_peer_events();
         tokio::spawn(async move {
@@ -437,8 +437,8 @@ impl FactsExchange {
     }
 }
 
-impl PeerFactsSink for FactsExchange {
-    fn on_peer_facts(&self, ctx: &PeerCtx, payload: &serde_json::Value) -> Vec<serde_json::Value> {
+impl PeerControlSink for FactsExchange {
+    fn on_peer_control(&self, ctx: &PeerCtx, payload: &serde_json::Value) -> Vec<serde_json::Value> {
         let wire: FactsWire = match serde_json::from_value(payload.clone()) {
             Ok(w) => w,
             Err(e) => {

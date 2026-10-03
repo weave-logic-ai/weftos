@@ -586,6 +586,19 @@ pub const EVENT_KIND_ARTIFACT_PIECE_REJECTED: &str = "artifact.piece_rejected";
 /// First time an artifact is served to a given peer.
 pub const EVENT_KIND_ARTIFACT_SERVE: &str = "artifact.serve";
 
+// ── Swarm distribution (ADR-099 section 6, mesh-placement-25) ──────────
+//
+// Governance actions on what a node holds and serves.
+
+/// A node began seeding a verified artifact (once per artifact).
+pub const EVENT_KIND_ARTIFACT_SEED: &str = "artifact.seed";
+/// An artifact was evicted from the node's cache (`reason` = lru | revoked | manual).
+pub const EVENT_KIND_ARTIFACT_EVICT: &str = "artifact.evict";
+/// A revocation was applied to what the node holds and seeds.
+pub const EVENT_KIND_ARTIFACT_REVOKE: &str = "artifact.revoke";
+/// A peer was banned for serving corrupt pieces.
+pub const EVENT_KIND_ARTIFACT_PEER_BAN: &str = "artifact.peer_ban";
+
 /// Cron job added event.
 pub const EVENT_KIND_CRON_ADD: &str = "cron.add";
 

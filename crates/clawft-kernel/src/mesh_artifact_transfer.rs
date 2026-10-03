@@ -34,7 +34,7 @@ pub use crate::mesh_artifact_peers::{
 use crate::mesh_artifact_wire::{ArtifactDescriptor, ArtifactKey, ArtifactMsg, Bitfield};
 
 #[derive(Debug, thiserror::Error)]
-enum PeerError {
+pub(crate) enum PeerError {
     #[error("{0}")]
     Mesh(#[from] MeshError),
     #[error("{0}")]
@@ -65,13 +65,19 @@ struct Progress {
     written: HashSet<[u8; 32]>,
 }
 
-async fn send(stream: &mut dyn MeshStream, msg: &ArtifactMsg) -> Result<(), PeerError> {
+pub(crate) async fn send(
+    stream: &mut dyn MeshStream,
+    msg: &ArtifactMsg,
+) -> Result<(), PeerError> {
     stream.send(&msg.to_wire()?).await?;
     Ok(())
 }
 
 impl ArtifactExchange {
-    async fn recv(&self, stream: &mut dyn MeshStream) -> Result<ArtifactMsg, PeerError> {
+    pub(crate) async fn recv(
+        &self,
+        stream: &mut dyn MeshStream,
+    ) -> Result<ArtifactMsg, PeerError> {
         let raw = tokio::time::timeout(self.config().recv_timeout, stream.recv())
             .await
             .map_err(|_| PeerError::Timeout)??;
@@ -88,6 +94,10 @@ impl ArtifactExchange {
         peer: &str,
     ) -> Result<ServeStats, ExchangeError> {
         let mut stats = ServeStats::default();
+        if self.is_banned(peer) {
+            let _ = stream.close().await;
+            return Err(ExchangeError::Banned(peer.to_string()));
+        }
         loop {
             let idle = self.config().serve_idle_timeout;
             let raw = match tokio::time::timeout(idle, stream.recv()).await {
@@ -129,6 +139,10 @@ impl ArtifactExchange {
         raw: &[u8],
         stats: &mut ServeStats,
     ) -> Result<(), ExchangeError> {
+        if self.is_banned(peer) {
+            let _ = stream.close().await;
+            return Err(ExchangeError::Banned(peer.to_string()));
+        }
         let msg = ArtifactMsg::from_wire(raw)?;
         self.serve_one(stream, peer, msg, stats)
             .await
@@ -168,6 +182,9 @@ impl ArtifactExchange {
                     let reason = "not available or not servable".to_string();
                     return send(stream, &ArtifactMsg::Reject { key, reason }).await;
                 };
+                if let Some(cache) = self.swarm.cache() {
+                    cache.touch(&id);
+                }
                 for index in pieces {
                     let Ok(data) = self.load_piece(&d, index) else {
                         send(stream, &ArtifactMsg::NoPiece { id, index }).await?;
@@ -177,6 +194,7 @@ impl ArtifactExchange {
                     for (n, block) in data.chunks(self.config().block_size).enumerate() {
                         let offset = (n * self.config().block_size) as u64;
                         let data = block.to_vec();
+                        self.swarm.bandwidth.upload(data.len()).await;
                         send(
                             stream,
                             &ArtifactMsg::Piece {
@@ -311,7 +329,7 @@ impl ArtifactExchange {
         })
     }
 
-    fn is_complete(&self, d: &ArtifactDescriptor) -> bool {
+    pub(crate) fn is_complete(&self, d: &ArtifactDescriptor) -> bool {
         self.have(&d.id()).is_some_and(|h| h.is_complete())
     }
 
