@@ -207,3 +207,37 @@ fn concurrent_inserts_for_one_node_never_leave_older_facts_held() {
         assert_eq!(c.get(&id, 1_000).unwrap().facts.seq, TOP, "round {round}");
     }
 }
+
+/// Forces the interleave the stress test above only hopes for: insert `seq 5`
+/// passes its staleness check and stops; `seq 6` is inserted meanwhile; then
+/// `seq 5` resumes. With the check and the write under one lock, 6 waits for 5
+/// and stays held; with a separate check and write, 5 would overwrite 6.
+#[test]
+fn an_older_insert_stopped_between_check_and_write_cannot_overwrite_a_newer_one() {
+    use super::pause::{PAUSED, RELEASE, TARGET};
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    let c = Arc::new(NodeFactsCache::new());
+    let k = key();
+    let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+    c.insert(signed(&k, 4, 1_000), TrustTier::Paired, 1_000).unwrap();
+    *TARGET.lock().unwrap() = Some((id.clone(), 5));
+    let (s5, s6) = (signed(&k, 5, 1_000), signed(&k, 6, 1_000));
+    let (c5, c6) = (c.clone(), c.clone());
+    let a = std::thread::spawn(move || c5.insert(s5, TrustTier::Paired, 1_000));
+    for _ in 0..5_000 {
+        if PAUSED.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(PAUSED.load(Ordering::SeqCst), "insert 5 never reached the pause point");
+    let b = std::thread::spawn(move || c6.insert(s6, TrustTier::Paired, 1_000));
+    // Under the lock, B is now waiting for A. Without it, B has already written.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    RELEASE.store(true, Ordering::SeqCst);
+    a.join().unwrap().ok();
+    b.join().unwrap().unwrap();
+    *TARGET.lock().unwrap() = None;
+    assert_eq!(c.get(&id, 1_000).unwrap().facts.seq, 6, "an older seq must not land last");
+}

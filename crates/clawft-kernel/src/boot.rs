@@ -656,6 +656,9 @@ impl<P: Platform> Kernel<P> {
                 // required for the leaf-push topic forwarding path
                 // (`peers_for_topic` → `send_to_peer`) to work.
                 a2a_router.set_mesh_runtime(Arc::clone(&runtime));
+                runtime.set_enforcing(
+                    mesh_config.admission == clawft_types::config::MeshAdmissionMode::Enforce,
+                );
 
                 // Clone values needed by seed-peer loop before moving mesh_config.
                 let seed_peers = mesh_config.seed_peers.clone();

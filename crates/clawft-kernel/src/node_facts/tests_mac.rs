@@ -259,3 +259,39 @@ fn the_docker_note_names_the_context_the_daemon_probed() {
     h.outputs.remove("docker context show");
     assert!(note(&h).contains("docker context unknown"));
 }
+
+#[test]
+fn a_user_named_docker_context_is_reported_as_custom() {
+    let note = |h: &FakeHost| {
+        probe_capabilities(h, &ProbeConfig::default())
+            .notes
+            .into_iter()
+            .find(|n| n.probe == "docker")
+            .unwrap()
+            .note
+    };
+    for known in ["default", "desktop-linux", "orbstack", "colima", "rancher-desktop"] {
+        let mut h = mac();
+        h.outputs.insert("docker context show".into(), format!("{known}\n"));
+        assert!(note(&h).contains(&format!("docker context {known}")), "{known}");
+    }
+    let mut h = mac();
+    h.outputs.insert("docker context show".into(), "alice-work-laptop\n".into());
+    let n = note(&h);
+    assert!(n.contains("docker context custom") && !n.contains("alice"), "{n}");
+}
+
+#[test]
+fn an_internal_mount_that_names_a_user_is_not_advertised() {
+    let internal = |df: &str| {
+        let mut h = mac();
+        h.outputs.insert("df -kP /".into(), df.into());
+        let c = probe_capabilities(&h, &ProbeConfig::default());
+        c.caps.into_iter().find(|c| c.id.as_str() == "store.tier.internal").unwrap()
+    };
+    let root = internal(DF_ROOT);
+    assert_eq!(root.attrs["mount"], AttrValue::from("/"));
+    let home = internal("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/x 1000 10 990 1% /Users/alice\n");
+    assert!(!home.attrs.contains_key("mount"), "{:?}", home.attrs);
+    assert!(home.attrs.contains_key("free"));
+}

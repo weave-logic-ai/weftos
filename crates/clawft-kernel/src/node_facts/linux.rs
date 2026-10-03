@@ -8,7 +8,7 @@
 use clawft_types::placement::Provenance;
 
 use super::host::ProbeHost;
-use super::probe::{Collected, bytes_attr, cap, normalize_arch, note_external_withheld, parse_df};
+use super::probe::{Collected, bytes_attr, cap, normalize_arch, note_external_withheld, parse_df, public_mount};
 
 const BINFMT: &str = "/proc/sys/fs/binfmt_misc";
 /// Mount roots treated as external (removable) drives.
@@ -159,10 +159,11 @@ fn storage(host: &dyn ProbeHost, c: &mut Collected) {
     if let Some((free, mount)) = host.run("df", &["-kP", "/"]).as_deref().and_then(parse_df)
         && let Some(s) = cap("store.tier.internal", Provenance::Probed)
     {
-        c.push(
-            s.with_attr("free", bytes_attr(free))
-                .with_attr("mount", mount.as_str()),
-        );
+        let mut s = s.with_attr("free", bytes_attr(free));
+        if let Some(m) = public_mount(&mount) {
+            s = s.with_attr("mount", m);
+        }
+        c.push(s);
     }
     let mounts = host.read_file("/proc/mounts").unwrap_or_default();
     let mut external = 0;

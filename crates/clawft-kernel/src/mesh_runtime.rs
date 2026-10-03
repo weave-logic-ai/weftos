@@ -153,9 +153,32 @@ pub struct MeshRuntime {
     /// Connection ids for control-topic limits, keyed by outbound channel.
     conn_ids: Mutex<Vec<(tokio::sync::mpsc::WeakSender<Vec<u8>>, u64)>>,
     conn_seq: std::sync::atomic::AtomicU64,
+    /// Whether admission is `enforce`. Only then does a peer whose node id
+    /// was not verified stop counting as a cluster member; under `observe`
+    /// and `off` (the shipped default is `observe`) every peer counts, as
+    /// before. Set by the owner of the admission mode and updated when the
+    /// mode changes.
+    enforcing: std::sync::atomic::AtomicBool,
 }
 
 impl MeshRuntime {
+    /// Say whether admission is `enforce` (see the field). Takes effect for
+    /// the peer events emitted after the call.
+    pub fn set_enforcing(&self, enforcing: bool) {
+        self.enforcing.store(enforcing, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether admission is `enforce`.
+    pub fn enforcing(&self) -> bool {
+        self.enforcing.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Whether a connection counts as a cluster member: admission verified
+    /// its node id, or admission is not enforcing.
+    fn counts_as_member(&self, verified: bool) -> bool {
+        verified || !self.enforcing()
+    }
+
     /// Create a new mesh runtime for the given local node.
     pub fn new(node_id: String) -> Self {
         Self {
@@ -172,6 +195,7 @@ impl MeshRuntime {
             control_sinks: DashMap::new(),
             conn_ids: Mutex::new(Vec::new()),
             conn_seq: std::sync::atomic::AtomicU64::new(0),
+            enforcing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -198,6 +222,7 @@ impl MeshRuntime {
             control_sinks: DashMap::new(),
             conn_ids: Mutex::new(Vec::new()),
             conn_seq: std::sync::atomic::AtomicU64::new(0),
+            enforcing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -469,14 +494,14 @@ impl MeshRuntime {
             self.peer_events.emit(MeshPeerEvent::Recovered {
                 node_id,
                 address,
-                verified,
+                verified: self.counts_as_member(verified),
             });
         } else {
             self.peer_events.emit(MeshPeerEvent::Joined {
                 node_id,
                 address,
                 platform: None,
-                verified,
+                verified: self.counts_as_member(verified),
             });
         }
         true
@@ -911,7 +936,9 @@ impl MeshRuntime {
                             .peer_addresses
                             .get(node_id)
                             .map(|a| a.value().clone()),
-                        verified: self.peers.get(node_id).is_some_and(|p| p.verified),
+                        verified: self.counts_as_member(
+                            self.peers.get(node_id).is_some_and(|p| p.verified),
+                        ),
                     });
                 }
                 _ => {
@@ -1341,6 +1368,8 @@ mod tests {
                 .with_min_peer_interval(std::time::Duration::ZERO),
         );
         let rt = MeshRuntime::new("local".into());
+        // Unverified only exists under enforce; observe and off count everyone.
+        rt.set_enforcing(true);
         membership.spawn_mesh_peer_listener(rt.subscribe_peer_events());
 
         // A legacy route (`add_peer`: a seed, a leaf, a test harness) is a

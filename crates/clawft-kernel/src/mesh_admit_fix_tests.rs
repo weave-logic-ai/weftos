@@ -233,7 +233,7 @@ async fn responder_registers_an_admitted_peer_without_any_app_traffic() {
 }
 
 #[tokio::test]
-async fn under_observe_no_one_joins_at_the_handshake_and_the_first_envelope_joins_unverified() {
+async fn under_observe_no_one_joins_at_the_handshake_and_the_first_envelope_joins_as_a_member() {
     use crate::mesh_discovery::MeshPeerEvent;
     let srv = server(crypto(MeshAdmissionMode::Observe), true).await;
     let mut events = srv.rt.subscribe_peer_events();
@@ -249,7 +249,9 @@ async fn under_observe_no_one_joins_at_the_handshake_and_the_first_envelope_join
     assert!(wait_for(&srv.rec, "t.first").await);
     let ev = tokio::time::timeout(Duration::from_secs(3), events.recv()).await.unwrap().unwrap();
     assert!(
-        matches!(&ev, MeshPeerEvent::Joined { node_id, verified: false, .. } if *node_id == id_of(&k)),
+        // `verified: true` here means "counts as a member": observe does
+        // not exclude anyone (the runtime is not enforcing).
+        matches!(&ev, MeshPeerEvent::Joined { node_id, verified: true, .. } if *node_id == id_of(&k)),
         "{ev:?}"
     );
     let _ = c.ch.close().await;

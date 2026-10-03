@@ -24,6 +24,26 @@ pub const MAX_CACHED_NODES: usize = 4096;
 /// Most mesh-derived `Discovered` entries held at once, whatever the total.
 pub const MAX_DISCOVERED: usize = 512;
 
+/// Test hook: pause an insert of `(node_id, seq)` after its staleness check
+/// has passed and before it writes, so a test can force the interleave.
+#[cfg(test)]
+pub(crate) mod pause {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    pub(crate) static TARGET: Mutex<Option<(String, u64)>> = Mutex::new(None);
+    pub(crate) static PAUSED: AtomicBool = AtomicBool::new(false);
+    pub(crate) static RELEASE: AtomicBool = AtomicBool::new(false);
+    pub(crate) fn here(node_id: &str, seq: u64) {
+        let hit = TARGET.lock().unwrap().as_ref().is_some_and(|(n, s)| n == node_id && *s == seq);
+        if hit {
+            PAUSED.store(true, Ordering::SeqCst);
+            while !RELEASE.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+}
+
 /// Where a node's tier came from. Only an operator-set tier is sticky: a
 /// mesh-derived tier follows the current connection (admission) every frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -243,6 +263,8 @@ impl NodeFactsCache {
                         });
                     }
                 }
+                #[cfg(test)]
+                pause::here(&node_id, entry.facts.seq);
                 o.insert(entry);
                 Ok(InsertOutcome::Replaced)
             }

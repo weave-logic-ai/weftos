@@ -65,6 +65,8 @@ pub const EMULATION_CACHE_SECS: u64 = 3600;
 /// Least gap between operator-forced probes (`cluster.facts` with `refresh`):
 /// a forced probe inside it is answered from the facts the last one produced.
 pub const MIN_FORCED_REFRESH_SECS: u64 = 30;
+/// Longest one probe may run before it is abandoned and reported as failed.
+pub const PROBE_TIMEOUT_SECS: u64 = 60;
 
 /// One probe at a time, and a floor on how often an operator can force one.
 ///
@@ -76,13 +78,17 @@ pub const MIN_FORCED_REFRESH_SECS: u64 = 30;
 struct RefreshGate {
     last_forced: tokio::sync::Mutex<Option<tokio::time::Instant>>,
     min: Duration,
+    /// A probe running longer than this is abandoned (an engine that hangs
+    /// must not hold the lock, and with it every later refresh, forever).
+    timeout: Duration,
 }
 
 impl RefreshGate {
-    fn new(min: Duration) -> Self {
+    fn new(min: Duration, timeout: Duration) -> Self {
         Self {
             last_forced: tokio::sync::Mutex::new(None),
             min,
+            timeout,
         }
     }
 
@@ -97,7 +103,10 @@ impl RefreshGate {
         if forced && last.is_some_and(|at| at.elapsed() < self.min) {
             return Ok(None);
         }
-        let result = probe().await;
+        let result = match tokio::time::timeout(self.timeout, probe()).await {
+            Ok(r) => r,
+            Err(_) => Err(format!("probe timed out after {}s", self.timeout.as_secs())),
+        };
         if forced {
             // A failed attempt counts too: a failing probe is not retried in a loop.
             *last = Some(tokio::time::Instant::now());
@@ -115,6 +124,8 @@ struct LocalSigner {
     last_full: Mutex<Option<(std::time::Instant, clawft_types::placement::NodeFacts)>>,
     emulation: Arc<EmulationCache>,
     gate: RefreshGate,
+    /// Unix seconds of the last forced probe that ran (0: none yet).
+    last_forced_at: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -343,7 +354,11 @@ pub fn init(
         exchange,
         last_full: Mutex::new(None),
         emulation: Arc::new(EmulationCache::new(Duration::from_secs(EMULATION_CACHE_SECS))),
-        gate: RefreshGate::new(Duration::from_secs(MIN_FORCED_REFRESH_SECS)),
+        gate: RefreshGate::new(
+            Duration::from_secs(MIN_FORCED_REFRESH_SECS),
+            Duration::from_secs(PROBE_TIMEOUT_SECS),
+        ),
+        last_forced_at: std::sync::atomic::AtomicU64::new(0),
     });
     if LOCAL.set(signer.clone()).is_err() {
         return;
@@ -378,6 +393,19 @@ pub struct FactsParams {
     /// Only this node.
     #[serde(default)]
     pub node_id: Option<String>,
+}
+
+/// The `cluster.facts` result when `refresh` was asked for (without it the
+/// result is the bare entry list, as before).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshedFacts {
+    /// True if this call probed; false if the minimum gap since the last
+    /// forced probe skipped it and the entries are the cached ones.
+    pub refreshed: bool,
+    /// Unix seconds of the last forced probe that ran (0: none since boot).
+    pub cached_as_of: u64,
+    /// The entries.
+    pub entries: Vec<FactsEntry>,
 }
 
 /// One entry of the `cluster.facts` result.
@@ -436,20 +464,30 @@ pub async fn handle(
     };
     let membership = kernel.read().await.cluster_membership().clone();
     let local = LOCAL.get().cloned();
+    // `Some((refreshed, cached_as_of))` when a refresh was asked for.
+    let mut refresh_result: Option<(bool, u64)> = None;
     if p.refresh {
         let Some(signer) = local.clone() else {
             return Response::error("local node facts not initialised");
         };
-        match refresh(signer, membership.clone(), true).await {
+        match refresh(signer.clone(), membership.clone(), true).await {
             Err(e) => return Response::error(format!("probe failed: {e}")),
-            #[cfg(feature = "exochain")]
             Ok(Some(seq)) => {
-                if let (Some(chain), Some(s)) = (kernel.read().await.chain_manager().cloned(), &local) {
-                    let id = clawft_kernel::node_id_from_pubkey(&s.key.verifying_key().to_bytes());
+                let at = now_secs();
+                signer.last_forced_at.store(at, std::sync::atomic::Ordering::SeqCst);
+                refresh_result = Some((true, at));
+                #[cfg(feature = "exochain")]
+                if let Some(chain) = kernel.read().await.chain_manager().cloned() {
+                    let id = clawft_kernel::node_id_from_pubkey(&signer.key.verifying_key().to_bytes());
                     record_forced_refresh(&chain, &id, seq);
                 }
+                #[cfg(not(feature = "exochain"))]
+                let _ = seq;
             }
-            Ok(_) => {}
+            Ok(None) => {
+                let at = signer.last_forced_at.load(std::sync::atomic::Ordering::SeqCst);
+                refresh_result = Some((false, at));
+            }
         }
     }
     let local_id = local
@@ -463,7 +501,16 @@ pub async fn handle(
         .filter(|c| p.node_id.as_deref().is_none_or(|n| n == c.node_id()))
         .map(|c| entry(c, local_id.as_deref()))
         .collect();
-    match serde_json::to_value(entries) {
+    let value = match refresh_result {
+        None => serde_json::to_value(entries),
+        // A refresh was asked for: say whether it ran or the floor skipped it.
+        Some((refreshed, cached_as_of)) => serde_json::to_value(RefreshedFacts {
+            refreshed,
+            cached_as_of,
+            entries,
+        }),
+    };
+    match value {
         Ok(v) => Response::success(v),
         Err(e) => Response::error(format!("encode failed: {e}")),
     }
@@ -550,7 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_forced_refreshes_probe_once() {
-        let gate = RefreshGate::new(Duration::from_secs(60));
+        let gate = RefreshGate::new(Duration::from_secs(60), Duration::from_secs(5));
         let (runs, live, peak) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let go = || gate.run(true, || slow_probe(&runs, &live, &peak));
         let (a, b, c) = tokio::join!(go(), go(), go());
@@ -563,7 +610,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_forced_refresh_is_allowed_again_after_the_floor() {
-        let gate = RefreshGate::new(Duration::from_millis(60));
+        let gate = RefreshGate::new(Duration::from_millis(60), Duration::from_secs(5));
         let (runs, live, peak) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         assert!(gate.run(true, || slow_probe(&runs, &live, &peak)).await.unwrap().is_some());
         assert!(gate.run(true, || slow_probe(&runs, &live, &peak)).await.unwrap().is_none());
@@ -574,7 +621,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_background_tick_and_a_forced_refresh_never_overlap() {
-        let gate = RefreshGate::new(Duration::from_secs(60));
+        let gate = RefreshGate::new(Duration::from_secs(60), Duration::from_secs(5));
         let (runs, live, peak) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let bg = || gate.run(false, || slow_probe(&runs, &live, &peak));
         let forced = || gate.run(true, || slow_probe(&runs, &live, &peak));
@@ -589,13 +636,27 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_forced_probe_is_rate_limited_too() {
-        let gate = RefreshGate::new(Duration::from_secs(60));
+        let gate = RefreshGate::new(Duration::from_secs(60), Duration::from_secs(5));
         let first = gate.run(true, || async { Err::<u64, _>("engine down".to_string()) }).await;
         assert_eq!(first, Err("engine down".to_string()));
         let again = gate
             .run(true, || async { panic!("must not probe again inside the floor") })
             .await;
         assert_eq!(again, Ok(None));
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_hangs_is_abandoned_and_releases_the_lock() {
+        let gate = RefreshGate::new(Duration::ZERO, Duration::from_millis(50));
+        let r = gate
+            .run(true, || async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok(1)
+            })
+            .await;
+        assert!(r.unwrap_err().contains("timed out"));
+        // The lock is free again: the next refresh runs.
+        assert_eq!(gate.run(false, || async { Ok(7) }).await, Ok(Some(7)));
     }
 
     #[cfg(feature = "exochain")]

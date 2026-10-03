@@ -64,10 +64,12 @@ pub enum MeshPeerEvent {
         address: Option<String>,
         /// Platform label when known.
         platform: Option<String>,
-        /// Admission verified `node_id` (the key behind it) for this
-        /// connection. False for every peer under `off` / `observe` and for
-        /// dialled seeds: the id is then only a claim, and membership holds
-        /// it as [`NodeState::Unverified`](crate::cluster::NodeState::Unverified),
+        /// The peer counts as a cluster member: admission verified `node_id`
+        /// for this connection, or admission is not `enforce` (under the
+        /// default `observe`, and under `off`, every peer counts). False only
+        /// under `enforce` for a connection whose id is just a claim (a
+        /// dialled seed, a legacy leaf); membership then holds it as
+        /// [`NodeState::Unverified`](crate::cluster::NodeState::Unverified),
         /// not `Active`. Absent in older events (read as false).
         #[serde(default)]
         verified: bool,

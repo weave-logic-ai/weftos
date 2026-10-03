@@ -373,6 +373,10 @@ async fn pump(
     // The silence timers run from the last frame in either direction; the
     // route check's own ticks must not reset them.
     let mut last_activity = tokio::time::Instant::now();
+    // Frames dropped on a dialled connection for speaking as an id other than
+    // the one it is bound to (or claiming a routed one). A seed that keeps
+    // doing it is cut off and redialled with backoff, not left spamming.
+    let mut mismatched = 0u32;
     loop {
         // Every mode bounds the silence before the first frame; strict gates
         // also bound how long an admitted peer may stay silent. Lenient gates
@@ -460,6 +464,11 @@ async fn pump(
                         if rt.route_is_foreign(&claimed, &out_tx) {
                             tracing::warn!(peer = %peer_addr, claimed = %claimed,
                                 "dialled peer claims an id routed elsewhere, dropping frame");
+                            mismatched += 1;
+                            if mismatched >= MAX_ID_MISMATCHES {
+                                tracing::warn!(peer = %peer_addr, "dialled peer keeps claiming routed ids, closing");
+                                break;
+                            }
                             continue;
                         }
                         act.bound = Some(claimed);
@@ -473,7 +482,18 @@ async fn pump(
                         tracing::warn!(peer = %peer_addr, node = id, "mesh peer revoked, closing");
                         break;
                     }
-                    if let Some(frame) = screen_frame(frame, act) {
+                    let screened = screen_frame(frame, act);
+                    if screened.is_none() && dialled && act.bound.is_some() {
+                        // `screen_frame` has logged this one; the connection
+                        // is cut after a few so the log cannot be flooded.
+                        mismatched += 1;
+                        if mismatched >= MAX_ID_MISMATCHES {
+                            tracing::warn!(peer = %peer_addr, node = act.bound.as_deref().unwrap_or("-"),
+                                "dialled peer keeps speaking for other ids, closing");
+                            break;
+                        }
+                    }
+                    if let Some(frame) = screened {
                         let ctx = act.peer_ctx();
                         if let Err(e) = rt.handle_incoming_tallied(&frame, out_tx.clone(), Some(&ctx), Some(&tally)).await {
                             tracing::debug!(error = %e, "mesh message handling error");
@@ -510,6 +530,10 @@ impl Drop for ConnRoutes {
         self.rt.disconnect_channel(&self.tx);
     }
 }
+
+/// Frames a dialled connection may have dropped for naming the wrong id
+/// before it is closed.
+const MAX_ID_MISMATCHES: u32 = 3;
 
 /// First reconnect delay; doubles per consecutive failure up to
 /// [`SEED_BACKOFF_MAX`]. Each wait is jittered to 50-100% of its nominal
@@ -725,6 +749,14 @@ async fn dial_seed_once(
     }
 
     let (out_tx, out_rx) = tokio::sync::mpsc::channel(256);
+    // A pinned id that another connection already routes is not ours to take.
+    if let Some(id) = expected
+        && rt.route_is_foreign(id, &out_tx)
+    {
+        tracing::warn!(peer = %addr, pinned = %id,
+            "pinned seed id is routed through another connection, not dialling");
+        return;
+    }
     let tally = RouteTally::default();
     rt.add_peer_tallied(addr.to_owned(), out_tx.clone(), &tally);
     tracing::info!(peer = %addr, noise = nc.is_some(), "connected to seed peer");

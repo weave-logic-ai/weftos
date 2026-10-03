@@ -470,6 +470,45 @@ async fn a_pinned_seed_may_only_speak_for_its_own_id() {
     }
 }
 
+#[tokio::test]
+async fn a_pinned_seed_that_keeps_speaking_for_other_ids_is_cut_off() {
+    use crate::mesh_noise::{EncryptedChannel, PassthroughChannel};
+    let mut l = crate::mesh_tcp::TcpTransport.listen("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    let (dialer, _drec) = runtime("dialer");
+    let handles = connect_seeds_with(&dialer, &[format!("{addr}#seed-id")], "tcp", None, None, quick());
+    let (stream, _) = l.accept().await.unwrap();
+    let mut seed = PassthroughChannel::new(stream);
+    for i in 0..MAX_ID_MISMATCHES {
+        seed.send_encrypted(&frame("someone-else", &format!("t.{i}"))).await.unwrap();
+    }
+    // The dialler closes the connection (our side reads EOF or an error).
+    let closed = tokio::time::timeout(Duration::from_secs(5), seed.recv_encrypted()).await;
+    assert!(matches!(closed, Ok(Err(_))), "connection must be closed: {closed:?}");
+    for h in &handles {
+        h.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_pinned_id_routed_through_another_connection_is_not_dialled_for() {
+    let mut l = crate::mesh_tcp::TcpTransport.listen("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    let (dialer, _drec) = runtime("dialer");
+    let (held_tx, _held_rx) = tokio::sync::mpsc::channel(4);
+    dialer.add_peer("seed-id".into(), held_tx.clone());
+    let handles = connect_seeds_with(&dialer, &[format!("{addr}#seed-id")], "tcp", None, None, quick());
+    // The dial is made (the TCP connect happens first) but dropped before
+    // any route is registered for it; the existing route is untouched.
+    let _ = tokio::time::timeout(Duration::from_millis(500), l.accept()).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!dialer.route_is_foreign("seed-id", &held_tx));
+    assert!(!dialer.peer_ids().iter().any(|p| p == &addr), "no route under the seed address");
+    for h in &handles {
+        h.abort();
+    }
+}
+
 #[test]
 fn backoff_grows_is_capped_and_jittered() {
     let (base, max) = (Duration::from_secs(1), Duration::from_secs(60));

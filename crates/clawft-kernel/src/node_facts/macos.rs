@@ -10,7 +10,7 @@
 use clawft_types::placement::{AttrValue, Provenance};
 
 use super::host::ProbeHost;
-use super::probe::{Collected, bytes_attr, cap, note_external_withheld, parse_df, str_list};
+use super::probe::{Collected, bytes_attr, cap, note_external_withheld, parse_df, public_mount, str_list};
 
 const COREML: &str = "/System/Library/Frameworks/CoreML.framework";
 
@@ -109,10 +109,11 @@ fn storage(host: &dyn ProbeHost, c: &mut Collected) {
     if let Some((free, mount)) = host.run("df", &["-kP", "/"]).as_deref().and_then(parse_df)
         && let Some(s) = cap("store.tier.internal", Provenance::Probed)
     {
-        c.push(
-            s.with_attr("free", bytes_attr(free))
-                .with_attr("mount", mount.as_str()),
-        );
+        let mut s = s.with_attr("free", bytes_attr(free));
+        if let Some(m) = public_mount(&mount) {
+            s = s.with_attr("mount", m);
+        }
+        c.push(s);
     }
     let mut external = 0;
     for vol in host.list_dir("/Volumes").unwrap_or_default() {

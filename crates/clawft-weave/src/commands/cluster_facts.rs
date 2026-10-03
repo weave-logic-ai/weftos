@@ -128,12 +128,12 @@ pub fn render(entries: &[FactsEntry], now: u64) -> String {
                 ),
                 None if e.delta_seq > 0 => (
                     format!(
-                        "verified (ed25519, node key); live state from update #{} is daemon-reported, not re-verified here",
+                        "id-bound signature (ed25519); live state from update #{} is daemon-reported, not re-verified here",
                         e.delta_seq
                     ),
                     &e.facts,
                 ),
-                None => ("verified (ed25519, node key)".to_string(), &e.facts),
+                None => ("id-bound signature (ed25519)".to_string(), &e.facts),
             },
         };
         out.push_str(&format!(
@@ -163,6 +163,30 @@ pub fn render(entries: &[FactsEntry], now: u64) -> String {
     out
 }
 
+/// The entries of a `cluster.facts` result, and, when `--refresh` was skipped
+/// by the daemon's minimum gap, when the cached facts were last probed. Reads
+/// both result shapes: a bare list, or the refresh object.
+pub fn parse_result(value: serde_json::Value) -> anyhow::Result<(Vec<FactsEntry>, Option<u64>)> {
+    if value.is_array() {
+        return Ok((serde_json::from_value(value)?, None));
+    }
+    let r: crate::node_facts_rpc::RefreshedFacts = serde_json::from_value(value)?;
+    Ok((r.entries, (!r.refreshed).then_some(r.cached_as_of)))
+}
+
+/// The line printed when the daemon skipped a requested refresh.
+pub fn skipped_note(cached_as_of: u64, now: u64) -> String {
+    if cached_as_of == 0 {
+        "refresh skipped: one ran moments ago; showing the cached facts".to_string()
+    } else {
+        format!(
+            "refresh skipped (at most one every {}s): showing facts cached as of {}s ago",
+            crate::node_facts_rpc::MIN_FORCED_REFRESH_SECS,
+            now.saturating_sub(cached_as_of)
+        )
+    }
+}
+
 /// Fetch `cluster.facts` and print it.
 pub async fn run(
     client: &mut DaemonClient,
@@ -182,11 +206,14 @@ pub async fn run(
         println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }
-    let entries: Vec<FactsEntry> = serde_json::from_value(value)?;
+    let (entries, skipped) = parse_result(value)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    if let Some(at) = skipped {
+        println!("{}", skipped_note(at, now));
+    }
     print!("{}", render(&entries, now));
     Ok(())
 }
@@ -238,7 +265,7 @@ mod tests {
     fn renders_provenance_memory_and_verification() {
         let text = render(&[entry(false)], 1_100);
         assert!(text.contains("(local)"));
-        assert!(text.contains("Signature: verified"));
+        assert!(text.contains("Signature: id-bound signature"));
         assert!(text.contains("total=137438953472 (128.0 GiB)"));
         assert!(text.contains("claimed"));
         assert!(text.contains("accel.npu.ane: inferred from chip + CoreML"));
@@ -298,7 +325,7 @@ mod tests {
         e.delta_seq = 2;
         e.facts = live;
         let text = render(&[e], 1_100);
-        assert!(text.contains("verified (ed25519, node key); live state from update #2"), "{text}");
+        assert!(text.contains("id-bound signature (ed25519); live state from update #2"), "{text}");
     }
 
     #[test]
@@ -315,5 +342,24 @@ mod tests {
         e.tier_source = Some(TierSource::Mesh);
         e.trust_tier = TrustTier::Discovered;
         assert!(render(&[e], 1_100).contains("trust=discovered "));
+    }
+
+    #[test]
+    fn a_skipped_refresh_is_reported_with_the_cache_age() {
+        use crate::node_facts_rpc::RefreshedFacts;
+        let e = entry(false);
+        // A bare list (no refresh asked): nothing skipped.
+        let (got, skipped) = parse_result(serde_json::to_value(vec![e.clone()]).unwrap()).unwrap();
+        assert_eq!((got.len(), skipped), (1, None));
+        // A refresh that ran.
+        let ran = RefreshedFacts { refreshed: true, cached_as_of: 1_050, entries: vec![e.clone()] };
+        assert_eq!(parse_result(serde_json::to_value(ran).unwrap()).unwrap().1, None);
+        // A refresh the daemon skipped.
+        let skip = RefreshedFacts { refreshed: false, cached_as_of: 1_050, entries: vec![e] };
+        let (got, skipped) = parse_result(serde_json::to_value(skip).unwrap()).unwrap();
+        assert_eq!((got.len(), skipped), (1, Some(1_050)));
+        let note = skipped_note(1_050, 1_062);
+        assert!(note.contains("refresh skipped") && note.contains("12s ago"), "{note}");
+        assert!(skipped_note(0, 5).contains("moments ago"));
     }
 }

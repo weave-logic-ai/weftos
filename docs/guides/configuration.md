@@ -1149,7 +1149,11 @@ assessment frame; a frame that names none is dropped) and can claim no id anothe
 connection routes. To pin the id instead, write the entry as
 `address#node-id`, for example `"quic://10.0.0.2:9489#n-0123abcd"`: frames
 naming any other id are then dropped from the first byte. The pin is your word
-about the seed, not a proof; the seed's peer is still held as `unverified`.
+about the seed, not a proof. Under `admission = "enforce"` the seed's peer is
+still held as `unverified` (not an active cluster member, and placement refuses
+it); under `observe`, the default, and `off`, it counts as a member as before.
+A pinned seed that keeps sending frames as other ids is disconnected after 3 and
+redialled with backoff.
 
 Admission and the machine mesh service (ADR-103 Phase 3):
 

@@ -474,3 +474,44 @@ async fn mutations_without_a_chained_decision_id_are_refused() {
         }
     }
 }
+
+/// Membership holds a peer admission did not verify (under `enforce`) as
+/// `Unverified`; placement treats anything but `Active` as not alive, so it
+/// refuses to place onto it. The same node held `Active` (the shipped
+/// `observe` default) is placed on.
+#[tokio::test]
+async fn placement_refuses_a_node_membership_holds_as_unverified() {
+    use crate::cluster::{ClusterConfig, ClusterMembership, NodeState, PeerNode, NodePlatform};
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "probe-cog", "#!/bin/sh\nexec sleep 30\n", &[arch()]);
+    let key = ctl_key();
+    let pi = host_node(12, board_caps("pi5"), true, &key);
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("pi", pi.svc.clone());
+    let (plane, _chain) = controller(&key, conn);
+    let membership = Arc::new(ClusterMembership::new(ClusterConfig::default()));
+    let plane = plane.with_membership(membership.clone());
+    plane.add_target(&addr, TrustTier::Paired).await.unwrap();
+    let peer = |state: NodeState| PeerNode {
+        id: pi.id.clone(),
+        name: pi.id.clone(),
+        platform: NodePlatform::CloudNative,
+        state,
+        address: None,
+        first_seen: chrono::Utc::now(),
+        last_heartbeat: chrono::Utc::now(),
+        capabilities: vec![],
+        labels: Default::default(),
+    };
+
+    membership.add_peer(peer(NodeState::Unverified)).unwrap();
+    let mut o = order(&pkg);
+    o.dry_run = true;
+    let refused = plane.place(&o).await.unwrap();
+    assert!(refused.decision.placement.is_none(), "{}", refused.explain);
+    assert!(refused.explain.contains("unknown"), "{}", refused.explain);
+
+    membership.update_state(&pi.id, NodeState::Active).unwrap();
+    let ok = plane.place(&o).await.unwrap();
+    assert_eq!(ok.decision.placement.as_ref().map(|p| p.node_id.clone()), Some(pi.id.clone()), "{}", ok.explain);
+}

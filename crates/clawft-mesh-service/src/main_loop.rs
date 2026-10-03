@@ -273,6 +273,7 @@ async fn start_inner(
     };
     rt.set_local_delivery(state.router.clone());
     let rt = Arc::new(rt);
+    rt.set_enforcing(state.policy.admission() == MeshAdmissionMode::Enforce);
     state.router.set_runtime(&rt);
 
     if !cfg.listen.parse::<SocketAddr>().is_ok_and(|a| a.ip().is_loopback()) {
