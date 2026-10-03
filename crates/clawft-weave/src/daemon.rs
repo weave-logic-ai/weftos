@@ -1208,9 +1208,17 @@ pub async fn run(
                     steward_node_id: clawft_kernel::node_id_from_pubkey(&pk),
                     steward_pubkey: hex::encode(pk),
                 }));
+            } else {
+                crate::licence_boot::skipped(k.kernel_config().mesh.as_ref(), "no chain manager");
             }
         }
-        Err(e) => warn!(error = %e, "placement control plane disabled"),
+        Err(e) => {
+            warn!(error = %e, "placement control plane disabled");
+            crate::licence_boot::skipped(
+                kernel.read().await.kernel_config().mesh.as_ref(),
+                "no node signing key (placement is off)",
+            );
+        }
     }
     // mesh-placement-03: probe, sign and cache this node's facts. In service
     // mode the service signs and advertises the machine's facts.

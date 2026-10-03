@@ -342,6 +342,26 @@ fn floor_preview_lists_what_a_reset_would_revive_and_changes_nothing() {
     assert!(covered(&fx, "aarch64"));
 }
 
+#[test]
+fn reset_floor_checked_refuses_when_the_floor_moved_since_the_preview() {
+    let fx = Fx::new();
+    fx.bind();
+    put(&fx, &grant(1, T0, HOUR, &["aarch64"])).unwrap();
+    fx.set_now(T0 + 5 * DAY);
+    fx.store.tick();
+    fx.set_now(T0 + 100);
+    let shown = fx.store.floor_preview().unwrap();
+    assert_eq!(
+        fx.store.reset_floor_checked(Some(shown.floor + 1)),
+        Err(LicenceError::CheckFailed("floor_changed".into()))
+    );
+    assert!(!covered(&fx, "aarch64"), "a refused reset changed nothing");
+    let done = fx.store.reset_floor_checked(Some(shown.floor)).unwrap();
+    assert_eq!(done, shown);
+    assert!(covered(&fx, "aarch64"));
+    assert_eq!(fx.names(), ["floor_reset"]);
+}
+
 // ── persistence, fail closed ─────────────────────────────────────
 
 #[test]

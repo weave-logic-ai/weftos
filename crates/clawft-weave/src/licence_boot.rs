@@ -102,6 +102,24 @@ pub fn spawn_tick(period: std::time::Duration, f: Arc<dyn Fn() + Send + Sync>) -
     })
 }
 
+static NOT_INSTALLED: OnceLock<String> = OnceLock::new();
+
+/// Why the licence runtime was not installed although `kernel.mesh.mesh_nonce`
+/// is configured (`None`: it was installed, or no nonce is configured).
+pub fn not_installed() -> Option<String> {
+    NOT_INSTALLED.get().cloned()
+}
+
+/// Called at boot when the runtime cannot be built (no chain manager, no
+/// signing key). With a configured nonce this is a warning and a doctor
+/// finding, not a silent fall back to the inert path.
+pub fn skipped(mesh: Option<&MeshConfig>, why: &str) {
+    if mesh.is_some_and(|m| m.mesh_nonce.is_some()) {
+        tracing::warn!(%why, "kernel.mesh.mesh_nonce is set but the Seed licence runtime is NOT installed; checkout stays off");
+        let _ = NOT_INSTALLED.set(why.to_owned());
+    }
+}
+
 /// The daemon's licence runtime (`None` before boot or without placement).
 pub fn runtime() -> Option<Arc<LicenceRuntime>> {
     RUNTIME.get().cloned()

@@ -18,6 +18,20 @@ const SET_NONCE: &str = "weaver mesh nonce generate, then set kernel.mesh.mesh_n
 /// Turn a `workload.node.binding` result into findings.
 pub fn findings(status: &Value) -> Vec<Finding> {
     let mut out = Vec::new();
+    if status.get("installed").and_then(Value::as_bool) == Some(false) {
+        out.push(
+            f(
+                "runtime",
+                Severity::Fail,
+                format!(
+                    "kernel.mesh.mesh_nonce is configured but the Seed licence runtime is not installed ({}), so checkout is off",
+                    status["reason"].as_str().unwrap_or("unknown reason")
+                ),
+            )
+            .remedy("see the daemon log at boot; the licence runtime needs the kernel chain and the node signing key"),
+        );
+        return out;
+    }
     let binding = status.get("binding").filter(|b| !b.is_null());
     let mesh_id = status.get("mesh_id").and_then(Value::as_str);
     if status.get("poisoned").and_then(Value::as_bool) == Some(true) {
@@ -112,6 +126,14 @@ mod tests {
         let out = findings(&st);
         assert_eq!(ids(&out), [("licence.mesh_nonce".into(), Severity::Ok)]);
         assert!(out[0].message.contains("mesh_nonce"), "{}", out[0].message);
+    }
+
+    #[test]
+    fn a_configured_nonce_with_no_runtime_fails() {
+        let st = json!({"installed": false, "nonce_configured": true, "reason": "no chain manager"});
+        let out = findings(&st);
+        assert_eq!(ids(&out), [("licence.runtime".into(), Severity::Fail)]);
+        assert!(out[0].message.contains("no chain manager"));
     }
 
     #[test]

@@ -316,6 +316,20 @@ async fn reset_floor_previews_without_confirm_and_chains_with_it() {
 }
 
 #[tokio::test]
+async fn confirm_with_a_stale_floor_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
+    assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await.ok);
+    let shown = call(&rt, posture(), "workload.node.reset-floor", json!({})).await.result.unwrap();
+    let floor = shown["preview"]["floor"].as_u64().unwrap();
+    let e = call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true, "floor": floor + 1})).await;
+    assert!(err_of(&e).contains("floor_changed"), "{e:?}");
+    assert!(!chain_kinds(&chain).contains(&"floor_reset".to_owned()));
+    assert!(call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true, "floor": floor})).await.ok);
+}
+
+#[tokio::test]
 async fn unbind_works_under_any_posture_and_a_rogue_signer_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let chain = Arc::new(ChainManager::new(0, 1000));

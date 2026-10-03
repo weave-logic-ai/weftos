@@ -149,7 +149,14 @@ pub async fn run(cmd: NodeCmd, client: &mut DaemonClient) -> anyhow::Result<()> 
             }
         }
         NodeCmd::ResetFloor { confirm } => {
-            let r = call(client, "workload.node.reset-floor", json!({ "confirm": confirm })).await?;
+            // Show first; confirm only against the floor that was shown.
+            let shown = call(client, "workload.node.reset-floor", json!({})).await?;
+            let r = if confirm {
+                let floor = shown["preview"]["floor"].as_u64();
+                call(client, "workload.node.reset-floor", json!({ "confirm": true, "floor": floor })).await?
+            } else {
+                shown
+            };
             print!("{}", render_floor_preview(&r["preview"]));
             if r["applied"].as_bool() == Some(true) {
                 println!("floor reset (chained as floor_reset_requested and floor_reset)");

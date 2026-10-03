@@ -39,28 +39,48 @@ impl CheckoutGrantStore {
     pub fn floor_preview(&self) -> Result<FloorPreview, LicenceError> {
         self.run(|inner, ev| {
             let b = self.binding_in_effect(inner, ev)?;
-            let now = (self.clock)();
-            let cur = inner.floors.get(&b.grant_pubkey).copied().unwrap_or_default();
-            let mut after = cur;
-            after.reset(now);
-            let (eff_now, eff_after) = (cur.effective_now(now), after.effective_now(now));
-            let mut revived: Vec<RevivedGrant> = inner
-                .slots
-                .values()
-                .filter_map(|s| s.current.as_ref())
-                .filter(|h| {
-                    h.body.mesh_id == b.mesh_id
-                        && !grant_valid(&h.body, eff_now)
-                        && grant_valid(&h.body, eff_after)
-                })
-                .map(|h| RevivedGrant {
-                    cog_id: h.body.cog_id.clone(),
-                    version: h.body.version.clone(),
-                    expires_at: h.body.expires_at,
-                })
-                .collect();
-            revived.sort_by(|a, c| (&a.cog_id, &a.version).cmp(&(&c.cog_id, &c.version)));
-            Ok(FloorPreview { now, floor: cur.floor(), floor_after: after.floor(), revived })
+            Ok(preview_of(inner, &b.grant_pubkey, &b.mesh_id, (self.clock)()))
         })
     }
+
+    /// Reset the floor and return the preview it was applied on, in one
+    /// critical section. With `expected_floor`, refuses (`floor_changed`)
+    /// when the floor is no longer the value the operator was shown.
+    pub fn reset_floor_checked(&self, expected_floor: Option<u64>) -> Result<FloorPreview, LicenceError> {
+        self.run(|inner, ev| {
+            let b = self.binding_in_effect(inner, ev)?;
+            let now = (self.clock)();
+            let p = preview_of(inner, &b.grant_pubkey, &b.mesh_id, now);
+            if expected_floor.is_some_and(|f| f != p.floor) {
+                return Err(LicenceError::CheckFailed("floor_changed".into()));
+            }
+            let mut next = inner.clone();
+            next.floors.entry(b.grant_pubkey).or_default().reset(now);
+            ev.push(super::LicenceEvent::FloorReset(now));
+            self.commit(inner, next)?;
+            Ok(p)
+        })
+    }
+}
+
+fn preview_of(inner: &super::store::Inner, key: &str, mesh_id: &str, now: u64) -> FloorPreview {
+    let cur = inner.floors.get(key).copied().unwrap_or_default();
+    let mut after = cur;
+    after.reset(now);
+    let (eff_now, eff_after) = (cur.effective_now(now), after.effective_now(now));
+    let mut revived: Vec<RevivedGrant> = inner
+        .slots
+        .values()
+        .filter_map(|s| s.current.as_ref())
+        .filter(|h| {
+            h.body.mesh_id == mesh_id && !grant_valid(&h.body, eff_now) && grant_valid(&h.body, eff_after)
+        })
+        .map(|h| RevivedGrant {
+            cog_id: h.body.cog_id.clone(),
+            version: h.body.version.clone(),
+            expires_at: h.body.expires_at,
+        })
+        .collect();
+    revived.sort_by(|a, c| (&a.cog_id, &a.version).cmp(&(&c.cog_id, &c.version)));
+    FloorPreview { now, floor: cur.floor(), floor_after: after.floor(), revived }
 }

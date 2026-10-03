@@ -74,6 +74,10 @@ struct ResetParams {
     /// Without it the call only previews.
     #[serde(default)]
     confirm: bool,
+    /// With `confirm`: the floor the operator was shown; the reset is refused
+    /// if it has changed since.
+    #[serde(default)]
+    floor: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,7 +103,7 @@ pub async fn route(ctx: &Ctx<'_>, method: &str, params: Value) -> Response {
             Err(e) => Response::error(e),
         },
         "workload.node.reset-floor" => match parse::<ResetParams>(method, params) {
-            Ok(p) => reset_floor(ctx, p.confirm),
+            Ok(p) => reset_floor(ctx, p.confirm, p.floor),
             Err(e) => Response::error(e),
         },
         "workload.node.unbind" => match parse::<UnbindParams>(method, params) {
@@ -191,22 +195,24 @@ fn unbind(ctx: &Ctx<'_>, signed: &SignedBinding) -> Response {
 /// Without `confirm` it returns the preview (the floor, the floor after, the
 /// grants it would revive) and changes nothing. With it, the request is
 /// chained with that preview, then the store resets and chains `floor_reset`.
-fn reset_floor(ctx: &Ctx<'_>, confirm: bool) -> Response {
+fn reset_floor(ctx: &Ctx<'_>, confirm: bool, expected_floor: Option<u64>) -> Response {
     let store = ctx.rt.policy.store();
-    let preview = match store.floor_preview() {
-        Ok(p) => p,
-        Err(e) => return err(e),
-    };
     if !confirm {
-        return Response::success(json!({ "applied": false, "preview": preview }));
+        return match store.floor_preview() {
+            Ok(p) => Response::success(json!({ "applied": false, "preview": p })),
+            Err(e) => err(e),
+        };
     }
-    ctx.rt.chain.append(
-        licence_boot::LICENCE_CHAIN_SOURCE,
-        "floor_reset_requested",
-        Some(json!({ "preview": &preview })),
-    );
-    match store.reset_floor() {
-        Ok(()) => Response::success(json!({ "applied": true, "preview": preview })),
+    // One critical section: the preview chained is the state that was reset.
+    match store.reset_floor_checked(expected_floor) {
+        Ok(preview) => {
+            ctx.rt.chain.append(
+                licence_boot::LICENCE_CHAIN_SOURCE,
+                "floor_reset_requested",
+                Some(json!({ "preview": &preview })),
+            );
+            Response::success(json!({ "applied": true, "preview": preview }))
+        }
         Err(e) => err(e),
     }
 }
@@ -218,6 +224,12 @@ pub async fn dispatch(
     kernel: Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Response {
     let Some(rt) = licence_boot::runtime() else {
+        if method == "workload.node.binding"
+            && let Some(why) = licence_boot::not_installed()
+        {
+            // The doctor needs to see this, not an error.
+            return Response::success(json!({ "installed": false, "nonce_configured": true, "reason": why }));
+        }
         return Response::error("the licence runtime is not initialised on this node");
     };
     let posture = {
