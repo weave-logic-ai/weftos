@@ -193,3 +193,19 @@ fn events_are_emitted_after_the_lock_is_released() {
     let open = AdmissionPosture { open_membership: true, ..posture() };
     let _ = fx.store.accept_binding(&binding(1, BindState::Bound), open, &NoExtraChecks);
 }
+
+#[test]
+fn an_unsaved_unbind_is_retried_by_tick_even_though_no_binding_is_in_effect() {
+    let mut fx = Fx::new();
+    fx.bind();
+    put(&fx, &grant(1, T0, DAY, &["aarch64"])).unwrap();
+    block_saves(&fx);
+    let unbind = binding(2, BindState::Unbound);
+    let r = fx.store.accept_binding(&unbind, posture(), &NoExtraChecks);
+    assert!(matches!(r, Err(LicenceError::Persist(_))));
+    assert!(!covered(&fx, "aarch64"), "applied in memory");
+    unblock_saves(&fx);
+    fx.store.tick();
+    fx.restart();
+    assert_eq!(fx.store.binding_status(), Err(LicenceError::Unbound), "the unbind reached disk");
+}

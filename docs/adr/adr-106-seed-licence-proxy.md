@@ -486,6 +486,10 @@ Choices made while building 1a that the text above leaves open. None change a de
 - **Floor.** The high-water mark never goes down and grows at most 30 days past the newest accepted `issued_at`. Only the Admin `reset_floor` lowers it. The `floor_clamped` event no longer exists.
 - **Fail closed.** A store file that is missing is empty. One that cannot be read, parsed or re-verified (every signature is checked again at load) is an error from `open`, or a poisoned store from `open_or_poisoned`, which serves nothing, refuses writes and leaves the file alone.
 - **Run gate.** `may_run` checks a valid grant that lists the binary's sha256, then that the grant's BLAKE3 is not revoked as an `ArtifactHash`, then an approval covering the sha256. The revocation is how an approval is withdrawn.
+- **Crash window.** An unbind, withdrawal or conflict that could not be saved is applied in memory only. A crash before a later successful save loses it until sync or a pull delivers it again, or until the grant TTL ends.
+- **Go-live condition.** The daemon must call `CheckoutGrantStore::tick()` about every 60 s before `mesh_nonce` is ever set, because `tick` is the only writer of the high-water mark and the retry for unsaved restrictive records.
+- **`reset_floor` revives by design.** It is Admin-only and chained. Phase 1d shows the floor before and after, and which grants it would bring back, before it runs.
+- **Cognitum questions raised by the bounds.** A perpetual licence has no sentinel: `licence.expires` of 0 or `u64::MAX` is refused, so the Seed should clamp to `MAX_UNIX_TIME` (2100-01-01). The 1 GiB artifact cap may be too small for cogs that bundle models.
 - **Events.** The stores report `binding_refused`, `binding_conflict`, `binding_orphaned`, `grant_conflict` and `floor_reset` through a `LicenceEventSink`. The daemon maps them to chain events in a later phase.
 
 ## Open questions

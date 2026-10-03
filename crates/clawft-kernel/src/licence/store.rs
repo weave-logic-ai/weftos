@@ -389,10 +389,15 @@ impl CheckoutGrantStore {
     /// this on its tick). The only place the read side writes to disk.
     pub fn tick(&self) {
         self.run(|inner, ev| {
+            // Retry an unsaved restrictive record first, even when no binding
+            // is in effect (an unbind is exactly that case).
+            if inner.dirty && inner.poisoned.is_none() {
+                let _ = self.save(inner);
+            }
             if let Ok(b) = self.binding_in_effect(inner, ev) {
                 self.eff_now(inner, &b.grant_pubkey);
                 let hw = inner.floors.get(&b.grant_pubkey).map_or(0, |f| f.hw);
-                if inner.dirty || hw >= inner.persisted_hw.saturating_add(HW_PERSIST_STEP) {
+                if hw >= inner.persisted_hw.saturating_add(HW_PERSIST_STEP) {
                     let _ = self.save(inner);
                 }
             }
