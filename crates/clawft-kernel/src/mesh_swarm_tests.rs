@@ -119,10 +119,14 @@ impl MeshStream for Behaving {
 }
 
 /// In-process mesh: `dial(peer)` connects to that peer's serve loop.
+type StreamFactory = Arc<dyn Fn() -> Box<dyn MeshStream> + Send + Sync>;
+
 struct Net {
     /// Id the dialing node presents to the servers.
     client: String,
     peers: HashMap<String, (Arc<ArtifactExchange>, Spec)>,
+    /// Scripted (malicious) peers: a fresh stream per dial.
+    custom: HashMap<String, StreamFactory>,
     dials: Mutex<Vec<String>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -132,6 +136,7 @@ impl Net {
         Self {
             client: client.into(),
             peers: HashMap::new(),
+            custom: HashMap::new(),
             dials: Mutex::new(Vec::new()),
             tasks: Mutex::new(Vec::new()),
         }
@@ -139,6 +144,10 @@ impl Net {
     fn with(mut self, n: &Node, spec: Spec) -> Self {
         self.peers
             .insert(n.ex.node_id().to_string(), (n.ex.clone(), spec));
+        self
+    }
+    fn with_stream(mut self, peer: &str, f: StreamFactory) -> Self {
+        self.custom.insert(peer.to_string(), f);
         self
     }
     fn dial_log(&self) -> Vec<String> {
@@ -153,6 +162,9 @@ impl Net {
 impl PeerDialer for Net {
     async fn dial(&self, peer: &str) -> Result<Box<dyn MeshStream>, MeshError> {
         self.dials.lock().unwrap().push(peer.to_string());
+        if let Some(f) = self.custom.get(peer) {
+            return Ok(f());
+        }
         let (ex, spec) = self
             .peers
             .get(peer)
@@ -435,7 +447,7 @@ async fn locality_and_measured_speed_choose_the_sources() {
         PeerCandidate::new("seed-2").on_lan("home"),
         PeerCandidate::new("seed-3").on_lan("home"),
     ];
-    let o = SwarmFetchOptions { local_lan: Some("home".into()) };
+    let o = SwarmFetchOptions { local_lan: Some("home".into()), ..Default::default() };
     leech
         .ex
         .swarm_fetch(net.clone(), c.clone(), ArtifactKey::Content(binary_hash(&pkg)), &o)
@@ -636,4 +648,353 @@ async fn revoking_a_signer_key_or_an_artifact_hash_evicts_what_it_allowed() {
     assert_eq!(hex_encode(&r[0].content_hash), bin);
     assert_eq!(b.ex.servable_artifacts().len(), 2, "manifest and cog.toml remain");
     assert_eq!(events(&b.chain, EVENT_KIND_ARTIFACT_REVOKE).len(), 1);
+}
+
+// ── hardening: licence, size limits, liars, eviction ────────────────
+
+use crate::mesh_artifact_types::{ArtifactDescriptor, MAX_PIECE_SIZE};
+use crate::mesh_artifact_wire::ArtifactMsg;
+use crate::workload_pkg::{CogPackInput, PackageSource, key_id_for, pack_cog, sign_envelope, write_manifest};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// A peer that answers `meta_request` with `descriptor` and, if `data` is
+/// given, serves its pieces from it. Counts `request` frames.
+struct Script {
+    descriptor: ArtifactDescriptor,
+    data: Option<Vec<u8>>,
+    requests: Arc<AtomicUsize>,
+    queue: std::collections::VecDeque<Vec<u8>>,
+}
+
+#[async_trait]
+impl MeshStream for Script {
+    async fn send(&mut self, raw: &[u8]) -> Result<(), MeshError> {
+        match ArtifactMsg::from_wire(raw).map_err(|e| MeshError::Transport(e.to_string()))? {
+            ArtifactMsg::MetaRequest { .. } => {
+                let d = self.descriptor.clone();
+                let have = {
+                    let mut b = crate::mesh_artifact_types::Bitfield::new(d.piece_count());
+                    for i in 0..d.piece_count() {
+                        b.set(i, true);
+                    }
+                    b
+                };
+                let id = d.id();
+                self.queue.push_back(ArtifactMsg::Meta { descriptor: d }.to_wire().unwrap());
+                self.queue.push_back(ArtifactMsg::Announce { id, have }.to_wire().unwrap());
+            }
+            ArtifactMsg::Request { id, pieces } => {
+                self.requests.fetch_add(1, Ordering::SeqCst);
+                if let Some(data) = &self.data {
+                    for i in pieces {
+                        let start = i as usize * self.descriptor.piece_size as usize;
+                        let end = (start + self.descriptor.piece_size as usize).min(data.len());
+                        let msg = ArtifactMsg::Piece { id, index: i, offset: 0, data: data[start..end].to_vec() };
+                        self.queue.push_back(msg.to_wire().unwrap());
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    async fn recv(&mut self) -> Result<Vec<u8>, MeshError> {
+        self.queue.pop_front().ok_or(MeshError::ConnectionClosed)
+    }
+    async fn close(&mut self) -> Result<(), MeshError> {
+        Ok(())
+    }
+    fn remote_addr(&self) -> Option<SocketAddr> {
+        None
+    }
+}
+
+fn scripted(d: ArtifactDescriptor, data: Option<Vec<u8>>, requests: Arc<AtomicUsize>) -> StreamFactory {
+    Arc::new(move || {
+        Box::new(Script {
+            descriptor: d.clone(),
+            data: data.clone(),
+            requests: requests.clone(),
+            queue: Default::default(),
+        })
+    })
+}
+
+/// A signed package; `commit` varies the package id, `record` adds a
+/// Cognitum release-record attestation. The binary is the same bytes every time.
+fn pack(root: &std::path::Path, len: usize, k: &ed25519_dalek::SigningKey, commit: &str, record: bool) -> PathBuf {
+    let cog_dir = root.join("cog");
+    std::fs::create_dir_all(&cog_dir).unwrap();
+    std::fs::write(cog_dir.join("cog.toml"), "[cog]\nid = \"swarm-probe\"\nname = \"Probe\"\nversion = \"0.1.0\"\n").unwrap();
+    let bin: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+    std::fs::write(root.join("bin"), &bin).unwrap();
+    let rec = root.join("record.json");
+    std::fs::write(&rec, b"{\"kind\":\"cognitum.cog.release-record.v1\"}").unwrap();
+    let input = CogPackInput {
+        cog_dir,
+        binaries: vec![("aarch64".into(), root.join("bin"))],
+        source: PackageSource { repo: None, commit: Some(commit.into()), release_url: None },
+        cognitum_record: record.then_some(rec),
+    };
+    let pkg = root.join("pkg");
+    let mut env = pack_cog(&input, &pkg).unwrap();
+    sign_envelope(&mut env, k, &key_id_for(&k.verifying_key().to_bytes())).unwrap();
+    write_manifest(&pkg, &env).unwrap();
+    pkg
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cognitum_origin_artifact_is_neither_advertised_nor_served() {
+    use crate::mesh_swarm_cache::{ArtifactCache, CacheConfig};
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let dir = pack(tmp.path(), 2 * 1024 * 1024, &k, "aaaaaaa", true);
+    let anchors = anchors_for(&k);
+    let holder = swarm_node("holder", cfg());
+    let pkg = holder.ex.seed_package_dir(&dir, &anchors).unwrap();
+
+    // The holder has it, verified and signed, and can read it ...
+    let bin = binary_hash(&pkg);
+    let id = holder.ex.resolve(&ArtifactKey::Content(bin)).unwrap().id();
+    assert!(holder.ex.read_all(&id).is_ok());
+    // ... but does not advertise it ...
+    assert!(holder.ex.servable_artifacts().is_empty());
+    let cache = ArtifactCache::new(holder.ex.clone(), CacheConfig { max_bytes: 1 << 30 });
+    let mut facts = clawft_types::placement::NodeFacts::new("holder", 1_000, 600, 1);
+    cache.advertise(&mut facts);
+    assert!(facts.capabilities.iter().all(|c| !c.id.is_under("store.artifact")), "{:?}", facts.capabilities);
+    // ... never chains a seed event ...
+    assert!(events(&holder.chain, EVENT_KIND_ARTIFACT_SEED).is_empty());
+    // ... and refuses every peer.
+    let leech = swarm_node("leech", cfg());
+    let net = Arc::new(Net::new("leech").with(&holder, Spec::default()));
+    let err = leech
+        .ex
+        .swarm_fetch_package(net.clone(), &cands(std::slice::from_ref(&holder)), &pkg.manifest_hash, &anchors, &opts())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not servable") || err.to_string().contains("fetch incomplete"), "{err}");
+    assert!(events(&holder.chain, crate::chain::EVENT_KIND_ARTIFACT_SERVE).is_empty());
+    assert!(holder.ex.who_has(net, &cands(std::slice::from_ref(&holder)), ArtifactKey::Content(bin)).await.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn content_listed_by_two_packages_survives_the_revocation_of_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let anchors = anchors_for(&k);
+    let (a_dir, b_dir) = (tmp.path().join("a"), tmp.path().join("b"));
+    std::fs::create_dir_all(&a_dir).unwrap();
+    std::fs::create_dir_all(&b_dir).unwrap();
+    let a = pack(&a_dir, 2 * 1024 * 1024, &k, "aaaaaaa", false);
+    let b = pack(&b_dir, 2 * 1024 * 1024, &k, "bbbbbbb", false);
+    let holder = swarm_node("holder", cfg());
+    let pa = holder.ex.seed_package_dir(&a, &anchors).unwrap();
+    let pb = holder.ex.seed_package_dir(&b, &anchors).unwrap();
+    assert_ne!(pa.package_id, pb.package_id);
+    assert_eq!(binary_hash(&pa), binary_hash(&pb), "same binary in both");
+
+    let rtmp = tempfile::tempdir().unwrap();
+    let list = revocations(&rtmp);
+    holder.ex.set_revocations(list.clone());
+    list.revoke_subject(RevocationKind::Package, &pa.package_id, "bad").unwrap();
+    holder.ex.apply_revocations();
+    let bin = holder.ex.resolve(&ArtifactKey::Content(binary_hash(&pa))).expect("package B still lists it");
+    assert!(holder.ex.is_servable(&bin));
+    list.revoke_subject(RevocationKind::Package, &pb.package_id, "bad too").unwrap();
+    holder.ex.apply_revocations();
+    assert!(holder.ex.resolve(&ArtifactKey::Content(binary_hash(&pa))).is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_oversize_descriptor_is_refused_before_any_piece_is_requested() {
+    let leech = swarm_node("leech", ExchangeConfig { max_artifact_bytes: 1 << 30, ..cfg() });
+    let requests = Arc::new(AtomicUsize::new(0));
+    let key = ArtifactKey::Content([5; 32]);
+
+    // A piece size far above the cap (valid on the wire: two 1 GiB pieces).
+    let huge_pieces = ArtifactDescriptor {
+        piece_size: MAX_PIECE_SIZE,
+        total_size: 2 * MAX_PIECE_SIZE,
+        content_hash: [5; 32],
+        pieces: vec![[1; 32]; 2],
+    };
+    // A total far above the cap (10 GiB in 1 MiB pieces).
+    let huge_total = ArtifactDescriptor {
+        piece_size: MIB,
+        total_size: 10 * 1024 * MIB,
+        content_hash: [5; 32],
+        pieces: vec![[2; 32]; 10 * 1024],
+    };
+    for (name, d) in [("piece-size", huge_pieces), ("total", huge_total)] {
+        let net = Arc::new(Net::new("leech").with_stream("evil", scripted(d, None, requests.clone())));
+        let err = leech
+            .ex
+            .swarm_fetch(net, vec![PeerCandidate::new("evil")], key, &opts())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("descriptor refused"), "{name}: {err}");
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 0, "no piece was requested");
+    assert_eq!(leech.ex.pending_bytes(), 0, "nothing was left pending");
+    assert_eq!(leech.ex.store().count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_descriptor_that_does_not_fit_the_manifest_size_is_refused_before_any_piece() {
+    let fx = fixture(2 * 1024 * 1024);
+    let (seeds, pkg) = seeders(1, &fx);
+    let net = Arc::new(Net::new("leech").with(&seeds[0], Spec::default()));
+    let leech = swarm_node("leech", cfg());
+    let wrong = SwarmFetchOptions {
+        expect: crate::mesh_swarm_fetch::Expect { size: Some(3 * MIB), ..Default::default() },
+        ..Default::default()
+    };
+    let err = leech
+        .ex
+        .swarm_fetch(net.clone(), cands(&seeds), ArtifactKey::Content(binary_hash(&pkg)), &wrong)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not the expected"), "{err}");
+    assert!(events(&seeds[0].chain, crate::chain::EVENT_KIND_ARTIFACT_SERVE).is_empty(), "no piece served");
+    // The right size passes.
+    let right = SwarmFetchOptions {
+        expect: crate::mesh_swarm_fetch::Expect { size: Some(2 * MIB), ..Default::default() },
+        ..Default::default()
+    };
+    leech.ex.swarm_fetch(net, cands(&seeds), ArtifactKey::Content(binary_hash(&pkg)), &right).await.unwrap();
+}
+
+#[test]
+fn partial_downloads_are_capped() {
+    let ex = swarm_node("n", cfg()).ex;
+    for i in 0..crate::mesh_artifact::MAX_PENDING as u8 {
+        let d = ArtifactDescriptor { piece_size: 1024, total_size: 1, content_hash: [i; 32], pieces: vec![[i; 32]] };
+        ex.note_pending(&d).unwrap();
+    }
+    let extra = ArtifactDescriptor { piece_size: 1024, total_size: 1, content_hash: [200; 32], pieces: vec![[200; 32]] };
+    assert!(ex.note_pending(&extra).is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_peer_that_lies_about_a_content_hash_is_banned_and_the_fetch_finishes_elsewhere() {
+    let fx = fixture(BIN);
+    let (seeds, pkg) = seeders(2, &fx);
+    let hash = binary_hash(&pkg);
+    // The liar's pieces are self-consistent garbage under the real content hash.
+    let garbage = vec![0xABu8; BIN];
+    let liar = ArtifactDescriptor {
+        piece_size: MIB,
+        total_size: BIN as u64,
+        content_hash: hash,
+        pieces: garbage.chunks(MIB as usize).map(|c| *blake3::hash(c).as_bytes()).collect(),
+    };
+    let net = Arc::new(
+        Net::new("leech")
+            .with_stream("a-liar", scripted(liar, Some(garbage), Arc::new(AtomicUsize::new(0))))
+            .with(&seeds[0], Spec::default())
+            .with(&seeds[1], Spec::default()),
+    );
+    let leech = swarm_node("leech", cfg());
+    let mut c = cands(&seeds);
+    c.insert(0, PeerCandidate::new("a-liar")); // ranked first
+    let out = leech
+        .ex
+        .swarm_fetch(net, c, ArtifactKey::Content(hash), &opts())
+        .await
+        .expect("honest peers finish what the liar blocked");
+    assert!(leech.ex.is_banned("a-liar"));
+    assert!(!out.sources.contains(&"a-liar".to_string()));
+    assert!(!seeds.iter().any(|s| leech.ex.is_banned(s.ex.node_id())), "honest peers are not blamed");
+    assert_eq!(leech.ex.read_all(&out.id).unwrap().len(), BIN);
+    assert_eq!(leech.ex.pending_bytes(), 0);
+    assert_eq!(events(&leech.chain, EVENT_KIND_ARTIFACT_PEER_BAN).len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_package_fetch_pins_its_files_so_a_small_cache_cannot_evict_them() {
+    use crate::mesh_swarm_cache::{ArtifactCache, CacheConfig};
+    let fx = fixture(3 * 1024 * 1024);
+    let (seeds, pkg) = seeders(1, &fx);
+    let net = Arc::new(Net::new("leech").with(&seeds[0], Spec::default()));
+    let leech = swarm_node("leech", cfg());
+    // The binary alone is bigger than the whole budget.
+    let cache = ArtifactCache::new(leech.ex.clone(), CacheConfig { max_bytes: 2 * MIB });
+    let got = leech
+        .ex
+        .swarm_fetch_package(net.clone(), &cands(&seeds), &pkg.manifest_hash, &fx.anchors, &opts())
+        .await
+        .expect("pinned files are kept even over budget");
+    for (_, id) in &got.files {
+        assert!(leech.ex.is_verified(id), "file evicted mid-fetch");
+    }
+    assert_eq!(leech.ex.servable_artifacts().len(), 3);
+    assert!(cache.over_budget() > 0, "the pins hold the cache over budget");
+    // Removing the package releases the pins and the budget applies again.
+    cache.unpin_package(&got);
+    assert!(leech.ex.resolve(&ArtifactKey::Content(binary_hash(&pkg))).is_none());
+
+    // Control: the same fetch without a package (nothing pinned) does not survive.
+    let leech2 = swarm_node("leech2", cfg());
+    let _cache2 = ArtifactCache::new(leech2.ex.clone(), CacheConfig { max_bytes: 2 * MIB });
+    let net2 = Arc::new(Net::new("leech2").with(&seeds[0], Spec::default()));
+    leech2.ex.swarm_fetch(net2, cands(&seeds), ArtifactKey::Content(binary_hash(&pkg)), &opts()).await.unwrap();
+    assert!(leech2.ex.resolve(&ArtifactKey::Content(binary_hash(&pkg))).is_none(), "unpinned, over budget: evicted");
+}
+
+#[tokio::test(start_paused = true)]
+async fn bytes_being_downloaded_count_against_the_budget() {
+    use crate::mesh_swarm_cache::{ArtifactCache, CacheConfig};
+    let fx = fixture(3 * 1024 * 1024);
+    let (seeds, pkg) = seeders(1, &fx);
+    let net = Arc::new(Net::new("leech").with(&seeds[0], Spec::default()));
+    let leech = swarm_node("leech", cfg());
+    let cache = ArtifactCache::new(leech.ex.clone(), CacheConfig { max_bytes: 5 * MIB });
+    let old = leech.ex.seed_bytes(&vec![9u8; 4 * MIB as usize]).unwrap().id();
+    assert!(leech.ex.is_verified(&old));
+    // 4 MiB held + 3 MiB arriving > 5 MiB: the old, unpinned entry makes room.
+    leech
+        .ex
+        .swarm_fetch(net, cands(&seeds), ArtifactKey::Content(binary_hash(&pkg)), &opts())
+        .await
+        .unwrap();
+    assert!(!leech.ex.is_verified(&old), "LRU entry evicted to make room for the download");
+    assert!(leech.ex.resolve(&ArtifactKey::Content(binary_hash(&pkg))).is_some());
+    assert!(cache.used_bytes() <= 5 * MIB);
+}
+
+#[test]
+fn eviction_never_removes_a_blob_another_subsystem_stored() {
+    let ex = swarm_node("n", cfg()).ex;
+
+    // 1. A workload stored these bytes first; the exchange only found them there.
+    let data = vec![3u8; 1000];
+    ex.store().store(&data, crate::artifact_store::ArtifactType::Generic).unwrap();
+    let d = ex.seed_bytes(&data).unwrap();
+    ex.forget(&d.id(), "lru").unwrap();
+    assert!(ex.store().contains(&hex_encode(&d.content_hash)), "not ours: left alone");
+
+    // 2. The exchange created the blob, then a workload stored the same bytes.
+    let data2 = vec![4u8; 1000];
+    let d2 = ex.seed_bytes(&data2).unwrap();
+    ex.store().store(&data2, crate::artifact_store::ArtifactType::Generic).unwrap();
+    ex.forget(&d2.id(), "lru").unwrap();
+    assert!(ex.store().contains(&hex_encode(&d2.content_hash)), "shared since: left alone");
+
+    // 3. Only ours, nobody else: removed.
+    let d3 = ex.seed_bytes(&vec![5u8; 1000]).unwrap();
+    ex.forget(&d3.id(), "lru").unwrap();
+    assert!(!ex.store().contains(&hex_encode(&d3.content_hash)));
+}
+
+#[test]
+fn a_pinned_entry_is_not_forgotten_except_by_revocation() {
+    use crate::mesh_swarm_cache::{ArtifactCache, CacheConfig};
+    let ex = swarm_node("n", cfg()).ex;
+    let cache = ArtifactCache::new(ex.clone(), CacheConfig { max_bytes: 1 << 30 });
+    let d = ex.seed_bytes(&vec![6u8; 1000]).unwrap();
+    assert!(cache.pin(&d.id()));
+    assert!(ex.forget(&d.id(), "lru").is_none());
+    assert!(ex.is_verified(&d.id()));
+    assert!(ex.forget(&d.id(), "revoked").is_some(), "revocation overrides a pin");
 }

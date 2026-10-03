@@ -16,6 +16,8 @@ pub struct FakeHost {
     pub files: BTreeMap<String, String>,
     pub dirs: BTreeMap<String, Vec<String>>,
     pub paths: BTreeSet<String>,
+    /// Every `run` command, in order (shared across clones).
+    pub log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl FakeHost {
@@ -73,6 +75,7 @@ impl ProbeHost for FakeHost {
             .chain(args.iter().copied())
             .collect::<Vec<_>>()
             .join(" ");
+        self.log.lock().unwrap().push(key.clone());
         self.outputs.get(&key).cloned()
     }
     fn run_all(&self, tool: &str, args: &[&str]) -> Option<String> {

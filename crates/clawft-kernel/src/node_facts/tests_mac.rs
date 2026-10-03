@@ -1,10 +1,10 @@
 //! macOS probes against a scripted Apple-silicon Mac (OrbStack + Apple
 //! container + llama-server), mirroring the acceptance machine.
 
-use clawft_types::placement::{AttrValue, CapabilityState, Provenance};
+use clawft_types::placement::{AttrValue, CapabilityState, NodeFacts, Provenance};
 
 use super::fake_host::FakeHost;
-use super::probe::{ProbeConfig, build_facts, probe_capabilities};
+use super::probe::{Collected, ProbeConfig, build_facts, probe_capabilities};
 
 const GIB128: i64 = 137_438_953_472;
 
@@ -174,4 +174,65 @@ fn rosetta_adds_x86_64_emulation_to_native_and_apple_container() {
             "{id}"
         );
     }
+}
+
+#[test]
+fn image_refs_are_validated_before_they_reach_docker() {
+    use super::probe::valid_image_ref;
+    for ok in ["alpine:3.20", "registry.local:5000/team/probe:1", "a@sha256:abcd", "x"] {
+        assert!(valid_image_ref(ok), "{ok}");
+    }
+    for bad in ["", "-v", "--privileged", "a b", "a;b", "a\nb", "$(x)", "/abs", ".hidden", &"a".repeat(256)] {
+        assert!(!valid_image_ref(bad), "{bad:?}");
+    }
+    // A bad configured image is never run.
+    let h = mac();
+    let cfg = ProbeConfig { docker_probe_image: Some("--privileged".into()), ..Default::default() };
+    probe_capabilities(&h, &cfg);
+    assert!(h.log.lock().unwrap().iter().all(|c| !c.contains("--privileged") || !c.starts_with("docker run")));
+}
+
+#[test]
+fn the_privileged_emulation_probe_runs_once_per_ttl() {
+    use super::probe::EmulationCache;
+    let h = mac();
+    let cfg = ProbeConfig {
+        emulation_cache: Some(std::sync::Arc::new(EmulationCache::new(std::time::Duration::from_secs(3600)))),
+        ..Default::default()
+    };
+    let runs = |h: &FakeHost| h.log.lock().unwrap().iter().filter(|c| c.starts_with("docker run")).count();
+    let first = probe_capabilities(&h, &cfg);
+    let second = probe_capabilities(&h, &cfg);
+    assert_eq!(runs(&h), 1, "second probe reuses the cached listing");
+    let emu = |c: &Collected| strs(c.caps.iter().find(|x| x.id.as_str() == "runtime.container.docker").unwrap().attrs.get("arches_emulated"));
+    assert_eq!(emu(&first), emu(&second));
+    // Without a cache every probe runs it.
+    let h2 = mac();
+    probe_capabilities(&h2, &ProbeConfig::default());
+    probe_capabilities(&h2, &ProbeConfig::default());
+    assert_eq!(runs(&h2), 2);
+    // An expired entry is run again.
+    let h3 = mac();
+    let short = ProbeConfig {
+        emulation_cache: Some(std::sync::Arc::new(EmulationCache::new(std::time::Duration::ZERO))),
+        ..Default::default()
+    };
+    probe_capabilities(&h3, &short);
+    probe_capabilities(&h3, &short);
+    assert_eq!(runs(&h3), 2);
+}
+
+#[test]
+fn the_live_refresh_rereads_only_free_memory() {
+    let h = mac();
+    let facts = build_facts("n", 1_000, 600, 1, probe_capabilities(&h, &ProbeConfig::default()));
+    let live_host = FakeHost::new("macos", "aarch64").out("vm_stat", "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 500.\nPages inactive: 400.\nPages speculative: 100.\n");
+    let live = super::probe::refresh_live(&live_host, &facts, 1_030);
+    assert_eq!(live.issued_at, 1_030);
+    let free = |f: &NodeFacts| f.find("mem.unified").next().unwrap().attrs["free"].clone();
+    assert_eq!(free(&live), AttrValue::Int(1_000 * 16_384));
+    assert_ne!(free(&live), free(&facts));
+    // Everything else is the base, unchanged, and no other command ran.
+    assert_eq!(live.capabilities.len(), facts.capabilities.len());
+    assert_eq!(live_host.log.lock().unwrap().as_slice(), ["vm_stat"]);
 }

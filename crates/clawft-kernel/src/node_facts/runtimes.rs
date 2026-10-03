@@ -144,26 +144,35 @@ fn vm_emulation(host: &dyn ProbeHost, native: &str, cfg: &ProbeConfig) -> (Vec<S
         .unwrap_or_default();
     let mut sources = vec!["buildx platforms"];
     let image = cfg.docker_probe_image.as_deref().filter(|img| {
-        host.run("docker", &["image", "inspect", "--format", "{{.Id}}", img])
-            .is_some()
+        super::probe::valid_image_ref(img)
+            && host
+                .run("docker", &["image", "inspect", "--format", "{{.Id}}", img])
+                .is_some()
     });
     match image {
         Some(img) => {
-            let listing = host.run(
-                "docker",
-                &[
-                    "run",
-                    "--rm",
-                    "--privileged",
-                    "--pull=never",
-                    "--network=none",
-                    "--entrypoint",
-                    "/bin/sh",
-                    img,
-                    "-c",
-                    BINFMT_LIST,
-                ],
-            );
+            let cached = cfg.emulation_cache.as_ref().and_then(|c| c.get(img));
+            let listing = cached.or_else(|| {
+                let l = host.run(
+                    "docker",
+                    &[
+                        "run",
+                        "--rm",
+                        "--privileged",
+                        "--pull=never",
+                        "--network=none",
+                        "--entrypoint",
+                        "/bin/sh",
+                        img,
+                        "-c",
+                        BINFMT_LIST,
+                    ],
+                );
+                if let (Some(l), Some(c)) = (&l, &cfg.emulation_cache) {
+                    c.put(img, l);
+                }
+                l
+            });
             if let Some(l) = listing {
                 arches.extend(emulated_from_listing(&l, native));
                 sources.push("engine VM binfmt_misc");

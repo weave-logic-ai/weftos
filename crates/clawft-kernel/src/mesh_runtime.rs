@@ -39,8 +39,16 @@ const CONTROL_TOPICS: [&str; 2] = [FACTS_TOPIC, REVOKE_TOPIC];
 /// to the same peer (for example a re-send request).
 pub trait PeerControlSink: Send + Sync + 'static {
     /// Handle one control payload from `ctx.peer_id`; return replies.
-    fn on_peer_control(&self, ctx: &PeerCtx, payload: &serde_json::Value)
-    -> Vec<serde_json::Value>;
+    ///
+    /// `conn` identifies the connection the frame arrived on (0 when the
+    /// caller has none): one connection can claim many source ids while
+    /// unverified, so per-connection limits key on this, not on `ctx`.
+    fn on_peer_control(
+        &self,
+        ctx: &PeerCtx,
+        conn: u64,
+        payload: &serde_json::Value,
+    ) -> Vec<serde_json::Value>;
 }
 
 /// A handle to a connected peer, holding the sender half of an mpsc
@@ -142,6 +150,9 @@ pub struct MeshRuntime {
     peer_events: MeshPeerEventBus,
     /// Sinks for control topics (`mesh.node_facts`, `mesh.artifact.revoke`).
     control_sinks: DashMap<String, Arc<dyn PeerControlSink>>,
+    /// Connection ids for control-topic limits, keyed by outbound channel.
+    conn_ids: Mutex<Vec<(tokio::sync::mpsc::WeakSender<Vec<u8>>, u64)>>,
+    conn_seq: std::sync::atomic::AtomicU64,
 }
 
 impl MeshRuntime {
@@ -159,6 +170,8 @@ impl MeshRuntime {
             assessment_transport: std::sync::OnceLock::new(),
             peer_events: MeshPeerEventBus::new(),
             control_sinks: DashMap::new(),
+            conn_ids: Mutex::new(Vec::new()),
+            conn_seq: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -183,7 +196,24 @@ impl MeshRuntime {
             assessment_transport: std::sync::OnceLock::new(),
             peer_events: MeshPeerEventBus::new(),
             control_sinks: DashMap::new(),
+            conn_ids: Mutex::new(Vec::new()),
+            conn_seq: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Stable id of the connection behind `outbound` (1-based; 0 means none).
+    fn conn_id(&self, outbound: &tokio::sync::mpsc::Sender<Vec<u8>>) -> u64 {
+        let mut ids = self.conn_ids.lock().unwrap_or_else(|p| p.into_inner());
+        ids.retain(|(w, _)| w.upgrade().is_some());
+        if let Some((_, id)) = ids
+            .iter()
+            .find(|(w, _)| w.upgrade().is_some_and(|t| t.same_channel(outbound)))
+        {
+            return *id;
+        }
+        let id = self.conn_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        ids.push((outbound.downgrade(), id));
+        id
     }
 
     /// Install the sink for the control topic `topic` (first call wins).
@@ -532,7 +562,7 @@ impl MeshRuntime {
         let envelope = MeshIpcEnvelope::from_bytes(data)
             .map_err(|e| KernelError::Mesh(format!("deserialization error: {e}")))?;
         let ctx = PeerCtx::unauthenticated(envelope.source_node.clone());
-        self.handle_envelope(envelope, &ctx).await
+        self.handle_envelope(envelope, &ctx, 0).await
     }
 
     /// Handle incoming bytes while auto-registering the sending peer.
@@ -625,6 +655,7 @@ impl MeshRuntime {
         // entry must be replaced or `send_to_peer` delivers into the
         // dead channel of the dropped connection and the peer never
         // receives anything again.
+        let conn = self.conn_id(&outbound);
         if !self.register_peer(ctx.peer_id.clone(), outbound, ctx.node_verified, tally) {
             return Err(KernelError::Mesh(format!(
                 "route for {} belongs to an admitted peer",
@@ -632,7 +663,7 @@ impl MeshRuntime {
             )));
         }
 
-        self.handle_envelope(envelope, &ctx).await
+        self.handle_envelope(envelope, &ctx, conn).await
     }
 
     /// Demux AssessmentSync frames into the registered transport.
@@ -677,6 +708,7 @@ impl MeshRuntime {
         &self,
         envelope: MeshIpcEnvelope,
         ctx: &PeerCtx,
+        conn: u64,
     ) -> KernelResult<()> {
         debug!(
             from_node = %envelope.source_node,
@@ -766,7 +798,7 @@ impl MeshRuntime {
         {
             let sink = self.control_sinks.get(t.as_str()).map(|s| s.clone());
             if let (Some(sink), MessagePayload::Json(payload)) = (sink, &message.payload) {
-                for reply in sink.on_peer_control(ctx, payload) {
+                for reply in sink.on_peer_control(ctx, conn, payload) {
                     let msg = KernelMessage::new(
                         0,
                         MessageTarget::Topic(t.clone()),

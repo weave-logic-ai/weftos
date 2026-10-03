@@ -42,6 +42,9 @@ use crate::mesh_artifact_wire::{ArtifactDescriptor, ArtifactId, ArtifactKey, Bit
 use crate::mesh_swarm_state::{GrantInfo, SwarmState};
 use crate::workload_pkg::codec::hex_encode;
 
+/// Most partially downloaded artifacts held at once.
+pub const MAX_PENDING: usize = 64;
+
 /// Node-local state of the artifact piece protocol.
 pub struct ArtifactExchange {
     node_id: String,
@@ -53,8 +56,8 @@ pub struct ArtifactExchange {
     pub(crate) pending: DashMap<ArtifactId, ArtifactDescriptor>,
     /// Content hash -> id, verified descriptors only.
     pub(crate) by_content: DashMap<[u8; 32], ArtifactId>,
-    /// Content hash -> the verified signed manifest that allows it.
-    pub(crate) grants: DashMap<[u8; 32], GrantInfo>,
+    /// Content hash -> the verified signed manifests that list it (one per package).
+    pub(crate) grants: DashMap<[u8; 32], Vec<GrantInfo>>,
     /// `(artifact, peer)` pairs already chained as `artifact.serve`.
     served: DashMap<(ArtifactId, String), ()>,
     /// Last `have` each peer announced (input for card 25's scheduler).
@@ -180,7 +183,15 @@ impl ArtifactExchange {
         d.validate()?;
         let id = d.id();
         if !self.descriptors.contains_key(&id) {
+            if !self.pending.contains_key(&id) && self.pending.len() >= MAX_PENDING {
+                return Err(ExchangeError::Config(format!(
+                    "{MAX_PENDING} partial downloads already held; forget one first"
+                )));
+            }
             self.pending.insert(id, d.clone());
+            if let Some(cache) = self.swarm.cache() {
+                cache.on_pending();
+            }
         }
         Ok(id)
     }
@@ -327,32 +338,46 @@ impl ArtifactExchange {
     /// Allow serving `content_hash` under a verified package.
     #[cfg(test)]
     pub(crate) fn grant(&self, content_hash: [u8; 32], package_id: &str) {
-        self.grant_with(content_hash, package_id, Vec::new());
+        self.grant_with(content_hash, package_id, Vec::new(), true);
     }
 
     /// [`Self::grant`], recording the hex public keys of the package's
-    /// signers so a signer revocation can find what they allowed.
-    pub(crate) fn grant_with(&self, content_hash: [u8; 32], package_id: &str, signers: Vec<String>) {
+    /// signers (a signer revocation names the key) and whether the package
+    /// may be redistributed. Grants are kept per package: a second package
+    /// that lists the same content does not replace the first.
+    pub(crate) fn grant_with(
+        &self,
+        content_hash: [u8; 32],
+        package_id: &str,
+        signers: Vec<String>,
+        redistributable: bool,
+    ) {
         if self.is_revoked_subject(package_id, &signers, &content_hash) {
             return; // a revoked package, signer or hash is never allowed to seed
         }
-        self.grants.insert(
-            content_hash,
-            GrantInfo {
-                package_id: package_id.to_string(),
-                signers,
-            },
-        );
+        let info = GrantInfo {
+            package_id: package_id.to_string(),
+            signers,
+            redistributable,
+        };
+        {
+            let mut gs = self.grants.entry(content_hash).or_default();
+            match gs.iter_mut().find(|g| g.package_id == package_id) {
+                Some(g) => *g = info,
+                None => gs.push(info),
+            }
+        }
         self.on_granted(&content_hash);
     }
 
     /// Governance: served only when `d` is verified on this node (its
     /// pieces assemble to its `content_hash`), a signed manifest that
-    /// verified here lists that content hash, and neither the package,
-    /// its signers nor the content hash has been revoked.
+    /// verified here lists that content hash, that package may be
+    /// redistributed, and neither the package, its signers nor the content
+    /// hash has been revoked.
     pub fn is_servable(&self, d: &ArtifactDescriptor) -> bool {
         self.descriptors.get(&d.id()).is_some_and(|v| *v == *d)
-            && self.grants.contains_key(&d.content_hash)
+            && self.servable_grant(&d.content_hash).is_some()
             && !self.is_revoked(&d.content_hash)
     }
 
@@ -399,6 +424,7 @@ impl ArtifactExchange {
                 "piece stored as {stored}, expected {key}"
             )));
         }
+        self.swarm.owned.insert(*hash, ());
         Ok(true)
     }
 
@@ -414,6 +440,7 @@ impl ArtifactExchange {
         self.store
             .store(&bytes, ArtifactType::Generic)
             .map_err(|e| ExchangeError::Store(e.to_string()))?;
+        self.swarm.owned.insert(d.content_hash, ());
         Ok(())
     }
 

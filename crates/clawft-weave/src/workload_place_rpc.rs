@@ -125,6 +125,35 @@ fn gate(
     Ok(Arc::new(g))
 }
 
+/// Give the exchange this node's revocation list (a revoked package, signer
+/// or artifact hash stops seeding at once) and, with a mesh, start taking
+/// signed revocation notices from peers. The handle the runtime keeps is the
+/// only owner needed: it lives as long as the runtime does.
+fn wire_revocations(
+    ex: &Arc<ArtifactExchange>,
+    list: Arc<clawft_kernel::revocation::RevocationList>,
+    anchors: &clawft_kernel::workload_pkg::TrustAnchors,
+    mesh: Option<Arc<clawft_kernel::mesh_runtime::MeshRuntime>>,
+) {
+    match mesh {
+        Some(rt) => {
+            clawft_kernel::mesh_swarm_revoke::RevocationExchange::start(
+                ex.clone(),
+                list,
+                anchors.clone(),
+                rt,
+            );
+        }
+        None => {
+            ex.set_revocations(list);
+        }
+    }
+    let swept = ex.apply_revocations();
+    if !swept.is_empty() {
+        tracing::warn!(n = swept.len(), "revoked artifacts evicted at startup");
+    }
+}
+
 async fn build(
     kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Result<Arc<PlacementControlPlane>, String> {
@@ -144,6 +173,8 @@ async fn build(
         None => (None, None),
     };
     let _ = BUILT_RULES.set(built);
+    let revocations = k.revocation_list().clone();
+    let mesh = k.a2a_router().mesh_runtime().cloned();
     drop(k);
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
@@ -154,6 +185,7 @@ async fn build(
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
+    wire_revocations(&ex, revocations, &anchors, mesh);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
     // `describe` always answers with the facts the daemon re-probes.
@@ -443,3 +475,49 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "workload_place_rpc_daemon_tests.rs"]
 mod daemon_tests;
+
+#[cfg(test)]
+mod revocation_wiring_tests {
+    use super::*;
+    use clawft_kernel::artifact_store::ArtifactStore;
+    use clawft_kernel::ipc::{KernelMessage, MessagePayload, MessageTarget};
+    use clawft_kernel::mesh_ipc::MeshIpcEnvelope;
+    use clawft_kernel::mesh_runtime::{MeshRuntime, REVOKE_TOPIC};
+    use clawft_kernel::mesh_swarm_revoke::sign_revocation;
+    use clawft_kernel::revocation::{RevocationKind, RevocationList};
+    use clawft_kernel::workload_pkg::{KeyOrigin, TrustAnchors};
+    use ed25519_dalek::SigningKey;
+
+    #[tokio::test]
+    async fn the_daemon_exchange_gets_the_revocation_list_and_takes_mesh_notices() {
+        let tmp = tempfile::tempdir().unwrap();
+        let list = Arc::new(RevocationList::new(tmp.path().join("revoked.json")));
+        let ex = Arc::new(
+            ArtifactExchange::new("n", Arc::new(ArtifactStore::new_memory()), ExchangeConfig::default())
+                .unwrap(),
+        );
+        let key = SigningKey::from_bytes(&[4; 32]);
+        let pk = key.verifying_key().to_bytes();
+        let mut anchors = TrustAnchors::default();
+        anchors
+            .push_signer("op", &clawft_kernel::workload_pkg::codec::hex_encode(&pk), KeyOrigin::Operator)
+            .unwrap();
+        let rt = Arc::new(MeshRuntime::new("n".into()));
+        wire_revocations(&ex, list.clone(), &anchors, Some(rt.clone()));
+        // The exchange already has a list: a second one is refused.
+        assert!(!ex.set_revocations(list.clone()));
+
+        // A signed notice arriving over the mesh lands in the node's list.
+        let hash = clawft_kernel::workload_pkg::codec::hex_encode(&[9u8; 32]);
+        let notice = sign_revocation(RevocationKind::ArtifactHash, &hash, "test", 1, &key).unwrap();
+        let msg = KernelMessage::new(
+            0,
+            MessageTarget::Topic(REVOKE_TOPIC.into()),
+            MessagePayload::Json(serde_json::to_value(&notice).unwrap()),
+        );
+        let bytes = MeshIpcEnvelope::new("peer".into(), "n".into(), msg).to_bytes().unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        rt.handle_incoming_peer(&bytes, tx, None).await.unwrap();
+        assert!(list.is_subject_revoked(RevocationKind::ArtifactHash, &hash));
+    }
+}

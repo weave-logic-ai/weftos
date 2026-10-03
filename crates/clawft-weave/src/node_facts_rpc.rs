@@ -33,8 +33,8 @@ use clawft_kernel::boot::Kernel;
 use clawft_kernel::cluster::ClusterMembership;
 use clawft_kernel::mesh_runtime::MeshRuntime;
 use clawft_kernel::node_facts::{
-    CachedNodeFacts, DEFAULT_FACTS_TTL_SECS, ProbeConfig, SystemHost, build_facts, measured,
-    probe_and_sign, probe_capabilities,
+    CachedNodeFacts, DEFAULT_FACTS_TTL_SECS, EmulationCache, ProbeConfig, SystemHost, build_facts,
+    measured, probe_and_sign, probe_capabilities, refresh_live, valid_image_ref,
 };
 use clawft_kernel::node_facts_exchange::{FactsExchange, FactsTrustPolicy};
 use clawft_platform::NativePlatform;
@@ -53,14 +53,22 @@ pub const FEEDS_FILE: &str = "feeds.declared.json";
 pub const CONFIG_FILE: &str = "facts.config.json";
 /// Environment override for the container-engine probe image.
 pub const PROBE_IMAGE_ENV: &str = "WEFTOS_FACTS_PROBE_IMAGE";
-/// How often a connected node re-probes for live-state changes.
+/// How often a connected node re-reads live state (free memory only: no
+/// container engine, no privileged command).
 pub const LIVE_PROBE_SECS: u64 = 60;
+/// How often the full probe runs (80% of the facts TTL).
+pub const FULL_PROBE_SECS: u64 = DEFAULT_FACTS_TTL_SECS * 4 / 5;
+/// How long the privileged emulation (binfmt) listing is reused.
+pub const EMULATION_CACHE_SECS: u64 = 3600;
 
 struct LocalSigner {
     key: SigningKey,
     runtime_dir: PathBuf,
     last_seq: Mutex<u64>,
     exchange: Option<Arc<FactsExchange>>,
+    /// The last full probe and when it ran: the base live refreshes start from.
+    last_full: Mutex<Option<(std::time::Instant, clawft_types::placement::NodeFacts)>>,
+    emulation: Arc<EmulationCache>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -77,13 +85,22 @@ fn some_or_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<
 
 /// The probe image: environment, then `facts.config.json`, then `default`.
 fn probe_image(runtime_dir: &Path, env: Option<String>, default: Option<String>) -> Option<String> {
+    let checked = |v: Option<String>| {
+        v.filter(|v| !v.trim().is_empty()).filter(|v| {
+            let ok = valid_image_ref(v);
+            if !ok {
+                warn!(image = %v, "probe image is not a plain image reference; no probe image used");
+            }
+            ok
+        })
+    };
     if let Some(v) = env {
-        return Some(v).filter(|v| !v.trim().is_empty());
+        return checked(Some(v));
     }
     if let Some(text) = read_small(&runtime_dir.join(CONFIG_FILE)) {
         match serde_json::from_str::<FactsConfig>(&text) {
             Ok(FactsConfig { docker_probe_image: Some(v) }) => {
-                return v.filter(|v| !v.trim().is_empty());
+                return checked(v);
             }
             Ok(_) => {}
             Err(e) => warn!(error = %e, "facts config unreadable; ignored"),
@@ -93,6 +110,7 @@ fn probe_image(runtime_dir: &Path, env: Option<String>, default: Option<String>)
 }
 
 static LOCAL: OnceLock<Arc<LocalSigner>> = OnceLock::new();
+static INIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -143,15 +161,34 @@ pub fn probe_config(runtime_dir: &Path) -> ProbeConfig {
 
 /// Probe this machine into unsigned facts. Blocking: call off the runtime.
 fn probe_blocking(signer: &LocalSigner) -> clawft_types::placement::NodeFacts {
-    let cfg = probe_config(&signer.runtime_dir);
+    let mut cfg = probe_config(&signer.runtime_dir);
+    cfg.emulation_cache = Some(signer.emulation.clone());
     let node_id = clawft_kernel::node_id_from_pubkey(&signer.key.verifying_key().to_bytes());
-    build_facts(
+    let facts = build_facts(
         &node_id,
         now_secs(),
         DEFAULT_FACTS_TTL_SECS,
         0,
         probe_capabilities(&SystemHost::default(), &cfg),
-    )
+    );
+    *signer.last_full.lock().unwrap_or_else(|p| p.into_inner()) =
+        Some((std::time::Instant::now(), facts.clone()));
+    facts
+}
+
+/// Facts for this tick: a cheap live refresh of the last full probe, or a
+/// full probe when asked, when none exists or when it is due.
+fn facts_blocking(signer: &LocalSigner, full: bool) -> clawft_types::placement::NodeFacts {
+    let base = signer
+        .last_full
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .filter(|(at, _)| at.elapsed() < Duration::from_secs(FULL_PROBE_SECS));
+    match base {
+        Some((_, base)) if !full => refresh_live(&SystemHost::default(), &base, now_secs()),
+        _ => probe_blocking(signer),
+    }
 }
 
 /// Probe, sign and cache this node's facts. Blocking: call off the runtime.
@@ -182,10 +219,11 @@ fn refresh_blocking(signer: &LocalSigner, membership: &ClusterMembership) -> Res
 async fn refresh(
     signer: Arc<LocalSigner>,
     membership: Arc<ClusterMembership>,
+    full: bool,
 ) -> Result<u64, String> {
     if let Some(exchange) = signer.exchange.clone() {
         let s = signer.clone();
-        let facts = tokio::task::spawn_blocking(move || probe_blocking(&s))
+        let facts = tokio::task::spawn_blocking(move || facts_blocking(&s, full))
             .await
             .map_err(|e| format!("probe task failed: {e}"))?;
         let published = exchange
@@ -212,6 +250,10 @@ pub fn init(
     membership: Arc<ClusterMembership>,
     mesh: Option<Arc<MeshRuntime>>,
 ) {
+    // Claim first: a second call must not build (and start) a second exchange.
+    if INIT.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let exchange = mesh.map(|rt| {
         let ex = FactsExchange::new(
             key.clone(),
@@ -227,6 +269,8 @@ pub fn init(
         runtime_dir,
         last_seq: Mutex::new(0),
         exchange,
+        last_full: Mutex::new(None),
+        emulation: Arc::new(EmulationCache::new(Duration::from_secs(EMULATION_CACHE_SECS))),
     });
     if LOCAL.set(signer.clone()).is_err() {
         return;
@@ -240,7 +284,7 @@ pub fn init(
             Duration::from_secs(DEFAULT_FACTS_TTL_SECS * 4 / 5)
         };
         loop {
-            match refresh(signer.clone(), membership.clone()).await {
+            match refresh(signer.clone(), membership.clone(), false).await {
                 Ok(seq) => info!(seq, "node facts probed and signed"),
                 Err(e) => warn!(error = %e, "node facts probe failed"),
             }
@@ -315,7 +359,7 @@ pub async fn handle(
         let Some(signer) = local.clone() else {
             return Response::error("local node facts not initialised");
         };
-        if let Err(e) = refresh(signer, membership.clone()).await {
+        if let Err(e) = refresh(signer, membership.clone(), true).await {
             return Response::error(format!("probe failed: {e}"));
         }
     }
@@ -378,6 +422,15 @@ mod tests {
         // An empty config object keeps the default.
         let empty = dir_with(Some("{}"));
         assert_eq!(probe_image(empty.path(), None, alpine()), alpine());
+    }
+
+    #[test]
+    fn an_image_reference_that_docker_would_read_as_an_option_is_not_used() {
+        let none = dir_with(None);
+        assert_eq!(probe_image(none.path(), Some("--privileged".into()), alpine()), None);
+        assert_eq!(probe_image(none.path(), Some("a b".into()), alpine()), None);
+        let file = dir_with(Some(r#"{"docker_probe_image": "-v /:/host"}"#));
+        assert_eq!(probe_image(file.path(), None, alpine()), None);
     }
 
     #[test]

@@ -161,11 +161,60 @@ async fn only_pinned_operator_keys_can_revoke() {
     // Over the wire, forged notices change nothing on any node.
     let forged = serde_json::to_value(&stranger).unwrap();
     let ctx = PeerCtx::unauthenticated("node-b");
-    assert!(l.a.rev.on_peer_control(&ctx, &forged).is_empty());
-    assert!(l.a.rev.on_peer_control(&ctx, &serde_json::json!({"nope": 1})).is_empty());
+    assert!(l.a.rev.on_peer_control(&ctx, 0, &forged).is_empty());
+    assert!(l.a.rev.on_peer_control(&ctx, 0, &serde_json::json!({"nope": 1})).is_empty());
     tokio::time::sleep(Duration::from_millis(50)).await;
     for p in [&l.a, &l.b, &l.c] {
         assert!(p.list.list_subjects(None).is_empty());
         assert_eq!(p.node.ex.servable_artifacts().len(), 3);
     }
+}
+
+#[tokio::test]
+async fn a_revoked_signer_key_can_no_longer_revoke() {
+    let l = line();
+    // Revoke the operator key itself, then try to use it.
+    let own = hex_encode(&key(1).verifying_key().to_bytes());
+    l.a.list.revoke_subject(RevocationKind::SignerKey, &own, "key leaked").unwrap();
+    assert_eq!(l.a.rev.accept(&notice(&l, &key(1))), Err(NoticeError::SignerRevoked));
+    // The notice that revoked it earlier is a separate, valid act: a second
+    // operator key, still pinned, may still issue notices.
+    assert!(l.a.list.is_subject_revoked(RevocationKind::SignerKey, &own));
+}
+
+#[tokio::test]
+async fn notices_are_rate_limited_per_node() {
+    let l = line();
+    let mut refused = 0;
+    for i in 0..30 {
+        let n = sign_revocation(RevocationKind::ArtifactHash, &hex_encode(&[i as u8; 32]), "x", 1, &key(1)).unwrap();
+        if l.a.rev.accept(&n) == Err(NoticeError::RateLimited) {
+            refused += 1;
+        }
+    }
+    assert!(refused >= 15, "burst of {NOTICE_BURST} then ~{NOTICES_PER_SEC}/s: {refused} refused");
+}
+
+#[tokio::test]
+async fn a_duplicate_notice_is_not_swept_again() {
+    let l = line();
+    let n = notice(&l, &key(1));
+    assert!(l.a.rev.accept(&n).unwrap());
+    let before = events(&l.a.node.chain, EVENT_KIND_ARTIFACT_REVOKE).len();
+    // Seed again by hand: a sweep would evict it, so a skipped sweep leaves it.
+    assert!(!l.a.rev.accept(&n).unwrap());
+    assert_eq!(events(&l.a.node.chain, EVENT_KIND_ARTIFACT_REVOKE).len(), before);
+}
+
+#[test]
+fn a_malleated_signature_is_refused_by_strict_verification() {
+    // Adding the group order L to S yields a second valid-looking encoding
+    // that non-strict verifiers can accept; verify_strict must not.
+    let k = key(1);
+    let anchors = anchors_for(&k);
+    let good = sign_revocation(RevocationKind::ArtifactHash, &hex_encode(&[7; 32]), "x", 1, &k).unwrap();
+    assert!(verify_revocation(&good, &anchors).is_ok());
+    let mut bad = good.clone();
+    bad.signature[63] |= 0xf0; // S out of canonical range
+    assert!(verify_revocation(&bad, &anchors).is_err());
 }

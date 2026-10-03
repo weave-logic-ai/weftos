@@ -2078,7 +2078,7 @@ ${BOLD}Commands:${NC}
                   from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
   test [pkg…]     Run cargo test --workspace (or scoped: test clawft-channels …)
-                  --test-filter <substr> runs only tests whose name contains it
+                  --filter (alias --test-filter) <substr> runs only tests whose name contains it
   test-pi [crate…] [--filter <test>] [--live-native] [--cogs] [--full]
                   Run ARM tests on the real Raspberry Pi 5: cross-build aarch64
                   test binaries in an arm64 Debian container (image
@@ -2327,7 +2327,7 @@ parse_args() {
                 PROFILE="${2:?'--profile requires a value'}"
                 shift 2
                 ;;
-            --test-filter)
+            --test-filter|--filter)
                 TEST_FILTER="${2:?'--test-filter requires a test-name substring'}"
                 shift 2
                 ;;

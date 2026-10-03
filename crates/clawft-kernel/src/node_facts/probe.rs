@@ -15,6 +15,50 @@ use super::{accel, linux, macos, runtimes};
 /// Default TTL for self-probed facts (ten minutes).
 pub const DEFAULT_FACTS_TTL_SECS: u64 = 600;
 
+/// Longest accepted container image reference.
+pub const MAX_IMAGE_REF_LEN: usize = 255;
+
+/// True for a plausible local image reference: `[A-Za-z0-9][A-Za-z0-9._/:@-]*`.
+/// Rejects a leading `-` (it would be read as an option by `docker`), spaces
+/// and any shell or control character.
+pub fn valid_image_ref(s: &str) -> bool {
+    let mut chars = s.chars();
+    s.len() <= MAX_IMAGE_REF_LEN
+        && matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | ':' | '@' | '-'))
+}
+
+/// Remembers what the privileged emulation probe (`docker run --privileged`)
+/// listed, so it runs once per `ttl` and not on every facts refresh.
+#[derive(Debug)]
+pub struct EmulationCache {
+    ttl: std::time::Duration,
+    slot: std::sync::Mutex<Option<(std::time::Instant, String, String)>>,
+}
+
+impl EmulationCache {
+    /// Cache entries live `ttl`.
+    pub fn new(ttl: std::time::Duration) -> Self {
+        Self {
+            ttl,
+            slot: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// The remembered binfmt listing for `image`, if fresh.
+    pub(crate) fn get(&self, image: &str) -> Option<String> {
+        let g = self.slot.lock().unwrap_or_else(|p| p.into_inner());
+        g.as_ref()
+            .filter(|(at, img, _)| img == image && at.elapsed() < self.ttl)
+            .map(|(_, _, l)| l.clone())
+    }
+
+    pub(crate) fn put(&self, image: &str, listing: &str) {
+        *self.slot.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((std::time::Instant::now(), image.to_string(), listing.to_string()));
+    }
+}
+
 /// What the probe is told rather than what it sees.
 #[derive(Debug, Clone)]
 pub struct ProbeConfig {
@@ -25,6 +69,8 @@ pub struct ProbeConfig {
     pub declared_feeds: Vec<Capability>,
     /// Harness / admission-probe results; only `measured` `perf.*` kept.
     pub measured: Vec<Capability>,
+    /// Remembers the privileged emulation probe between runs (none: always run it).
+    pub emulation_cache: Option<std::sync::Arc<EmulationCache>>,
 }
 
 impl Default for ProbeConfig {
@@ -33,6 +79,7 @@ impl Default for ProbeConfig {
             docker_probe_image: Some("alpine:3.20".into()),
             declared_feeds: Vec::new(),
             measured: Vec::new(),
+            emulation_cache: None,
         }
     }
 }
@@ -224,4 +271,31 @@ pub fn build_facts(
     facts.capabilities = collected.caps;
     facts.notes = collected.notes;
     facts
+}
+
+/// Cheap live refresh of `base`: only free memory is re-read (no container
+/// engine, no subprocess beyond `vm_stat` / `/proc/meminfo`). Capability
+/// states are carried over from `base`; the caller owns busy tracking.
+pub fn refresh_live(host: &dyn ProbeHost, base: &NodeFacts, now: u64) -> NodeFacts {
+    let mut f = base.clone();
+    f.issued_at = now;
+    let free = match host.os().as_str() {
+        "macos" => macos::live_free(host),
+        "linux" => linux::live_free(host),
+        _ => None,
+    };
+    if let Some(free) = free {
+        for c in f
+            .capabilities
+            .iter_mut()
+            .filter(|c| matches!(c.id.as_str(), "mem.unified" | "mem.system"))
+        {
+            let total = match c.attrs.get("total") {
+                Some(AttrValue::Int(t)) if *t >= 0 => *t as u64,
+                _ => u64::MAX,
+            };
+            c.attrs.insert("free".into(), bytes_attr(free.min(total)));
+        }
+    }
+    f
 }

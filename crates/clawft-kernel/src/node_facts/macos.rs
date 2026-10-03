@@ -21,6 +21,11 @@ fn sysctl(host: &dyn ProbeHost, key: &str) -> Option<String> {
 }
 
 /// Free memory from `vm_stat`: (free + inactive + speculative) pages.
+/// Current free memory from `vm_stat` alone (cheap live probe).
+pub fn live_free(host: &dyn ProbeHost) -> Option<u64> {
+    host.run("vm_stat", &[]).as_deref().and_then(parse_vm_stat)
+}
+
 pub fn parse_vm_stat(out: &str) -> Option<u64> {
     let page: u64 = out
         .lines()

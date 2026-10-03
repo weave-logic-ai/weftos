@@ -32,6 +32,11 @@ use crate::workload_pkg::codec::hex_encode;
 /// Capability id carrying a node's LAN for locality.
 pub const LAN_CAPABILITY: &str = "net.lan";
 
+/// Peers asked at once by one [`ArtifactExchange::who_has`].
+pub const WHO_HAS_CONCURRENCY: usize = 8;
+/// Most peers one [`ArtifactExchange::who_has`] asks.
+pub const WHO_HAS_MAX_PEERS: usize = 64;
+
 /// A peer that answered a `who_has` query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holder {
@@ -75,6 +80,7 @@ pub fn holders_from_facts(
             PeerCandidate {
                 peer_id: c.node_id().to_string(),
                 lan_id: lan,
+                tier: c.trust_tier(),
             }
         })
         .collect()
@@ -90,9 +96,16 @@ impl ArtifactExchange {
         key: ArtifactKey,
     ) -> Vec<Holder> {
         let mut set = tokio::task::JoinSet::new();
-        for p in peers.iter().filter(|p| !self.is_banned(&p.peer_id)) {
-            let (ex, dialer, peer) = (self.clone(), dialer.clone(), p.peer_id.clone());
+        let gate = Arc::new(tokio::sync::Semaphore::new(WHO_HAS_CONCURRENCY));
+        for p in peers
+            .iter()
+            .filter(|p| !self.is_banned(&p.peer_id))
+            .take(WHO_HAS_MAX_PEERS)
+        {
+            let (ex, dialer, peer, gate) =
+                (self.clone(), dialer.clone(), p.peer_id.clone(), gate.clone());
             set.spawn(async move {
+                let _slot = gate.acquire_owned().await.ok()?;
                 let (mut s, d) = ex.open_session_for_lookup(dialer.as_ref(), &peer, key).await.ok()?;
                 let _ = s.stream.close().await;
                 Some(Holder {

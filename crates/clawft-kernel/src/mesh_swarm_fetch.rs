@@ -3,8 +3,8 @@
 //! [`ArtifactExchange::swarm_fetch`] pulls one artifact from several
 //! holders at once, on top of the card 11 piece protocol:
 //!
-//! - **Sources.** Candidates are ranked by locality and measured link speed
-//!   ([`order_peers`]); up to `max_sources` are dialed. The first peer that
+//! - **Sources.** Candidates are ranked by trust tier, then locality, then
+//!   measured link speed ([`order_peers`]); up to `max_sources` are dialed. The first peer that
 //!   answers fixes the descriptor; every other source must present the same
 //!   artifact id.
 //! - **Scheduling.** One worker per peer. Each worker asks the shared
@@ -17,6 +17,11 @@
 //!   corrupt piece is banned (`artifact.piece_rejected`, `artifact.peer_ban`)
 //!   and its piece is fetched elsewhere.
 //! - **Bandwidth.** Received bytes are paced by the node's download cap.
+//! - **Limits.** A descriptor with a piece size over `max_piece_size`, a total
+//!   over `max_artifact_bytes`, or one that does not fit the caller's
+//!   [`Expect`] (exact size from a signed manifest) is refused before any
+//!   piece is requested. At most one piece is buffered per source, so memory
+//!   is bounded by `max_sources x max_piece_size`.
 //! - **Verification.** When every piece is held, the whole-content hash is
 //!   checked ([`ArtifactExchange::promote`]). A verified artifact that a
 //!   verified manifest allows is seeded from then on (`artifact.seed`).
@@ -36,7 +41,7 @@ use crate::mesh::{MeshError, MeshStream};
 use crate::mesh_artifact::ArtifactExchange;
 use crate::mesh_artifact_peers::{FetchError, FetchOutcome};
 use crate::mesh_artifact_transfer::{PeerError, send};
-use crate::mesh_artifact_types::{ArtifactDescriptor, ArtifactKey, Bitfield};
+use crate::mesh_artifact_types::{ArtifactDescriptor, ArtifactId, ArtifactKey, Bitfield};
 use crate::mesh_artifact_wire::ArtifactMsg;
 use crate::mesh_swarm_picker::{PeerCandidate, Pick, PiecePicker, order_peers};
 
@@ -47,12 +52,32 @@ pub trait PeerDialer: Send + Sync + 'static {
     async fn dial(&self, peer_id: &str) -> Result<Box<dyn MeshStream>, MeshError>;
 }
 
+/// What the caller already knows about the artifact, from a signed manifest.
+/// A peer's descriptor that does not fit is refused before any piece is
+/// requested.
+#[derive(Debug, Clone, Default)]
+pub struct Expect {
+    /// Exact total size.
+    pub size: Option<u64>,
+    /// Largest acceptable total size (when the exact size is not known).
+    pub max_size: Option<u64>,
+    /// Exact artifact id (piece-list root), when something pins it.
+    pub root: Option<ArtifactId>,
+}
+
 /// Per-fetch settings.
 #[derive(Debug, Clone, Default)]
 pub struct SwarmFetchOptions {
-    /// LAN of the local node (`net.lan` fact): same-LAN peers rank first.
+    /// LAN of the local node (`net.lan` fact): same-LAN peers rank first
+    /// within a trust tier.
     pub local_lan: Option<String>,
+    /// What the caller knows about the artifact.
+    pub expect: Expect,
 }
+
+/// Fetch attempts in one call: after a peer's content fails verification the
+/// peer is banned and the next candidates are tried.
+const MAX_ATTEMPTS: usize = 3;
 
 pub(crate) struct Session {
     pub(crate) peer: String,
@@ -81,28 +106,77 @@ fn lock(m: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// How one attempt ended, short of success.
+enum Attempt {
+    /// Pieces assembled but the content did not verify: the sessions' peers
+    /// all vouched for a descriptor that lied.
+    Unverified { error: String, peers: Vec<String> },
+    /// Could not complete (no peers, all lost).
+    Failed(FetchError),
+}
+
 impl ArtifactExchange {
-    /// Dial `peer` and ask for `key`: its descriptor and the pieces it holds.
+    /// Refuse a descriptor that exceeds the node's caps or does not fit what
+    /// the caller expects, before any piece is requested.
+    pub(crate) fn check_descriptor(
+        &self,
+        d: &ArtifactDescriptor,
+        expect: &Expect,
+    ) -> Result<(), PeerError> {
+        let cfg = self.config();
+        let refuse = |why: String| Err(PeerError::Protocol(format!("descriptor refused: {why}")));
+        if d.piece_size > cfg.max_piece_size {
+            return refuse(format!(
+                "piece size {} exceeds the accepted {}",
+                d.piece_size, cfg.max_piece_size
+            ));
+        }
+        if d.total_size > cfg.max_artifact_bytes {
+            return refuse(format!(
+                "total size {} exceeds the accepted {}",
+                d.total_size, cfg.max_artifact_bytes
+            ));
+        }
+        if let Some(max) = expect.max_size
+            && d.total_size > max
+        {
+            return refuse(format!("total size {} exceeds the expected maximum {max}", d.total_size));
+        }
+        if let Some(size) = expect.size
+            && d.total_size != size
+        {
+            return refuse(format!("total size {} is not the expected {size}", d.total_size));
+        }
+        if let Some(root) = expect.root
+            && d.id() != root
+        {
+            return refuse("artifact id is not the expected root".into());
+        }
+        Ok(())
+    }
+
     pub(crate) async fn open_session_for_lookup(
         &self,
         dialer: &dyn PeerDialer,
         peer: &str,
         key: ArtifactKey,
     ) -> Result<(Session, ArtifactDescriptor), String> {
-        self.open_session(dialer, peer, key).await
+        self.open_session(dialer, peer, key, &Expect::default()).await
     }
 
+    /// Dial `peer` and ask for `key`: its descriptor and the pieces it holds.
     async fn open_session(
         &self,
         dialer: &dyn PeerDialer,
         peer: &str,
         key: ArtifactKey,
+        expect: &Expect,
     ) -> Result<(Session, ArtifactDescriptor), String> {
         let mut stream = tokio::time::timeout(self.config().recv_timeout, dialer.dial(peer))
             .await
             .map_err(|_| "dial timed out".to_string())?
             .map_err(|e| e.to_string())?;
-        let result = self.handshake(stream.as_mut(), key).await;
+        let result = self.handshake(stream.as_mut(), key, expect).await;
         match result {
             Ok((d, has)) => Ok((
                 Session {
@@ -123,6 +197,7 @@ impl ArtifactExchange {
         &self,
         stream: &mut dyn MeshStream,
         key: ArtifactKey,
+        expect: &Expect,
     ) -> Result<(ArtifactDescriptor, Bitfield), PeerError> {
         send(stream, &ArtifactMsg::MetaRequest { key }).await?;
         let d = match self.recv(stream).await? {
@@ -138,6 +213,7 @@ impl ArtifactExchange {
             return Err(PeerError::Protocol(format!("descriptor does not match {key}")));
         }
         d.validate().map_err(PeerError::Wire)?;
+        self.check_descriptor(&d, expect)?;
         let id = d.id();
         let has = match self.recv(stream).await? {
             ArtifactMsg::Announce { id: aid, have } if aid == id && have.len() == d.piece_count() => {
@@ -152,6 +228,12 @@ impl ArtifactExchange {
     /// Pieces already held are not requested again, so a repeated call
     /// resumes. `candidates` are the peers that may hold it (from
     /// [`crate::mesh_swarm_lookup`]); banned peers are skipped.
+    ///
+    /// A fetch by content hash trusts nobody's descriptor: when the pieces a
+    /// peer's descriptor describes do not assemble to the content hash, that
+    /// peer and the sources that vouched for the same descriptor are banned
+    /// and the fetch carries on with the remaining candidates (up to three
+    /// attempts), so one liar cannot block it or get honest peers blamed.
     pub async fn swarm_fetch(
         self: &Arc<Self>,
         dialer: Arc<dyn PeerDialer>,
@@ -177,13 +259,54 @@ impl ArtifactExchange {
         );
         let mut queue: VecDeque<PeerCandidate> = ordered.into();
         let mut dialed = 0usize;
+        let mut last_unverified = None;
+        for _ in 0..MAX_ATTEMPTS {
+            match self.swarm_attempt(&dialer, &mut queue, key, opts, &mut dialed).await {
+                Ok(out) => return Ok(out),
+                Err(Attempt::Failed(e)) => {
+                    return Err(match last_unverified {
+                        Some(msg) => FetchError::Verification(msg),
+                        None => e,
+                    });
+                }
+                Err(Attempt::Unverified { error, peers }) => {
+                    for p in &peers {
+                        self.ban_peer(p, &format!("vouched for content that does not verify as {key}"));
+                    }
+                    last_unverified = Some(error);
+                }
+            }
+        }
+        let msg = last_unverified.unwrap_or_default();
+        self.chain_fetch(serde_json::json!({
+            "key": key.to_string(),
+            "result": "failed",
+            "error": msg,
+            "peers_dialed": dialed,
+            "swarm": true,
+            "node": self.node_id(),
+        }));
+        Err(FetchError::Verification(msg))
+    }
+
+    async fn swarm_attempt(
+        self: &Arc<Self>,
+        dialer: &Arc<dyn PeerDialer>,
+        queue: &mut VecDeque<PeerCandidate>,
+        key: ArtifactKey,
+        opts: &SwarmFetchOptions,
+        dialed: &mut usize,
+    ) -> Result<FetchOutcome, Attempt> {
         let mut last_error = String::from("no candidate peers");
 
         // The first peer that answers fixes the descriptor.
         let mut first = None;
         while let Some(c) = queue.pop_front() {
-            dialed += 1;
-            match self.open_session(dialer.as_ref(), &c.peer_id, key).await {
+            if self.is_banned(&c.peer_id) {
+                continue;
+            }
+            *dialed += 1;
+            match self.open_session(dialer.as_ref(), &c.peer_id, key, &opts.expect).await {
                 Ok(x) => {
                     first = Some(x);
                     break;
@@ -192,9 +315,17 @@ impl ArtifactExchange {
             }
         }
         let Some((s0, d)) = first else {
-            return Err(self.swarm_failed(&key, None, &Totals::default(), dialed, 0, last_error));
+            return Err(Attempt::Failed(self.swarm_failed(
+                &key,
+                None,
+                &Totals::default(),
+                *dialed,
+                0,
+                last_error,
+            )));
         };
-        let id = self.note_pending(&d)?;
+        let id = self.note_pending(&d).map_err(|e| Attempt::Failed(e.into()))?;
+        let mut session_peers = vec![s0.peer.clone()];
         let mut picker = PiecePicker::new(self.have_of(&d));
         picker.add_peer(&s0.peer, s0.has.clone());
         let shared = Arc::new(Mutex::new(Shared {
@@ -216,9 +347,17 @@ impl ArtifactExchange {
             // Fill up to `max_sources` sessions from the remaining candidates.
             while active < max && !lock(&shared).picker.is_complete() {
                 let Some(c) = queue.pop_front() else { break };
-                dialed += 1;
-                match self.open_session(dialer.as_ref(), &c.peer_id, ArtifactKey::Root(id)).await {
+                if self.is_banned(&c.peer_id) {
+                    continue;
+                }
+                *dialed += 1;
+                let expect = Expect {
+                    root: Some(id),
+                    ..opts.expect.clone()
+                };
+                match self.open_session(dialer.as_ref(), &c.peer_id, ArtifactKey::Root(id), &expect).await {
                     Ok((s, _)) => {
+                        session_peers.push(s.peer.clone());
                         lock(&shared).picker.add_peer(&s.peer, s.has.clone());
                         spawn(&mut set, s);
                         active += 1;
@@ -243,24 +382,23 @@ impl ArtifactExchange {
         let totals = &g.totals;
         if !g.picker.is_complete() {
             let missing = g.picker.missing();
-            return Err(self.swarm_failed(&key, Some(&d), totals, dialed, missing, last_error));
+            return Err(Attempt::Failed(self.swarm_failed(
+                &key,
+                Some(&d),
+                totals,
+                *dialed,
+                missing,
+                last_error,
+            )));
         }
-        match self.promote(&d, &totals.written) {
-            Ok(()) => {}
-            Err(e) => {
-                self.chain_fetch(serde_json::json!({
-                    "key": key.to_string(),
-                    "artifact_id": id.to_string(),
-                    "sources": totals.sources,
-                    "result": "failed",
-                    "error": e.to_string(),
-                    "swarm": true,
-                    "node": self.node_id(),
-                }));
-                return Err(FetchError::Verification(e.to_string()));
-            }
+        if let Err(e) = self.promote(&d, &totals.written) {
+            // `promote` discarded the descriptor and the pieces this fetch wrote.
+            return Err(Attempt::Unverified {
+                error: e.to_string(),
+                peers: session_peers,
+            });
         }
-        self.materialize(&id)?;
+        self.materialize(&id).map_err(|e| Attempt::Failed(e.into()))?;
         self.chain_fetch(serde_json::json!({
             "artifact_id": id.to_string(),
             "content_hash": d.content_hex(),
@@ -270,7 +408,7 @@ impl ArtifactExchange {
             "total_size": d.total_size,
             "pieces_fetched": totals.pieces,
             "pieces_rejected": totals.rejected,
-            "peers_dialed": dialed,
+            "peers_dialed": *dialed,
             "peers_lost": totals.lost.iter().map(|(p, w)| serde_json::json!({"peer": p, "why": w})).collect::<Vec<_>>(),
             "peers_banned": totals.banned,
             "result": "verified",

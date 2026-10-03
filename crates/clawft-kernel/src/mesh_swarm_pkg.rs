@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::mesh_artifact::ArtifactExchange;
 use crate::mesh_artifact_pkg::{ExchangedPackage, PackageExchangeError, pinned};
 use crate::mesh_artifact_types::ArtifactKey;
-use crate::mesh_swarm_fetch::{PeerDialer, SwarmFetchOptions};
+use crate::mesh_swarm_fetch::{Expect, PeerDialer, SwarmFetchOptions};
 use crate::mesh_swarm_picker::PeerCandidate;
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 use crate::workload_pkg::manifest::MAX_MANIFEST_BYTES;
@@ -33,8 +33,19 @@ impl ArtifactExchange {
         let mh = hex_decode_exact::<32>(manifest_hash).ok_or_else(|| {
             VerifyError::Manifest("manifest hash must be 64 lower-case hex".into())
         })?;
+        let cache = self.swarm.cache();
+        if let Some(c) = &cache {
+            c.pin_content(mh);
+        }
+        let mopts = SwarmFetchOptions {
+            expect: Expect {
+                max_size: Some(MAX_MANIFEST_BYTES as u64),
+                ..opts.expect.clone()
+            },
+            ..opts.clone()
+        };
         let m = self
-            .swarm_fetch(dialer.clone(), candidates.to_vec(), ArtifactKey::Content(mh), opts)
+            .swarm_fetch(dialer.clone(), candidates.to_vec(), ArtifactKey::Content(mh), &mopts)
             .await?;
         if m.descriptor.total_size > MAX_MANIFEST_BYTES as u64 {
             return Err(VerifyError::Manifest("manifest too large".into()).into());
@@ -44,12 +55,24 @@ impl ArtifactExchange {
         self.refuse_if_revoked(&verified, anchors, &mh)?;
         let grant = self.authorize(verified.clone(), mh, Vec::new(), anchors);
 
+        if let Some(c) = &cache {
+            for file in verified.body.files() {
+                c.pin_content(pinned(file)?.0);
+            }
+        }
         let mut files = Vec::new();
         let mut all_small = true;
         for file in verified.body.files() {
             let (hash, size) = pinned(file)?;
+            let fopts = SwarmFetchOptions {
+                expect: Expect {
+                    size: Some(size),
+                    ..opts.expect.clone()
+                },
+                ..opts.clone()
+            };
             let got = self
-                .swarm_fetch(dialer.clone(), candidates.to_vec(), ArtifactKey::Content(hash), opts)
+                .swarm_fetch(dialer.clone(), candidates.to_vec(), ArtifactKey::Content(hash), &fopts)
                 .await?;
             if got.descriptor.total_size != size {
                 return Err(VerifyError::HashMismatch {

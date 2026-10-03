@@ -47,6 +47,23 @@ use crate::node_facts_advert::{
 };
 use crate::node_registry::node_id_from_pubkey;
 
+/// Most `Discovered` entries one connection may hold: an unverified
+/// connection can claim any source id, so it cannot fill the cache.
+pub const MAX_DISCOVERED_PER_CONN: usize = 4;
+/// Frames per second one connection may send on the facts topic (burst 2x).
+pub const FRAMES_PER_SEC: f64 = 20.0;
+/// Payload bytes per second one connection may send (burst 4x).
+pub const BYTES_PER_SEC: f64 = 256.0 * 1024.0;
+/// Connections whose budgets are remembered at once.
+const MAX_TRACKED_CONNS: usize = 1024;
+
+/// Token buckets for one connection.
+struct Budget {
+    frames: f64,
+    bytes: f64,
+    last: std::time::Instant,
+}
+
 /// A new base is signed once the current one has used this share of its TTL
 /// (deltas do not extend a base's lifetime).
 const REBASE_NUMERATOR: u64 = 4;
@@ -138,6 +155,14 @@ pub enum IngestError {
     /// A peer tried to replace this node's own facts.
     #[error("refusing remote facts for the local node")]
     LocalNode,
+    /// One connection holds its maximum of `Discovered` entries.
+    #[error("connection {conn} already supplied {limit} unverified nodes")]
+    Quota {
+        /// Connection id.
+        conn: u64,
+        /// The per-connection limit.
+        limit: usize,
+    },
     /// Signature, binding, TTL, ordering or delta check failed.
     #[error(transparent)]
     Cache(#[from] CacheError),
@@ -176,6 +201,7 @@ pub struct FactsExchange {
     runtime: Arc<MeshRuntime>,
     policy: FactsTrustPolicy,
     local: Mutex<Local>,
+    budgets: dashmap::DashMap<u64, Budget>,
 }
 
 impl FactsExchange {
@@ -201,6 +227,7 @@ impl FactsExchange {
                 delta_seq: 0,
                 last_seq: 0,
             }),
+            budgets: dashmap::DashMap::new(),
         })
     }
 
@@ -217,12 +244,49 @@ impl FactsExchange {
                     | Ok(MeshPeerEvent::Recovered { node_id, .. }) => {
                         me.send_current(&node_id).await;
                     }
+                    // The connection is gone: the mesh-derived tier goes with it
+                    // (an admission revocation closes the connection).
+                    Ok(MeshPeerEvent::Left { node_id }) => {
+                        me.on_peer_gone(&node_id);
+                    }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => break,
                 }
             }
         });
+    }
+
+    /// A peer's connection ended or its admission was revoked: lower its
+    /// mesh-derived tier to `Discovered`. An operator-set tier stays.
+    pub fn on_peer_gone(&self, node_id: &str) -> bool {
+        self.membership.facts().demote_mesh_tier(node_id)
+    }
+
+    /// Charge one frame of `bytes` to connection `conn`. False = over budget.
+    fn allow(&self, conn: u64, bytes: usize) -> bool {
+        if self.budgets.len() >= MAX_TRACKED_CONNS && !self.budgets.contains_key(&conn) {
+            let oldest = self.budgets.iter().min_by_key(|b| b.last).map(|b| *b.key());
+            if let Some(k) = oldest {
+                self.budgets.remove(&k);
+            }
+        }
+        let now = std::time::Instant::now();
+        let mut b = self.budgets.entry(conn).or_insert(Budget {
+            frames: 2.0 * FRAMES_PER_SEC,
+            bytes: 4.0 * BYTES_PER_SEC,
+            last: now,
+        });
+        let dt = now.duration_since(b.last).as_secs_f64();
+        b.last = now;
+        b.frames = (b.frames + dt * FRAMES_PER_SEC).min(2.0 * FRAMES_PER_SEC);
+        b.bytes = (b.bytes + dt * BYTES_PER_SEC).min(4.0 * BYTES_PER_SEC);
+        if b.frames < 1.0 || b.bytes < bytes as f64 {
+            return false;
+        }
+        b.frames -= 1.0;
+        b.bytes -= bytes as f64;
+        true
     }
 
     /// This node's id.
@@ -367,11 +431,28 @@ impl FactsExchange {
         }
     }
 
-    /// Receive one facts message from the connection `ctx`, at `now`.
-    /// Replies to send back to the peer are appended to `replies`.
+    /// [`Self::ingest_from`] with no connection id (no per-connection quota).
     pub fn ingest(
         &self,
         ctx: &PeerCtx,
+        wire: FactsWire,
+        now: u64,
+        replies: &mut Vec<FactsWire>,
+    ) -> Result<IngestOutcome, IngestError> {
+        self.ingest_from(ctx, 0, wire, now, replies)
+    }
+
+    /// Receive one facts message from connection `conn` (identity `ctx`), at
+    /// `now`. Replies to send back to the peer are appended to `replies`.
+    ///
+    /// The tier is derived from `ctx` on every frame: a node that is no
+    /// longer admitted drops back to `Discovered` with its next frame (or
+    /// when its connection goes, see [`Self::start`]); only a tier an
+    /// operator set is kept.
+    pub fn ingest_from(
+        &self,
+        ctx: &PeerCtx,
+        conn: u64,
         wire: FactsWire,
         now: u64,
         replies: &mut Vec<FactsWire>,
@@ -391,12 +472,21 @@ impl FactsExchange {
                 let facts = crate::node_facts_advert::verify_node_facts(&signed, now)
                     .map_err(CacheError::from)?;
                 self.check_subject(ctx, &facts.node_id)?;
-                // A peer's frame never lowers the tier an operator or an
-                // earlier verified connection earned.
-                let tier = cache
-                    .get(&facts.node_id, now)
-                    .map_or(tier, |held| held.trust_tier.max(tier));
-                let outcome = cache.insert_remote(signed, tier, cap, now)?;
+                // One unverified connection can claim any number of source ids:
+                // cap how many `Discovered` entries it may hold.
+                if tier == TrustTier::Discovered
+                    && conn != 0
+                    && cache.get(&facts.node_id, now).is_none_or(|h| h.origin != conn)
+                    && cache.discovered_from(conn, now) >= MAX_DISCOVERED_PER_CONN
+                {
+                    return Err(IngestError::Quota {
+                        conn,
+                        limit: MAX_DISCOVERED_PER_CONN,
+                    });
+                }
+                let outcome = cache.insert_remote(signed, tier, cap, conn, now)?;
+                // The tier actually held: an operator-set one wins.
+                let tier = cache.get(&facts.node_id, now).map_or(tier, |h| h.trust_tier);
                 Ok(IngestOutcome::Accepted {
                     node_id: facts.node_id,
                     tier,
@@ -438,7 +528,25 @@ impl FactsExchange {
 }
 
 impl PeerControlSink for FactsExchange {
-    fn on_peer_control(&self, ctx: &PeerCtx, payload: &serde_json::Value) -> Vec<serde_json::Value> {
+    fn on_peer_control(
+        &self,
+        ctx: &PeerCtx,
+        conn: u64,
+        payload: &serde_json::Value,
+    ) -> Vec<serde_json::Value> {
+        // Budget first: nothing below (parse, signature check) runs for a
+        // connection that is over its frame or byte budget. The size is read
+        // off the signed payload string, which is what the verify cost follows.
+        let size = payload
+            .get("signed")
+            .and_then(|s| s.get("payload"))
+            .and_then(|p| p.as_str())
+            .map_or(0, str::len)
+            + 128;
+        if !self.allow(conn, size) {
+            tracing::debug!(peer = %ctx.peer_id, conn, "node facts frame dropped: over budget");
+            return Vec::new();
+        }
         let wire: FactsWire = match serde_json::from_value(payload.clone()) {
             Ok(w) => w,
             Err(e) => {
@@ -447,9 +555,20 @@ impl PeerControlSink for FactsExchange {
             }
         };
         let mut replies = Vec::new();
-        if let Err(e) = self.ingest(ctx, wire, Self::now(), &mut replies) {
-            tracing::warn!(peer = %ctx.peer_id, verified = ctx.node_verified, error = %e,
-                "node facts refused");
+        if let Err(e) = self.ingest_from(ctx, conn, wire, Self::now(), &mut replies) {
+            if matches!(
+                &e,
+                IngestError::Cache(CacheError::Verify(NodeFactsAdvertError::Facts(
+                    clawft_types::placement::FactsError::FromFuture { .. }
+                )))
+            ) {
+                tracing::warn!(peer = %ctx.peer_id, error = %e,
+                    "node facts refused: issued in the future, the peer's clock is ahead of ours \
+                     by more than the allowed skew");
+            } else {
+                tracing::warn!(peer = %ctx.peer_id, verified = ctx.node_verified, error = %e,
+                    "node facts refused");
+            }
         }
         replies.iter().filter_map(FactsWire::to_value).collect()
     }

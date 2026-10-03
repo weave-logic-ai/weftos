@@ -9,7 +9,13 @@ use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 use crate::workload_pkg::verify::MAX_FILE_BYTES;
 
 /// Default piece size (ADR-099 section 6 placeholder).
-pub const DEFAULT_PIECE_SIZE: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_PIECE_SIZE: u64 = 16 * 1024 * 1024;
+/// Largest piece size a node accepts from a peer by default: with at most
+/// `max_sources` pieces buffered at once, memory is bounded by their product.
+pub const DEFAULT_MAX_PIECE_SIZE: u64 = 16 * 1024 * 1024;
+/// Largest artifact a node accepts by default (a caller that knows the size
+/// from a signed manifest passes the exact size instead).
+pub const DEFAULT_MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 /// Smallest accepted piece size.
 pub const MIN_PIECE_SIZE: u64 = 1024;
 /// Largest accepted piece size.
@@ -245,6 +251,12 @@ pub struct ExchangeConfig {
     pub max_sources: usize,
     /// Corrupt pieces from one peer before it is banned (1 = first).
     pub ban_after_corrupt: u32,
+    /// Largest piece size accepted in a peer's descriptor. A descriptor
+    /// above it is refused before any piece is requested.
+    pub max_piece_size: u64,
+    /// Largest total size accepted in a peer's descriptor (an exact size
+    /// from a signed manifest, when the caller has one, is checked as well).
+    pub max_artifact_bytes: u64,
 }
 
 impl Default for ExchangeConfig {
@@ -261,6 +273,8 @@ impl Default for ExchangeConfig {
             download_bytes_per_sec: None,
             max_sources: 4,
             ban_after_corrupt: 1,
+            max_piece_size: DEFAULT_MAX_PIECE_SIZE,
+            max_artifact_bytes: DEFAULT_MAX_ARTIFACT_BYTES,
         }
     }
 }
@@ -286,6 +300,15 @@ impl ExchangeConfig {
         }
         if self.upload_bytes_per_sec == Some(0) || self.download_bytes_per_sec == Some(0) {
             return Err(ExchangeError::Config("bandwidth caps must be > 0".into()));
+        }
+        if self.piece_size > self.max_piece_size || self.max_piece_size > MAX_PIECE_SIZE {
+            return Err(ExchangeError::Config(
+                "piece_size must not exceed max_piece_size (and max_piece_size the protocol limit)"
+                    .into(),
+            ));
+        }
+        if self.max_artifact_bytes == 0 {
+            return Err(ExchangeError::Config("max_artifact_bytes must be > 0".into()));
         }
         if self.max_sources == 0 || self.ban_after_corrupt == 0 {
             return Err(ExchangeError::Config(

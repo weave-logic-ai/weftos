@@ -13,6 +13,10 @@
 //!   [`RevocationList`] and applied at once: grants dropped, bytes evicted,
 //!   `artifact.revoke` and `artifact.evict` chained
 //!   ([`ArtifactExchange::apply_revocations`]).
+//! - **Limited.** A signer key that is itself revoked can no longer issue
+//!   revocations, signatures are checked strictly (no malleable encodings),
+//!   and a node accepts a bounded number of notices per second, so a stolen
+//!   key cannot make every node verify and sweep in a loop.
 //! - **Flooded.** A notice that was new here is forwarded to every other
 //!   peer; one that was already known is not, so a notice crosses a mesh
 //!   once and cannot loop. Revocations are only ever added by notices, so a
@@ -20,7 +24,7 @@
 
 use std::sync::Arc;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::ipc::{KernelMessage, MessagePayload, MessageTarget};
@@ -71,6 +75,12 @@ pub enum NoticeError {
     /// Signer is not a pinned operator or WeftOS key.
     #[error("revocation signer is not a pinned operator key")]
     UnauthorizedSigner,
+    /// The signing key has itself been revoked.
+    #[error("revocation signer key is revoked")]
+    SignerRevoked,
+    /// Too many notices arrived too fast.
+    #[error("revocation notices are arriving too fast")]
+    RateLimited,
 }
 
 fn signed_bytes(payload: &str) -> Vec<u8> {
@@ -124,7 +134,7 @@ pub fn verify_revocation(
         .try_into()
         .map_err(|_| NoticeError::Malformed("signature length".into()))?;
     let vk = VerifyingKey::from_bytes(&pk).map_err(|_| NoticeError::BadSignature)?;
-    vk.verify(&signed_bytes(&signed.payload), &Signature::from_bytes(&sig))
+    vk.verify_strict(&signed_bytes(&signed.payload), &Signature::from_bytes(&sig))
         .map_err(|_| NoticeError::BadSignature)?;
     let pinned = anchors.signer(&pk).ok_or(NoticeError::UnauthorizedSigner)?;
     if !matches!(pinned.origin, KeyOrigin::Operator | KeyOrigin::Weftos) {
@@ -149,7 +159,14 @@ pub struct RevocationExchange {
     anchors: TrustAnchors,
     runtime: Arc<MeshRuntime>,
     me: std::sync::Weak<Self>,
+    /// Token bucket for accepted notices: `(tokens, last refill)`.
+    bucket: std::sync::Mutex<(f64, std::time::Instant)>,
 }
+
+/// Notices accepted per second (burst [`NOTICE_BURST`]).
+pub const NOTICES_PER_SEC: f64 = 2.0;
+/// Burst of notices accepted at once.
+pub const NOTICE_BURST: f64 = 10.0;
 
 impl RevocationExchange {
     /// Exchange applying notices to `ex`, recording them in `list` and
@@ -168,21 +185,46 @@ impl RevocationExchange {
             anchors,
             runtime: runtime.clone(),
             me: w.clone(),
+            bucket: std::sync::Mutex::new((NOTICE_BURST, std::time::Instant::now())),
         });
         runtime.set_control_sink(REVOKE_TOPIC, me.clone());
         me
     }
 
-    /// Record and apply a notice. Returns whether it was new here.
+    fn take_token(&self) -> bool {
+        let mut b = self.bucket.lock().unwrap_or_else(|p| p.into_inner());
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(b.1).as_secs_f64();
+        b.1 = now;
+        b.0 = (b.0 + dt * NOTICES_PER_SEC).min(NOTICE_BURST);
+        if b.0 < 1.0 {
+            return false;
+        }
+        b.0 -= 1.0;
+        true
+    }
+
+    /// Record and apply a notice. Returns whether it was new here; a notice
+    /// already on the list is not swept again.
     pub fn accept(&self, signed: &SignedRevocation) -> Result<bool, NoticeError> {
+        // Budget first: verification and the sweep are the expensive parts.
+        if !self.take_token() {
+            return Err(NoticeError::RateLimited);
+        }
         let n = verify_revocation(signed, &self.anchors)?;
+        if self
+            .list
+            .is_subject_revoked(RevocationKind::SignerKey, &crate::workload_pkg::codec::hex_encode(&signed.public_key))
+        {
+            return Err(NoticeError::SignerRevoked);
+        }
         let new = self
             .list
             .revoke_subject(n.kind, &n.id, &n.reason)
             .map_err(|e| NoticeError::Malformed(e.to_string()))?;
-        // Apply even when the entry was already listed: the operator may have
-        // revoked locally before the sweep ran.
-        self.ex.apply_revocations();
+        if new {
+            self.ex.apply_revocations();
+        }
         Ok(new)
     }
 
@@ -215,7 +257,12 @@ impl RevocationExchange {
 }
 
 impl PeerControlSink for RevocationExchange {
-    fn on_peer_control(&self, ctx: &PeerCtx, payload: &serde_json::Value) -> Vec<serde_json::Value> {
+    fn on_peer_control(
+        &self,
+        ctx: &PeerCtx,
+        _conn: u64,
+        payload: &serde_json::Value,
+    ) -> Vec<serde_json::Value> {
         let signed: SignedRevocation = match serde_json::from_value(payload.clone()) {
             Ok(s) => s,
             Err(e) => {

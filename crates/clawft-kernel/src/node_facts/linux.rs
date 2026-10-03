@@ -73,6 +73,13 @@ fn kv<'a>(text: &'a str, key: &str, sep: char) -> Option<&'a str> {
         .map(|(_, v)| v.trim().trim_matches('"'))
 }
 
+/// Current available memory, from `/proc/meminfo` alone (cheap live probe).
+pub fn live_free(host: &dyn ProbeHost) -> Option<u64> {
+    host.read_file("/proc/meminfo")
+        .as_deref()
+        .and_then(|t| meminfo_bytes(t, "MemAvailable"))
+}
+
 fn meminfo_bytes(text: &str, key: &str) -> Option<u64> {
     kv(text, key, ':')?
         .split_whitespace()

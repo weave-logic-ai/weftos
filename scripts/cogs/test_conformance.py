@@ -375,10 +375,6 @@ class Runtimes(unittest.TestCase):
             ad.run("/w1", timeout=10)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class MeasuredFile(unittest.TestCase):
     """--measured-file feeds the daemon's perf.measured.json without
     clobbering measurements from other cogs, arches or runtimes."""
@@ -430,3 +426,7 @@ class MeasuredFile(unittest.TestCase):
                                                 and c["id"].startswith("perf.") for c in got), argv)
         finally:
             conformance.execute = real
+
+
+if __name__ == "__main__":
+    unittest.main()

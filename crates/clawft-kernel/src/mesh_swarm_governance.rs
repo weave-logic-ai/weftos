@@ -26,6 +26,7 @@ use crate::chain::{
 use crate::mesh_artifact::ArtifactExchange;
 use crate::mesh_artifact_types::{ArtifactDescriptor, ArtifactId};
 use crate::mesh_swarm_picker::LinkStats;
+use crate::mesh_swarm_state::GrantInfo;
 use crate::revocation::{RevocationList, RevokedSubject};
 use crate::workload_pkg::codec::hex_encode;
 
@@ -78,31 +79,62 @@ impl ArtifactExchange {
             .is_some()
     }
 
-    /// True when the content hash, or the package or signers that allowed
-    /// it, is revoked.
+    /// True when the content hash is revoked, or every package that allowed
+    /// it (or those packages' signers) is. A package revoked while another,
+    /// unrevoked one still lists the same content leaves the content allowed.
     pub fn is_revoked(&self, content_hash: &[u8; 32]) -> bool {
         match self.grants.get(content_hash) {
-            Some(g) => self.is_revoked_subject(&g.package_id, &g.signers, content_hash),
-            None => self.is_revoked_subject("", &[], content_hash),
+            Some(gs) if !gs.is_empty() => gs
+                .iter()
+                .all(|g| self.is_revoked_subject(&g.package_id, &g.signers, content_hash)),
+            _ => self.is_revoked_subject("", &[], content_hash),
         }
     }
 
-    /// Apply the revocation list to everything held: drop the grant of each
-    /// revoked artifact, evict its bytes (and any partial copy), and chain
-    /// `artifact.revoke` and `artifact.evict`. Safe to call repeatedly.
+    /// The first grant that currently allows seeding `content_hash`: not
+    /// revoked, and its package may be redistributed.
+    pub(crate) fn servable_grant(&self, content_hash: &[u8; 32]) -> Option<GrantInfo> {
+        self.grants.get(content_hash)?.iter().find(|g| {
+            g.redistributable
+                && !self.is_revoked_subject(&g.package_id, &g.signers, content_hash)
+        }).cloned()
+    }
+
+    /// Apply the revocation list to everything held: drop each revoked
+    /// grant; when no grant is left for a content hash, evict its bytes (and
+    /// any partial copy), and chain `artifact.revoke` and `artifact.evict`.
+    /// Safe to call repeatedly.
+    ///
+    /// Revocation evicts **even pinned** cache entries: a revoked package must
+    /// stop running as well as stop seeding.
+    ///
+    /// Revocation is monotonic mesh-wide: entries are only ever added, by an
+    /// operator command or a signed notice, and a notice is re-flooded to
+    /// every peer. Removing one locally (`unrevoke_subject`) is undone by the
+    /// next notice a peer re-sends; to lift a revocation, clear the list on
+    /// every node or issue the package under a new key.
     pub fn apply_revocations(&self) -> Vec<RevokedArtifact> {
         let Some(list) = self.swarm.revocations.get().cloned() else {
             return Vec::new();
         };
+        // (content, package, subject) for every grant a revocation took away.
         let mut hits: Vec<([u8; 32], String, RevokedSubject)> = Vec::new();
-        for g in self.grants.iter() {
-            let hex = hex_encode(g.key());
-            if let Some(subject) = list.first_revoked(
-                Some(&g.package_id),
-                g.signers.iter(),
-                std::iter::once(&hex),
-            ) {
-                hits.push((*g.key(), g.package_id.clone(), subject));
+        let mut emptied: Vec<[u8; 32]> = Vec::new();
+        for entry in self.grants.iter() {
+            let hex = hex_encode(entry.key());
+            let mut left = 0;
+            for g in entry.value() {
+                match list.first_revoked(
+                    Some(&g.package_id),
+                    g.signers.iter(),
+                    std::iter::once(&hex),
+                ) {
+                    Some(subject) => hits.push((*entry.key(), g.package_id.clone(), subject)),
+                    None => left += 1,
+                }
+            }
+            if left == 0 {
+                emptied.push(*entry.key());
             }
         }
         // Revoked content hashes also cover what was never granted (a partial
@@ -115,28 +147,36 @@ impl ArtifactExchange {
                 || self.pending.iter().any(|p| p.content_hash == hash);
             if held && !hits.iter().any(|h| h.0 == hash) {
                 hits.push((hash, String::new(), s));
+                emptied.push(hash);
             }
         }
         let mut out = Vec::new();
         for (content_hash, package_id, subject) in hits {
-            self.grants.remove(&content_hash);
-            self.swarm.seeded.remove(&content_hash);
-            let ids: Vec<ArtifactId> = self
-                .by_content
-                .get(&content_hash)
-                .map(|i| *i)
-                .into_iter()
-                .chain(
-                    self.pending
-                        .iter()
-                        .filter(|p| p.content_hash == content_hash)
-                        .map(|p| p.id()),
-                )
-                .collect();
+            let evict = emptied.contains(&content_hash);
+            if let Some(mut gs) = self.grants.get_mut(&content_hash) {
+                gs.retain(|g| g.package_id != package_id);
+            }
+            self.grants.remove_if(&content_hash, |_, gs| gs.is_empty());
+            let mut ids: Vec<ArtifactId> = Vec::new();
             let mut bytes_freed = 0;
-            for id in &ids {
-                if let Some(f) = self.forget(id, "revoked") {
-                    bytes_freed += f.bytes_freed;
+            if evict {
+                self.swarm.seeded.remove(&content_hash);
+                ids = self
+                    .by_content
+                    .get(&content_hash)
+                    .map(|i| *i)
+                    .into_iter()
+                    .chain(
+                        self.pending
+                            .iter()
+                            .filter(|p| p.content_hash == content_hash)
+                            .map(|p| p.id()),
+                    )
+                    .collect();
+                for id in &ids {
+                    if let Some(f) = self.forget(id, "revoked") {
+                        bytes_freed += f.bytes_freed;
+                    }
                 }
             }
             self.chain_event(
@@ -148,6 +188,7 @@ impl ArtifactExchange {
                     "content_hash": hex_encode(&content_hash),
                     "package_id": package_id,
                     "artifact_ids": ids.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+                    "evicted": evict,
                     "bytes_freed": bytes_freed,
                     "node": self.node_id(),
                 }),
@@ -240,7 +281,7 @@ impl ArtifactExchange {
         let Some(id) = self.by_content.get(content_hash).map(|i| *i) else {
             return;
         };
-        let Some(g) = self.grants.get(content_hash).map(|g| g.clone()) else {
+        let Some(g) = self.servable_grant(content_hash) else {
             return;
         };
         if self.is_revoked(content_hash) || self.swarm.seeded.insert(*content_hash, ()).is_some() {
@@ -259,6 +300,11 @@ impl ArtifactExchange {
         );
     }
 
+    /// Bytes of downloads in progress (what their descriptors claim).
+    pub fn pending_bytes(&self) -> u64 {
+        self.pending.iter().map(|d| d.total_size).sum()
+    }
+
     /// Verified artifacts this node may serve (verified, allowed, not revoked).
     pub fn servable_artifacts(&self) -> Vec<ArtifactDescriptor> {
         self.descriptors
@@ -271,7 +317,15 @@ impl ArtifactExchange {
     /// Remove `id` (verified or pending) and the blobs no other artifact
     /// lists. The grant is kept, so a later fetch can seed it again;
     /// revocation drops the grant itself. Chains `artifact.evict`.
+    ///
+    /// Only blobs this exchange created and nobody else has stored since
+    /// (store reference count 1) are removed: the store is shared with
+    /// package verification and installed workloads, which may hold the same
+    /// bytes. A pinned cache entry is not forgotten, except for `revoked`.
     pub fn forget(&self, id: &ArtifactId, reason: &str) -> Option<Forgotten> {
+        if reason != "revoked" && self.swarm.cache().is_some_and(|c| c.is_pinned(id)) {
+            return None;
+        }
         let verified = self.descriptors.remove(id).map(|(_, d)| d);
         let pending = self.pending.remove(id).map(|(_, d)| d);
         let d = verified.or(pending)?;
@@ -294,11 +348,18 @@ impl ArtifactExchange {
             if keep.contains(&hash) || !seen.insert(hash) {
                 continue;
             }
+            if !self.swarm.owned.contains_key(&hash) {
+                continue; // not ours: another subsystem put it there
+            }
             let key = hex_encode(&hash);
-            if let Some((_, size, ..)) = self.store.metadata(&key)
-                && self.store.remove(&key).is_ok()
-            {
-                freed += size;
+            if let Some((_, size, _, _, refs)) = self.store.metadata(&key) {
+                if refs > 1 {
+                    // Someone else stored the same bytes since: theirs now.
+                    self.swarm.owned.remove(&hash);
+                } else if self.store.remove(&key).is_ok() {
+                    self.swarm.owned.remove(&hash);
+                    freed += size;
+                }
             }
         }
         if let Some(cache) = self.swarm.cache() {

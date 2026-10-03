@@ -100,6 +100,14 @@ impl Inner {
     }
 }
 
+fn package_hashes(pkg: &crate::mesh_artifact_pkg::ExchangedPackage) -> Vec<[u8; 32]> {
+    use crate::workload_pkg::codec::hex_decode_exact;
+    std::iter::once(pkg.manifest_hash.as_str())
+        .chain(pkg.verified.body.files().map(|f| f.blake3.as_str()))
+        .filter_map(hex_decode_exact::<32>)
+        .collect()
+}
+
 /// Budgeted, pin-aware view of the verified artifacts of one exchange.
 pub struct ArtifactCache {
     ex: Arc<ArtifactExchange>,
@@ -173,6 +181,12 @@ impl ArtifactCache {
         let _ = self.admit(id);
     }
 
+    /// Hook from the exchange: a download began. Its bytes count against the
+    /// budget, so room is made now rather than after it lands.
+    pub(crate) fn on_pending(&self) {
+        self.enforce();
+    }
+
     /// Hook from the exchange: an artifact was forgotten (evicted or revoked).
     pub(crate) fn on_forgotten(&self, id: &ArtifactId) {
         self.lock().entries.remove(id);
@@ -238,6 +252,20 @@ impl ArtifactCache {
         self.enforce();
     }
 
+    /// Pin a package's manifest and every file it lists.
+    pub fn pin_package(&self, pkg: &crate::mesh_artifact_pkg::ExchangedPackage) {
+        for h in package_hashes(pkg) {
+            self.pin_content(h);
+        }
+    }
+
+    /// Make a package's manifest and files evictable again (it was removed).
+    pub fn unpin_package(&self, pkg: &crate::mesh_artifact_pkg::ExchangedPackage) {
+        for h in package_hashes(pkg) {
+            self.unpin_content(&h);
+        }
+    }
+
     /// True if `id` is pinned.
     pub fn is_pinned(&self, id: &ArtifactId) -> bool {
         self.lock().entries.get(id).is_some_and(|e| e.pinned)
@@ -279,7 +307,7 @@ impl ArtifactCache {
         loop {
             let victim = {
                 let g = self.lock();
-                if g.used() <= self.cfg.max_bytes {
+                if g.used() + self.ex.pending_bytes() <= self.cfg.max_bytes {
                     break;
                 }
                 let oldest = |skip: Option<&ArtifactId>| {
@@ -303,12 +331,12 @@ impl ArtifactCache {
         self.ex.forget(id, reason);
     }
 
-    /// Bytes accounted.
+    /// Bytes accounted: verified entries plus downloads in progress.
     pub fn used_bytes(&self) -> u64 {
-        self.lock().used()
+        self.lock().used() + self.ex.pending_bytes()
     }
 
-    /// Bytes over the budget (only pins can cause this).
+    /// Bytes over the budget (only pins and downloads in progress can cause this).
     pub fn over_budget(&self) -> u64 {
         self.used_bytes().saturating_sub(self.cfg.max_bytes)
     }

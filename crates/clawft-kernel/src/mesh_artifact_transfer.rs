@@ -385,6 +385,7 @@ impl ArtifactExchange {
                 "descriptor does not match {key}"
             )));
         }
+        self.check_descriptor(&d, &crate::mesh_swarm_fetch::Expect::default())?;
         // Pending only: the content hash is the peer's claim until the
         // assembled pieces prove it (see `promote`).
         let id = self.note_pending(&d)?;

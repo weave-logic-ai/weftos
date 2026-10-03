@@ -92,3 +92,16 @@ fn link_stats_smooth_new_samples() {
     l.record("p", 0, 1.0); // ignored
     assert_eq!(l.bytes_per_sec("p"), Some(v));
 }
+
+#[test]
+fn trust_tier_outranks_a_self_asserted_lan() {
+    let links = LinkStats::default();
+    let cands = vec![
+        PeerCandidate::new("liar").on_lan("home"),
+        PeerCandidate::new("paired").on_lan("cloud").with_tier(TrustTier::Paired),
+        PeerCandidate::new("pinned").with_tier(TrustTier::Pinned),
+    ];
+    let ordered = order_peers(cands, Some("home"), &links, &|_| false);
+    let ids: Vec<_> = ordered.iter().map(|c| c.peer_id.as_str()).collect();
+    assert_eq!(ids, vec!["pinned", "paired", "liar"]);
+}

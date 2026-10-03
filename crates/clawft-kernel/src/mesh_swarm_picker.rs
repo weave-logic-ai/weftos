@@ -6,8 +6,8 @@
 //!   the number of live peers that hold the piece; ties go to the lowest
 //!   index so a fetch is reproducible. When a peer is lost its in-flight
 //!   pieces return to the pool and its holdings stop counting.
-//! - [`order_peers`] ranks fetch candidates: same LAN as the local node
-//!   first, then by measured link speed (peers never measured rank as an
+//! - [`order_peers`] ranks fetch candidates: higher trust tier first (a LAN
+//!   id is self-asserted), then same LAN as the local node, then by measured link speed (peers never measured rank as an
 //!   assumed default, so they get tried), then by id.
 //! - [`LinkStats`] keeps a smoothed bytes-per-second figure per peer from
 //!   the transfers this node actually performed. It is locally measured:
@@ -16,6 +16,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use dashmap::DashMap;
+
+use clawft_types::placement::TrustTier;
 
 use crate::mesh_artifact_types::Bitfield;
 
@@ -138,8 +140,11 @@ impl PiecePicker {
 pub struct PeerCandidate {
     /// Peer node id.
     pub peer_id: String,
-    /// LAN the peer advertises (`net.lan` fact), for locality.
+    /// LAN the peer advertises (`net.lan` fact), for locality. Self-asserted,
+    /// so it only orders peers of the same tier.
     pub lan_id: Option<String>,
+    /// Trust tier this node assigned the peer (`Discovered` when unknown).
+    pub tier: TrustTier,
 }
 
 impl PeerCandidate {
@@ -148,7 +153,14 @@ impl PeerCandidate {
         Self {
             peer_id: peer_id.into(),
             lan_id: None,
+            tier: TrustTier::Discovered,
         }
+    }
+
+    /// Candidate with trust tier `tier`.
+    pub fn with_tier(mut self, tier: TrustTier) -> Self {
+        self.tier = tier;
+        self
     }
 
     /// Candidate on `lan`.
@@ -162,8 +174,8 @@ impl PeerCandidate {
 /// is tried rather than starved (bytes per second).
 pub const ASSUMED_LINK_BPS: f64 = 10.0 * 1024.0 * 1024.0;
 
-/// Rank `candidates`: same LAN as `local_lan` first, then faster measured
-/// link, then peer id. Banned peers are dropped.
+/// Rank `candidates`: higher trust tier first, then same LAN as `local_lan`,
+/// then faster measured link, then peer id. Banned peers are dropped.
 pub fn order_peers(
     candidates: Vec<PeerCandidate>,
     local_lan: Option<&str>,
@@ -180,7 +192,9 @@ pub fn order_peers(
         })
         .collect();
     v.sort_by(|a, b| {
-        b.0.cmp(&a.0)
+        b.2.tier
+            .cmp(&a.2.tier)
+            .then(b.0.cmp(&a.0))
             .then(b.1.total_cmp(&a.1))
             .then(a.2.peer_id.cmp(&b.2.peer_id))
     });

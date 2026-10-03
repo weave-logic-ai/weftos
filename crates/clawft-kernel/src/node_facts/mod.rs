@@ -35,10 +35,13 @@ mod tests_linux;
 mod tests_mac;
 
 pub use host::{ProbeHost, SystemHost};
-pub use probe::{Collected, DEFAULT_FACTS_TTL_SECS, ProbeConfig, build_facts, probe_capabilities};
+pub use probe::{
+    Collected, DEFAULT_FACTS_TTL_SECS, EmulationCache, ProbeConfig, build_facts, probe_capabilities,
+    refresh_live, valid_image_ref,
+};
 
 #[cfg(any(feature = "mesh", feature = "exochain"))]
-pub use cache::{CacheError, CachedNodeFacts, InsertOutcome, NodeFactsCache};
+pub use cache::{CacheError, CachedNodeFacts, InsertOutcome, NodeFactsCache, TierSource};
 
 /// Probe `host`, build facts for the node owning `key`, and sign them.
 #[cfg(any(feature = "mesh", feature = "exochain"))]

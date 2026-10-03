@@ -21,6 +21,10 @@ pub struct GrantInfo {
     pub package_id: String,
     /// Lower-case hex public keys of the manifest's accepted signers.
     pub signers: Vec<String>,
+    /// False for a package that must not be handed to other nodes (Cognitum
+    /// provenance; no licence check exists here): it is never seeded,
+    /// advertised or served, though this node may hold and run it.
+    pub redistributable: bool,
 }
 
 /// Mutable swarm state of one node.
@@ -32,6 +36,8 @@ pub(crate) struct SwarmState {
     /// Corrupt pieces seen per peer.
     pub(crate) corrupt: DashMap<String, u32>,
     pub(crate) revocations: OnceLock<Arc<RevocationList>>,
+    /// Blobs this exchange created in the store (the only ones it may evict).
+    pub(crate) owned: DashMap<[u8; 32], ()>,
     /// Content hashes already chained as `artifact.seed`.
     pub(crate) seeded: DashMap<[u8; 32], ()>,
     cache: Mutex<Weak<ArtifactCache>>,
@@ -46,6 +52,7 @@ impl SwarmState {
             corrupt: DashMap::new(),
             revocations: OnceLock::new(),
             seeded: DashMap::new(),
+            owned: DashMap::new(),
             cache: Mutex::new(Weak::new()),
         }
     }

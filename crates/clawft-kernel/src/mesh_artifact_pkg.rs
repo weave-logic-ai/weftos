@@ -75,6 +75,25 @@ pub(crate) fn signer_keys(verified: &VerifiedPackage, anchors: &TrustAnchors) ->
         .collect()
 }
 
+/// May this package be handed to other nodes? No when it carries Cognitum
+/// provenance (a release-record attestation, or a `cognitum` release URL):
+/// those cogs are licence-gated, and nothing here checks a licence or that a
+/// peer belongs to the same operator, so they are never seeded or advertised.
+pub(crate) fn redistributable(verified: &VerifiedPackage) -> bool {
+    let cognitum_record = verified
+        .body
+        .attestations
+        .iter()
+        .any(|a| a.kind.to_ascii_lowercase().starts_with("cognitum."));
+    let cognitum_url = verified
+        .body
+        .source
+        .release_url
+        .as_deref()
+        .is_some_and(|u| u.to_ascii_lowercase().contains("cognitum"));
+    !(cognitum_record || cognitum_url)
+}
+
 pub(crate) fn pinned(file: &FileRef) -> Result<([u8; 32], u64), VerifyError> {
     let hash = hex_decode_exact::<32>(&file.blake3)
         .ok_or_else(|| VerifyError::Manifest(format!("{}: bad blake3", file.path)))?;
@@ -244,10 +263,11 @@ impl ArtifactExchange {
         anchors: &TrustAnchors,
     ) -> ExchangedPackage {
         let signers = signer_keys(&verified, anchors);
-        self.grant_with(manifest_hash, &verified.package_id, signers.clone());
+        let open = redistributable(&verified);
+        self.grant_with(manifest_hash, &verified.package_id, signers.clone(), open);
         for file in verified.body.files() {
             if let Ok((hash, _)) = pinned(file) {
-                self.grant_with(hash, &verified.package_id, signers.clone());
+                self.grant_with(hash, &verified.package_id, signers.clone(), open);
             }
         }
         ExchangedPackage {

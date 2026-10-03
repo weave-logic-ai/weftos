@@ -22,6 +22,16 @@ use crate::node_facts_advert::{
 /// Most nodes held.
 pub const MAX_CACHED_NODES: usize = 4096;
 
+/// Where a node's tier came from. Only an operator-set tier is sticky: a
+/// mesh-derived tier follows the current connection (admission) every frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TierSource {
+    /// Derived from how the node's connection was admitted.
+    Mesh,
+    /// Set by the operator (or the local node itself).
+    Operator,
+}
+
 /// One cached, verified facts block plus what the receiver knows about it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CachedNodeFacts {
@@ -31,6 +41,10 @@ pub struct CachedNodeFacts {
     pub signed: SignedNodeFacts,
     /// Trust tier assigned by this node.
     pub trust_tier: TrustTier,
+    /// Where the tier came from.
+    pub tier_source: TierSource,
+    /// Connection that supplied the facts (0 = none), for per-connection quotas.
+    pub origin: u64,
     /// When this node accepted the base, unix seconds.
     pub received_at: u64,
     /// Last applied delta `seq` (0 = none).
@@ -119,7 +133,7 @@ impl NodeFactsCache {
         trust_tier: TrustTier,
         now: u64,
     ) -> Result<InsertOutcome, CacheError> {
-        self.insert_capped(signed, trust_tier, now, None)
+        self.insert_capped(signed, trust_tier, now, None, 0)
     }
 
     /// [`Self::insert`] for facts a *peer* sent. Every capability's
@@ -127,14 +141,22 @@ impl NodeFactsCache {
     /// receiver did not probe or measure remote data, so a peer's
     /// `measured` claim is never held as `measured`. The signed envelope is
     /// kept as received.
+    ///
+    /// `mesh_tier` is derived from the connection that sent the facts and is
+    /// re-derived on every frame; a tier the operator set is kept. `origin`
+    /// names the connection (see [`Self::discovered_from`]). When the cache
+    /// is full, the oldest mesh-derived `Discovered` entry makes room before
+    /// the insert is refused, so `Paired` and `Pinned` entries are never
+    /// pushed out by `Discovered` ones.
     pub fn insert_remote(
         &self,
         signed: SignedNodeFacts,
-        trust_tier: TrustTier,
+        mesh_tier: TrustTier,
         max_provenance: Provenance,
+        origin: u64,
         now: u64,
     ) -> Result<InsertOutcome, CacheError> {
-        self.insert_capped(signed, trust_tier, now, Some(max_provenance))
+        self.insert_capped(signed, mesh_tier, now, Some(max_provenance), origin)
     }
 
     fn insert_capped(
@@ -143,7 +165,9 @@ impl NodeFactsCache {
         trust_tier: TrustTier,
         now: u64,
         cap: Option<Provenance>,
+        origin: u64,
     ) -> Result<InsertOutcome, CacheError> {
+        let remote = cap.is_some();
         let mut facts = verify_node_facts(&signed, now)?;
         if let Some(cap) = cap {
             for c in &mut facts.capabilities {
@@ -153,17 +177,33 @@ impl NodeFactsCache {
         let mut public_key = [0u8; 32];
         public_key.copy_from_slice(&signed.public_key);
         let node_id = facts.node_id.clone();
-        let entry = CachedNodeFacts {
+        let mut entry = CachedNodeFacts {
             facts,
             signed,
             trust_tier,
+            tier_source: if remote { TierSource::Mesh } else { TierSource::Operator },
+            origin,
             received_at: now,
             delta_seq: 0,
             public_key,
         };
         // Expired entries do not block a node that restarted its seq.
         if let Some(held) = self.entries.get(&node_id).filter(|e| e.is_fresh(now)) {
+            if remote && held.tier_source == TierSource::Operator {
+                entry.trust_tier = held.trust_tier;
+                entry.tier_source = TierSource::Operator;
+            }
             if held.signed.payload == entry.signed.payload {
+                drop(held);
+                if remote {
+                    // Same facts, but the connection's tier is current.
+                    if let Some(mut e) = self.entries.get_mut(&node_id)
+                        && e.tier_source == TierSource::Mesh
+                    {
+                        e.trust_tier = trust_tier;
+                        e.origin = origin;
+                    }
+                }
                 return Ok(InsertOutcome::Unchanged);
             }
             if entry.facts.seq <= held.facts.seq {
@@ -176,7 +216,7 @@ impl NodeFactsCache {
         }
         if !self.entries.contains_key(&node_id) && self.entries.len() >= MAX_CACHED_NODES {
             self.evict_expired(now);
-            if self.entries.len() >= MAX_CACHED_NODES {
+            if self.entries.len() >= MAX_CACHED_NODES && !self.evict_oldest_discovered() {
                 return Err(CacheError::Full);
             }
         }
@@ -184,6 +224,51 @@ impl NodeFactsCache {
             Some(_) => InsertOutcome::Replaced,
             None => InsertOutcome::Added,
         })
+    }
+
+    /// Drop the oldest mesh-derived `Discovered` entry. False if none.
+    fn evict_oldest_discovered(&self) -> bool {
+        let victim = self
+            .entries
+            .iter()
+            .filter(|e| e.tier_source == TierSource::Mesh && e.trust_tier == TrustTier::Discovered)
+            .min_by_key(|e| e.received_at)
+            .map(|e| e.key().clone());
+        match victim {
+            Some(k) => self.entries.remove(&k).is_some(),
+            None => false,
+        }
+    }
+
+    /// Fresh mesh-derived `Discovered` entries that connection `origin` supplied.
+    pub fn discovered_from(&self, origin: u64, now: u64) -> usize {
+        if origin == 0 {
+            return 0;
+        }
+        self.entries
+            .iter()
+            .filter(|e| {
+                e.origin == origin
+                    && e.tier_source == TierSource::Mesh
+                    && e.trust_tier == TrustTier::Discovered
+                    && e.is_fresh(now)
+            })
+            .count()
+    }
+
+    /// Lower a mesh-derived tier to `Discovered` (the node's admission was
+    /// revoked or its verified connection is gone). An operator-set tier is
+    /// left alone. True if the tier changed.
+    pub fn demote_mesh_tier(&self, node_id: &str) -> bool {
+        match self.entries.get_mut(node_id) {
+            Some(mut e)
+                if e.tier_source == TierSource::Mesh && e.trust_tier != TrustTier::Discovered =>
+            {
+                e.trust_tier = TrustTier::Discovered;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Verify a signed delta and apply it to the cached base.
@@ -218,6 +303,7 @@ impl NodeFactsCache {
         match self.entries.get_mut(node_id) {
             Some(mut e) => {
                 e.trust_tier = trust_tier;
+                e.tier_source = TierSource::Operator;
                 true
             }
             None => false,

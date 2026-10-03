@@ -246,8 +246,16 @@ async fn forged_facts_are_rejected() {
     assert!(b.ex.ingest(&from_a, FactsWire::Facts { signed: good }, now(), &mut replies).is_ok());
 }
 
+fn signed_for(n: u8, seq: u64) -> (String, SignedNodeFacts) {
+    let k = SigningKey::from_bytes(&[n; 32]);
+    let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+    let mut f = NodeFacts::new(id.clone(), now(), 600, seq);
+    f.capabilities = vec![cap("cpu.arch.aarch64", Provenance::Probed)];
+    (id, sign_node_facts(&f, &k).unwrap())
+}
+
 #[tokio::test]
-async fn a_later_frame_never_lowers_a_nodes_tier_and_old_facts_cannot_roll_back() {
+async fn the_tier_follows_the_current_connection_and_old_facts_cannot_roll_back() {
     let (a, b) = (node(12), node(13));
     let ka = SigningKey::from_bytes(&[12; 32]);
     let mut replies = Vec::new();
@@ -260,12 +268,127 @@ async fn a_later_frame_never_lowers_a_nodes_tier_and_old_facts_cannot_roll_back(
 
     let out = b.ex.ingest(&ctx(&a.id, true), FactsWire::Facts { signed: s1.clone() }, now(), &mut replies).unwrap();
     assert!(matches!(out, IngestOutcome::Accepted { tier: TrustTier::Paired, .. }));
-    // Newer facts over an unverified connection keep the earned tier.
+    // Newer facts over a connection that is no longer verified: Discovered.
+    // (Admission is re-derived on every frame; it is not remembered.)
     let out = b.ex.ingest(&ctx(&a.id, false), FactsWire::Facts { signed: s2 }, now(), &mut replies).unwrap();
-    assert!(matches!(out, IngestOutcome::Accepted { tier: TrustTier::Paired, outcome: InsertOutcome::Replaced, .. }), "{out:?}");
+    assert!(matches!(out, IngestOutcome::Accepted { tier: TrustTier::Discovered, outcome: InsertOutcome::Replaced, .. }), "{out:?}");
+    assert_eq!(held(&b, &a).unwrap().trust_tier(), TrustTier::Discovered);
     // Replaying the older block is stale.
     let r = b.ex.ingest(&ctx(&a.id, true), FactsWire::Facts { signed: s1 }, now(), &mut replies);
     assert!(matches!(r, Err(IngestError::Cache(CacheError::Stale { .. }))), "{r:?}");
+}
+
+#[tokio::test]
+async fn an_unchanged_block_over_an_unverified_connection_also_lowers_the_tier() {
+    let (a, b) = (node(20), node(21));
+    let s = sign_node_facts(&sample(&a), &SigningKey::from_bytes(&[20; 32])).unwrap();
+    let mut r = Vec::new();
+    b.ex.ingest(&ctx(&a.id, true), FactsWire::Facts { signed: s.clone() }, now(), &mut r).unwrap();
+    assert_eq!(held(&b, &a).unwrap().trust_tier(), TrustTier::Paired);
+    let out = b.ex.ingest(&ctx(&a.id, false), FactsWire::Facts { signed: s }, now(), &mut r).unwrap();
+    assert!(matches!(out, IngestOutcome::Accepted { outcome: InsertOutcome::Unchanged, tier: TrustTier::Discovered, .. }), "{out:?}");
+}
+
+#[tokio::test]
+async fn admitted_then_revoked_goes_back_to_discovered() {
+    let (a, b) = (node(14), node(15));
+    link(&a, &b, true, true);
+    a.ex.publish(sample(&a), now()).await.unwrap();
+    wait_for("paired", || held(&b, &a).is_some_and(|c| c.trust_tier() == TrustTier::Paired)).await;
+    // `weaver mesh peer revoke` closes the connection: the runtime emits Left.
+    b.rt.disconnect_peer(&a.id);
+    wait_for("demoted", || held(&b, &a).is_some_and(|c| c.trust_tier() == TrustTier::Discovered)).await;
+    assert!(held(&b, &a).is_some(), "the signed facts stay; only the tier drops");
+}
+
+#[tokio::test]
+async fn an_operator_set_tier_survives_mesh_frames_and_disconnects() {
+    let (a, b) = (node(16), node(17));
+    let ka = SigningKey::from_bytes(&[16; 32]);
+    let mut r = Vec::new();
+    let mut f = sample(&a);
+    f.seq = 1;
+    b.ex.ingest(&ctx(&a.id, true), FactsWire::Facts { signed: sign_node_facts(&f, &ka).unwrap() }, now(), &mut r).unwrap();
+    assert!(b.ex.membership().facts().set_trust_tier(&a.id, TrustTier::Pinned));
+    f.seq = 2;
+    let out = b.ex.ingest(&ctx(&a.id, false), FactsWire::Facts { signed: sign_node_facts(&f, &ka).unwrap() }, now(), &mut r).unwrap();
+    assert!(matches!(out, IngestOutcome::Accepted { tier: TrustTier::Pinned, .. }), "{out:?}");
+    assert!(!b.ex.on_peer_gone(&a.id), "an operator tier is not demoted");
+    assert_eq!(held(&b, &a).unwrap().trust_tier(), TrustTier::Pinned);
+}
+
+#[tokio::test]
+async fn one_unverified_connection_cannot_mint_more_than_its_quota() {
+    let b = node(30);
+    let mut r = Vec::new();
+    for n in 100..100 + MAX_DISCOVERED_PER_CONN as u8 {
+        let (id, s) = signed_for(n, 1);
+        b.ex.ingest_from(&ctx(&id, false), 7, FactsWire::Facts { signed: s }, now(), &mut r).unwrap();
+    }
+    let (id, s) = signed_for(200, 1);
+    let e = b.ex.ingest_from(&ctx(&id, false), 7, FactsWire::Facts { signed: s.clone() }, now(), &mut r);
+    assert!(matches!(e, Err(IngestError::Quota { conn: 7, .. })), "{e:?}");
+    // Another connection has its own quota; a verified one is not limited by it.
+    assert!(b.ex.ingest_from(&ctx(&id, false), 8, FactsWire::Facts { signed: s }, now(), &mut r).is_ok());
+    let (vid, vs) = signed_for(201, 1);
+    assert!(b.ex.ingest_from(&ctx(&vid, true), 7, FactsWire::Facts { signed: vs }, now(), &mut r).is_ok());
+    // An id it already holds can still be refreshed.
+    let (id0, s0) = signed_for(100, 2);
+    assert!(b.ex.ingest_from(&ctx(&id0, false), 7, FactsWire::Facts { signed: s0 }, now(), &mut r).is_ok());
+}
+
+#[tokio::test]
+async fn a_flooding_connection_is_cut_off_before_anything_is_verified() {
+    let b = node(31);
+    let (id, s) = signed_for(110, 1);
+    let ctxu = ctx(&id, false);
+    // Garbage frames drain the budget (the parse fails, but each is charged first).
+    let junk = serde_json::json!({"op": "nonsense"});
+    for _ in 0..(2.0 * FRAMES_PER_SEC) as usize {
+        assert!(b.ex.on_peer_control(&ctxu, 55, &junk).is_empty());
+    }
+    // Now a valid, signed block on the same connection is dropped unread.
+    let wire = serde_json::to_value(FactsWire::Facts { signed: s.clone() }).unwrap();
+    assert!(b.ex.on_peer_control(&ctxu, 55, &wire).is_empty());
+    assert!(held_by_id(&b, &id).is_none(), "over-budget frame was not verified or cached");
+    // Another connection is unaffected.
+    b.ex.on_peer_control(&ctxu, 56, &wire);
+    assert!(held_by_id(&b, &id).is_some());
+}
+
+fn held_by_id(on: &TestNode, id: &str) -> Option<crate::node_facts::CachedNodeFacts> {
+    on.ex.membership().facts().get(id, now())
+}
+
+#[test]
+fn a_full_cache_evicts_discovered_before_refusing_and_never_pushes_out_paired() {
+    use crate::node_facts::cache::MAX_CACHED_NODES;
+    let cache = crate::node_facts::NodeFactsCache::new();
+    let mk = |n: u32| {
+        let mut b = [0u8; 32];
+        b[..4].copy_from_slice(&n.to_be_bytes());
+        b[31] = 1;
+        let k = SigningKey::from_bytes(&b);
+        let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+        let mut f = NodeFacts::new(id, now(), 600, 1);
+        f.capabilities = vec![cap("cpu.arch.aarch64", Provenance::Probed)];
+        sign_node_facts(&f, &k).unwrap()
+    };
+    // Full of Discovered: a newcomer evicts the oldest instead of failing.
+    for n in 0..MAX_CACHED_NODES as u32 {
+        cache.insert_remote(mk(n), TrustTier::Discovered, Provenance::Claimed, 1, now() + (n as u64 % 5)).unwrap();
+    }
+    assert_eq!(cache.len(), MAX_CACHED_NODES);
+    cache.insert_remote(mk(9_000), TrustTier::Paired, Provenance::Probed, 2, now() + 10).unwrap();
+    assert_eq!(cache.len(), MAX_CACHED_NODES);
+    // Full of Paired: Discovered cannot displace them.
+    let full = crate::node_facts::NodeFactsCache::new();
+    for n in 0..MAX_CACHED_NODES as u32 {
+        full.insert_remote(mk(n), TrustTier::Paired, Provenance::Probed, 1, now()).unwrap();
+    }
+    let r = full.insert_remote(mk(9_001), TrustTier::Discovered, Provenance::Claimed, 2, now());
+    assert_eq!(r, Err(CacheError::Full));
+    assert_eq!(full.len(), MAX_CACHED_NODES);
 }
 
 #[tokio::test]
