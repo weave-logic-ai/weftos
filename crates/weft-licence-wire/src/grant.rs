@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
-use super::{
+use crate::{
     GRANT_DOMAIN, LicenceError, MAX_GRANT_TTL_SECS, MeshId, SignedEnvelope, envelope_key, key_id,
     parse_canonical, sha256_hex, sign_envelope, valid_hex32, valid_token, verify_envelope,
 };
@@ -131,7 +131,7 @@ pub fn verify_grant(
 }
 
 /// Signature and shape only, with no mesh check (store load).
-pub(crate) fn verify_grant_signature(
+pub fn verify_grant_signature(
     signed: &SignedGrant,
     grant_pubkey: &[u8; 32],
 ) -> Result<CheckoutGrant, LicenceError> {

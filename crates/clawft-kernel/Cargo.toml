@@ -141,6 +141,7 @@ rcgen = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 sha2 = { workspace = true }
+weft-licence-wire = { path = "../weft-licence-wire" }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
