@@ -133,6 +133,25 @@ impl PlacementControlPlane {
         }
     }
 
+    /// Drop the controller's records of `ids` (instances a revocation took
+    /// down on this node, see [`super::host_revoke`]), and their Seed
+    /// handles, and save. Returns how many records were removed.
+    pub fn forget_instances(&self, ids: &[String]) -> usize {
+        let mut n = 0;
+        if let Ok(mut p) = self.placements.lock() {
+            n = ids.iter().filter(|i| p.remove(*i).is_some()).count();
+        }
+        if let Ok(mut h) = self.seed_handles.lock() {
+            for i in ids {
+                h.remove(i);
+            }
+        }
+        if n > 0 {
+            self.persist();
+        }
+        n
+    }
+
     /// Re-describe `node_id` with its stored key when its facts are not
     /// cached (after a restart), so governance sees its real tier.
     pub(super) async fn ensure_described(&self, node_id: &str) {

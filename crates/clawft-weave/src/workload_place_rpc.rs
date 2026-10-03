@@ -45,6 +45,7 @@ use crate::workload_place_policy::{load_container, load_seeds};
 
 /// Methods served here (the rest of `workload.*` is in `workload_rpc`).
 pub const METHODS: &[&str] = &[
+    "workload.revoke",
     "workload.place",
     "workload.explain",
     "workload.status",
@@ -64,6 +65,9 @@ static PLANE: OnceCell<Arc<PlacementControlPlane>> = OnceCell::const_new();
 /// the gate is fixed at build, so a later governance push must not leave an
 /// older, possibly looser, gate deciding (ADR-103 D8: applies after a restart).
 static BUILT_RULES: OnceLock<Option<String>> = OnceLock::new();
+/// What `workload.revoke` and the mesh revocation hook act on, set once the
+/// control plane is built.
+static REVOKER: OnceLock<crate::workload_revoke_rpc::Revoker> = OnceLock::new();
 /// This node's `workload-host` (in-process target and, when configured,
 /// served to other nodes).
 static HOST: OnceLock<Arc<WorkloadHostService>> = OnceLock::new();
@@ -124,31 +128,56 @@ fn gate(
 
 /// Give the exchange this node's revocation list (a revoked package, signer
 /// or artifact hash stops seeding at once) and, with a mesh, start taking
-/// signed revocation notices from peers. The handle the runtime keeps is the
-/// only owner needed: it lives as long as the runtime does.
+/// signed revocation notices from peers. A notice that was new here also
+/// stops and unloads what this node is running from the revoked subject
+/// (`Revoker::enforce`, on a task: the notice sink must not block). The
+/// handle the runtime keeps is the only owner of the exchange needed: it
+/// lives as long as the runtime does, so the daemon keeps a second one for
+/// the operator verb.
 fn wire_revocations(
     ex: &Arc<ArtifactExchange>,
     list: Arc<clawft_kernel::revocation::RevocationList>,
     anchors: &clawft_kernel::workload_pkg::TrustAnchors,
     mesh: Option<Arc<clawft_kernel::mesh_runtime::MeshRuntime>>,
-) {
-    match mesh {
+) -> Option<Arc<clawft_kernel::mesh_swarm_revoke::RevocationExchange>> {
+    let notices = match mesh {
         Some(rt) => {
-            clawft_kernel::mesh_swarm_revoke::RevocationExchange::start(
+            let x = clawft_kernel::mesh_swarm_revoke::RevocationExchange::start(
                 ex.clone(),
                 list,
                 anchors.clone(),
                 rt,
             );
+            x.set_on_applied(Arc::new(|_| enforce_in_background()));
+            Some(x)
         }
         None => {
             ex.set_revocations(list);
+            None
         }
-    }
+    };
     let swept = ex.apply_revocations();
     if !swept.is_empty() {
         tracing::warn!(n = swept.len(), "revoked artifacts evicted at startup");
     }
+    notices
+}
+
+/// Run the forced unload for a revocation applied from the mesh, off the
+/// task that received it.
+fn enforce_in_background() {
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        tracing::warn!("revocation applied outside a runtime: running instances not swept");
+        return;
+    };
+    rt.spawn(async {
+        if let Some(r) = REVOKER.get() {
+            let forced = r.enforce().await;
+            if !forced.is_empty() {
+                tracing::warn!(n = forced.len(), "instances stopped by a mesh revocation");
+            }
+        }
+    });
 }
 
 async fn build(
@@ -192,7 +221,7 @@ async fn build(
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
-    wire_revocations(&ex, revocations, &anchors, mesh);
+    let notices = wire_revocations(&ex, revocations.clone(), &anchors, mesh);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
     // `describe` always answers with the facts the daemon re-probes.
@@ -238,7 +267,7 @@ async fn build(
     let local_addr = conn.register_local("local", local);
     let seeds = load_seeds(dir, gate.clone(), &chain)?;
     let plane =
-        PlacementControlPlane::new(boot.key.clone(), gate, chain, ex, anchors, conn)
+        PlacementControlPlane::new(boot.key.clone(), gate, chain, ex.clone(), anchors.clone(), conn)
             .with_membership(membership)
             .with_state_file(dir.join(STATE_FILE))
             .map_err(|e| format!("placement state: {e}"))?;
@@ -253,7 +282,29 @@ async fn build(
     // Targets restored from the state file are re-described with the key
     // each was learned with.
     plane.refresh().await;
-    Ok(Arc::new(plane))
+    let plane = Arc::new(plane);
+    // The key notices are signed with must be one this node itself trusts to
+    // revoke (a peer would refuse any other).
+    let pk = boot.key.verifying_key().to_bytes();
+    let notice_key = anchors
+        .signer(&pk)
+        .filter(|k| {
+            matches!(
+                k.origin,
+                clawft_kernel::workload_pkg::KeyOrigin::Operator
+                    | clawft_kernel::workload_pkg::KeyOrigin::Weftos
+            )
+        })
+        .map(|_| boot.key.clone());
+    let _ = REVOKER.set(crate::workload_revoke_rpc::Revoker {
+        list: revocations,
+        exchange: ex.clone(),
+        host: HOST.get().cloned(),
+        plane: Some(plane.clone()),
+        notices,
+        notice_key,
+    });
+    Ok(plane)
 }
 
 #[derive(Debug, Deserialize)]
@@ -411,6 +462,10 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
                 plane.refresh().await;
                 let r = plane.place(&o).await.map_err(|e| e.to_string())?;
                 serde_json::to_value(r).map_err(|e| e.to_string())
+            }
+            "workload.revoke" => {
+                let r = REVOKER.get().ok_or("revocation is not available: placement did not start")?;
+                r.revoke(params).await
             }
             "workload.status" if params.get("instance_id").is_none() => {
                 plane.settle_unsettled().await;

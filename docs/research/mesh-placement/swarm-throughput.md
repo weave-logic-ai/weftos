@@ -129,10 +129,9 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   left by installed workloads from earlier runs are indexed and the exchange
   never takes ownership of them (with `new_file` it would have re-stored the
   same bytes as its own and could evict them). `apply_revocations` does evict
-  pinned entries: the bytes are removed and serving is blocked. It does not
-  stop a workload that is already running: that instance continues until it
-  restarts, and placement does not yet react to `artifact.revoke`. Follow-up:
-  have placement tear down instances of a revoked package.
+  pinned entries: the bytes are removed and serving is blocked. The sweep
+  itself does not touch a workload that is already running; the host does,
+  right after (see "Revocation: scope and limits", forced unload).
 - **Unverified facts cannot crowd the cache.** One connection holds at most 4
   `Discovered` entries and the cache at most 512 in all; past that the
   connection holding the most loses its oldest entry first, and `Paired` and
@@ -161,7 +160,36 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   second) before the signature verify, so junk on one connection cannot starve
   notices on another, and the operator's own `issue` is exempt. A known notice
   is not swept again.
-- Not covered: a running instance. See the eviction note above.
+- **Forced unload.** Every applied revocation (the operator's
+  `weaver workload revoke`, a signed notice from a peer) is followed by
+  `WorkloadHostService::enforce_revocations` on that node: each hosted
+  instance whose package id, signer key or artifact hashes are now revoked is
+  stopped and unloaded, its ingest token is dropped, and the controller's
+  record of it is forgotten. The teardown is not gated: the applied
+  revocation is the authority, so it needs no stop or unload permit. Every
+  step is chained (`workload.stop`, `workload.unload` with
+  `forced_by_revocation` naming the subject; a step that fails is chained as
+  `workload.refuse` and the instance is retried by the next sweep).
+- **Chained, always.** The list itself chains every revocation
+  (`workload.revoke`: subject, reason, `revoked_by` = `operator` or
+  `mesh:<signer prefix>`) and every lifted one (`workload.unrevoke`),
+  whichever caller applied it, and does so before the disk write is
+  reported: a failed write leaves the entry in force in memory and the event
+  on the chain with `persisted: false`.
+- **No bypass.** The workload gate checks the list on every place, load and
+  start and for install and migrate; a request that names no package, signer
+  key or artifact hash is refused rather than trusted on its `package_trust`
+  claim. Stopping or unloading is never blocked by a revocation (a revoked
+  package must stay stoppable). The daemon builds every `WorkloadGate` with
+  the kernel's list, and `crates/clawft-weave/tests/revocation_population.rs`
+  fails a build that adds one without it.
+- Not covered: instances on a Cognitum Seed (the device's own store; a
+  revoked store cog is refused at the next place or start, not stopped), and
+  a remote `workload-host` that missed the notice (it stops its own instances
+  when it receives one; the operator's node can only flood to the peers it is
+  connected to). A notice is issued only when this node's key is a pinned
+  operator key in `workload-trust.json`; otherwise the verb says so and the
+  revocation holds on this node alone.
 
 ## Live facts
 

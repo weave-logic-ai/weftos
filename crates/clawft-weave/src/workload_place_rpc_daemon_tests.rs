@@ -304,7 +304,7 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
 
     // Listed as paired again: place runs the cog on the board.
     write(&runtime, PEERS_FILE, &paired);
-    let v = call(&kernel, "workload.place", params).await.unwrap();
+    let v = call(&kernel, "workload.place", params.clone()).await.unwrap();
     assert_eq!(v["placed"]["node_id"], pi.as_str(), "{}", v["explain"]);
     let iid = v["placed"]["instance_id"].as_str().unwrap().to_string();
     let st = call(&kernel, "workload.status", json!({ "instance_id": iid }))
@@ -319,6 +319,44 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
             .any(|e| e.kind == "workload.place"),
         "placed on the board's own chain"
     );
+
+    // `weaver workload revoke --signer`: nothing of it runs on THIS node (the
+    // instance is on the board) so nothing local is torn down, and with no
+    // mesh no notice goes out (the answer says so). The daemon's placement
+    // gate and exchange have the kernel's revocation list, so the package is
+    // now refused;
+    // the revocation is chained by the list at boot; and the instance on the
+    // board can still be taken down by hand.
+    let signer_hex = hex_encode(&signer.verifying_key().to_bytes());
+    let r = call(
+        &kernel,
+        "workload.revoke",
+        json!({ "signer": signer_hex, "reason": "leaked" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["newly_revoked"], true, "{r}");
+    assert_eq!(r["forced"], json!([]), "{r}");
+    assert!(r["notice"].as_str().unwrap().contains("no mesh"), "{r}");
+    // Refused at verify/seed time (the exchange has the same list), before
+    // any node is asked.
+    let e = call(&kernel, "workload.explain", params).await.unwrap_err();
+    assert!(e.contains("is revoked"), "{e}");
+    assert!(
+        kernel
+            .read()
+            .await
+            .chain_manager()
+            .unwrap()
+            .tail(10_000)
+            .iter()
+            .any(|e| e.kind == "workload.revoke"
+                && e.payload.as_ref().is_some_and(|p| p["revoked_by"] == "operator")),
+        "the revocation is on the chain"
+    );
+    // Admin only, one subject at a time.
+    assert!(call(&kernel, "workload.revoke", json!({})).await.is_err());
+
     call(&kernel, "workload.stop", json!({ "instance_id": iid }))
         .await
         .unwrap();
