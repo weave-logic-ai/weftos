@@ -39,6 +39,18 @@ pub enum LockError {
     },
 }
 
+/// Write `path` (a `kernel.pid`) atomically: a temp file in the same
+/// directory, then a rename, so a reader (the supervisor's adoption scan)
+/// sees either no file or the whole pid, never an empty one.
+pub fn write_pid_file(path: &Path, pid: u32) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let tmp = dir.join(format!(".kernel.pid.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, pid.to_string())?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 /// Held for the daemon's lifetime; dropping it releases the lock.
 #[derive(Debug)]
 pub struct InstanceLock {

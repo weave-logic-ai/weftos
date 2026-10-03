@@ -1145,7 +1145,7 @@ pub async fn run(
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
     // Record this process as the live daemon only now that boot (which takes
     // the chain lock) has succeeded, so a refused boot leaves no stale pid.
-    let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
+    let _ = crate::instance_lock::write_pid_file(&protocol::pid_path(), std::process::id());
     // Boot succeeded. A launchd-started instance lifts the "do not restart"
     // sentinel (from an earlier refusal or clean exit) so launchd supervises
     // this run; a manual start leaves it, or launchd would launch its own,

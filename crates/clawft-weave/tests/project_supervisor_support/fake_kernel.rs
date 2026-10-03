@@ -43,7 +43,7 @@ pub fn run(args: &[String]) -> ! {
 fn serve(run: &PathBuf, id: &str, mode: &str) -> ! {
     let paths = RuntimePaths::at(run);
     let _lock = (mode != "nolock").then(|| InstanceLock::acquire(&paths).expect("kernel.lock"));
-    std::fs::write(paths.pid(), std::process::id().to_string()).unwrap();
+    clawft_weave::instance_lock::write_pid_file(&paths.pid(), std::process::id()).unwrap();
     if let Some(ms) = std::fs::read_to_string(run.join("start_delay_ms")).ok().and_then(|s| s.trim().parse().ok()) {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }

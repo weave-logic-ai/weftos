@@ -155,6 +155,32 @@ fn check_identity(run_dir: &Path, pid: u32, current_exe: &Path) -> Result<(), Sk
     Ok(())
 }
 
+/// How long an empty `kernel.pid` (or lock file) is read again before it is
+/// called bad: the kernel creates the file a moment before the pid is in it.
+const PID_FILE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+const PID_FILE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+fn lock_is_booting(lock: &Path) -> bool {
+    lock_held(lock) && std::fs::read_to_string(lock).is_ok_and(|s| s.trim().is_empty())
+}
+
+/// Read a pid file. Empty content (a kernel still booting) is read again for
+/// up to `grace`; any other content that is not a pid is bad at once.
+pub async fn read_pid_file(path: &Path, grace: std::time::Duration) -> Result<u32, String> {
+    let deadline = tokio::time::Instant::now() + grace;
+    loop {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let t = text.trim();
+        if !t.is_empty() {
+            return t.parse::<u32>().map_err(|e| e.to_string());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return t.parse::<u32>().map_err(|e| e.to_string());
+        }
+        tokio::time::sleep(PID_FILE_POLL).await;
+    }
+}
+
 /// Verify one run dir. `None` when it has no `kernel.pid`.
 pub async fn scan_one(dir: &Path, id: &str, current_exe: &Path, io: &dyn ChildIo) -> Option<Found> {
     let id = id.to_owned();
@@ -162,15 +188,21 @@ pub async fn scan_one(dir: &Path, id: &str, current_exe: &Path, io: &dyn ChildIo
     if !pid_file.exists() {
         return None;
     }
-    let pid = match std::fs::read_to_string(&pid_file)
-        .map_err(|e| e.to_string())
-        .and_then(|s| s.trim().parse::<u32>().map_err(|e| e.to_string()))
-    {
+    let pid = match read_pid_file(&pid_file, PID_FILE_GRACE).await {
         Ok(p) => p,
         Err(e) => return Some(Found::Unverifiable { id, pid: None, reason: Skip::BadPidFile(e) }),
     };
-    if let Err(reason) = check_identity(dir, pid, current_exe) {
-        return Some(Found::Unverifiable { id, pid: Some(pid), reason });
+    let deadline = tokio::time::Instant::now() + PID_FILE_GRACE;
+    loop {
+        match check_identity(dir, pid, current_exe) {
+            Ok(()) => break,
+            // The holder truncates and rewrites the lock file's pid; an empty
+            // one under a held lock is a kernel mid-write, not a stale lock.
+            Err(Skip::LockNotHeld) if lock_is_booting(&dir.join("kernel.lock")) && tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(PID_FILE_POLL).await;
+            }
+            Err(reason) => return Some(Found::Unverifiable { id, pid: Some(pid), reason }),
+        }
     }
     Some(match io.handshake(&dir.join("kernel.sock")).await {
         Some(h) if h.project_id.as_deref() == Some(id.as_str()) && h.pid == pid => Found::Adopted { id, pid },
@@ -207,4 +239,47 @@ pub async fn scan(run_root: &Path, current_exe: &Path, io: &dyn ChildIo) -> Vec<
         }
     }
     out
+}
+
+#[cfg(test)]
+mod pid_file_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn an_empty_pid_file_that_fills_in_shortly_is_read() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("kernel.pid");
+        std::fs::write(&p, "").unwrap();
+        let p2 = p.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            std::fs::write(&p2, "4242").unwrap();
+        });
+        assert_eq!(read_pid_file(&p, Duration::from_secs(2)).await, Ok(4242));
+    }
+
+    #[tokio::test]
+    async fn bad_content_is_bad_at_once_and_a_forever_empty_file_after_the_grace() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("kernel.pid");
+        std::fs::write(&p, "12x").unwrap();
+        let start = std::time::Instant::now();
+        assert!(read_pid_file(&p, Duration::from_secs(2)).await.is_err());
+        assert!(start.elapsed() < Duration::from_millis(500), "garbage is not retried");
+        std::fs::write(&p, "").unwrap();
+        assert!(read_pid_file(&p, Duration::from_millis(100)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn scan_one_adopts_nothing_from_garbage_and_reports_bad_pid_file() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("kernel.pid"), "nope").unwrap();
+        let io = crate::project_supervisor::io::RpcChildIo::new(
+            ed25519_dalek::SigningKey::from_bytes(&[1; 32]),
+            t.path().to_path_buf(),
+        );
+        let f = scan_one(t.path(), "01JB8Z3Q0V6X9KQ4M2N7T5R1WD", Path::new("/x/weaver"), &io).await;
+        assert!(matches!(f, Some(Found::Unverifiable { reason: Skip::BadPidFile(_), .. })), "{f:?}");
+    }
 }
