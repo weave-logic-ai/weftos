@@ -1332,6 +1332,46 @@ cmd_audit() {
 #                    values: critical | high | moderate | low | info
 #   NPM_AUDIT_SOFT=1 soft mode: print findings, never fail
 
+# Per-advisory residual allowlist for the npm audit gate. Each entry is
+# "<lockfile label> <GHSA id> <expiry YYYY-MM-DD>". Only the named advisory in
+# the named lockfile is tolerated, and only until the expiry date; any other
+# >=level advisory still fails. Rationale: docs/security/npm-audit-residual.md.
+NPM_AUDIT_ALLOW=(
+    # braces <=3.0.3 stack-exhaustion DoS; no patched release exists (latest is
+    # 3.0.3). Dev tooling only: agentic-flow -> http-proxy-middleware -> micromatch.
+    "root GHSA-vfj7-8cjw-p6xm 2026-12-31"
+)
+
+# Print the >=level advisories in an `npm audit --json` document that are not
+# covered by an unexpired NPM_AUDIT_ALLOW entry for this label. Empty output
+# means everything at or above the floor is allowlisted.
+npm_audit_unallowed() {
+    local label="$1" level="$2" json="$3" today allow
+    today=$(date +%Y-%m-%d)
+    allow=$(printf '%s;' "${NPM_AUDIT_ALLOW[@]}")
+    printf '%s' "$json" | NPM_ALLOW="$allow" LABEL="$label" LEVEL="$level" TODAY="$today" node -e '
+        const rank={info:0,low:1,moderate:2,high:3,critical:4};
+        let d=""; process.stdin.on("data",c=>d+=c); process.stdin.on("end",()=>{
+          const j=JSON.parse(d);
+          const floor=rank[process.env.LEVEL]??3;
+          const allow=new Map();
+          for (const e of (process.env.NPM_ALLOW||"").split(";").filter(Boolean)) {
+            const [l,id,exp]=e.split(" ");
+            if (l===process.env.LABEL && exp>=process.env.TODAY) allow.set(id,exp);
+          }
+          const seen=new Set();
+          for (const v of Object.values(j.vulnerabilities||{})) {
+            for (const via of v.via) {
+              if (typeof via==="string"||(rank[via.severity]??0)<floor) continue;
+              const id=(via.url||"").split("/").pop();
+              if (allow.has(id)||seen.has(id)) continue;
+              seen.add(id);
+              console.log(id+" "+via.name+" ("+via.severity+")");
+            }
+          }
+        });'
+}
+
 npm_audit_one() {
     local dir="$1"
     local label="${2:-$dir}"
@@ -1380,6 +1420,14 @@ npm_audit_one() {
             skip "$label npm audit ($summary) ≥$level present (soft)"
             return 0
         fi
+        local unallowed
+        unallowed=$(npm_audit_unallowed "$label" "$level" "$audit_json" 2>/dev/null || echo "parse-error")
+        if [ -z "$unallowed" ]; then
+            pass "$label npm audit ($summary) — ≥$level only allowlisted residual (docs/security/npm-audit-residual.md)"
+            return 0
+        fi
+        info "non-allowlisted ≥$level advisories:"
+        printf '%s\n' "$unallowed"
         fail "$label npm audit ($summary) — ≥$level present"
         # Print human report for the failure path (truncated).
         (cd "$dir" && npm audit --audit-level="$level" 2>&1 | tail -40) || true
