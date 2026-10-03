@@ -91,19 +91,26 @@ impl HttpReader {
     }
 }
 
-/// Follow up to 5 redirects, but never from https down to http: Cognitum
-/// binaries are trusted by sha256 alone, so a downgrade would let a network
+/// Why a redirect must be refused, if it must: more than 5 hops, or a step from https down to
+/// http. Cognitum binaries are trusted by sha256 alone, so a downgrade would let a network
 /// attacker replace the binary.
+pub fn redirect_blocked(previous_scheme: Option<&str>, next_scheme: &str, hops: usize) -> Option<&'static str> {
+    if hops >= 5 {
+        return Some("too many redirects");
+    }
+    if previous_scheme == Some("https") && next_scheme != "https" {
+        return Some("refusing a redirect from https to http");
+    }
+    None
+}
+
 #[cfg(feature = "net")]
 fn redirect_decision(attempt: reqwest::redirect::Attempt<'_>) -> reqwest::redirect::Action {
-    if attempt.previous().len() >= 5 {
-        return attempt.error("too many redirects");
+    let prev = attempt.previous().last().map(|u| u.scheme().to_string());
+    match redirect_blocked(prev.as_deref(), attempt.url().scheme(), attempt.previous().len()) {
+        Some(why) => attempt.error(why),
+        None => attempt.follow(),
     }
-    let from_https = attempt.previous().last().is_some_and(|u| u.scheme() == "https");
-    if from_https && attempt.url().scheme() != "https" {
-        return attempt.error("refusing a redirect from https to http");
-    }
-    attempt.follow()
 }
 
 #[cfg(feature = "net")]
@@ -130,5 +137,63 @@ impl Reader for HttpReader {
             return Err(f(format!("larger than {max} bytes")));
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redirect_policy_refuses_downgrade_and_loops() {
+        assert!(redirect_blocked(Some("https"), "http", 1).unwrap().contains("https to http"));
+        assert!(redirect_blocked(Some("https"), "https", 1).is_none());
+        assert!(redirect_blocked(Some("http"), "http", 1).is_none());
+        assert!(redirect_blocked(Some("http"), "https", 1).is_none());
+        assert!(redirect_blocked(Some("https"), "https", 5).unwrap().contains("too many"));
+    }
+
+    /// Loopback server: connection `i` gets `respond(i, base_url)`.
+    #[cfg(feature = "net")]
+    fn serve(n: usize, respond: impl Fn(usize, &str) -> String + Send + 'static) -> String {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        let b = base.clone();
+        std::thread::spawn(move || {
+            for i in 0..n {
+                let Ok((mut c, _)) = l.accept() else { return };
+                let mut buf = [0u8; 2048];
+                let _ = c.read(&mut buf);
+                let _ = c.write_all(respond(i, &b).as_bytes());
+            }
+        });
+        base
+    }
+
+    #[cfg(feature = "net")]
+    fn redirect_to(base: &str, path: &str) -> String {
+        format!("HTTP/1.1 302 Found\r\nLocation: {base}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    }
+
+    /// Loopback only (an https server needs certificates this crate does not carry), so the
+    /// https-to-http step itself is covered by `redirect_blocked`; here the live client is shown
+    /// to follow a 302 to http and to stop a loop.
+    #[cfg(feature = "net")]
+    #[test]
+    fn http_reader_follows_a_302_to_http_but_stops_a_redirect_loop() {
+        let r = HttpReader::new();
+        let base = serve(2, |i, b| {
+            if i == 0 {
+                redirect_to(b, "/ok")
+            } else {
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi".to_string()
+            }
+        });
+        assert_eq!(r.read(&format!("{base}/start"), 1024).unwrap(), b"hi");
+
+        let looping = serve(8, |_, b| redirect_to(b, "/again"));
+        let err = r.read(&format!("{looping}/loop"), 1024).unwrap_err();
+        assert_eq!(err.code(), "fetch_failed", "{err}");
     }
 }

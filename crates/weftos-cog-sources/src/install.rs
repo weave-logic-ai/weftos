@@ -239,12 +239,15 @@ fn verify_with_any(bytes: &[u8], art: &Artifact, keys_hex: &[String]) -> std::re
 
 /// Write a verified cog into a cog-host root and record its provenance.
 ///
-/// Provenance is written first (temp file + rename), so a cog that is enabled
-/// is never without it. A cog is labelled WeaveLogic only when the verifying
+/// Provenance is staged first and renamed into place right after the record. A cog is labelled WeaveLogic only when the verifying
 /// key is a WeftOS anchor; a signature from any other pinned key is recorded as
 /// a local, signed install.
 pub fn install_into_host(root: &Path, f: &Fetched, enable: bool, args: &[String]) -> Result<CogRecord> {
     let p = &f.provenance;
+    // The id names a directory under the host root: validate before touching the filesystem.
+    if !valid_cog_id(&p.cog_id) {
+        return Err(SourceError::Config(format!("bad cog id {:?}", p.cog_id)));
+    }
     let (source, signed) = match p.trust.as_str() {
         "ed25519-signed" if p.kind == "weftos" && p.weftos_anchor => (HostSource::WeaveLogic, true),
         "ed25519-signed" => (HostSource::Local, true),
@@ -253,20 +256,28 @@ pub fn install_into_host(root: &Path, f: &Fetched, enable: bool, args: &[String]
     let io = |path: &Path, e: std::io::Error| SourceError::Io { path: path.display().to_string(), msg: e.to_string() };
     let dir = root.join(&p.cog_id);
     std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
+    // Stage provenance under a unique name; it replaces the old file only once the install
+    // succeeded, so a failed reinstall never leaves provenance for a version that is not there.
     let json = serde_json::to_vec_pretty(p).map_err(|e| SourceError::Parse { what: "provenance".into(), msg: e.to_string() })?;
     let path = dir.join(PROVENANCE_FILE);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let tmp = dir.join(format!("{PROVENANCE_FILE}.{}.{nanos}.tmp", std::process::id()));
     std::fs::write(&tmp, json).map_err(|e| io(&tmp, e))?;
+    let rec = match install_verified(
+        root,
+        &VerifiedInstall { id: &p.cog_id, version: &p.version, source, signed, args, enable, bytes: &f.bytes },
+    ) {
+        Ok(r) => r,
+        Err(msg) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(SourceError::Io { path: root.display().to_string(), msg });
+        }
+    };
     std::fs::rename(&tmp, &path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         io(&path, e)
     })?;
-    install_verified(
-        root,
-        &VerifiedInstall { id: &p.cog_id, version: &p.version, source, signed, args, enable, bytes: &f.bytes },
-    )
-    .map_err(|msg| SourceError::Io { path: root.display().to_string(), msg })
+    Ok(rec)
 }
 
 /// Read the provenance of an installed cog, if recorded.

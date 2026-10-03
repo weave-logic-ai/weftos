@@ -23,7 +23,7 @@ A **cog source** is one entry of a `[[cog_source]]` list:
 | `kind` | `weftos`, `cognitum` or `private` |
 | `url` | `registry.json` / `app-registry.json` URL or path, or a repo directory or URL prefix holding `registry.json` |
 | `pinned_keys` | Ed25519 public keys, 64 hex. Required for `private`. **Refused on `weftos`**: the WeftOS anchors are compiled in and a project file cannot add to them. Accepted but unused today on `cognitum` (reserved for the optional release-record verifier) |
-| `allow_insecure` | default false; development only, lets a `cognitum` source use `http://` or a local path |
+| `allow_insecure` | default false; development only, lets a `cognitum` source use `http://` or a local path. Honoured only from the user file (a project file's value is dropped in the merge, with a warning); `weaver cog source add --allow-insecure` requires `--user` |
 | `priority` | integer, default 0, higher wins |
 | `enabled` | default true; a disabled source is kept in the file and skipped |
 

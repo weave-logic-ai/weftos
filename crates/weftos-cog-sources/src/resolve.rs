@@ -111,6 +111,12 @@ pub fn registry_location(url: &str) -> String {
 
 /// Load one enabled-or-not source (the caller decides which to load).
 pub fn load_source(src: &CogSource, reader: &dyn Reader) -> Result<LoadedSource> {
+    if src.kind == SourceKind::Cognitum && !src.allow_insecure && !src.url.starts_with("https://") {
+        return Err(SourceError::Config(format!(
+            "source '{}': a cognitum registry location must be https:// (allow_insecure applies only from the user file)",
+            src.name
+        )));
+    }
     let loc = match src.kind {
         SourceKind::Cognitum => src.url.clone(),
         _ => registry_location(&src.url),
@@ -231,4 +237,14 @@ pub fn resolve<'a>(eff: &EffectiveSources, loaded: &'a [LoadedSource], r: &CogRe
     }
     let (l, cog) = hits.remove(0);
     Ok(Resolved { loaded: l, cog })
+}
+
+/// The guard in front of `--enable`: a bare id that resolved to a source defined only in this
+/// project's file must be given namespaced (or confirmed), because a cloned repository can
+/// define its own sources and a bare id would otherwise start whatever they serve.
+pub fn enable_guard(eff: &EffectiveSources, cref: &CogRef, resolved: &Resolved<'_>, enable: bool, confirmed: bool) -> Result<()> {
+    if enable && cref.source.is_none() && eff.from_project(&resolved.loaded.source.name) && !confirmed {
+        return Err(SourceError::NeedsNamespacedId { reference: cref.id.clone(), namespaced: resolved.namespaced() });
+    }
+    Ok(())
 }

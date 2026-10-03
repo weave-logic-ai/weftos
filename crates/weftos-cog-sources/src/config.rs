@@ -370,6 +370,12 @@ impl EffectiveSources {
     pub fn merge(user: &SourcesFile, project: &SourcesFile) -> Self {
         let mut sources: Vec<CogSource> = project.cog_source.clone();
         let mut warnings = Vec::new();
+        // `allow_insecure` is honoured only from the user's own file: a cloned project must not
+        // be able to re-open http, file:// or local paths for a Cognitum source.
+        for s in sources.iter_mut().filter(|s| s.allow_insecure) {
+            s.allow_insecure = false;
+            warnings.push(format!("ignoring allow_insecure on source '{}' in this project's cog-sources.toml (only your user file may set it)", s.name));
+        }
         for u in &user.cog_source {
             match project.cog_source.iter().find(|p| p.name == u.name) {
                 None => sources.push(u.clone()),
@@ -396,6 +402,9 @@ impl EffectiveSources {
         }
         sources.sort_by(|a, b| a.name.cmp(&b.name));
         for s in &sources {
+            if s.allow_insecure {
+                warnings.push(format!("source '{}' has allow_insecure in effect: {} is accepted without https (development only)", s.name, s.url));
+            }
             if s.url.starts_with("http://") {
                 warnings.push(format!("source '{}' uses plain http://; registry and binaries can be altered in transit (signed sources still verify signatures)", s.name));
             }

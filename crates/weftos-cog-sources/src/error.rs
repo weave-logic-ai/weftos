@@ -82,6 +82,14 @@ pub enum SourceError {
         /// Source name.
         source_name: String,
     },
+    /// `--enable` on a bare id that resolved to a project-defined source.
+    #[error("'{reference}' resolved to {namespaced} from this project's own source list; use the namespaced id ({namespaced}) or pass --confirm-project-source to start it")]
+    NeedsNamespacedId {
+        /// Reference as typed.
+        reference: String,
+        /// The namespaced form.
+        namespaced: String,
+    },
     /// A Cognitum binary location is not https.
     #[error("refusing {id} from '{source_name}': binary location {location} is not https:// (Cognitum binaries are trusted by sha256 alone)")]
     Insecure {
@@ -133,6 +141,7 @@ impl SourceError {
             Self::Unsigned { .. } => "unsigned",
             Self::Verify { .. } => "verify_failed",
             Self::NoPinnedHash { .. } => "no_pinned_hash",
+            Self::NeedsNamespacedId { .. } => "needs_namespaced_id",
             Self::Insecure { .. } => "insecure_transport",
             Self::Fetch { .. } => "fetch_failed",
             Self::Parse { .. } => "parse_failed",

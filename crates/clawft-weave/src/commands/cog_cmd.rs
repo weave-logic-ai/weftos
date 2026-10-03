@@ -425,13 +425,7 @@ fn run_blocking(args: CogArgs) -> anyhow::Result<()> {
                 r.loaded.source.kind.label(),
                 r.loaded.source.effective_keys(&keys).len()
             );
-            if enable && cref.source.is_none() && eff.from_project(&r.loaded.source.name) && !confirm_project_source {
-                bail!(
-                    "'{reference}' resolved to {} from this project's own source list. Use the namespaced id ({}) or pass --confirm-project-source to start it",
-                    r.namespaced(),
-                    r.namespaced()
-                );
-            }
+            weftos_cog_sources::resolve::enable_guard(&eff, &cref, &r, enable, confirm_project_source)?;
             let ctx = FetchCtx { reader: &reader, licences: &eff.licences, now: Utc::now(), extra_weftos_keys: &keys };
             let fetched = fetch_verified(r.loaded, &r.cog.id, &arch, &ctx)?;
             let root = root.unwrap_or_else(weftos_cog_sources::default_host_root);
@@ -452,6 +446,9 @@ fn run_blocking(args: CogArgs) -> anyhow::Result<()> {
 fn source(roots: &Roots, cmd: SourceCommand) -> anyhow::Result<()> {
     match cmd {
         SourceCommand::Add { name, kind, url, keys, priority, user, allow_insecure } => {
+            if allow_insecure && !user {
+                bail!("--allow-insecure is honoured only from the user file; add it with --user (a project file's allow_insecure is ignored)");
+            }
             let kind: SourceKind = kind.into();
             let url = match (url, kind) {
                 (Some(u), _) => u,

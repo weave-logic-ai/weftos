@@ -620,11 +620,93 @@ fn provenance_is_written_atomically_before_the_record() {
     // record without provenance: here the record is what is missing.
     std::fs::create_dir_all(root.join("acme-gauge/cog-acme-gauge-arm.new")).unwrap();
     assert!(install_into_host(&root, &f, true, &[]).is_err());
-    assert!(root.join("acme-gauge/provenance.json").is_file());
+    assert!(!root.join("acme-gauge/provenance.json").exists(), "a failed install leaves no provenance behind");
     assert!(!root.join("acme-gauge/cog.json").exists(), "no enabled record without a finished install");
     std::fs::remove_dir_all(root.join("acme-gauge/cog-acme-gauge-arm.new")).unwrap();
     install_into_host(&root, &f, true, &[]).unwrap();
+    // a failed reinstall must not replace the provenance of the version that is installed
+    let before = std::fs::read(root.join("acme-gauge/provenance.json")).unwrap();
+    let mut f2 = f.clone();
+    f2.provenance.version = "9.9.9".into();
+    std::fs::create_dir_all(root.join("acme-gauge/cog-acme-gauge-arm.new")).unwrap();
+    assert!(install_into_host(&root, &f2, true, &[]).is_err());
+    assert_eq!(std::fs::read(root.join("acme-gauge/provenance.json")).unwrap(), before);
+    std::fs::remove_dir_all(root.join("acme-gauge/cog-acme-gauge-arm.new")).unwrap();
     let leftovers: Vec<_> = std::fs::read_dir(root.join("acme-gauge")).unwrap().flatten().filter(|d| d.file_name().to_string_lossy().ends_with(".tmp")).collect();
     assert!(leftovers.is_empty());
     assert!(read_provenance(&root, "acme-gauge").is_some());
+}
+
+#[test]
+fn install_into_host_validates_the_id_before_touching_the_filesystem() {
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(15);
+    let reg = signed_repo(&tmp.path().join("pv"), &k, &["acme-gauge"]);
+    let s = source("acme-private", SourceKind::Private, &reg, &[pub_hex(&k)], 0);
+    let e = eff(vec![s.clone()], vec![]);
+    let l = load_source(&s, &FsReader).unwrap();
+    let mut f = fetch_verified(&l, "acme-gauge", "arm", &ctx(&FsReader, &e)).unwrap();
+    f.provenance.cog_id = "../x".into();
+    let root = tmp.path().join("host");
+    let err = install_into_host(&root, &f, false, &[]).unwrap_err();
+    assert_eq!(err.code(), "config_invalid");
+    assert!(!root.exists() && !tmp.path().join("x").exists(), "nothing was created");
+}
+
+#[test]
+fn allow_insecure_is_ignored_from_the_project_file_and_warned_from_the_user_file() {
+    use crate::resolve::{load_all, enable_guard};
+    let tmp = tempfile::tempdir().unwrap();
+    let up = tmp.path().join("user.toml");
+    let pp = tmp.path().join("proj.toml");
+    std::fs::write(&pp, "[[cog_source]]\nname=\"cognitum\"\nkind=\"cognitum\"\nurl=\"http://example.invalid/app-registry.json\"\nallow_insecure=true\n").unwrap();
+    // the project file itself parses (the field exists), but the merge drops it
+    let e = load_effective(None, Some(&pp)).unwrap();
+    assert!(!e.sources[0].allow_insecure);
+    assert!(e.warnings.iter().any(|w| w.contains("ignoring allow_insecure")), "{:?}", e.warnings);
+    // so the http registry is refused before any read
+    let reader = CountingReader { needle: "example.invalid".into(), hits: Default::default() };
+    let ls = load_all(&e, &reader);
+    assert!(ls.loaded.is_empty());
+    assert_eq!(ls.failures[0].1.code(), "config_invalid", "{:?}", ls.failures);
+    assert_eq!(*reader.hits.borrow(), 0);
+    // a local path is refused the same way
+    std::fs::write(&pp, "[[cog_source]]\nname=\"cognitum\"\nkind=\"cognitum\"\nurl=\"/some/local/app-registry.json\"\nallow_insecure=true\n").unwrap();
+    let e = load_effective(None, Some(&pp)).unwrap();
+    assert!(load_all(&e, &FsReader).loaded.is_empty());
+
+    // the user file may set it, and every effective use is warned about, also for local paths
+    std::fs::write(&up, "[[cog_source]]\nname=\"cognitum\"\nkind=\"cognitum\"\nurl=\"/some/local/app-registry.json\"\nallow_insecure=true\n").unwrap();
+    let e = load_effective(Some(&up), None).unwrap();
+    assert!(e.sources[0].allow_insecure);
+    assert!(e.warnings.iter().any(|w| w.contains("allow_insecure in effect") && w.contains("/some/local")), "{:?}", e.warnings);
+    let _ = enable_guard;
+}
+
+#[test]
+fn enable_on_a_bare_id_from_a_project_defined_source_needs_the_namespaced_id() {
+    use crate::resolve::enable_guard;
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(16);
+    let pv = signed_repo(&tmp.path().join("pv"), &k, &["acme-gauge"]);
+    let wl = signed_repo(&tmp.path().join("wl"), &k, &["bridge"]);
+    let up = tmp.path().join("user.toml");
+    let pp = tmp.path().join("proj.toml");
+    std::fs::write(&up, format!("[[cog_source]]\nname=\"weftos\"\nkind=\"weftos\"\nurl=\"{}\"\n", wl.display())).unwrap();
+    std::fs::write(&pp, format!("[[cog_source]]\nname=\"acme-private\"\nkind=\"private\"\nurl=\"{}\"\npinned_keys=[\"{}\"]\n", pv.display(), pub_hex(&k))).unwrap();
+    let e = load_effective(Some(&up), Some(&pp)).unwrap();
+    let ls = load_all(&e, &FsReader);
+    let res = |r: &str| resolve(&e, &ls.loaded, &parse_ref(r).unwrap()).map(|x| (parse_ref(r).unwrap(), x));
+    // bare id -> project-defined source: --enable refused, namespaced or confirmed or not enabling: fine
+    let (cref, r) = res("acme-gauge").unwrap();
+    let err = enable_guard(&e, &cref, &r, true, false).unwrap_err();
+    assert_eq!(err.code(), "needs_namespaced_id");
+    assert!(err.to_string().contains("acme-private:acme-gauge"));
+    enable_guard(&e, &cref, &r, true, true).unwrap();
+    enable_guard(&e, &cref, &r, false, false).unwrap();
+    let (cref, r) = res("acme-private:acme-gauge").unwrap();
+    enable_guard(&e, &cref, &r, true, false).unwrap();
+    // bare id -> user-defined source: no extra step
+    let (cref, r) = res("bridge").unwrap();
+    enable_guard(&e, &cref, &r, true, false).unwrap();
 }
