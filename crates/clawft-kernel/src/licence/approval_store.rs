@@ -28,13 +28,13 @@ struct ApprovalsFile {
 }
 
 /// Held approvals by content key, with the verified body.
-type Held = BTreeMap<String, (SignedApproval, Approval)>;
+pub(super) type Held = BTreeMap<String, (SignedApproval, Approval)>;
 
 /// Persisted operator hash approvals of one node.
 pub struct ApprovalStore {
     path: PathBuf,
     anchors: Arc<TrustAnchors>,
-    local: LocalMeshId,
+    pub(super) local: LocalMeshId,
     inner: Mutex<(Held, Option<String>)>,
 }
 
@@ -62,7 +62,7 @@ impl ApprovalStore {
         Self { path, anchors, local, inner: Mutex::new((held, poison)) }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, (Held, Option<String>)> {
+    pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, (Held, Option<String>)> {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 

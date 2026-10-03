@@ -173,7 +173,7 @@ impl CheckoutGrantStore {
         self.lock().poisoned.clone()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+    pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
@@ -221,7 +221,7 @@ impl CheckoutGrantStore {
     /// The accepted binding, or why there is none in effect: not bound, bound
     /// to a mesh id this node no longer computes (orphaned: chained once),
     /// no local mesh id, or poisoned.
-    fn binding_in_effect(&self, inner: &mut Inner) -> Result<BindingRecord, LicenceError> {
+    pub(super) fn binding_in_effect(&self, inner: &mut Inner) -> Result<BindingRecord, LicenceError> {
         if let Some(p) = &inner.poisoned {
             return Err(LicenceError::Poisoned(p.clone()));
         }

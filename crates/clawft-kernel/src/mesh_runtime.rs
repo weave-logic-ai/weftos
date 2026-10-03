@@ -29,8 +29,26 @@ pub const FACTS_TOPIC: &str = "mesh.node_facts";
 /// mesh-placement-25). Handled like [`FACTS_TOPIC`].
 pub const REVOKE_TOPIC: &str = "mesh.artifact.revoke";
 
+/// Control topic carrying signed Seed bindings (ADR-106). Handled like
+/// [`FACTS_TOPIC`].
+pub const COG_BINDING_TOPIC: &str = "mesh.cog.binding";
+
+/// Control topic carrying signed checkout grants and operator approvals
+/// (ADR-106). Handled like [`FACTS_TOPIC`].
+pub const COG_GRANT_TOPIC: &str = "mesh.cog.grant";
+
+/// Control topic carrying licence catch-up sync requests and responses
+/// (ADR-106 section 5.5). Handled like [`FACTS_TOPIC`].
+pub const COG_SYNC_TOPIC: &str = "mesh.cog.sync";
+
 /// Control topics the runtime consumes instead of routing locally.
-const CONTROL_TOPICS: [&str; 2] = [FACTS_TOPIC, REVOKE_TOPIC];
+const CONTROL_TOPICS: [&str; 5] = [
+    FACTS_TOPIC,
+    REVOKE_TOPIC,
+    COG_BINDING_TOPIC,
+    COG_GRANT_TOPIC,
+    COG_SYNC_TOPIC,
+];
 
 /// Receiver of a runtime control topic ([`FACTS_TOPIC`], [`REVOKE_TOPIC`]).
 ///
@@ -217,7 +235,7 @@ impl MeshRuntime {
     }
 
     /// Install the sink for the control topic `topic` (first call wins).
-    /// Only [`FACTS_TOPIC`] and [`REVOKE_TOPIC`] are control topics.
+    /// Only the topics in `CONTROL_TOPICS` are control topics.
     pub fn set_control_sink(&self, topic: &str, sink: Arc<dyn PeerControlSink>) {
         self.control_sinks.entry(topic.to_string()).or_insert(sink);
     }

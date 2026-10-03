@@ -156,6 +156,62 @@ fn wire_revocations(
     }
 }
 
+/// The admission state a binding is judged against (ADR-106): enforce mode
+/// with open membership off. The daemon always has the governance gate that
+/// answers verdicts (boot refuses `enforce` without one), so a verdict source
+/// is bound whenever this runs.
+fn licence_posture(
+    mesh: Option<&clawft_types::config::MeshConfig>,
+) -> clawft_kernel::licence::PostureFn {
+    use clawft_types::config::MeshAdmissionMode;
+    let p = clawft_kernel::licence::AdmissionPosture {
+        enforce: mesh.is_some_and(|m| m.admission == MeshAdmissionMode::Enforce),
+        verdict_source_bound: true,
+        open_membership: mesh.is_none_or(|m| m.admission_open_membership),
+    };
+    Arc::new(move || p)
+}
+
+/// Start the licence exchange (ADR-106 phase 1b): chain the store's events,
+/// open the approval store, and with a mesh carry bindings, grants and
+/// approvals by flood and catch-up sync. Inert while the local mesh id is
+/// unset (no `mesh_nonce` yet), exactly like the policy. Peers count as
+/// admitted from the mesh runtime's own verdict until phase 1c brings the
+/// service-stamped origin.
+fn wire_licence(
+    dir: &Path,
+    policy: &Arc<clawft_kernel::licence::MeshCheckoutPolicy>,
+    anchors: &clawft_kernel::workload_pkg::TrustAnchors,
+    chain: &Arc<ChainManager>,
+    mesh: Option<Arc<clawft_kernel::mesh_runtime::MeshRuntime>>,
+    posture: clawft_kernel::licence::PostureFn,
+) {
+    use clawft_kernel::licence as l;
+    let sink: Arc<dyn l::LicenceEventSink> = Arc::new(l::ChainLicenceSink::new(chain.clone()));
+    let store = policy.store().clone();
+    store.set_sink(sink.clone());
+    let Some(runtime) = mesh else { return };
+    let anchors = Arc::new(anchors.clone());
+    let approvals = Arc::new(l::ApprovalStore::open_or_poisoned(
+        &dir.join("licence"),
+        anchors.clone(),
+        store.local_mesh_id().clone(),
+    ));
+    if let Some(why) = approvals.poisoned() {
+        tracing::warn!(%why, "approval store unreadable; approvals stay off");
+    }
+    l::LicenceExchange::start(l::LicenceExchangeParts {
+        store,
+        approvals,
+        anchors,
+        runtime,
+        posture,
+        admission: Arc::new(l::CtxAdmission),
+        sink,
+        config: l::LicenceExchangeConfig::default(),
+    });
+}
+
 async fn build(
     kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Result<Arc<PlacementControlPlane>, String> {
@@ -177,6 +233,7 @@ async fn build(
     let _ = BUILT_RULES.set(built);
     let revocations = k.revocation_list().clone();
     let mesh = k.a2a_router().mesh_runtime().cloned();
+    let posture = licence_posture(k.kernel_config().mesh.as_ref());
     drop(k);
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
@@ -193,19 +250,22 @@ async fn build(
     // The policy is installed unconditionally and reads the binding live, so
     // a binding that arrives later needs no restart; with none (or no mesh id
     // yet) it is exactly `ManifestPolicy`.
+    let local_mesh = clawft_kernel::licence::LocalMeshId::unset();
+    let policy = clawft_kernel::licence::MeshCheckoutPolicy::open(
+        dir,
+        anchors.clone(),
+        revocations.clone(),
+        local_mesh.clone(),
+    );
     let cfg = ExchangeConfig {
-        redistribution: clawft_kernel::licence::MeshCheckoutPolicy::open(
-            dir,
-            anchors.clone(),
-            revocations.clone(),
-            clawft_kernel::licence::LocalMeshId::unset(),
-        ),
+        redistribution: policy.clone(),
         ..ExchangeConfig::default()
     };
     let mut ex = ArtifactExchange::new(&id, Arc::new(store), cfg)
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
+    wire_licence(dir, &policy, &anchors, &chain, mesh.clone(), posture);
     wire_revocations(&ex, revocations, &anchors, mesh);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
@@ -571,5 +631,52 @@ mod revocation_wiring_tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
         rt.handle_incoming_peer(&bytes, tx, None).await.unwrap();
         assert!(list.is_subject_revoked(RevocationKind::ArtifactHash, &hash));
+    }
+
+    #[tokio::test]
+    async fn the_daemon_licence_exchange_is_inert_until_the_mesh_id_is_set_then_takes_bindings() {
+        use clawft_kernel::licence::{
+            AdmissionPosture, BindState, BindingRecord, LocalMeshId, MeshCheckoutPolicy, MeshId,
+            sign_binding,
+        };
+        use clawft_kernel::mesh_runtime::COG_BINDING_TOPIC;
+        let tmp = tempfile::tempdir().unwrap();
+        let list = Arc::new(RevocationList::new(tmp.path().join("revoked.json")));
+        let key = SigningKey::from_bytes(&[4; 32]);
+        let hex = clawft_kernel::workload_pkg::codec::hex_encode;
+        let mut anchors = TrustAnchors::default();
+        anchors.push_signer("op", &hex(&key.verifying_key().to_bytes()), KeyOrigin::Operator).unwrap();
+        let local = LocalMeshId::unset();
+        let policy = MeshCheckoutPolicy::open(tmp.path(), anchors.clone(), list, local.clone());
+        let chain = Arc::new(ChainManager::new(0, 1000));
+        let rt = Arc::new(MeshRuntime::new("n".into()));
+        let enforce = AdmissionPosture { enforce: true, verdict_source_bound: true, open_membership: false };
+        wire_licence(tmp.path(), &policy, &anchors, &chain, Some(rt.clone()), Arc::new(move || enforce));
+
+        let mesh = MeshId::derive(&[1; 32], &[2; 32]);
+        let rec = BindingRecord {
+            v: 2,
+            device_id: "seed-x".into(),
+            device_pubkey: hex(&[5; 32]),
+            mesh_id: mesh.to_hex(),
+            grant_pubkey: hex(&[6; 32]),
+            steward_node_id: "steward".into(),
+            steward_pubkey: hex(&[7; 32]),
+            state: BindState::Bound,
+            seq: 1,
+            bound_at: 1,
+        };
+        let signed = sign_binding(&rec, &key).unwrap();
+        let send = |rt: Arc<MeshRuntime>, v: serde_json::Value| async move {
+            let msg = KernelMessage::new(0, MessageTarget::Topic(COG_BINDING_TOPIC.into()), MessagePayload::Json(v));
+            let bytes = MeshIpcEnvelope::new("peer".into(), "n".into(), msg).to_bytes().unwrap();
+            let (tx, _rx) = tokio::sync::mpsc::channel(4);
+            rt.handle_incoming_peer(&bytes, tx, None).await.unwrap();
+        };
+        send(rt.clone(), serde_json::to_value(&signed).unwrap()).await;
+        assert!(policy.store().held_binding().is_none(), "inert: no local mesh id yet");
+        local.set(Some(mesh));
+        send(rt, serde_json::to_value(&signed).unwrap()).await;
+        assert_eq!(policy.store().held_binding().map(|b| b.0), Some(1));
     }
 }

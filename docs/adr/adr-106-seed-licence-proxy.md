@@ -33,8 +33,10 @@
   - ADR-105 (cog sources; section 3 licensing)
   - mesh-facts (`RedistributionPolicy` with `Audience`, `GrantOrigin`, `ServePeer`), now in `integrate/cog-repo`
 - **Relates-To**: COG-009 (`weft-cog-host` on the appliance) and COG-011 (per-node Ed25519 request signing, clock floor), both in the private cogs repo
-- **Implementation**: Phase 1a built (see the status line below). Phases 1b to 4 are not started.
+- **Implementation**: Phases 1a and 1b built (see the status lines below). Phases 1c to 4 are not started.
 - **Implementation status, phase 1a**: done on branch `wt/seed-1a`. Module `crates/clawft-kernel/src/licence/` (gated like the mesh swarm code): `MeshId`, binding v2 with the member profile, `CheckoutGrant`, `Approval`, `CheckoutGrantStore`, `ApprovalStore`, the persisted clock floor with the clamp, `MeshCheckoutPolicy`, `ArtifactExchange::grant_checkout`, and the `may_run` gate. The daemon installs `MeshCheckoutPolicy` unconditionally (`workload_place_rpc.rs`); its local mesh id is unset until the `mesh_nonce` config entry exists, so it behaves exactly like `ManifestPolicy` for now. Not yet: floods and sync (1b), transport and steward relay (1c), the steward profile hook (`BindingExtraCheck`) and the RPCs (1d), and wiring `may_run` into placement (phase 3). Detail choices made in 1a are listed under "Phase 1a implementation notes" below.
+
+- **Implementation status, phase 1b**: done on branch `wt/seed-1b` (based on `wt/seed-1a`). `licence/exchange*.rs`: `LicenceExchange` floods bindings on `mesh.cog.binding` and grants plus approvals on `mesh.cog.grant`, and runs catch-up sync on `mesh.cog.sync` (all three are runtime control topics in `mesh_runtime.rs`). `ChainLicenceSink` chains the store events as `licence.<name>`, including the new `sync_bad_signature`. The daemon starts the exchange next to `RevocationExchange` (`wire_licence` in `workload_place_rpc.rs`); it is inert while the local mesh id is unset. Detail choices are under "Phase 1b implementation notes". Admission for sync is read from the mesh runtime's `PeerCtx` behind the `PeerAdmission` trait; phase 1c switches it to the service-stamped origin.
 
 ## Owner decisions this ADR implements (not reopened here)
 
@@ -484,6 +486,22 @@ Choices made while building 1a that the text above leaves open. None change a de
 - **Fail closed.** A store file that is missing is empty. One that cannot be read, parsed or re-verified (every signature is checked again at load) is an error from `open`, or a poisoned store from `open_or_poisoned`, which serves nothing, refuses writes and leaves the file alone.
 - **Run gate.** `may_run` checks a valid grant that lists the binary's sha256, then that the grant's BLAKE3 is not revoked as an `ArtifactHash`, then an approval covering the sha256. The revocation is how an approval is withdrawn.
 - **Events.** The stores report `binding_refused`, `binding_conflict`, `binding_orphaned`, `grant_conflict`, `floor_clamped` and `floor_reset` through a `LicenceEventSink`. The daemon maps them to chain events in a later phase.
+
+## Phase 1b implementation notes
+
+Choices made while building 1b that the text above leaves open. None change a decision.
+
+- **Flood discipline.** As `RevocationExchange`: size, then signer (pinned operator key for bindings and approvals, the bound grant key for grants), then the record naming this mesh, then a `seq` or content key the store does not hold. Only then one token from the connection's bucket for that record kind (2 per second, burst 10), then the store verifies. The seen-set is written after a verify succeeds. The operator's own `issue_*` is exempt. Buckets belong to the exchange, so they are separate from the revocation exchange's by construction.
+- **Deferral.** `clock_not_set` is the store's `NotYetValid`: the grant is neither applied, forwarded nor remembered, and the next sync brings it again. A grant that arrives before its binding is dropped the same way and recovered by sync.
+- **Wire.** `mesh.cog.binding` carries one signed envelope. `mesh.cog.grant` carries `{kind: grant|approval, record}`. `mesh.cog.sync` carries `{op: request, grant_after, approval_after}` or `{op: response, binding, grants, approvals, more_grants, more_approvals}`.
+- **Paging.** Grants are ordered by `(seq, cog, version)` and approvals by content key, each with its own cursor. The binding rides on the first grant page only. A response holds at most 256 entries and 256 KiB: grants get half of each cap, approvals the rest after the binding and grants. The receiver cuts a response at the same caps. A follow-up request is sent only when a cursor advanced, up to 16 pages per session.
+- **Rates.** A fresh sync (no cursor) is answered once per peer per minute. A continuation page is bounded by the connection's sync bucket instead (8 tokens per second, burst 600), which also pays one token per request and one per entry verified. A response is accepted only for a request this node has open (120 s), and anything else is dropped unread.
+- **Bad signature.** Only a signature that fails to verify aborts the response and bans the peer (10 minutes, no requests to it and no answers for it). A malformed or refused entry is skipped.
+- **Forwarding.** A record applied from a sync response is also forwarded once to the other peers.
+- **Unbind.** `sign_unbind` builds the next-`seq` unbound record from the held one; `issue_binding` accepts and floods it. The Admin check belongs to the RPC (phase 1d).
+- **Sync trigger.** The exchange syncs with a peer on `MeshPeerEvent::Joined` and every 30 minutes. It cannot see a peer's admission at that point, so it asks every peer and the answering side applies the `PeerAdmission` check (`CtxAdmission`: verified, class `Node`).
+- **Store accessors.** Added read-only `held_binding`, `bound_grant_key`, `held_grant`, `sync_grants` on `CheckoutGrantStore` and `holds`, `sync_approvals` on `ApprovalStore` (`licence/store_sync.rs`), and the `SyncBadSignature` event.
+- **Daemon admission posture.** `enforce` and `open_membership` come from `kernel.mesh`. `verdict_source_bound` is always true in the daemon, because boot refuses `enforce` without the governance gate.
 
 ## Open questions
 
