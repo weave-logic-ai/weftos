@@ -1236,6 +1236,7 @@ cmd_serve() {
 # When a followup lands, drop the matching IDs from this array.
 #
 # WEFT-551 — DONE (wave0c): wasmtime/wasmtime-wasi 33 → 45.0.3; ignores removed.
+# wasmtime 48.0.5 + Rust 1.95 — DONE: RUSTSEC-2026-0222/0269/0314/0316 ignores removed.
 # WEFT-552 — DONE (wave0c): rustls-webpki via ruvector-core 2.3 + pin 0.103.13; ignores removed.
 # WEFT-553 — partial (wave0i): cleared serial / instant / rustls-pemfile / rand;
 #            residual bincode + paste need upstream (ruvector/hnsw_rs, tokenizers/egui_dock).
@@ -1246,17 +1247,6 @@ CARGO_AUDIT_IGNORES=(
     # 0.8.0 residual — tracked post-tag; do not expand silently without Plane note
     --ignore RUSTSEC-2026-0194   # quick-xml quadratic attrs (transitive); need >=0.41
     --ignore RUSTSEC-2026-0195   # quick-xml NsReader DoS (transitive); need >=0.41
-    --ignore RUSTSEC-2026-0222   # wasmtime type indices mixed between engines; ticket toolchain-wasmtime-bump.
-                                 # Needs two engines sharing a store; kernel uses one engine per runner.
-                                 # Not fully audited. Expiry in CARGO_AUDIT_EXPIRIES.
-    --ignore RUSTSEC-2026-0269   # wasmtime FS trailing-slash escape; ticket toolchain-wasmtime-bump.
-                                 # Not reachable: the only WASI ctx (kernel wasm_runner) has no FS preopens.
-    --ignore RUSTSEC-2026-0314   # wasmtime-wasi FS datetime overflow panic; fixed in wasmtime 48.0.3+ (Rust 1.95+).
-                                 # Not reachable: no FS preopens, so guests have no filesystem. toolchain-wasmtime-bump.
-    --ignore RUSTSEC-2026-0316   # wasmtime dynamic record lifting fuel bypass (component model; low severity).
-                                 # component-model IS enabled (feature unification via wasmtime-wasi p2), but nothing
-                                 # instantiates a component: only core Module::new and p1::add_to_linker_async.
-                                 # Re-check if anyone adds Component::, bindgen! or a p2/component host.
     --ignore RUSTSEC-2020-0036   # failure unmaintained (transitive)
     --ignore RUSTSEC-2019-0036   # failure unsound (transitive)
     --ignore RUSTSEC-2026-0221   # event-listener unsound (transitive async stack)
@@ -1266,41 +1256,6 @@ CARGO_AUDIT_IGNORES=(
     --no-yanked
 )
 
-# Expiry dates for time-boxed ignores (docs/security/cargo-audit-residual.md).
-# The audit step fails once a date has passed, forcing a re-triage.
-CARGO_AUDIT_EXPIRIES=(
-    "RUSTSEC-2026-0222 2026-12-31"
-    "RUSTSEC-2026-0269 2026-12-31"
-    "RUSTSEC-2026-0314 2026-12-31"
-    "RUSTSEC-2026-0316 2026-12-31"
-)
-
-# The wasmtime ignores are justified by how we use wasmtime. Fail if the source
-# starts using the features that would make them reachable.
-audit_guard_wasmtime_usage() {
-    local hits
-    hits=$(grep -rnE 'wasmtime::component|Component::new|bindgen!|preopened_dir|\.preopen\(' \
-        "$ROOT/crates" --include='*.rs' 2>/dev/null | grep -vE '^[^:]+:[0-9]+:\s*//' || true)
-    if [ -n "$hits" ]; then
-        fail "wasmtime ignores (0269/0314/0316) assume no components and no FS preopens; found:"
-        printf '%s\n' "$hits"
-        return 1
-    fi
-}
-
-audit_check_expiries() {
-    local today entry id date rc=0
-    today=$(date +%Y-%m-%d)
-    for entry in "${CARGO_AUDIT_EXPIRIES[@]}"; do
-        id=${entry% *}; date=${entry#* }
-        if [[ "$today" > "$date" ]]; then
-            fail "cargo-audit ignore $id expired on $date — re-triage or upgrade"
-            rc=1
-        fi
-    done
-    return $rc
-}
-
 cmd_audit() {
     header "Running cargo audit (with 0.7.0 ignore-list)"
     if ! command -v cargo-audit >/dev/null 2>&1; then
@@ -1308,8 +1263,6 @@ cmd_audit() {
         return 1
     fi
     timer_start
-    audit_check_expiries || return 1
-    audit_guard_wasmtime_usage || return 1
     if [ "$DRY_RUN" = true ]; then
         printf "  ${YELLOW}DRY${NC}   cargo audit %s\n" "${CARGO_AUDIT_IGNORES[*]}"
     else
@@ -1331,6 +1284,56 @@ cmd_audit() {
 #   NPM_AUDIT_LEVEL  severity floor for fail (default: high)
 #                    values: critical | high | moderate | low | info
 #   NPM_AUDIT_SOFT=1 soft mode: print findings, never fail
+
+# Per-advisory residual allowlist for the npm audit gate. Each entry is
+# "<lockfile label> <GHSA id> <expiry YYYY-MM-DD>". Only the named advisory in
+# the named lockfile is tolerated, and only until the expiry date; any other
+# >=level advisory still fails. Rationale: docs/security/npm-audit-residual.md.
+NPM_AUDIT_ALLOW=(
+    # braces <=3.0.3 stack-exhaustion DoS; no patched release exists (latest is
+    # 3.0.3). Dev tooling only: agentic-flow -> http-proxy-middleware -> micromatch.
+    "root GHSA-vfj7-8cjw-p6xm 2026-12-31"
+)
+
+# Print the >=level advisories in an `npm audit --json` document that are not
+# covered by an unexpired NPM_AUDIT_ALLOW entry for this label. Empty output
+# means everything at or above the floor is allowlisted.
+npm_audit_unallowed() {
+    local label="$1" level="$2" json="$3" today allow
+    today=$(date +%Y-%m-%d)
+    allow=$(printf '%s;' "${NPM_AUDIT_ALLOW[@]}")
+    printf '%s' "$json" | NPM_ALLOW="$allow" LABEL="$label" LEVEL="$level" TODAY="$today" node -e '
+        const rank={info:0,low:1,moderate:2,high:3,critical:4};
+        let d=""; process.stdin.on("data",c=>d+=c); process.stdin.on("end",()=>{
+          let j;
+          try { j=JSON.parse(d); } catch(e) { console.log("parse-error"); return; }
+          // Fail closed: an error document or one without a vulnerabilities map
+          // proves nothing about the lockfile.
+          if (!j||j.error||typeof j.vulnerabilities!=="object"||j.vulnerabilities===null) {
+            console.log("parse-error"); return;
+          }
+          const floor=rank[process.env.LEVEL]??3;
+          const allow=new Map();
+          for (const e of (process.env.NPM_ALLOW||"").split(";").filter(Boolean)) {
+            const f=e.split(" ");
+            const ok=f.length===3 && /^\d{4}-\d{2}-\d{2}$/.test(f[2]) &&
+              !Number.isNaN(Date.parse(f[2]+"T00:00:00Z")) &&
+              new Date(f[2]+"T00:00:00Z").toISOString().slice(0,10)===f[2];
+            if (!ok) { console.log("bad-allow-entry \""+e+"\""); continue; }
+            if (f[0]===process.env.LABEL && f[2]>=process.env.TODAY) allow.set(f[1],f[2]);
+          }
+          const seen=new Set();
+          for (const v of Object.values(j.vulnerabilities)) {
+            for (const via of v.via||[]) {
+              if (typeof via==="string"||(rank[via.severity]??4)<floor) continue;
+              const id=(via.url||"").split("/").pop();
+              if (allow.has(id)||seen.has(id)) continue;
+              seen.add(id);
+              console.log(id+" "+via.name+" ("+via.severity+")");
+            }
+          }
+        });'
+}
 
 npm_audit_one() {
     local dir="$1"
@@ -1380,6 +1383,14 @@ npm_audit_one() {
             skip "$label npm audit ($summary) ≥$level present (soft)"
             return 0
         fi
+        local unallowed
+        unallowed=$(npm_audit_unallowed "$label" "$level" "$audit_json" 2>/dev/null || echo "parse-error")
+        if [ -z "$unallowed" ]; then
+            pass "$label npm audit ($summary) — ≥$level only allowlisted residual (docs/security/npm-audit-residual.md)"
+            return 0
+        fi
+        info "non-allowlisted ≥$level advisories:"
+        printf '%s\n' "$unallowed"
         fail "$label npm audit ($summary) — ≥$level present"
         # Print human report for the failure path (truncated).
         (cd "$dir" && npm audit --audit-level="$level" 2>&1 | tail -40) || true

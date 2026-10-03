@@ -210,3 +210,23 @@ scripts/build.sh ui
   unchanged. Root now reports 0 high, 32 moderate (the existing OTEL-chain residual).
 - `clawft-ui/`, `gui/`: `brace-expansion` override 5.0.9 -> 5.0.12 (advisory range 4.0.0 - 5.0.11).
   Both report 0 vulnerabilities.
+
+## 2026-10-02: braces GHSA-vfj7-8cjw-p6xm (allowlisted residual)
+
+- Advisory: `braces` <=3.0.3, stack-exhaustion DoS on deeply nested patterns (high, CWE-674).
+- No patched release exists: `braces` latest is 3.0.3 (`npm view braces versions`), so no
+  `overrides` entry can fix it. `npm audit` offers only `agentic-flow@1.10.2` (major
+  downgrade, rejected as above) and `@claude-flow/cli@3.5.59` (downgrade across the WEFT-684
+  pin, rejected).
+- Reach: root lockfile only, `agentic-flow` -> `http-proxy-middleware` -> `micromatch` ->
+  `braces`. Dev-time agent tooling; not in the shipped daemon or clawft-ui bundle. The root
+  highs `@claude-flow/cli`, `agentic-flow`, `http-proxy-middleware`, `micromatch` are rollups
+  of this single advisory.
+- Gate handling: `NPM_AUDIT_ALLOW` in `scripts/build.sh` names this one advisory for the
+  `root` lockfile with expiry 2026-12-31. The gate still fails on any other >=high advisory
+  in any lockfile, and fails on this one once the expiry passes (verified by setting an
+  expired date). There is no blanket soft mode involved.
+- Clear when: a patched `braces` is published, or at the next deliberate ruflo pin bump.
+- The advisories listed on the earlier "new highs" card (undici, hono, qs, ip-address,
+  @opentelemetry/core) no longer report as high in the root lockfile; hono and qs are
+  moderate residual as above.
