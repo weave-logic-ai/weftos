@@ -1,7 +1,8 @@
 # Used by scripts/build.sh through `cargo nextest run --config-file`.
 # Each test process runs under scripts/test-runtime-wrap.sh, which gives it a
 # private WEFTOS_RUNTIME_DIR under $WEFTOS_TEST_RUNTIME_ROOT (build.sh creates
-# and removes that root) and sets WEFTOS_TEST=1. The wrapper exits 70 when the
+# and removes that root) and sets WEFTOS_TEST=1 (informational; the test guard reads only the
+# executable path, never the environment). The wrapper exits 70 when the
 # root is unset, so these tests are never run against a real runtime dir by
 # accident.
 #

@@ -141,7 +141,11 @@ fn statement_ok(view: &RevocationView, a: &Accepted) -> bool {
 
 /// The record file, when it exists and passes every check.
 pub(super) fn read_file(env: &CertEnv, id: &str, view: &RevocationView) -> Option<Accepted> {
-    let bytes = std::fs::read(anchor_file(&env.manifests_dir, id)).ok()?;
+    let Ok(bytes) = std::fs::read(anchor_file(&env.manifests_dir, id)) else {
+        // No record: a leftover ignored-marker has nothing to report.
+        let _ = std::fs::remove_file(ignored_marker(&env.manifests_dir, id));
+        return None;
+    };
     let a: Accepted = match serde_json::from_slice(&bytes) {
         Ok(a) => a,
         Err(e) => {

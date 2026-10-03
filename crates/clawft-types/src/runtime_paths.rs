@@ -143,29 +143,35 @@ pub fn user_profile_active() -> bool {
         .is_some()
 }
 
-/// Is this process a test? Any of: this crate's own `cfg(test)`; the
-/// `WEFTOS_TEST` marker (set by `scripts/test-runtime-wrap.sh`); `NEXTEST`
-/// (set by nextest); the executable living in a cargo `deps` directory (every
-/// integration-test and unit-test binary, however it was started: IDE, CI
-/// `cargo test`, nextest); or a `rustdoctest*` path (doctest executables).
-/// A library built for an integration test has no `cfg(test)`, which is why
-/// the others exist.
-pub fn running_under_test() -> bool {
-    if cfg!(test) || std::env::var_os("WEFTOS_TEST").is_some() || std::env::var_os("NEXTEST").is_some() {
+/// Does this executable look like a test process? This crate's own
+/// `cfg(test)`; the executable living in a cargo `deps` directory (every
+/// integration-test and unit-test binary however it was started: IDE, CI
+/// `cargo test`, nextest); or a `rustdoctest*` path component (doctests).
+/// A library built for an integration test has no `cfg(test)`, hence the
+/// path signals. Environment variables are deliberately NOT signals: a user's
+/// shell must never turn the daemon or CLI into a "test".
+pub fn is_test_process(cfg_test: bool, exe: Option<&Path>) -> bool {
+    if cfg_test {
         return true;
     }
-    let Ok(exe) = std::env::current_exe() else { return false };
+    let Some(exe) = exe else { return false };
     exe.parent().and_then(|p| p.file_name()).is_some_and(|d| d == "deps")
         || exe.components().any(|c| c.as_os_str().to_string_lossy().starts_with("rustdoctest"))
 }
 
-/// Panic when a test would use a real runtime root: a test process, no
-/// `WEFTOS_RUNTIME_DIR` override (`overridden`), and `root` not under the
-/// temp dir (the real `~/.weftos/run` or `~/.clawft` holds live files:
-/// `cluster_peers.json`, `node.key`, chains). A test that points `HOME` at a
-/// tempdir passes. `WEFTOS_ALLOW_REAL_HOME_IN_TESTS=1` opts out.
+/// Panic when a test would use a real runtime root: a test process
+/// ([`is_test_process`]), no `WEFTOS_RUNTIME_DIR` override (`overridden`),
+/// and `root` not under the temp dir (the real `~/.weftos/run` or
+/// `~/.clawft` holds live files: `cluster_peers.json`, `node.key`, chains).
+/// A test that points `HOME` at a tempdir passes. `WEFTOS_ALLOW_REAL_HOME_IN_TESTS=1`
+/// opts out. Compiled out of release builds (`debug_assertions` off), so the
+/// shipped daemon and CLI can never panic here.
 pub fn refuse_real_runtime_in_tests(root: &Path, overridden: bool) {
-    if overridden || std::env::var_os("WEFTOS_ALLOW_REAL_HOME_IN_TESTS").is_some() || !running_under_test() {
+    if !cfg!(debug_assertions)
+        || overridden
+        || std::env::var_os("WEFTOS_ALLOW_REAL_HOME_IN_TESTS").is_some()
+        || !is_test_process(cfg!(test), std::env::current_exe().ok().as_deref())
+    {
         return;
     }
     let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
@@ -173,8 +179,9 @@ pub fn refuse_real_runtime_in_tests(root: &Path, overridden: bool) {
     if !(root.starts_with(&tmp) || canon(root).starts_with(canon(&tmp))) {
         panic!(
             "a test resolved the runtime root {} without a WEFTOS_RUNTIME_DIR override; \
-             that is a real runtime dir. Pin the root (WEFTOS_RUNTIME_DIR, \
-             set_user_profile_at, or an explicit RuntimePaths) or point HOME at a tempdir",
+             that is a real runtime dir. Run tests through `scripts/build.sh test`, pin the root \
+             (WEFTOS_RUNTIME_DIR, set_user_profile_at, or an explicit RuntimePaths), or point HOME \
+             at a tempdir. WEFTOS_ALLOW_REAL_HOME_IN_TESTS=1 opts out",
             root.display()
         );
     }
@@ -495,6 +502,21 @@ mod tests {
     #[should_panic(expected = "a test resolved the runtime root")]
     fn a_test_resolving_a_real_home_root_panics() {
         at("/definitely-not-temp/home/.weftos/run").refuse_real_home_in_tests(false);
+    }
+
+    /// The signals are the executable path only; a shell's WEFTOS_TEST or
+    /// NEXTEST can never make the shipped daemon or CLI a "test".
+    #[test]
+    fn only_a_deps_or_doctest_executable_is_a_test_process() {
+        let p = |s: &str| Some(PathBuf::from(s));
+        assert!(is_test_process(false, p("/w/target/debug/deps/user_daemon-1a2b").as_deref()));
+        assert!(is_test_process(false, p("/tmp/rustdoctestAbC/rust_out").as_deref()));
+        assert!(is_test_process(true, None));
+        // The installed or dev daemon and CLI, with or without a marker env.
+        assert!(!is_test_process(false, p("/usr/local/bin/weaver").as_deref()));
+        assert!(!is_test_process(false, p("/w/target/debug/weaver").as_deref()));
+        assert!(!is_test_process(false, p("/w/target/release/weft").as_deref()));
+        assert!(!is_test_process(false, None));
     }
 
     #[test]
