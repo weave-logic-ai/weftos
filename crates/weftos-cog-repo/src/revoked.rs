@@ -83,6 +83,11 @@ impl RevokedKeys {
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
+
+    /// Add every key revoked in `other`.
+    pub fn merge(&mut self, other: RevokedKeys) {
+        self.keys.extend(other.keys);
+    }
 }
 
 #[cfg(test)]

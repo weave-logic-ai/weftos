@@ -120,9 +120,13 @@ the latest release was signed more than 90 days ago, `weaver update` warns:
 a mirror or attacker may be serving an old release and hiding newer ones.
 
 If an operator has revoked the release key (a `signer_key` entry in
-`revoked_subjects.json` in the runtime dir, the same list cog installs
-honour), `weaver update` refuses everything, `--check` included. An
-unreadable list also stops it. A revoked key means a new key, which can only
+`revoked_subjects.json`, the same list cog installs honour), `weaver update`
+refuses everything, `--check` included. It reads the user-level lists
+whatever directory you run it from: `$WEFTOS_RUNTIME_DIR` when set,
+otherwise `~/.weftos/run` and the legacy `~/.clawft`. Inside a project, it
+also adds that project's `.weftos/runtime` list. An unreadable user-level
+list stops the update. An unreadable project list is ignored with a
+warning, so a broken file in a cloned repository cannot block updates. A revoked key means a new key, which can only
 arrive with a new `weaver`. Reinstall out of band from a source you trust,
 following WeaveLogic's key-rotation announcement.
 

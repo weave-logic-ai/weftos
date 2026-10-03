@@ -27,13 +27,15 @@
 //! skips this check (sha256 checks still run) and says so loudly.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use weftos_cog_repo::RevokedKeys;
+use clawft_types::runtime_paths::{self as rp, RUNTIME_DIR_ENV};
+use weftos_cog_repo::{RevokedKeys, SUBJECTS_FILE_NAME};
 
 /// The signed hash list's asset name.
 pub const SIGNED_DOC: &str = "weftos-release.json";
@@ -60,18 +62,58 @@ pub enum Trust {
 
 impl Trust {
     /// The compiled-in WeaveLogic release key (the COG-008 key), checked
-    /// against the operator's signer-key revocation list
-    /// (`revoked_subjects.json` in the runtime dir). An unreadable list is an
-    /// error, never an empty one.
-    pub fn pinned() -> anyhow::Result<Self> {
-        let revoked = RevokedKeys::load_default().map_err(|e| anyhow!("cannot read the signer revocation list: {e}"))?;
-        Ok(Self::pinned_with(revoked))
+    /// against the operator's signer-key revocations (see
+    /// [`load_revocations`]). Returns warnings to print alongside.
+    pub fn pinned() -> anyhow::Result<(Self, Vec<String>)> {
+        let env = std::env::var(RUNTIME_DIR_ENV).ok();
+        let cwd = std::env::current_dir().ok();
+        let (revoked, warnings) = load_revocations(env.as_deref(), cwd.as_deref(), rp::home_dir().as_deref())?;
+        Ok((Self::pinned_with(revoked), warnings))
     }
 
     /// [`Trust::pinned`] with an explicit revocation list.
     pub fn pinned_with(revoked: RevokedKeys) -> Self {
         Trust::Pinned { key: weftos_cog_repo::weavelogic_key(), revoked }
     }
+}
+
+/// The revocation files `weaver update` reads, from explicit inputs: the
+/// user-level ones (`$WEFTOS_RUNTIME_DIR` when set; else the user daemon's
+/// `~/.weftos/run` and the legacy `~/.clawft`), and the project-level one of
+/// the project around `cwd`, if any. Unlike [`rp::RuntimePaths::resolve`],
+/// the user-level lists never depend on the working directory.
+pub fn revocation_files(env: Option<&str>, cwd: Option<&Path>, home: Option<&Path>) -> anyhow::Result<(Vec<PathBuf>, Option<PathBuf>)> {
+    if let Some(dir) = env.map(str::trim).filter(|d| !d.is_empty()) {
+        return Ok((vec![Path::new(dir).join(SUBJECTS_FILE_NAME)], None));
+    }
+    let home = home.ok_or_else(|| {
+        anyhow!("cannot locate the signer revocation list: no home directory and {RUNTIME_DIR_ENV} is unset")
+    })?;
+    let user = vec![rp::user_runtime_root(home).join(SUBJECTS_FILE_NAME), home.join(".clawft").join(SUBJECTS_FILE_NAME)];
+    let project = cwd
+        .and_then(|c| rp::find_project_dir(c, Some(home)))
+        .map(|p| p.join(".weftos").join("runtime").join(SUBJECTS_FILE_NAME));
+    Ok((user, project))
+}
+
+/// Union of the user-level and project-level signer revocations. A user-level
+/// file that cannot be read or parsed is an error (fail closed). A malformed
+/// project-level file (say, in a cloned repository) is ignored with a warning,
+/// so it can neither block updates nor hide a user-level revocation.
+pub fn load_revocations(env: Option<&str>, cwd: Option<&Path>, home: Option<&Path>) -> anyhow::Result<(RevokedKeys, Vec<String>)> {
+    let (user, project) = revocation_files(env, cwd, home)?;
+    let mut revoked = RevokedKeys::none();
+    for p in &user {
+        revoked.merge(RevokedKeys::load(p).map_err(|e| anyhow!("cannot read the signer revocation list: {e}"))?);
+    }
+    let mut warnings = Vec::new();
+    if let Some(p) = project {
+        match RevokedKeys::load(&p) {
+            Ok(r) => revoked.merge(r),
+            Err(e) => warnings.push(format!("warning: ignoring the project revocation list ({e}); the user-level list still applies")),
+        }
+    }
+    Ok((revoked, warnings))
 }
 
 /// Fail closed when `key` is revoked. Nothing signed by it is trusted, and a

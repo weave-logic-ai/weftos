@@ -30,7 +30,11 @@ Staging area for changes after the 0.8.1 cut.
   `--allow-downgrade` (warns). A downgrade never lowers the mark.
 - A release key revoked in the operator's signer revocation list
   (`revoked_subjects.json`, as used for cogs) makes `weaver update` refuse
-  everything and point to an out-of-band reinstall.
+  everything and point to an out-of-band reinstall. The user-level lists
+  (`$WEFTOS_RUNTIME_DIR`, else `~/.weftos/run` and `~/.clawft`) are read
+  whatever the working directory, with a project's list added when there is
+  one. A malformed project list warns and is ignored; a malformed user list
+  is an error.
 - The signed list carries a `published` time; a latest release signed over 90
   days ago gets a warning.
 - The cog signer (`weft-cog-repo sign`, public and private repos) refuses

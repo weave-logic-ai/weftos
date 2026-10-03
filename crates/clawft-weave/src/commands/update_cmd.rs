@@ -97,9 +97,18 @@ fn running_as_sudo_root() -> bool {
 
 fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
+    let trust = if flags.insecure_skip_signature {
+        Trust::Skip
+    } else {
+        let (trust, warnings) = Trust::pinned()?;
+        for w in warnings {
+            println!("{w}");
+        }
+        trust
+    };
     let ctx = Ctx {
         src: Source::github(),
-        trust: if flags.insecure_skip_signature { Trust::Skip } else { Trust::pinned()? },
+        trust,
         triple: detect_target_triple().to_string(),
         current_version: CURRENT_VERSION.to_string(),
         dirty: option_env!("BUILD_VERSION").is_some_and(|v| v.contains("-dirty")),
