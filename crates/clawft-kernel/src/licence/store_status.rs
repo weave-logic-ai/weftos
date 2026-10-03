@@ -90,6 +90,53 @@ impl CheckoutGrantStore {
     }
 }
 
+/// The sticky "this node was Seed-bound" marker, beside the store file. It
+/// outlives a deleted or replaced store file, so the run gate fails closed
+/// instead of treating such a node as never bound.
+pub const BOUND_MARKER: &str = "licence-bound.marker";
+
+impl CheckoutGrantStore {
+    fn marker(&self) -> std::path::PathBuf {
+        self.path.with_file_name(BOUND_MARKER)
+    }
+
+    /// Write the marker (best effort; logged on failure).
+    pub(super) fn note_bound(&self) {
+        let m = self.marker();
+        if m.exists() {
+            return;
+        }
+        if let Err(e) = super::persist::write_atomic(&m, b"bound\n") {
+            tracing::warn!(error = %e, "could not write the licence bound marker");
+        }
+    }
+
+    /// True once this node has accepted a binding (the marker exists, or a
+    /// binding is held now, which also writes the marker).
+    pub fn was_ever_bound(&self) -> bool {
+        if self.marker().exists() {
+            return true;
+        }
+        if self.held_binding().is_some() {
+            self.note_bound();
+            return true;
+        }
+        false
+    }
+
+    /// True when a held grant (current or previous) lists a binary with
+    /// this sha256 or this BLAKE3: the bytes are a checked-out Cognitum cog,
+    /// whatever package they arrive in.
+    pub fn claims_artifact(&self, sha256: &str, blake3: &str) -> bool {
+        let g = self.lock();
+        g.slots
+            .values()
+            .flat_map(|s| s.current.iter().chain(s.previous.iter()))
+            .flat_map(|h| h.body.artifacts.iter())
+            .any(|a| a.sha256 == sha256 || a.blake3 == blake3)
+    }
+}
+
 impl ApprovalStore {
     /// Every held approval, active or orphaned.
     pub fn rows(&self) -> Vec<ApprovalRow> {
@@ -102,6 +149,14 @@ impl ApprovalStore {
                 active: g.1.is_none() && Some(&a.mesh_id) == local.as_ref(),
             })
             .collect()
+    }
+
+    /// The signed envelopes of the orphaned approvals: the CLI verifies each
+    /// against the operator's own key before it re-signs it.
+    pub fn orphaned_signed(&self) -> Vec<super::SignedApproval> {
+        let local = self.local.get().map(|m| m.to_hex());
+        let g = self.lock();
+        g.0.values().filter(|(_, a)| Some(&a.mesh_id) != local.as_ref()).map(|(s, _)| s.clone()).collect()
     }
 
     /// The orphaned approvals themselves (`--reapprove-orphaned` re-signs

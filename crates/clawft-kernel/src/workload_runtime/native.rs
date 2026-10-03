@@ -296,6 +296,10 @@ impl WorkloadRuntime for NativeRuntime {
         })
     }
 
+    async fn staged_payload(&self, h: &InstanceHandle) -> Option<std::path::PathBuf> {
+        self.instances.lock().await.get(&h.instance_id).map(|i| i.program.clone())
+    }
+
     async fn start(&self, h: &InstanceHandle) -> Result<(), RuntimeError> {
         let mut map = self.instances.lock().await;
         let inst = map

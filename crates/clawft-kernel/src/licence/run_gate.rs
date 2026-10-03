@@ -6,9 +6,11 @@
 //! it as `workload.refuse`).
 //!
 //! - **Applies** when this node holds a Seed binding (bound, unbound or
-//!   orphaned) or its store is unreadable. A node that never held one is not
-//!   in a Seed-bound mesh, and its Cognitum cogs keep the ADR-105 path
-//!   (operator-signed package) unchanged: [`RunVerdict::NotSeedBound`].
+//!   orphaned), its store is unreadable, the sticky bound marker exists (a
+//!   deleted store file does not reset it), or it holds approvals. A node
+//!   with none of these is not in a Seed-bound mesh, and its Cognitum cogs
+//!   keep the ADR-105 path (operator-signed package) unchanged:
+//!   [`RunVerdict::NotSeedBound`].
 //! - **Refusals**, in this order: no binding in effect (`binding_inactive`),
 //!   no grant held for the cog version (`no_grant`), a grant held but no
 //!   longer valid (`grant_lapsed`: expired, withdrawn, key revoked), a valid
@@ -89,8 +91,20 @@ pub fn check_run(
     approvals: Option<&ApprovalStore>,
     req: &RunRequest<'_>,
 ) -> Result<RunVerdict, RunRefusal> {
-    if grants.held_binding().is_none() && grants.poisoned().is_none() {
+    let approvals_held = approvals.is_some_and(|a| !a.is_empty() || a.poisoned().is_some());
+    let bound_signal = grants.held_binding().is_some()
+        || grants.poisoned().is_some()
+        || grants.was_ever_bound()
+        || approvals_held;
+    if !bound_signal {
         return Ok(RunVerdict::NotSeedBound);
+    }
+    if grants.held_binding().is_none() && grants.poisoned().is_none() {
+        // Bound before, but the store holds no binding now: the store file
+        // was deleted or replaced. Fail closed until sync brings it back.
+        return Err(RunRefusal::BindingInactive(
+            "this node was Seed-bound but its licence store holds no binding (store missing?)".into(),
+        ));
     }
     grants.binding_status().map_err(|e| RunRefusal::BindingInactive(e.to_string()))?;
     let Some((grant, art)) = grants.valid_grant_for_artifact(req.cog_id, req.version, req.sha256, req.blake3)
@@ -118,6 +132,11 @@ pub fn check_run(
 pub trait CognitumRunGate: Send + Sync {
     /// Decide `req` (hashes computed from the bytes that will run).
     fn check(&self, req: &RunRequest<'_>) -> Result<RunVerdict, RunRefusal>;
+    /// True when these bytes are known Cognitum bytes (listed by a held
+    /// grant, or a revoked artifact hash) whatever the package says.
+    fn claims(&self, _sha256: &str, _blake3: &str) -> bool {
+        false
+    }
 }
 
 /// [`CognitumRunGate`] over this node's stores.
@@ -131,5 +150,9 @@ pub struct StoreRunGate {
 impl CognitumRunGate for StoreRunGate {
     fn check(&self, req: &RunRequest<'_>) -> Result<RunVerdict, RunRefusal> {
         check_run(&self.grants, self.approvals.as_deref(), req)
+    }
+
+    fn claims(&self, sha256: &str, blake3: &str) -> bool {
+        self.grants.claims_artifact(sha256, blake3) || self.grants.is_hash_revoked(blake3)
     }
 }

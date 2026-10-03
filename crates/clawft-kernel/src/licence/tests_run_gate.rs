@@ -94,3 +94,50 @@ fn status_rows_list_validity_and_orphaned_approvals() {
     assert_eq!(fx.approvals.orphaned_approvals()[0].cog_id, "fall-detect");
     assert!(fx.store.grant_rows().iter().all(|r| !r.valid), "no binding in effect for the new id");
 }
+
+
+#[test]
+fn a_deleted_store_on_a_node_that_was_bound_fails_closed() {
+    let mut fx = Fx::new();
+    fx.bind();
+    fx.store.accept_grant(&grant(1, T0, 3600, &["aarch64"])).unwrap();
+    fx.approvals.accept(&approval(&[sha_of("aarch64")])).unwrap();
+    assert!(matches!(check(&fx, "aarch64"), Ok(RunVerdict::Permit(_))));
+    assert!(fx.dir.path().join(BOUND_MARKER).exists(), "the first binding wrote the marker");
+    std::fs::remove_file(fx.dir.path().join(super::store::GRANTS_FILE)).unwrap();
+    std::fs::remove_file(fx.dir.path().join(super::approval_store::APPROVALS_FILE)).unwrap();
+    fx.restart();
+    assert!(fx.store.held_binding().is_none() && fx.approvals.is_empty());
+    let e = check(&fx, "aarch64").unwrap_err();
+    assert_eq!(e.code(), "binding_inactive");
+    // Without the marker too, held approvals alone keep the gate on.
+    std::fs::remove_file(fx.dir.path().join(BOUND_MARKER)).unwrap();
+    fx.approvals.accept(&approval(&[sha_of("aarch64")])).unwrap();
+    assert_eq!(check(&fx, "aarch64").unwrap_err().code(), "binding_inactive");
+}
+
+#[test]
+fn a_poisoned_store_fails_closed() {
+    let fx = Fx::new();
+    std::fs::write(fx.dir.path().join(super::store::GRANTS_FILE), b"{not json").unwrap();
+    let poisoned = CheckoutGrantStore::open_or_poisoned(fx.dir.path(), anchors(), fx.local.clone(), clock_of(&fx.clock));
+    assert!(poisoned.poisoned().is_some());
+    let (sha, b3) = (sha_of("aarch64"), b3_of("aarch64"));
+    let e = check_run(&poisoned, Some(&fx.approvals), &req(&sha, &b3)).unwrap_err();
+    assert_eq!(e.code(), "binding_inactive");
+}
+
+#[test]
+fn a_held_grant_claims_its_bytes_and_a_revoked_hash_is_claimed_too() {
+    let fx = Fx::new();
+    fx.bind();
+    fx.store.accept_grant(&grant(1, T0, 3600, &["aarch64"])).unwrap();
+    let gate = StoreRunGate { grants: fx.store.clone(), approvals: Some(fx.approvals.clone()) };
+    assert!(gate.claims(&sha_of("aarch64"), "x"));
+    assert!(gate.claims("x", &b3_of("aarch64")));
+    assert!(!gate.claims(&sha_of("x86_64"), &b3_of("x86_64")));
+    let list = Arc::new(RevocationList::new(fx.dir.path().join("revoked.json")));
+    fx.store.attach_revocations(list.clone());
+    list.revoke_subject(RevocationKind::ArtifactHash, &b3_of("x86_64"), "bad").unwrap();
+    assert!(gate.claims("x", &b3_of("x86_64")));
+}

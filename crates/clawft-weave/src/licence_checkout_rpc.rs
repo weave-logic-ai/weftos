@@ -2,7 +2,7 @@
 //!
 //! | method                          | capability | what it does |
 //! |---------------------------------|------------|--------------|
-//! | `workload.cog.checkout`         | Write      | `{cog_id, version, arch}`: ask the steward (or this node's relay, on the steward) |
+//! | `workload.cog.checkout`         | Admin      | `{cog_id, version, arch}`: ask the steward (or this node's relay, on the steward) |
 //! | `workload.cog.checkout.approve` | Admin      | `{cog_id, version, prepare: true}`: what the operator signs; `{signed: [..]}`: verify, store, flood |
 //! | `workload.cog.checkout.status`  | Read       | binding, steward, relay, held grants (with the run gate per artifact) and approvals |
 //!
@@ -62,6 +62,9 @@ pub struct Ctx<'a> {
     pub arch: Option<&'a str>,
     /// Unix seconds.
     pub now: u64,
+    /// Who is asking (a checkout on the steward is charged to and gated as
+    /// this principal).
+    pub principal: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,7 +151,7 @@ async fn checkout(ctx: &Ctx<'_>, p: CheckoutParams) -> Result<Value, String> {
     let local = steward == rt.steward_node_id;
     chain(rt, "cog.checkout.request", json!({
         "cog_id": wire.cog_id, "version": wire.version, "arch": wire.arch,
-        "steward": steward, "via": if local { "local" } else { "steward" },
+        "steward": steward, "via": if local { "local" } else { "steward" }, "principal": ctx.principal,
     }));
     let out = if local {
         if mesh.relay().is_none() {
@@ -157,8 +160,8 @@ async fn checkout(ctx: &Ctx<'_>, p: CheckoutParams) -> Result<Value, String> {
                 licence_steward::LINK_FILE
             ));
         }
-        // The relay chains `cog.checkout.granted` / `refused` itself.
-        mesh.checkout_local(&wire).await
+        // The relay rate-limits, gates and chains (`granted` / `refused`) as this principal.
+        mesh.checkout_as(ctx.principal, &wire).await
     } else {
         let r = mesh.request_checkout(&steward, wire.clone(), STEWARD_TIMEOUT).await;
         match &r {
@@ -203,13 +206,21 @@ async fn approve(ctx: &Ctx<'_>, p: ApproveParams) -> Result<Value, String> {
     let ex = ctx.exchange.clone().ok_or("no licence exchange on this node (needs the mesh)")?;
     if p.prepare {
         if p.reapprove_orphaned {
-            let orphaned = ex.approvals().orphaned_approvals();
-            return Ok(json!({ "mesh_id": mesh_id, "orphaned": orphaned, "now": ctx.now }));
+            // The signed envelopes: the CLI checks each signature itself.
+            let orphaned = ex.approvals().orphaned_signed();
+            return Ok(json!({ "mesh_id": mesh_id, "orphaned_signed": orphaned, "now": ctx.now }));
         }
         let (cog, version) = p.cog_id.as_deref().zip(p.version.as_deref()).ok_or("give <cog>@<version>")?;
         let (sha256, grant) = approval_set(ctx, cog, version, &p.sha256)?;
+        // The content key does not depend on `approved_at`: the CLI's
+        // `--confirm <content_key>` pins exactly this content.
+        let content_key = clawft_kernel::licence::Approval {
+            v: 1, mesh_id: mesh_id.clone(), cog_id: cog.into(), version: version.into(),
+            sha256: sha256.clone(), approved_at: 0,
+        }
+        .content_key();
         return Ok(json!({ "mesh_id": mesh_id, "cog_id": cog, "version": version, "sha256": sha256,
-                          "grant": grant, "now": ctx.now }));
+                          "grant": grant, "now": ctx.now, "content_key": content_key }));
     }
     if p.signed.is_empty() {
         return Err("workload.cog.checkout.approve needs 'signed' (or 'prepare': true)".into());
@@ -279,11 +290,45 @@ fn status(ctx: &Ctx<'_>) -> Value {
     })
 }
 
-/// Daemon entry.
+/// The RPC principal of an extension call: the verified project, else a
+/// token (by a short hash, never the secret), else the local operator.
+pub fn principal_of(ctx: &crate::rpc_ext::ExtCtx) -> String {
+    if let Some(p) = &ctx.verified_project {
+        return format!("project:{}", p.as_str());
+    }
+    match ctx.auth.as_deref() {
+        Some(t) if !crate::capability::is_literal_scope(t) => {
+            format!("token:{}", &clawft_kernel::licence::sha256_hex(t.as_bytes())[..12])
+        }
+        _ => "operator".into(),
+    }
+}
+
+/// `workload.cog.checkout`, registered in `rpc_ext::ROUTES` (Admin: a
+/// checkout spends the Seed's licence and transfer budget), so the handler
+/// knows the caller's principal.
+pub fn handle_ext(call: crate::rpc_ext::ExtCall) -> crate::rpc_ext::ExtFuture {
+    Box::pin(async move {
+        let principal = principal_of(&call.ctx);
+        dispatch_as(&call.method, call.params, call.ctx.kernel.clone(), &principal).await
+    })
+}
+
+/// Daemon entry (legacy route: approve and status; a checkout normally
+/// arrives through [`handle_ext`]).
 pub async fn dispatch(
     method: &str,
     params: Value,
     kernel: Arc<tokio::sync::RwLock<clawft_kernel::boot::Kernel<clawft_platform::NativePlatform>>>,
+) -> Response {
+    dispatch_as(method, params, kernel, "operator").await
+}
+
+async fn dispatch_as(
+    method: &str,
+    params: Value,
+    kernel: Arc<tokio::sync::RwLock<clawft_kernel::boot::Kernel<clawft_platform::NativePlatform>>>,
+    principal: &str,
 ) -> Response {
     let Some(rt) = licence_boot::runtime() else {
         return Response::error("the licence runtime is not initialised on this node");
@@ -306,6 +351,7 @@ pub async fn dispatch(
         reachable: &reachable,
         arch,
         now: chrono::Utc::now().timestamp().max(0) as u64,
+        principal,
     };
     route(&ctx, method, params).await
 }

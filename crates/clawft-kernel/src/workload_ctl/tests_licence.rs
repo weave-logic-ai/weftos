@@ -40,11 +40,15 @@ impl RedistributionPolicy for ServeAll {
 struct TestGate {
     answer: Mutex<Result<RunVerdict, RunRefusal>>,
     asked: Mutex<Vec<(String, String, String, String)>>,
+    /// Bytes it claims as Cognitum whatever the package says.
+    claimed: Mutex<Option<String>>,
+    /// Only this sha256 is permitted, when set.
+    only_sha: Mutex<Option<String>>,
 }
 
 impl TestGate {
     fn new(answer: Result<RunVerdict, RunRefusal>) -> Arc<Self> {
-        Arc::new(Self { answer: Mutex::new(answer), asked: Mutex::default() })
+        Arc::new(Self { answer: Mutex::new(answer), asked: Mutex::default(), claimed: Mutex::default(), only_sha: Mutex::default() })
     }
     fn set(&self, a: Result<RunVerdict, RunRefusal>) {
         *self.answer.lock().unwrap() = a;
@@ -54,7 +58,13 @@ impl TestGate {
 impl CognitumRunGate for TestGate {
     fn check(&self, r: &RunRequest<'_>) -> Result<RunVerdict, RunRefusal> {
         self.asked.lock().unwrap().push((r.cog_id.into(), r.version.into(), r.sha256.into(), r.blake3.into()));
+        if self.only_sha.lock().unwrap().as_deref().is_some_and(|s| s != r.sha256) {
+            return Err(RunRefusal::NotInGrant);
+        }
         self.answer.lock().unwrap().clone()
+    }
+    fn claims(&self, sha256: &str, _: &str) -> bool {
+        self.claimed.lock().unwrap().as_deref() == Some(sha256)
     }
 }
 
@@ -255,4 +265,144 @@ async fn with_the_real_stores_a_member_runs_the_cog_only_with_grant_and_approval
     revoked.revoke_subject(RevocationKind::ArtifactHash, &b3, "withdrawn").unwrap();
     let e = plane.instance(method::START, &placed.instance_id).await.unwrap_err();
     assert!(e.to_string().contains("[hash_revoked]"), "{e}");
+}
+
+
+fn other_arch() -> &'static str {
+    if arch() == "aarch64" { "x86_64" } else { "aarch64" }
+}
+
+fn ctl_req() -> super::msg::CtlRequest {
+    super::msg::CtlRequest {
+        version: super::msg::CTL_VERSION,
+        method: method::PLACE.into(),
+        requester: "controller".into(),
+        target: "node".into(),
+        nonce: "0".repeat(32),
+        issued_at_ms: 0,
+        expires_at_ms: 0,
+        decision_id: Some("d".repeat(64)),
+        body: serde_json::Value::Null,
+    }
+}
+
+fn verified(pkg: &std::path::Path) -> (crate::workload_pkg::VerifiedPackage, crate::workload_runtime::VerifiedWorkload) {
+    let vp = crate::workload_pkg::verify_dir(pkg, &anchors(), &crate::workload_pkg::VerifyPolicy::default()).unwrap();
+    let w = crate::workload_runtime::VerifiedWorkload::from_package(&vp, &crate::workload_pkg::DirSource::new(pkg)).unwrap();
+    (vp, w)
+}
+
+/// A minimal little-endian ELF64 header for `arch` (enough for admission).
+fn elf(arch: &str) -> String {
+    let m = crate::workload_runtime::native::elf_machine(arch).unwrap().to_le_bytes();
+    let mut b = vec![0x7f, b'E', b'L', b'F', 2, 1, 1];
+    b.resize(18, 0);
+    b.extend_from_slice(&m);
+    b.resize(64, 0);
+    // The package helper writes text; these bytes are all ASCII-safe except
+    // the header, so go through latin-1 to keep them byte for byte.
+    b.iter().map(|&c| c as char).collect()
+}
+
+/// The runtime's admission picks the arch: a placement whose variant names
+/// another arch is refused, for native (host arch) and container (its arch
+/// order) alike, and every binary of the package is asked about.
+#[tokio::test]
+async fn the_gate_hashes_the_binary_the_runtime_admits_and_refuses_another_variant_arch() {
+    // Native: the host arch runs; a variant for the other arch is refused.
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package_from(tmp.path(), "fall-detect", SCRIPT, &[arch(), other_arch()], Some(COGNITUM_URL));
+    let (vp, w) = verified(&pkg);
+    let key = SigningKey::from_bytes(&[30; 32]);
+    let node = host_node(33, board_caps("pi5"), true, &key);
+    let gate = TestGate::new(permit());
+    node.svc.set_licence_gate(gate.clone());
+    let native = node.svc.routes["native"].clone();
+    let e = node.svc
+        .licence_check_place(&vp, &w, &format!("{}-native", other_arch()), &native, &ctl_req())
+        .await
+        .unwrap_err();
+    assert!(e.reason.contains("[arch_mismatch]"), "{}", e.reason);
+    let run = node.svc
+        .licence_check_place(&vp, &w, &format!("{}-native", arch()), &native, &ctl_req())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.arch, arch());
+    assert_eq!(gate.asked.lock().unwrap().len(), 2, "both binaries were asked about");
+
+    // Container: it runs the first arch of its own order; another variant arch is refused.
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = other_arch();
+    let pkg = package_from(tmp.path(), "fall-detect", &elf(runs), &[arch(), runs], Some(COGNITUM_URL));
+    let (vp, w) = verified(&pkg);
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let wg = gate_for(&chain);
+    let mut cfg = crate::workload_runtime::ContainerRuntimeConfig::new(
+        crate::workload_runtime::Engine::Docker,
+        format!("debian@sha256:{}", "0".repeat(64)),
+        tmp.path().join("ctx"),
+    );
+    cfg.arches_native = vec![runs.to_string()];
+    let rt = crate::workload_runtime::ContainerRuntime::new(cfg, Arc::new(NoEngine));
+    let host = Arc::new(crate::workload_runtime::WorkloadHost::new(
+        Arc::new(rt), wg.clone(), "c", crate::workload_governance::NodeTrustTier::Paired,
+    ));
+    let svc = super::host_service::WorkloadHostService::new(SigningKey::from_bytes(&[34; 32]), exchange("c", &chain), anchors(), wg)
+        .with_route("container", host.clone());
+    svc.set_licence_gate(TestGate::new(permit()));
+    let e = svc.licence_check_place(&vp, &w, &format!("{}-container", arch()), &host, &ctl_req()).await.unwrap_err();
+    assert!(e.reason.contains("[arch_mismatch]") && e.reason.contains(runs), "{}", e.reason);
+    let run = svc.licence_check_place(&vp, &w, &format!("{runs}-container"), &host, &ctl_req()).await.unwrap().unwrap();
+    assert_eq!(run.arch, runs);
+}
+
+/// A package that does not say Cognitum but carries bytes a held grant lists
+/// is gated all the same.
+#[tokio::test]
+async fn bytes_a_grant_lists_are_gated_whatever_the_package_says() {
+    let r = rig(None, Err(RunRefusal::NoGrant)).await;
+    *r.gate.claimed.lock().unwrap() = Some(sha256_hex(SCRIPT.as_bytes()));
+    let rep = r.plane.place(&order(&r.pkg)).await.unwrap();
+    assert!(rep.placed.is_none());
+    assert!(rep.attempts[0].reason.as_deref().unwrap_or("").contains("[no_grant]"), "{}", rep.explain);
+    assert_eq!(r.gate.asked.lock().unwrap()[0].0, "fall-detect", "checked under the package's own id");
+}
+
+/// At start the staged file is rehashed: bytes changed on disk after the
+/// load are refused.
+#[tokio::test]
+async fn a_start_rehashes_the_staged_file_on_disk() {
+    let r = rig(Some(COGNITUM_URL), permit()).await;
+    *r.gate.only_sha.lock().unwrap() = Some(sha256_hex(SCRIPT.as_bytes()));
+    let rep = r.plane.place(&order(&r.pkg)).await.unwrap();
+    let placed = rep.placed.clone().unwrap_or_else(|| panic!("{}", rep.explain));
+    r.plane.instance(method::STOP, &placed.instance_id).await.unwrap();
+    let (host, handle) = {
+        let map = r.host.svc.instances.lock().await;
+        let p = &map[&placed.instance_id];
+        (r.host.svc.routes[&p.route].clone(), p.handle.clone())
+    };
+    let path = host.runtime().staged_payload(&handle).await.expect("native stages a file");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(&path, "#!/bin/sh\necho swapped\n").unwrap();
+    let e = r.plane.instance(method::START, &placed.instance_id).await.unwrap_err();
+    assert!(e.to_string().contains("[not_in_grant]"), "{e}");
+}
+
+/// An ArtifactHash revocation of a licensed cog's binary tears the running
+/// instance down (the existing revocation sweep covers it).
+#[tokio::test]
+async fn revoking_a_licensed_binary_tears_its_running_instance_down() {
+    let r = rig(Some(COGNITUM_URL), permit()).await;
+    let rep = r.plane.place(&order(&r.pkg)).await.unwrap();
+    let placed = rep.placed.clone().unwrap_or_else(|| panic!("{}", rep.explain));
+    let dir = tempfile::tempdir().unwrap();
+    let list = crate::revocation::RevocationList::new(dir.path().join("revoked.json"));
+    let b3 = hex_encode(blake3::hash(SCRIPT.as_bytes()).as_bytes());
+    list.revoke_subject(crate::revocation::RevocationKind::ArtifactHash, &b3, "withdrawn").unwrap();
+    let forced = r.host.svc.enforce_revocations(&list).await;
+    assert_eq!(forced.len(), 1, "{forced:?}");
+    assert!(!r.host.svc.instances.lock().await.contains_key(&placed.instance_id));
 }

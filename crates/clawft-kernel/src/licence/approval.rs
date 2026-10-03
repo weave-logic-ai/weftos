@@ -87,8 +87,9 @@ pub fn verify_approval(
     Ok(a)
 }
 
-/// Signature and shape only, with no mesh check (store load).
-pub(crate) fn verify_approval_signature(
+/// Signature and shape only, with no mesh check (store load, and the CLI's
+/// check of an orphaned approval before it re-signs it for the new mesh).
+pub fn verify_approval_signature(
     signed: &SignedApproval,
     anchors: &TrustAnchors,
 ) -> Result<Approval, LicenceError> {

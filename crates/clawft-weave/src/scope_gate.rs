@@ -157,6 +157,9 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "mesh.register",
     "mesh.heartbeat",
     "mesh.unregister",
+    // ADR-106 phase 3: a Cognitum checkout is a machine-level licence
+    // operation (Admin), not part of any one project.
+    "workload.cog.checkout",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.

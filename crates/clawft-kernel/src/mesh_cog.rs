@@ -119,6 +119,14 @@ impl CogMesh {
         self.relay.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
+    /// An RPC caller on the steward asks for a checkout, as `principal`.
+    pub async fn checkout_as(&self, principal: &str, req: &CheckoutWire) -> Result<SignedGrant, CheckoutRefusal> {
+        match self.relay() {
+            Some(r) => r.handle(CheckoutCaller::Local(principal), req).await,
+            None => Err(CheckoutRefusal::Licence("no_steward".into())),
+        }
+    }
+
     /// The steward's own kernel asks for a checkout.
     pub async fn checkout_local(&self, req: &CheckoutWire) -> Result<SignedGrant, CheckoutRefusal> {
         match self.relay() {

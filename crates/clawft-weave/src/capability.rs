@@ -85,8 +85,10 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-106: withdrawing a Seed binding is the same trust change.
         "workload.node.unbind" => Capability::Admin,
         "workload.node.reset-floor" => Capability::Admin,
-        // ADR-106 phase 3: an operator hash approval is a trust change.
+        // ADR-106 phase 3: an operator hash approval is a trust change, and a
+        // checkout spends the Seed's licence and transfer budget.
         "workload.cog.checkout.approve" => Capability::Admin,
+        "workload.cog.checkout" => Capability::Admin,
 
         // ── Write: state-mutating verbs ─────────────────────────────
         "agent.register" => Capability::Write,
@@ -494,7 +496,6 @@ mod tests {
             "workload.stop",
             "workload.unload",
             "workload.migrate",
-            "workload.cog.checkout",
             "workload.some_future_verb",
         ] {
             assert_eq!(required_capability(m), Capability::Write, "{m}");
@@ -507,6 +508,7 @@ mod tests {
             "workload.node.unbind",
             "workload.node.reset-floor",
             "workload.cog.checkout.approve",
+            "workload.cog.checkout",
         ] {
             assert_eq!(required_capability(m), Capability::Admin, "{m}");
             assert!(!write.allows_method(m), "{m}");

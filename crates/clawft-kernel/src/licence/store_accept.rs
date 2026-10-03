@@ -56,6 +56,7 @@ impl CheckoutGrantStore {
                 return Ok(self.commit_restrictive(inner, next));
             }
             self.commit(inner, next)?;
+            self.note_bound();
             Ok(Outcome::Applied)
         })
     }

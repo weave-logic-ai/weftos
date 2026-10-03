@@ -102,16 +102,21 @@ When a Cognitum Seed is bound to the mesh (`weaver workload node bind`), the per
 
 ```sh
 weaver cog checkout <cog>@<version> --arch aarch64       # e.g. fall-detect@1.2.0; asks the steward (or its own relay)
-weaver cog checkout approve fall-detect@1.2.0 --operator-key ~/.config/weftos/operator.seed   # shows the hashes
-weaver cog checkout approve fall-detect@1.2.0 --operator-key ~/.config/weftos/operator.seed --confirm
+weaver cog checkout approve fall-detect@1.2.0 --operator-key ~/.config/weftos/operator.seed   # shows the hashes and a content key
+weaver cog checkout approve fall-detect@1.2.0 --operator-key ~/.config/weftos/operator.seed --confirm <content-key>
 weaver cog checkout status --explain                      # grants, approvals, the run gate per artifact
-weaver cog checkout approve --reapprove-orphaned --operator-key <file> --confirm   # after a mesh_nonce change
+weaver cog checkout approve --reapprove-orphaned --operator-key <file> --confirm <digest>   # after a mesh_nonce change
 ```
 
 - **Checkout** gets a signed grant from the Seed through the steward. The grant floods to every admitted node, and members fetch the bytes from peers. The Seed sends the bytes once.
 - **A grant alone never runs anything.** Before a Cognitum-origin cog is installed or started, the node needs a valid grant and an operator hash approval whose sha256 set covers the binary. The hashes are computed from the bytes that will run. The approval is signed with the operator key on the CLI side (`weft-licence-v1/approval`), then verified by the daemon, stored, and flooded to every node.
-- `approve` without `--confirm` prints the hashes it would approve and signs nothing. Compare them with the registry entry or the upstream release first. `--sha256 <hex>` (repeatable) approves exactly those hashes instead of the held grant's set.
+- `approve` without `--confirm` prints the hashes it would approve and their content key, and signs nothing. Compare the hashes with the registry entry or the upstream release first, then pass that content key to `--confirm`; if the content prepared on the second run hashes differently (the grant changed in between), nothing is signed. `--sha256 <hex>` (repeatable) approves exactly those hashes instead of the held grant's set.
+- `--reapprove-orphaned` takes the orphaned approvals as signed envelopes from the daemon, keeps only those signed by your operator key for an earlier mesh id, prints how many and a batch digest, and signs only with `--confirm <digest>`.
+- `weaver cog checkout` needs Admin: a checkout spends the Seed's licence and transfer budget. On the steward it is charged per caller (project, token or operator; 5 a minute) and node-wide (20 a minute), and the governance gate is asked as that caller.
 - **Refusals** carry a stable code: `no_grant`, `grant_lapsed`, `not_in_grant`, `no_approval`, `hash_revoked` or `binding_inactive`. `weaver workload place --explain` shows it as the attempt's reason, and the node chains it as `workload.refuse`. A permitted run is chained as `cog.run.permit` with the grant id and the approval id.
+- **Which binary.** The gate checks every binary in the package before anything is staged, and the one that will run is the one the node's runtime admits (native: the host arch; container: its own arch order). A placement whose variant names a different arch is refused (`arch_mismatch`). At each start the staged file is hashed again from disk.
+- **Re-packed bytes.** A package that does not say Cognitum but carries a binary a held grant lists (or a revoked hash) is gated all the same, under its own id.
+- **A deleted licence store** does not turn the gate off: the first accepted binding writes `licence-bound.marker` beside the store, and a node with the marker (or with approvals) but no binding refuses (`binding_inactive`) until sync brings the binding back.
 - **A lapse** (an expired or withdrawn grant, or an unbind) refuses new starts and restarts. Running instances keep running.
 - **To withdraw an approval**, revoke the artifact hash: `weaver workload revoke --hash <blake3>`. That also evicts the bytes.
 - Signed WeftOS and private packages never reach this gate. A node that never held a Seed binding keeps the per-project path above.

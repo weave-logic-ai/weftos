@@ -357,7 +357,7 @@ Not run from the repository. Steps, in order:
    one `byte transfer`.
 7. With `licence-link.json` on the steward (above): `weaver cog checkout
    fall-detect@<version> --arch arm` on a second node, then `weaver cog
-   checkout approve ... --confirm`; the second node runs it from peers, and the
+   checkout approve ... --confirm <content-key>`; the second node runs it from peers, and the
    journal still shows exactly one `byte transfer`.
 8. Switch the Seed off for longer than the grant lifetime (72 h by default) and
    confirm sharing stops when the grants lapse.

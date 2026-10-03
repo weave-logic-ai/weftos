@@ -74,9 +74,12 @@ pub struct ApproveArgs {
     /// Re-sign, for the current mesh id, every approval a `mesh_nonce` change orphaned.
     #[arg(long, conflicts_with_all = ["reference", "sha256"])]
     pub reapprove_orphaned: bool,
-    /// Sign and send. Without it the hashes are shown and nothing is signed.
-    #[arg(long)]
-    pub confirm: bool,
+    /// Sign and send, pinned to what the dry run printed: the approval's
+    /// content key, or with `--reapprove-orphaned` the batch digest. Without
+    /// it the content is shown and nothing is signed; a value that no longer
+    /// matches the freshly prepared content is refused.
+    #[arg(long, value_name = "CONTENT_KEY|DIGEST")]
+    pub confirm: Option<String>,
 }
 
 /// `<cog>@<version>` split, both parts non-empty.
@@ -156,13 +159,42 @@ pub async fn run(a: CheckoutArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The orphaned approvals this operator signed, re-addressed to `mesh_id`,
+/// with how many were skipped (signed by another key, malformed, or not
+/// actually for another mesh) and the batch digest `--confirm` must match.
+pub fn reapprovals(
+    operator: &ed25519_dalek::SigningKey,
+    signed: &[clawft_kernel::licence::SignedApproval],
+    mesh_id: &str,
+    now: u64,
+) -> (Vec<Approval>, usize, String) {
+    let mut anchors = clawft_kernel::workload_pkg::TrustAnchors::default();
+    let pk = clawft_kernel::workload_pkg::codec::hex_encode(&operator.verifying_key().to_bytes());
+    let _ = anchors.push_signer("operator", &pk, clawft_kernel::workload_pkg::KeyOrigin::Operator);
+    let mut out = Vec::new();
+    let mut skipped = 0;
+    for s in signed {
+        match clawft_kernel::licence::verify_approval_signature(s, &anchors) {
+            Ok(a) if a.mesh_id != mesh_id => out.push(Approval { mesh_id: mesh_id.to_owned(), approved_at: now, ..a }),
+            _ => skipped += 1,
+        }
+    }
+    let mut keys: Vec<String> = out.iter().map(Approval::content_key).collect();
+    keys.sort();
+    let digest = clawft_kernel::licence::sha256_hex(format!("{mesh_id}\n{}", keys.join("\n")).as_bytes());
+    (out, skipped, digest[..16].to_owned())
+}
+
 async fn approve(client: &mut DaemonClient, p: ApproveArgs) -> anyhow::Result<()> {
     let key = load_key(&p.operator_key)?;
-    let approvals: Vec<Approval> = if p.reapprove_orphaned {
+    let (approvals, pin): (Vec<Approval>, String) = if p.reapprove_orphaned {
         let prep = call(client, "workload.cog.checkout.approve", json!({ "reapprove_orphaned": true, "prepare": true })).await?;
         let mesh_id = prep["mesh_id"].as_str().ok_or_else(|| anyhow::anyhow!("no mesh id in the reply"))?.to_owned();
-        let old: Vec<Approval> = serde_json::from_value(prep["orphaned"].clone())?;
-        old.into_iter().map(|a| Approval { mesh_id: mesh_id.clone(), approved_at: now(), ..a }).collect()
+        let signed: Vec<clawft_kernel::licence::SignedApproval> = serde_json::from_value(prep["orphaned_signed"].clone())?;
+        let (out, skipped, digest) = reapprovals(&key, &signed, &mesh_id, now());
+        println!("{} orphaned approval(s) signed by this operator key; {skipped} skipped (another key or not orphaned)", out.len());
+        println!("batch digest {digest}");
+        (out, digest)
     } else {
         let (cog, version) = parse_ref(p.reference.as_deref().unwrap_or_default()).map_err(anyhow::Error::msg)?;
         let prep = call(
@@ -171,10 +203,16 @@ async fn approve(client: &mut DaemonClient, p: ApproveArgs) -> anyhow::Result<()
             json!({ "cog_id": cog, "version": version, "prepare": true, "sha256": p.sha256 }),
         )
         .await?;
-        vec![approval_from(&prep, now()).map_err(anyhow::Error::msg)?]
+        let a = approval_from(&prep, now()).map_err(anyhow::Error::msg)?;
+        let key_now = a.content_key();
+        if prep["content_key"].as_str() != Some(key_now.as_str()) {
+            anyhow::bail!("the daemon's content key does not match the content it named; nothing signed");
+        }
+        println!("content key {key_now}");
+        (vec![a], key_now)
     };
     if approvals.is_empty() {
-        println!("nothing is orphaned; nothing to sign");
+        println!("nothing to sign");
         return Ok(());
     }
     for a in &approvals {
@@ -183,9 +221,15 @@ async fn approve(client: &mut DaemonClient, p: ApproveArgs) -> anyhow::Result<()
             println!("  sha256 {h}");
         }
     }
-    if !p.confirm {
-        println!("nothing signed: compare these hashes with the registry or the upstream release, then run again with --confirm");
-        return Ok(());
+    match p.confirm.as_deref() {
+        None => {
+            println!("nothing signed: compare these hashes with the registry or the upstream release, then run again with --confirm {pin}");
+            return Ok(());
+        }
+        Some(c) if c.trim() != pin => {
+            anyhow::bail!("--confirm {c} does not match the content prepared now ({pin}): it changed since the dry run; nothing signed");
+        }
+        Some(_) => {}
     }
     let signed: Vec<_> = approvals.iter().map(|a| sign_approval(a, &key)).collect::<Result<_, _>>().map_err(|e| anyhow::anyhow!("{e}"))?;
     let done = call(client, "workload.cog.checkout.approve", json!({ "signed": signed })).await?;
@@ -282,9 +326,10 @@ mod tests {
         assert!(a.command.is_none());
         assert_eq!((a.reference.as_deref(), a.arch.as_deref()), (Some("fall-detect@1.2.0"), Some("aarch64")));
 
-        let a = parse(&["approve", "fall-detect@1.2.0", "--operator-key", "/k", "--sha256", "ab", "--confirm"]).unwrap();
+        let a = parse(&["approve", "fall-detect@1.2.0", "--operator-key", "/k", "--sha256", "ab", "--confirm", "k1"]).unwrap();
         let Some(CheckoutCmd::Approve(p)) = a.command else { panic!("approve") };
-        assert_eq!((p.reference.as_deref(), p.sha256.as_slice(), p.confirm), (Some("fall-detect@1.2.0"), &["ab".to_string()][..], true));
+        assert_eq!((p.reference.as_deref(), p.sha256.as_slice(), p.confirm.as_deref()), (Some("fall-detect@1.2.0"), &["ab".to_string()][..], Some("k1")));
+        assert!(parse(&["approve", "fall-detect@1.2.0", "--operator-key", "/k", "--confirm"]).is_err(), "--confirm needs the key");
 
         let a = parse(&["approve", "--reapprove-orphaned", "--operator-key", "/k"]).unwrap();
         assert!(matches!(a.command, Some(CheckoutCmd::Approve(ApproveArgs { reapprove_orphaned: true, .. }))));
@@ -312,6 +357,28 @@ mod tests {
         assert_eq!((a.v, a.approved_at, a.sha256.len()), (1, 7, 2));
         assert!(approval_from(&json!({"mesh_id": "m", "cog_id": "c", "version": "1", "sha256": []}), 1).is_err());
         assert!(approval_from(&json!({}), 1).is_err());
+    }
+
+    #[test]
+    fn reapproval_keeps_only_this_operators_orphans_and_pins_a_digest() {
+        use clawft_kernel::licence::sign_approval;
+        let op = ed25519_dalek::SigningKey::from_bytes(&[1; 32]);
+        let other = ed25519_dalek::SigningKey::from_bytes(&[2; 32]);
+        let a = |mesh: &str| Approval { v: 1, mesh_id: mesh.into(), cog_id: "fall-detect".into(), version: "1.2.0".into(), sha256: vec!["ab".repeat(32)], approved_at: 5 };
+        let (old, new) = ("aa".repeat(32), "bb".repeat(32));
+        let signed = vec![
+            sign_approval(&a(&old), &op).unwrap(),
+            sign_approval(&a(&old), &other).unwrap(), // another key: skipped
+            sign_approval(&a(&new), &op).unwrap(),    // already for the new mesh: skipped
+        ];
+        let (out, skipped, digest) = reapprovals(&op, &signed, &new, 9);
+        assert_eq!((out.len(), skipped), (1, 2));
+        assert_eq!((out[0].mesh_id.as_str(), out[0].approved_at), (new.as_str(), 9));
+        assert_eq!(digest.len(), 16);
+        // The digest pins the content: another set gives another digest.
+        let (_, _, d2) = reapprovals(&op, &signed[..1], &"cc".repeat(32), 9);
+        assert_ne!(digest, d2);
+        assert_eq!(reapprovals(&op, &signed, &new, 99).2, digest, "approved_at is not part of it");
     }
 
     #[test]

@@ -62,6 +62,8 @@ mod tests_policy;
 #[cfg(test)]
 mod tests_relay;
 #[cfg(test)]
+mod tests_relay_local;
+#[cfg(test)]
 mod tests_request;
 #[cfg(test)]
 mod tests_stub;
@@ -92,7 +94,7 @@ use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 
-pub use approval::{Approval, SignedApproval, sign_approval, verify_approval};
+pub use approval::{Approval, SignedApproval, sign_approval, verify_approval, verify_approval_signature};
 pub use approval_store::ApprovalStore;
 pub use binding::{
     AdmissionPosture, BindState, BindingExtraCheck, BindingRecord, NoExtraChecks, SignedBinding,
@@ -120,7 +122,7 @@ pub use renewal::{
 };
 pub use run_gate::{CognitumRunGate, RunRefusal, RunVerdict, StoreRunGate, check_run};
 pub use steward_client::{SharedTransport, StewardLicenceClient};
-pub use store_status::{ApprovalRow, GrantRow};
+pub use store_status::{ApprovalRow, BOUND_MARKER, GrantRow};
 pub use weft_licence_wire::{
     APPROVAL_DOMAIN, BINDING_DOMAIN, CheckoutGrant, FAR_FUTURE_CLAMP_SECS, GRANT_DOMAIN,
     GRANT_SKEW_SECS, GrantArtifact, LicenceError, LicenceRef, MAX_APPROVALS, MAX_GRANT_SLOTS,

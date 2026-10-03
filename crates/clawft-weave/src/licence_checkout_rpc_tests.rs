@@ -153,7 +153,7 @@ async fn call(
     m: &str,
     params: Value,
 ) -> Response {
-    let ctx = Ctx { rt, mesh, exchange: ex, relay: None, reachable: &never, arch: Some("aarch64"), now: now() };
+    let ctx = Ctx { rt, mesh, exchange: ex, relay: None, reachable: &never, arch: Some("aarch64"), now: now(), principal: "operator" };
     route(&ctx, m, params).await
 }
 
@@ -185,6 +185,9 @@ async fn approve_names_the_grants_hashes_then_verifies_stores_and_chains_the_sig
     let prep = ok(call(&rt, None, Some(ex.clone()), "workload.cog.checkout.approve",
         json!({"cog_id": "fall-detect", "version": "1.2.0", "prepare": true})).await);
     assert_eq!(prep["sha256"], json!([sha256_hex(BIN)]));
+    let pinned = Approval { v: 1, mesh_id: rt.local.get().unwrap().to_hex(), cog_id: "fall-detect".into(),
+        version: "1.2.0".into(), sha256: vec![sha256_hex(BIN)], approved_at: 12345 };
+    assert_eq!(prep["content_key"], pinned.content_key().as_str());
     assert_eq!(prep["mesh_id"], rt.local.get().unwrap().to_hex().as_str());
 
     // Status before: the run gate says no_approval, with the remedy.
@@ -239,7 +242,9 @@ async fn reapprove_orphaned_lists_what_a_nonce_change_orphaned() {
     let ex2 = exchange(dir.path(), &rt2);
     let prep = ok(call(&rt2, None, Some(ex2.clone()), "workload.cog.checkout.approve",
         json!({"reapprove_orphaned": true, "prepare": true})).await);
-    assert_eq!(prep["orphaned"][0]["cog_id"], "fall-detect");
+    let signed: Vec<clawft_kernel::licence::SignedApproval> = serde_json::from_value(prep["orphaned_signed"].clone()).unwrap();
+    assert_eq!(signed.len(), 1);
+    assert!(signed[0].payload.contains("fall-detect"));
     assert_eq!(prep["mesh_id"], rt2.local.get().unwrap().to_hex().as_str());
     let mut renewed = a.clone();
     renewed.mesh_id = rt2.local.get().unwrap().to_hex();

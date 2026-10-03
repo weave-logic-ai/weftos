@@ -497,7 +497,7 @@ impl WorkloadHostService {
             ));
         }
         // ADR-106 run gate: before anything of a Cognitum-origin cog is installed.
-        let licence = self.licence_check_place(&pkg.verified, &w, &b.variant, req)?;
+        let licence = self.licence_check_place(&pkg.verified, &w, &b.variant, &host, req).await?;
         if let Some(p) = &b.project_id
             && !crate::cog_ingest::valid_project_id(p)
         {
