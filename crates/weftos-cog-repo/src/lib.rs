@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+mod revoked;
+pub use revoked::{RevokedKeys, SUBJECTS_FILE_NAME};
+
 /// The pinned WeaveLogic release public key (raw Ed25519, hex). The matching private key lives
 /// in the dashboard/CI secret `WEAVELOGIC_RELEASE_KEY`, never in this repo.
 pub const WEAVELOGIC_PUBKEY_HEX: &str = "6aae63e067488f1e5414ad4a6b9536bef0407db210fb33a3b378e8d6d12eca15";
@@ -72,6 +75,8 @@ pub enum VerifyError {
     Sha256Mismatch { want: String, got: String },
     BadSignatureHex(String),
     SignatureRejected,
+    /// The verifying key is on the operator's signer-key revocation list.
+    KeyRevoked,
 }
 
 impl std::fmt::Display for VerifyError {
@@ -81,6 +86,7 @@ impl std::fmt::Display for VerifyError {
             VerifyError::Sha256Mismatch { want, got } => write!(f, "sha256 {got} != registry {want}"),
             VerifyError::BadSignatureHex(e) => write!(f, "signature not valid hex/length: {e}"),
             VerifyError::SignatureRejected => write!(f, "Ed25519 signature rejected (not signed by a key pinned for this repository)"),
+            VerifyError::KeyRevoked => write!(f, "the signing key is revoked"),
         }
     }
 }
@@ -101,6 +107,15 @@ pub fn verify_artifact(bytes: &[u8], art: &Artifact, key: &VerifyingKey) -> Resu
         .map_err(|_| VerifyError::BadSignatureHex("not 64 bytes".into()))?;
     let sig = Signature::from_bytes(&sig_bytes);
     key.verify(bytes, &sig).map_err(|_| VerifyError::SignatureRejected)
+}
+
+/// [`verify_artifact`], but refuses first when `key` is revoked. A revoked key never verifies,
+/// whatever it signed.
+pub fn verify_artifact_unrevoked(bytes: &[u8], art: &Artifact, key: &VerifyingKey, revoked: &RevokedKeys) -> Result<(), VerifyError> {
+    if revoked.contains(&hex::encode(key.to_bytes())) {
+        return Err(VerifyError::KeyRevoked);
+    }
+    verify_artifact(bytes, art, key)
 }
 
 #[cfg(test)]
@@ -149,6 +164,16 @@ mod tests {
         // a tampered binary whose sha we "fix" in the record still fails the signature
         let fixed_sha = Artifact { size: bad.len() as u64, sha256: sha256_hex(&bad), ..art };
         assert_eq!(verify_artifact(&bad, &fixed_sha, &vk), Err(VerifyError::SignatureRejected));
+    }
+
+    #[test]
+    fn a_revoked_key_never_verifies() {
+        let (sk, vk) = test_pair();
+        let bytes = b"ELF...".to_vec();
+        let art = artifact_for(&sk, &bytes);
+        assert!(verify_artifact_unrevoked(&bytes, &art, &vk, &RevokedKeys::none()).is_ok());
+        let revoked = RevokedKeys::from_keys([hex::encode(vk.to_bytes())]);
+        assert_eq!(verify_artifact_unrevoked(&bytes, &art, &vk, &revoked), Err(VerifyError::KeyRevoked));
     }
 
     #[test]

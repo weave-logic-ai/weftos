@@ -12,18 +12,18 @@ use crate::fetch::FsReader;
 use crate::install::{fetch_verified, install_into_host, read_provenance, FetchCtx};
 use crate::resolve::{load_all, load_source, parse_ref, resolve};
 use crate::testkit::*;
-use weftos_cog_repo::WEAVELOGIC_PUBKEY_HEX;
+use weftos_cog_repo::{RevokedKeys, WEAVELOGIC_PUBKEY_HEX};
 
 fn eff(sources: Vec<CogSource>, licences: Vec<crate::config::CogLicence>) -> EffectiveSources {
     EffectiveSources { sources, licences, ..Default::default() }
 }
 
 fn ctx<'a>(reader: &'a dyn crate::fetch::Reader, eff: &'a EffectiveSources) -> FetchCtx<'a> {
-    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: &[] }
+    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: &[], revoked: &RevokedKeys::none() }
 }
 
 fn ctx_with<'a>(reader: &'a dyn crate::fetch::Reader, eff: &'a EffectiveSources, keys: &'a [String]) -> FetchCtx<'a> {
-    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: keys }
+    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: keys, revoked: &RevokedKeys::none() }
 }
 
 // ── config ────────────────────────────────────────────────────────────────
@@ -270,6 +270,27 @@ fn private_source_refuses_wrong_key_unsigned_and_hash_mismatch() {
 
     // a missing arch is its own error
     assert_eq!(fetch_verified(&l, "acme-gauge", "arm64", &ctx(&FsReader, &e)).unwrap_err().code(), "no_artifact");
+}
+
+#[test]
+fn a_revoked_signer_key_is_refused_at_install() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mine = key(7);
+    let other = key(8);
+    let reg = signed_repo(&tmp.path().join("priv"), &mine, &["acme-gauge"]);
+    let e = eff(vec![], vec![]);
+    let s = source("acme-private", SourceKind::Private, &reg, &[pub_hex(&mine)], 0);
+    let l = load_source(&s, &FsReader).unwrap();
+    let c = |revoked: &RevokedKeys| FetchCtx { reader: &FsReader, licences: &e.licences, now: now(), extra_weftos_keys: &[], revoked };
+
+    // an unrelated revocation changes nothing
+    let unrelated = RevokedKeys::from_keys([pub_hex(&other)]);
+    assert!(fetch_verified(&l, "acme-gauge", "arm", &c(&unrelated)).is_ok());
+    // the signer's key, in any case, is refused
+    let revoked = RevokedKeys::from_keys([pub_hex(&mine).to_uppercase()]);
+    let err = fetch_verified(&l, "acme-gauge", "arm", &c(&revoked)).unwrap_err();
+    assert_eq!(err.code(), "verify_failed");
+    assert!(err.to_string().contains("revoked"), "{err}");
 }
 
 // ── cognitum source + licence ─────────────────────────────────────────────

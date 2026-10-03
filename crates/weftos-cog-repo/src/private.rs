@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use weftos_cog_repo::Registry;
+use weftos_cog_repo::{Registry, RevokedKeys};
 
-use crate::{arg, fetch, sign_tree, verify_any, R};
+use crate::{arg, fetch, revocations, sign_tree, verify_any, R};
 
 const REPO_TOML: &str = "repo.toml";
 const GITIGNORE: &str = "# Never commit signing keys.\n*.pem\n*.key\n*.seed\n";
@@ -281,7 +281,7 @@ pub fn cmd_sign(dir: &str, args: &[String]) -> R<()> {
 /// Checks every artifact of `<dir>/repo` against `pins`, or the key in repo.toml when `pins` is
 /// empty; returns the artifact count. A `--pin` that differs from repo.toml fails, it is never
 /// silently replaced by the repo's own key.
-fn verify_repo(dir: &Path, pins: &[VerifyingKey]) -> R<usize> {
+fn verify_repo(dir: &Path, pins: &[VerifyingKey], revoked: &RevokedKeys) -> R<usize> {
     let keys: Vec<VerifyingKey> = if pins.is_empty() { vec![repo_key(dir)?] } else { pins.to_vec() };
     let base = dir.join("repo");
     let base_s = base.to_str().ok_or("bad path")?;
@@ -290,7 +290,7 @@ fn verify_repo(dir: &Path, pins: &[VerifyingKey]) -> R<usize> {
     let mut bad = Vec::new();
     for cog in &reg.cogs {
         for (arch, art) in &cog.artifacts {
-            match fetch(base_s, &art.path).and_then(|b| verify_any(&b, art, &keys).map_err(|e| e.to_string())) {
+            match fetch(base_s, &art.path).and_then(|b| verify_any(&b, art, &keys, revoked).map_err(|e| e.to_string())) {
                 Ok(()) => n += 1,
                 Err(e) => bad.push(format!("{} [{arch}]: {e}", cog.id)),
             }
@@ -302,8 +302,8 @@ fn verify_repo(dir: &Path, pins: &[VerifyingKey]) -> R<usize> {
     Ok(n)
 }
 
-pub fn cmd_verify(dir: &str, pins: &[VerifyingKey]) -> R<()> {
-    let n = verify_repo(Path::new(dir), pins)?;
+pub fn cmd_verify(dir: &str, pins: &[VerifyingKey], revoked: &RevokedKeys) -> R<()> {
+    let n = verify_repo(Path::new(dir), pins, revoked)?;
     if pins.is_empty() {
         eprintln!("{n} artifact(s) verified against the key in {dir}/{REPO_TOML}");
     } else {
@@ -333,7 +333,7 @@ pub fn cmd_publish(args: &[String]) -> R<()> {
     let dir = PathBuf::from(args.first().filter(|a| !a.starts_with("--")).ok_or("publish needs <repo-dir>")?);
     let to = PathBuf::from(arg(args, "--to").ok_or("publish needs --to <dir>")?);
     let cfg = load_config(&dir)?;
-    let n = verify_repo(&dir, &[])?; // never publish something that does not verify
+    let n = verify_repo(&dir, &[], &revocations(args)?)?; // never publish something that does not verify
     copy_tree(&dir.join("repo"), &to)?;
     let pubkey = cfg.pubkey.clone().unwrap_or_default();
     eprintln!("published {n} verified artifact(s) to {}", to.display());
@@ -369,7 +369,7 @@ mod tests {
     fn init_keygen_add_sign_verify_publish_round_trip() {
         let (tmp, repo, key) = setup();
         cmd_sign(&s(&repo), &a(&["--key", &s(&key)])).unwrap();
-        cmd_verify(&s(&repo), &[]).unwrap();
+        cmd_verify(&s(&repo), &[], &RevokedKeys::none()).unwrap();
         let reg: Registry = serde_json::from_slice(&std::fs::read(repo.join("repo/registry.json")).unwrap()).unwrap();
         assert_eq!(reg.repo, "acme-private");
         assert_eq!(reg.cogs[0].id, "acme-gauge");
@@ -384,9 +384,44 @@ mod tests {
         let k = parse_pubkey(&pubkey).unwrap();
         let r: Registry = serde_json::from_slice(&std::fs::read(out.join("registry.json")).unwrap()).unwrap();
         let art = &r.cogs[0].artifacts["arm"];
-        verify_any(&std::fs::read(out.join(&art.path)).unwrap(), art, &[k]).unwrap();
+        verify_any(&std::fs::read(out.join(&art.path)).unwrap(), art, &[k], &RevokedKeys::none()).unwrap();
         // and does not verify under the WeaveLogic key
-        assert!(verify_any(&std::fs::read(out.join(&art.path)).unwrap(), art, &[weftos_cog_repo::weavelogic_key()]).is_err());
+        assert!(verify_any(&std::fs::read(out.join(&art.path)).unwrap(), art, &[weftos_cog_repo::weavelogic_key()], &RevokedKeys::none()).is_err());
+    }
+
+    #[test]
+    fn a_revoked_repo_key_is_refused_by_verify_publish_and_the_public_path() {
+        let (tmp, repo, key) = setup();
+        cmd_sign(&s(&repo), &a(&["--key", &s(&key)])).unwrap();
+        let pubkey = load_config(&repo).unwrap().pubkey.unwrap();
+        let revoked = RevokedKeys::from_keys([pubkey.clone()]);
+        let e = cmd_verify(&s(&repo), &[], &revoked).unwrap_err();
+        assert!(e.contains("revoked"), "{e}");
+
+        // The kernel's list format, from a file.
+        let list = tmp.path().join("revoked_subjects.json");
+        std::fs::write(&list, format!(r#"[{{"kind":"signer_key","id":"{pubkey}","revoked_at":1,"reason":"leaked"}}]"#)).unwrap();
+        let out = tmp.path().join("hosted");
+        let e = cmd_publish(&a(&[&s(&repo), "--to", &s(&out), "--revocations", &s(&list)])).unwrap_err();
+        assert!(e.contains("revoked"), "{e}");
+        assert!(!out.exists(), "nothing published");
+
+        // The plain-registry path (weft-cog-repo verify <dir>, no repo.toml).
+        cmd_publish(&a(&[&s(&repo), "--to", &s(&out)])).unwrap();
+        let args = a(&[&s(&out), "--pin", &pubkey]);
+        assert!(crate::cmd_verify(&args).is_ok());
+        let args = a(&[&s(&out), "--pin", &pubkey, "--revocations", &s(&list)]);
+        assert!(crate::cmd_verify(&args).unwrap_err().contains("failed verification"));
+        // a revocation of some other key changes nothing
+        let other = tmp.path().join("other.json");
+        std::fs::write(&other, format!(r#"[{{"kind":"signer_key","id":"{}","revoked_at":1,"reason":"r"}}]"#, "cd".repeat(32))).unwrap();
+        let args = a(&[&s(&out), "--pin", &pubkey, "--revocations", &s(&other)]);
+        assert!(crate::cmd_verify(&args).is_ok());
+        // a malformed list fails closed
+        let bad = tmp.path().join("bad.json");
+        std::fs::write(&bad, "oops").unwrap();
+        let args = a(&[&s(&out), "--pin", &pubkey, "--revocations", &s(&bad)]);
+        assert!(crate::cmd_verify(&args).is_err());
     }
 
     #[test]
@@ -400,11 +435,11 @@ mod tests {
             let k = SigningKey::from_pkcs8_pem(&std::fs::read_to_string(&other).unwrap()).unwrap();
             k.verifying_key()
         };
-        assert!(cmd_verify(&s(&repo), &[other_pub]).is_err());
+        assert!(cmd_verify(&s(&repo), &[other_pub], &RevokedKeys::none()).is_err());
         // pinning the real key passes, and so does pinning both
         let real = parse_pubkey(&load_config(&repo).unwrap().pubkey.unwrap()).unwrap();
-        cmd_verify(&s(&repo), &[real]).unwrap();
-        cmd_verify(&s(&repo), &[other_pub, real]).unwrap();
+        cmd_verify(&s(&repo), &[real], &RevokedKeys::none()).unwrap();
+        cmd_verify(&s(&repo), &[other_pub, real], &RevokedKeys::none()).unwrap();
     }
 
     #[test]
@@ -453,7 +488,7 @@ mod tests {
         let (tmp, repo, key) = setup();
         cmd_sign(&s(&repo), &a(&["--key", &s(&key)])).unwrap();
         std::fs::write(repo.join("repo/cogs/arm/cog-acme-gauge-arm"), b"\x7fELF evil gauge!").unwrap();
-        assert!(cmd_verify(&s(&repo), &[]).is_err());
+        assert!(cmd_verify(&s(&repo), &[], &RevokedKeys::none()).is_err());
         let out = tmp.path().join("hosted");
         assert!(cmd_publish(&a(&[&s(&repo), "--to", &s(&out)])).is_err());
         assert!(!out.exists(), "nothing is published when verification fails");

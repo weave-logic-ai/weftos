@@ -20,6 +20,7 @@ use weftos_cog_sources::config::{
     SourceKind, SourcesFile, COGNITUM_DEFAULT_URL,
 };
 use weftos_cog_sources::fetch::HttpReader;
+use weftos_cog_sources::RevokedKeys;
 use weftos_cog_sources::{fetch_verified, install_into_host, load_all, parse_ref, resolve, FetchCtx};
 
 /// `weaver cog` arguments.
@@ -307,6 +308,20 @@ fn default_baseline(inputs: &CatalogInputs) -> anyhow::Result<Option<Expectation
 }
 
 fn print_failures(failures: &[(String, weftos_cog_sources::SourceError)]) {
+/// Signer keys the operator revoked, from the kernel `RevocationList` that sits in the runtime dir
+/// (`revoked_hosts.json` and its sibling `revoked_subjects.json`). Fail-closed: an unreadable
+/// subjects file refuses the install rather than reading as "nothing revoked".
+fn revoked_signer_keys(host_ban_file: &Path) -> anyhow::Result<RevokedKeys> {
+    use clawft_kernel::revocation::{RevocationKind, RevocationList};
+    let list = RevocationList::load(host_ban_file.to_path_buf());
+    if let Some(e) = list.subjects_error() {
+        bail!("cannot read the signer revocation list, refusing to install: {e}");
+    }
+    Ok(RevokedKeys::from_keys(
+        list.list_subjects(Some(RevocationKind::SignerKey)).into_iter().map(|s| s.id),
+    ))
+}
+
     for (name, e) in failures {
         eprintln!("warning: source '{name}' not loaded: {e}");
     }
@@ -426,7 +441,8 @@ fn run_blocking(args: CogArgs) -> anyhow::Result<()> {
                 r.loaded.source.effective_keys(&keys).len()
             );
             weftos_cog_sources::resolve::enable_guard(&eff, &cref, &r, enable, confirm_project_source)?;
-            let ctx = FetchCtx { reader: &reader, licences: &eff.licences, now: Utc::now(), extra_weftos_keys: &keys };
+            let revoked = revoked_signer_keys(&clawft_types::runtime_paths::RuntimePaths::resolve().revoked_hosts())?;
+            let ctx = FetchCtx { reader: &reader, licences: &eff.licences, now: Utc::now(), extra_weftos_keys: &keys, revoked: &revoked };
             let fetched = fetch_verified(r.loaded, &r.cog.id, &arch, &ctx)?;
             let root = root.unwrap_or_else(weftos_cog_sources::default_host_root);
             let rec = install_into_host(&root, &fetched, enable, &args)?;
@@ -531,4 +547,42 @@ fn licence(roots: &Roots, cmd: LicenceCommand) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod revocation_tests {
+    use super::*;
+    use clawft_kernel::revocation::{RevocationKind, RevocationList};
+
+    const KEY: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+
+    #[test]
+    fn a_kernel_signer_revocation_reaches_the_installer() {
+        let dir = tempfile::tempdir().unwrap();
+        let host_file = dir.path().join("revoked_hosts.json");
+        assert!(revoked_signer_keys(&host_file).unwrap().is_empty());
+
+        let list = RevocationList::load(host_file.clone());
+        assert!(list.revoke_subject(RevocationKind::SignerKey, KEY, "leaked").unwrap());
+        list.revoke_subject(RevocationKind::Package, "some-cog", "bad").unwrap();
+        let keys = revoked_signer_keys(&host_file).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(keys.contains(&KEY.to_uppercase()));
+        // The standalone reader in weftos-cog-repo agrees with the kernel's file.
+        let standalone = weftos_cog_repo_reads(&list.subjects_path());
+        assert!(standalone);
+    }
+
+    fn weftos_cog_repo_reads(path: &Path) -> bool {
+        RevokedKeys::load(path).unwrap().contains(KEY)
+    }
+
+    #[test]
+    fn an_unreadable_revocation_list_refuses_the_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let host_file = dir.path().join("revoked_hosts.json");
+        std::fs::write(dir.path().join("revoked_subjects.json"), "{not json").unwrap();
+        let err = revoked_signer_keys(&host_file).unwrap_err().to_string();
+        assert!(err.contains("refusing to install"), "{err}");
+    }
 }
