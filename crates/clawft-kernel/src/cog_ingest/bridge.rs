@@ -46,6 +46,13 @@ pub enum BridgeScope {
 pub struct BridgeConfig {
     /// Time allowed to receive a request head and body.
     pub read_timeout: Duration,
+    /// Time allowed from accept to an authenticated request head (the
+    /// pre-auth deadline; shorter than `read_timeout`).
+    pub preauth_timeout: Duration,
+    /// Most connections that have not authenticated yet, at once. More are
+    /// dropped on accept, so an anonymous flood cannot use up the
+    /// connection cap meant for authenticated cogs.
+    pub max_unauthenticated: usize,
     /// Allow binding a non-loopback address. Only for an instance-scoped
     /// listener whose address a container relay needs (the VM gateway);
     /// the token still applies.
@@ -56,6 +63,8 @@ impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
             read_timeout: Duration::from_secs(5),
+            preauth_timeout: Duration::from_secs(2),
+            max_unauthenticated: 16,
             allow_non_loopback: false,
         }
     }
@@ -119,6 +128,11 @@ impl IngestBridge {
         })
     }
 
+    /// True if a store owner is known for `b`.
+    pub fn has_route(&self, b: &InstanceBinding) -> bool {
+        self.router.route(b).is_some()
+    }
+
     /// Drop an instance's rate counters (at unload).
     pub fn forget(&self, instance_id: &str) {
         self.budget.forget(instance_id);
@@ -151,6 +165,7 @@ impl IngestBridge {
             .map_err(|e| IngestError::Unavailable(e.to_string()))?;
         let me = self.clone();
         let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+        let unauth = Arc::new(tokio::sync::Semaphore::new(self.cfg.max_unauthenticated));
         let task = tokio::spawn(async move {
             loop {
                 let Ok((sock, _)) = listener.accept().await else {
@@ -159,18 +174,32 @@ impl IngestBridge {
                 let Ok(slot) = slots.clone().try_acquire_owned() else {
                     continue; // over the connection cap: dropped
                 };
+                // Anonymous connections are capped separately and dropped
+                // when the cap is reached.
+                let Ok(pre) = unauth.clone().try_acquire_owned() else {
+                    continue;
+                };
                 let (me, scope) = (me.clone(), scope.clone());
                 tokio::spawn(async move {
                     let _slot = slot;
-                    me.serve(sock, &scope).await;
+                    me.serve(sock, &scope, pre).await;
                 });
             }
         });
         Ok(BridgeHandle { addr: bound, task })
     }
 
-    async fn serve(&self, mut sock: TcpStream, scope: &BridgeScope) {
-        let res = tokio::time::timeout(self.cfg.read_timeout, self.handle(&mut sock, scope)).await;
+    async fn serve(
+        &self,
+        mut sock: TcpStream,
+        scope: &BridgeScope,
+        pre: tokio::sync::OwnedSemaphorePermit,
+    ) {
+        let res = tokio::time::timeout(
+            self.cfg.read_timeout,
+            self.handle(&mut sock, scope, pre),
+        )
+        .await;
         let (status, body, extra) = match res {
             Ok(Ok(v)) => (200, v, None),
             Ok(Err(e)) => {
@@ -210,16 +239,25 @@ impl IngestBridge {
         &self,
         sock: &mut TcpStream,
         scope: &BridgeScope,
+        pre: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<serde_json::Value, IngestError> {
-        let (head, mut body) = read_head(sock).await?;
-        let req = parse_head(&head)?;
-        if req.path != INGEST_PATH {
-            return Err(IngestError::Malformed(format!("no such path `{}`", req.path)));
-        }
-        if req.method != "POST" {
-            return Err(IngestError::Malformed("POST only".into()));
-        }
-        let binding = self.authenticate(req.token.as_deref(), scope)?;
+        // Until the token checks out the connection holds an
+        // unauthenticated slot and a short deadline.
+        let (req, mut body, binding) = tokio::time::timeout(self.cfg.preauth_timeout, async {
+            let (head, body) = read_head(sock).await?;
+            let req = parse_head(&head)?;
+            if req.path != INGEST_PATH {
+                return Err(IngestError::Malformed(format!("no such path `{}`", req.path)));
+            }
+            if req.method != "POST" {
+                return Err(IngestError::Malformed("POST only".into()));
+            }
+            let binding = self.authenticate(req.token.as_deref(), scope)?;
+            Ok((req, body, binding))
+        })
+        .await
+        .map_err(|_| IngestError::Malformed("request head not received in time".into()))??;
+        drop(pre);
         if !self.budget.charge_request(&binding.instance_id) {
             return Err(IngestError::RateLimited);
         }
@@ -253,6 +291,12 @@ impl IngestBridge {
             .router
             .route(&binding)
             .ok_or_else(|| IngestError::Unavailable("no store owner for this placement".into()))?;
+        // The token is checked again immediately before the write, so a stop
+        // or unload that completed while this request was being read is not
+        // followed by a write.
+        if !self.registry.contains(&binding.instance_id) {
+            return Err(IngestError::Unauthorized);
+        }
         let out = fwd.forward(&binding, &batch).await?;
         self.stats.accepted.fetch_add(1, Ordering::Relaxed);
         self.stats

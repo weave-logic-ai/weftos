@@ -113,3 +113,12 @@ then the adapters report `egress` to the gate. The ingest bridge itself is
 wired into placement: the placing project id rides `PlaceOrder`,
 `PlaceBody` and `PlacementRecord`, tokens are issued at place and revoked at
 stop and unload.
+
+The target host decides who may place for a project: the controller must be
+the node itself, be listed for the project in the node's `cog-ingest.json`,
+or be the node of the project's bound key. A placement whose vectors have no
+routed store owner is refused at place time, and a node whose ingest bridge
+could not start places cogs without a token and reports `ingest: disabled`.
+Whatever re-creates an instance record without going through `place` (adopt,
+host-restart re-adoption) must issue a new ingest lease for native and
+container instances.

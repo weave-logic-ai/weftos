@@ -42,6 +42,10 @@ pub struct HostContract {
     pub ingest_upstream: Option<SocketAddr>,
     /// Ingest bridge URL injected as [`ENV_INGEST_URL`], if any.
     pub ingest_url: Option<String>,
+    /// False: the instance gets no [`ENV_TOKEN`] (and no ingest URL). Set
+    /// when the node's ingest bridge is down, so a cog never carries a
+    /// credential for a bridge that is not there.
+    pub expose_token: bool,
 }
 
 impl HostContract {
@@ -53,6 +57,7 @@ impl HostContract {
             token: Self::fresh_token(),
             ingest_upstream: None,
             ingest_url: None,
+            expose_token: true,
         }
     }
 
@@ -76,6 +81,13 @@ impl HostContract {
     /// Builder: bridge URL handed to the cog as [`ENV_INGEST_URL`].
     pub fn with_ingest_url(mut self, url: impl Into<String>) -> Self {
         self.ingest_url = Some(url.into());
+        self
+    }
+
+    /// Builder: hand the instance no token and no ingest URL.
+    pub fn without_ingest(mut self) -> Self {
+        self.expose_token = false;
+        self.ingest_url = None;
         self
     }
 
@@ -110,9 +122,11 @@ impl HostContract {
     pub fn env(&self, data_dir: &str) -> Vec<(String, String)> {
         let mut env = vec![
             (ENV_CSI_BIND.to_string(), self.csi_bind.to_string()),
-            (ENV_TOKEN.to_string(), self.token.expose().to_string()),
             (ENV_DATA_DIR.to_string(), data_dir.to_string()),
         ];
+        if self.expose_token {
+            env.push((ENV_TOKEN.to_string(), self.token.expose().to_string()));
+        }
         if let Some(s) = self.sensor_url {
             env.push((ENV_SENSOR_URL.to_string(), s.to_string()));
         }

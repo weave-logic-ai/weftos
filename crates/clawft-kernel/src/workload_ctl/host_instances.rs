@@ -64,6 +64,7 @@ impl WorkloadHostService {
                 all.push(json!({
                     "instance_id": id, "workload": p.name, "variant": p.variant,
                     "decision_id": p.decision_id, "status": host.status(&p.handle).await,
+                    "ingest": p.ingest_state,
                 }));
             }
             return Ok(Value::Array(all));
@@ -106,7 +107,8 @@ impl WorkloadHostService {
                 r
             }
             method::STATUS => {
-                Ok(json!({ "instance_id": iid, "status": host.status(&p.handle).await }))
+                Ok(json!({ "instance_id": iid, "status": host.status(&p.handle).await,
+                           "ingest": p.ingest_state }))
             }
             _ => Ok(match &p.last {
                 Some(ev) => json!({

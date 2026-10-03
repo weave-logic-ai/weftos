@@ -36,13 +36,13 @@ pub use forward::{
     ForwardRefusal, ForwardRequest, Forwarder, LocalForwarder, MeshForwarder, STORE_INGEST_METHOD,
     STORE_SERVICE,
 };
-pub use hooks::{IngestHooks, IngestLease};
+pub use hooks::{IngestHooks, IngestLease, ProjectDirectory};
 pub use owner::{ForwardPolicy, KeyPolicy, OwnerConnector, StoreOwnerService};
 pub use registry::{InstanceBinding, RateBudget, StaticRouter, StoreRouter, TokenRegistry};
 #[cfg(feature = "ecc")]
 pub use store::{VectorBackendStore, VectorDirectory};
 pub use store::{
-    IngestOutcome, IngestStore, MemoryIngestStore, Provenance, StaticDirectory, StoreDirectory,
+    Hit, IngestOutcome, IngestStore, MemoryIngestStore, Provenance, StaticDirectory, StoreDirectory,
     StoreError,
 };
 pub use types::{

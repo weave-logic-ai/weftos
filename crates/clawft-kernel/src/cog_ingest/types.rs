@@ -54,6 +54,9 @@ pub enum IngestError {
     /// The store owner could not take the batch (502).
     #[error("store unavailable: {0}")]
     Unavailable(String),
+    /// No store owner is known for the placement (502).
+    #[error("not routed: {0}")]
+    NotRouted(String),
 }
 
 impl IngestError {
@@ -65,7 +68,7 @@ impl IngestError {
             Self::Forbidden => 403,
             Self::TooLarge(_) => 413,
             Self::RateLimited => 429,
-            Self::Unavailable(_) => 502,
+            Self::Unavailable(_) | Self::NotRouted(_) => 502,
         }
     }
 }
@@ -131,7 +134,8 @@ fn parse_vector(e: &Value) -> Result<IngestVector, String> {
     Ok(IngestVector { id, values })
 }
 
-/// True for a project id: 26 upper-case alphanumeric characters (a ULID).
+/// True for a project id: a canonical ULID, the same check every other
+/// project id passes ([`clawft_types::project::validate_id`]).
 pub fn valid_project_id(s: &str) -> bool {
-    s.len() == 26 && s.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    clawft_types::project::validate_id(s).is_ok()
 }

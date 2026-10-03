@@ -12,7 +12,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use super::*;
 use crate::workload_runtime::HostContract;
 
-pub(super) const PROJECT: &str = "01J9ZXW0PROJECTAAAAAAAAAAA";
+pub(super) const PROJECT: &str = "01J9ZXW0PRJCTAAAAAAAAAAAAA";
 
 pub(super) fn key(n: u8) -> SigningKey {
     SigningKey::from_bytes(&[n; 32])
@@ -220,8 +220,8 @@ async fn replayed_feed_through_a_cog_stub_lands_in_the_store_and_dedups() {
 
     // The vectors are queryable and carry the instance as provenance.
     let hits = store.query(&vec8(0.3), 1);
-    assert_eq!(hits[0].0, 2);
-    assert_eq!(store.provenance(2).unwrap().instance_id, "inst-1");
+    assert_eq!(hits[0].id, 2);
+    assert_eq!(store.provenance("inst-1", 2).unwrap().instance_id, "inst-1");
     assert_eq!(bridge.stats().vectors.load(std::sync::atomic::Ordering::Relaxed), 7);
 }
 
@@ -385,7 +385,7 @@ async fn project_less_placements_fall_back_to_the_controllers_store() {
     assert_eq!(post(h.addr(), Some(&tp), &batch_json(&[(1, vec8(1.0))], false)).await.0, 200);
     assert_eq!(post(h.addr(), Some(&tn), &batch_json(&[(2, vec8(2.0))], false)).await.0, 200);
     assert_eq!((proj_store.len(), ctl_store.len()), (1, 1));
-    assert!(proj_store.provenance(1).is_some() && ctl_store.provenance(2).is_some());
+    assert!(proj_store.provenance("with-project", 1).is_some() && ctl_store.provenance("no-project", 2).is_some());
 }
 
 #[tokio::test]
@@ -457,5 +457,5 @@ async fn hnsw_backend_store_takes_batches_with_dedup() {
     let (_, body) = post(h.addr(), Some(&t), &batch_json(&vs, true)).await;
     assert!(body.contains(r#""deduped":4"#), "{body}");
     assert_eq!(store.len(), 4);
-    assert_eq!(store.query(&vec8(2.0), 1)[0].0, 2);
+    assert_eq!(store.query(&vec8(2.0), 1)[0].id, 2);
 }

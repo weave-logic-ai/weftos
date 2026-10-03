@@ -63,9 +63,13 @@ pub struct PlaceOrder {
     /// Decide and explain only; dispatch nothing.
     #[serde(default)]
     pub dry_run: bool,
-    /// Project placing the workload (the caller's verified project). The
-    /// target's ingest bridge delivers a cog's vectors to this project's
-    /// store; `None` delivers them to this controller's store.
+    /// Project the workload is placed for. The target's ingest bridge
+    /// delivers a cog's vectors to this project's store; `None` delivers
+    /// them to the placing controller's store. The target refuses the order
+    /// unless this controller may place for the project (it is the target
+    /// node itself, is listed for the project in the target's
+    /// `cog-ingest.json`, or is the node of the project's bound key); the
+    /// controller's signature covers the id but does not by itself prove it.
     #[serde(default)]
     pub project_id: Option<String>,
 }

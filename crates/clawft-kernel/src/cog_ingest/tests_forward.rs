@@ -50,7 +50,7 @@ fn two_nodes(budget: RateBudget) -> TwoNodes {
     ));
     let router = StaticRouter::new()
         .with_project(PROJECT, fwd.clone())
-        .with_project("01J9ZXW0OTHERPROJECTAAAAAA", fwd.clone())
+        .with_project("01J9ZXW0PRJCTBBBBBBBBBBBBB", fwd.clone())
         .with_controller("ctl", fwd);
     let (bridge, reg) = bridge_over(router, budget);
     TwoNodes {
@@ -74,8 +74,8 @@ async fn vectors_from_a_cog_on_node_a_are_queryable_on_node_b() {
     assert_eq!(st, 200, "{body}");
     // Queried on B's store: the project's, written by A's bridge.
     assert_eq!(t.proj_store.len(), 5);
-    assert_eq!(t.proj_store.query(&vec8(3.0), 1)[0].0, 3);
-    let from = t.proj_store.provenance(3).unwrap();
+    assert_eq!(t.proj_store.query(&vec8(3.0), 1)[0].id, 3);
+    let from = t.proj_store.provenance("cog-on-a", 3).unwrap();
     assert_eq!(from.instance_id, "cog-on-a");
     assert_eq!(from.source_node, node_id(&t.key_a), "the owner records the bridge node");
     assert_eq!(t.ctl_store.len(), 0);
@@ -97,14 +97,14 @@ async fn two_node_project_less_goes_to_the_owner_fallback_and_unknown_projects_f
     assert_eq!((t.ctl_store.len(), t.proj_store.len()), (1, 0));
 
     // Routed to B, but B has no store for that project.
-    let other = register(&t.reg, "other", Some("01J9ZXW0OTHERPROJECTAAAAAA"), "ctl");
+    let other = register(&t.reg, "other", Some("01J9ZXW0PRJCTBBBBBBBBBBBBB"), "ctl");
     let (st, body) = post(h.addr(), Some(&other), &batch_json(&[(2, vec8(2.0))], false)).await;
     assert_eq!(st, 502, "{body}");
     assert!(!body.contains("refused"), "owner detail stays off the wire: {body}");
     assert_eq!((t.ctl_store.len(), t.proj_store.len()), (1, 0));
 
     // No route at all.
-    let lost = register(&t.reg, "lost", Some("01J9ZXW0NOROUTEAAAAAAAAAAA"), "ctl");
+    let lost = register(&t.reg, "lost", Some("01J9ZXW0PRJCTCCCCCCCCCCCCC"), "ctl");
     assert_eq!(post(h.addr(), Some(&lost), &batch_json(&[(3, vec8(3.0))], false)).await.0, 502);
 }
 
@@ -190,7 +190,7 @@ fn owner_refuses_forged_replayed_expired_and_unauthorised_forwards() {
 
     // Tampered after signing: another project, more vectors.
     let (_, mut s) = signed_for(&t.key_a, &t.node_b, Some(PROJECT), 30_000);
-    s.payload = s.payload.replace(PROJECT, "01J9ZXW0OTHERPROJECTAAAAAA");
+    s.payload = s.payload.replace(PROJECT, "01J9ZXW0PRJCTBBBBBBBBBBBBB");
     let (r, authed) = t.owner.handle_at(&s, now());
     assert!(!authed);
     assert_eq!(refusal(outcome_of(&r, &key_b)), ForwardRefusal::Signature);
@@ -229,7 +229,7 @@ fn a_project_restricted_key_cannot_forward_for_other_projects_or_project_less() 
         outcome_of(&owner.handle_at(&ok, now()).0, &key_b),
         ForwardOutcome::Ok { .. }
     ));
-    for p in [Some("01J9ZXW0OTHERPROJECTAAAAAA"), None] {
+    for p in [Some("01J9ZXW0PRJCTBBBBBBBBBBBBB"), None] {
         let (_, s) = signed_for(&key_a, &nb, p, 30_000);
         assert_eq!(
             refusal(outcome_of(&owner.handle_at(&s, now()).0, &key_b)),
@@ -276,7 +276,7 @@ async fn container_routes_get_a_token_scoped_listener_as_their_upstream() {
         ),
         RateBudget::default(),
     );
-    let hooks = IngestHooks::new(reg.clone(), bridge, "127.0.0.1:80".parse().unwrap(), Some("127.0.0.1".parse().unwrap()));
+    let hooks = IngestHooks::new("own", reg.clone(), bridge, "127.0.0.1:80".parse().unwrap(), Some("127.0.0.1".parse().unwrap()));
     let mk = || crate::workload_runtime::HostContract::default_feed();
 
     // Native: the shared URL, no listener of its own.
@@ -301,4 +301,125 @@ async fn container_routes_get_a_token_scoped_listener_as_their_upstream() {
     assert_eq!(post(up1, Some(&t1), &b).await.0, 401);
     hooks.activate(&lease1).unwrap();
     assert_eq!(post(up1, Some(&t1), &b).await.0, 200);
+}
+
+#[tokio::test]
+async fn a_scoped_listener_closes_when_its_lease_drops() {
+    let (bridge, reg) = bridge_over(StaticRouter::new(), RateBudget::default());
+    let hooks = IngestHooks::new(
+        "own",
+        reg,
+        bridge,
+        "127.0.0.1:80".parse().unwrap(),
+        Some("127.0.0.1".parse().unwrap()),
+    );
+    let (c, l) = hooks
+        .prepare("container", crate::workload_runtime::HostContract::default_feed())
+        .await
+        .unwrap();
+    let up = c.ingest_upstream.unwrap();
+    let lease = hooks.lease(InstanceBinding::new("i", None, "ctl"), c, l).unwrap();
+    assert!(tokio::net::TcpStream::connect(up).await.is_ok(), "listening while leased");
+    drop(lease);
+    let mut closed = false;
+    for _ in 0..40 {
+        if tokio::net::TcpStream::connect(up).await.is_err() {
+            closed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(closed, "the scoped listener must close with its lease");
+}
+
+/// Revokes the instance the moment the bridge asks where to send its batch,
+/// as a stop or unload completing while a request is in flight would.
+struct RevokingRouter {
+    inner: StaticRouter,
+    reg: Arc<TokenRegistry>,
+    instance: String,
+}
+
+impl StoreRouter for RevokingRouter {
+    fn route(&self, b: &InstanceBinding) -> Option<Arc<dyn Forwarder>> {
+        self.reg.revoke(&self.instance);
+        self.inner.route(b)
+    }
+}
+
+#[tokio::test]
+async fn a_token_revoked_while_a_request_is_in_flight_writes_nothing() {
+    let store = mem();
+    let reg = Arc::new(TokenRegistry::new());
+    let dir: Arc<dyn StoreDirectory> = Arc::new(StaticDirectory::new().with_fallback(store.clone()));
+    let router = RevokingRouter {
+        inner: StaticRouter::new().with_controller("ctl", Arc::new(LocalForwarder::new("n", dir))),
+        reg: reg.clone(),
+        instance: "inst".into(),
+    };
+    let bridge = IngestBridge::new(reg.clone(), Arc::new(router), RateBudget::default(), BridgeConfig::default());
+    let token = register(&reg, "inst", None, "ctl");
+    let h = bridge.bind(lo(), BridgeScope::Any).await.unwrap();
+    let (st, _) = post(h.addr(), Some(&token), &batch_json(&[(1, vec8(1.0))], false)).await;
+    assert_eq!(st, 401, "revoked between authentication and the write");
+    assert_eq!(store.len(), 0);
+}
+
+#[tokio::test]
+async fn anonymous_connections_are_capped_and_time_out_before_authenticated_ones_suffer() {
+    use std::time::Duration;
+    let store = mem();
+    let reg = Arc::new(TokenRegistry::new());
+    let dir: Arc<dyn StoreDirectory> = Arc::new(StaticDirectory::new().with_fallback(store.clone()));
+    let router = StaticRouter::new().with_controller("ctl", Arc::new(LocalForwarder::new("n", dir)));
+    let cfg = BridgeConfig {
+        preauth_timeout: Duration::from_millis(300),
+        max_unauthenticated: 2,
+        ..Default::default()
+    };
+    let bridge = IngestBridge::new(reg.clone(), Arc::new(router), RateBudget::default(), cfg);
+    let token = register(&reg, "inst", None, "ctl");
+    let h = bridge.bind(lo(), BridgeScope::Any).await.unwrap();
+    let b = batch_json(&[(1, vec8(1.0))], false);
+
+    // Two silent connections hold both anonymous slots.
+    let _a = tokio::net::TcpStream::connect(h.addr()).await.unwrap();
+    let _b = tokio::net::TcpStream::connect(h.addr()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(post(h.addr(), Some(&token), &b).await.0, 0, "over the anonymous cap: dropped");
+    // They are closed at the pre-auth deadline, and the slots come back.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(post(h.addr(), Some(&token), &b).await.0, 200);
+    assert_eq!(store.len(), 1);
+}
+
+#[test]
+fn vector_ids_are_namespaced_per_instance_in_a_shared_store() {
+    fn check(store: &dyn IngestStore) {
+        let (a, b) = (
+            Provenance { instance_id: "a".into(), source_node: "n".into() },
+            Provenance { instance_id: "b".into(), source_node: "n".into() },
+        );
+        let v = |id, x: f32| IngestVector { id, values: vec8(x) };
+        assert_eq!(store.ingest(&a, &[v(1, 1.0)], true).unwrap().accepted, 1);
+        // Same id from another instance: not an overwrite, not a dedup.
+        let o = store.ingest(&b, &[v(1, 2.0)], true).unwrap();
+        assert_eq!((o.accepted, o.deduped, o.total), (1, 0, 2));
+        // Identical values from another instance are not deduped against a's.
+        let o = store.ingest(&b, &[v(7, 1.0)], true).unwrap();
+        assert_eq!((o.accepted, o.deduped), (1, 0));
+        // a's own repeat is deduped.
+        assert_eq!(store.ingest(&a, &[v(1, 1.0)], true).unwrap().deduped, 1);
+        let hits = store.query(&vec8(1.0), 3);
+        assert!(hits.iter().any(|h| h.instance_id == "a" && h.id == 1));
+        assert!(hits.iter().any(|h| h.instance_id == "b" && h.id == 1));
+        // a's value was not replaced by b's write to "id 1".
+        let a1 = hits.iter().find(|h| h.instance_id == "a" && h.id == 1).unwrap();
+        assert!(a1.distance < 1e-6, "{a1:?}");
+    }
+    check(&MemoryIngestStore::new(100));
+    #[cfg(feature = "ecc")]
+    check(&VectorBackendStore::new(Arc::new(crate::vector_hnsw::HnswBackend::new(
+        crate::hnsw_service::HnswServiceConfig::default(),
+    ))));
 }

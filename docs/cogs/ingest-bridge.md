@@ -38,18 +38,43 @@ The owner may be this node (`LocalForwarder`) or another (`MeshForwarder`).
 The project id travels with the placement:
 
 1. The caller names the project: `PlaceOrder.project_id` (the
-   `workload.place` RPC takes `project`, a 26-character project id).
-   `PlaceBody.project_id` carries it to the target, and `PlacementRecord`
-   keeps it (`project_id`, absent when the placement had no project).
-2. At `place` / `load` on the target, `WorkloadHostService` (given
+   `workload.place` RPC takes `project`, a project id). `PlaceBody.project_id`
+   carries it to the target, and `PlacementRecord` keeps it (`project_id`,
+   absent when the placement had no project). The RPC refuses a project the
+   identity records do not know or have revoked (`check_project`, on a
+   daemon that has them) and a malformed id (`clawft_types::project::validate_id`).
+2. **Who may place for a project.** The controller's signature covers the
+   project id but does not prove the controller may use it, so the target
+   host checks (`IngestHooks::authorize`, refusal code `unauthorized`):
+   the requester is this node's own key, or is listed in that project
+   route's `controllers` in `cog-ingest.json`, or is the node of the key
+   bound to the project in the identity records (the project daemon's node
+   key, ADR-103). Otherwise the placement is refused and no token is issued.
+3. **Refuse what cannot deliver.** At place time the target also checks
+   that a store owner is routed for the placement (a route for the project,
+   or for the requesting controller when the placement has no project). If
+   not, the placement is refused with `admission` ("project ... is not
+   routed here"), so the controller tries the next candidate. A cog is
+   never placed to have every post fail with 502.
+4. At `place` / `load` on the target, `WorkloadHostService` (given
    `with_ingest(IngestHooks)`) issues the cog's token with its host
    contract, injects `COGNITUM_COG_TOKEN` and `COGNITUM_INGEST_URL`, and
    after the adapter names the instance registers
    `InstanceBinding { instance_id, project_id, controller_node = requester }`.
-   Only `cog` workloads get a token.
-3. `stop` and `unload` revoke the token before the adapter acts, and a
-   failed start rolls back and revokes. `start` registers it again. A
-   malformed project id is refused (`invalid_request`).
+   Only `cog` workloads get a token. The place result, `status` rows and the
+   `workload-host` advertisement carry `ingest: enabled | disabled | none`.
+5. `stop` and `unload` revoke the token before the adapter acts, and a
+   failed start rolls back and revokes. `start` registers it again. The
+   bridge checks the token again immediately before it writes, so a stop or
+   unload that finished while a request was in flight is not followed by a
+   write.
+6. **Bridge down, cogs degraded.** If the shared bridge could not bind, the
+   daemon builds disabled hooks: cogs are still placed, but with no
+   `COGNITUM_COG_TOKEN` and no `COGNITUM_INGEST_URL` in their environment
+   (a cog never carries a credential for a port some other process may
+   own), no token is registered, and the place result, status and
+   advertisement say `ingest: disabled`. The orders have no "require ingest"
+   flag yet; a caller that needs ingest must read `ingest` in the result.
 4. Native cogs get the shared loopback listener's URL. Container routes get
    their own token-scoped listener (when `bridge.container_bind` is set),
    passed to the adapter as the relay's `ingest_upstream`; that listener
@@ -58,6 +83,10 @@ The project id travels with the placement:
 
 There is no package-revocation path to the host yet (card 13); when one
 force-unloads an instance it goes through `unload`, which revokes the token.
+Anything that re-creates an instance record without going through `place`
+(a controller adopting an in-flight placement, a host restart re-adopting
+running instances) must issue a new lease (`IngestHooks::lease`), or the
+cog's token is unknown and its posts are refused.
 
 ## Daemon configuration
 
@@ -70,24 +99,29 @@ Everything is optional; `<runtime>/cog-ingest.json` overrides the defaults:
   "bridge": { "bind": "127.0.0.1:80", "requests_per_sec": 20,
               "vectors_per_sec": 2048, "container_bind": "192.168.64.1" },
   "routes": [
-    { "project": "<26-char project id>", "owner": "local" },
-    { "project": "<26-char project id>",
+    { "project": "<project id>", "owner": "local", "controllers": ["<node id>"] },
+    { "project": "<project id>",
       "owner": { "node": "<node id>", "key": "<64 hex>", "addr": "host:9472", "noise": true } },
     { "controller": "<node id>", "owner": "local" }
   ],
   "store_owner": { "listen": "0.0.0.0:9472", "noise": true,
-                   "forwarders": [ { "key": "<64 hex>", "projects": ["<id>"] } ],
+                   "forwarders": [ { "key": "<64 hex>", "projects": ["<id>"] },
+                                   { "key": "<64 hex>", "projects": "*" } ],
                    "projects": ["<id>"], "fallback": false }
 }
 ```
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `bridge.bind` | `127.0.0.1:80` | Shared listener; must be loopback. Released cogs post to this address. If it cannot bind (taken, or unprivileged on Linux) the daemon logs it and places cogs without ingest. |
+| `bridge.bind` | `127.0.0.1:80` | Shared listener; must be loopback. Released cogs post to this address. If it cannot bind (taken, or unprivileged on Linux) the daemon logs it and places cogs degraded (`ingest: disabled`, see above). The user daemon and each project daemon all default to this port and only the first to bind wins; give the others a distinct loopback port in their own runtime dir's `cog-ingest.json` (cogs that honour `COGNITUM_INGEST_URL` follow it; a released cog that posts to the fixed port 80 can be served by one daemon per host). |
 | `bridge.requests_per_sec`, `vectors_per_sec` | 20, 2048 | Per-instance budgets. |
-| `bridge.container_bind` | none | Address for token-scoped container listeners (the engine or VM gateway). Unset: containers get no scoped listener. |
-| `routes` | one route: project-less placements by this node's key go to this node's store | A `project` route sends that project's batches to its owner; a `controller` route takes project-less batches placed by that node. `owner` is `"local"` or a remote node pinned by `key`. A project with no route is refused. |
-| `store_owner` | off | Serve `cog-store` on `listen` (Noise XX by default) for the listed bridge keys, optionally restricted per project. `projects` are the stores this node owns; `fallback` also owns the project-less store. |
+| `bridge.container_bind` | none | One gateway address for token-scoped container listeners (the engine or VM gateway); unspecified (`0.0.0.0`) and multicast addresses are refused. Unset: containers get no scoped listener. |
+| `routes` | one route: project-less placements by this node's key go to this node's store | A `project` route sends that project's batches to its owner and may list `controllers` (node ids besides this node that may place for it; default none); a `controller` route takes project-less batches placed by that node. `owner` is `"local"` or a remote node pinned by `key`. A project or controller with no route is refused at place time. |
+| `store_owner` | off | Serve `cog-store` on `listen` (Noise XX by default). The service serves **only** `projects` (and the project-less store when `fallback` is true); it does not serve the stores of this node's own local routes. Each forwarder key must state its scope: a list of project ids, or `"*"` for any project and project-less batches. There is no default. |
+
+Vector ids are namespaced per instance inside a store (`(instance, id)`):
+one instance cannot overwrite or dedup against another's vectors in a shared
+project store.
 
 Stores on an owner node are in-memory HNSW indexes created on first use
 (`VectorDirectory`). They are not persisted yet: a daemon restart empties
@@ -116,7 +150,16 @@ ingest requests themselves are counted (`BridgeStats`), not chained.
 | Transport | one request per connection, no chunked bodies, 8 KiB head, 5 s read timeout, 64 connections per listener | 400 / 408 |
 
 Nothing is read from the body of an unauthenticated request. Owner-side
-failure detail is logged, not returned.
+failure detail is logged, not returned. Connections that have not
+authenticated are capped (16 at once per listener, dropped beyond that) and
+must present an authenticated head within 2 s, so an anonymous flood cannot
+use up the cap meant for cogs.
+
+`COGNITUM_COG_TOKEN` sits in the cog's environment, so any process of the
+same uid can read it (`/proc/<pid>/environ`, `ps eww`). The token only
+authorises writes to its own instance's vectors, and is revoked at stop and
+unload; run cogs under their own unprivileged user to keep other processes
+out.
 
 `dedup: true` skips a vector when the store already holds the same id or a
 bit-identical value. `dedup: false` upserts by id. The store applies it, so
@@ -133,6 +176,12 @@ node, addressee, time window (30 s skew, 5 min maximum lifetime), the
 freshness, then writes. The answer is signed by the owner and bound to the
 request nonce; the forwarder pins the owner's key and rejects any other
 signer. A replayed request is refused, never written twice.
+
+The Noise XX link between bridge and owner gives confidentiality against
+passive observers only: the handshake keys are ephemeral and not pinned to
+node identities, so it authenticates no one. Integrity and authorisation come
+from the signed request and the signed, key-pinned response. A `noise: false`
+link (a warning is logged) travels in clear.
 
 Transport is the same as `workload.ctl`: in-process streams for tests
 (`OwnerConnector::register_local`), mesh TCP with optional Noise XX
@@ -225,7 +274,16 @@ and `cargo test -p clawft-weave --lib cog_ingest_serve`:
 - daemon config defaults and validation; an unbindable bridge disables
   ingest without failing the daemon; a bridge on one daemon delivers to the
   store-owner daemon over real TCP with Noise;
-- token-scoped container listeners;
+- who may place for a project (own key, listed controller, bound project
+  key; a stranger and an unlisted project are refused), a placement with no
+  store route refused at place time, and the degraded no-token placement
+  when the bridge is down;
+- token-scoped container listeners that close with their lease, a token
+  revoked mid-request writing nothing, the anonymous-connection cap, and
+  per-instance vector-id namespacing;
+- the owner service serving only what `store_owner` lists, forwarder scope
+  required, container-bind validation, and the RPC refusing unregistered
+  projects;
 
 - request validation (shape, dimensions, non-finite, batch and body caps);
 - fake feed, cog stub, bridge, store: vectors land and dedup holds;

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::chain::{self, ChainManager};
-use crate::cog_ingest::{IngestHooks, IngestLease, InstanceBinding};
+use crate::cog_ingest::{IngestError, IngestHooks, IngestLease, InstanceBinding};
 use crate::gate::{GateBackend, GateDecision};
 use crate::ipc::GlobalPid;
 use crate::mesh_artifact::ArtifactExchange;
@@ -112,6 +112,8 @@ pub(super) struct Placed {
     pub(super) last: Option<RunEvidence>,
     /// The instance's ingest registration (cogs, when ingest is wired).
     pub(super) ingest: Option<IngestLease>,
+    /// `enabled`, `disabled` (bridge down, no token issued) or `none`.
+    pub(super) ingest_state: &'static str,
 }
 
 /// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
@@ -266,6 +268,10 @@ impl WorkloadHostService {
         if let Some(a) = &self.address {
             metadata.insert("addr".to_string(), a.clone());
         }
+        metadata.insert(
+            "ingest".to_string(),
+            self.ingest.as_ref().map_or("none", |h| h.state()).to_string(),
+        );
         ServiceAdvertisement {
             name: WORKLOAD_HOST_SERVICE.to_string(),
             methods: method::ALL.iter().map(|m| m.to_string()).collect(),
@@ -461,6 +467,26 @@ impl WorkloadHostService {
         let mut contract = HostContract::new(SocketAddr::from(([0, 0, 0, 0], b.config.csi_port)));
         let mut listener = None;
         let hooks = self.ingest.as_ref().filter(|_| w.kind == "cog");
+        // `none`: no ingest wiring on this node. `disabled`: wired, but the
+        // bridge could not start; the cog runs with no token and no URL.
+        let ingest_state: &'static str = hooks.map_or("none", |h| h.state());
+        let hooks = hooks.filter(|h| h.is_enabled());
+        if ingest_state == "disabled" {
+            contract = contract.without_ingest();
+        }
+        if let Some(hk) = hooks {
+            // Instance id unknown yet: the binding only carries the project
+            // and the controller for the check.
+            let probe = InstanceBinding::new("", b.project_id.clone(), &req.requester);
+            hk.authorize(&probe).map_err(|e| match e {
+                IngestError::Forbidden => refuse(
+                    RefusalCode::Unauthorized,
+                    "this controller may not place cogs for that project",
+                ),
+                IngestError::NotRouted(m) => refuse(RefusalCode::Admission, m),
+                other => refuse(RefusalCode::Runtime, format!("ingest bridge: {other}")),
+            })?;
+        }
         if let Some(hk) = hooks {
             (contract, listener) = hk
                 .prepare(&route, contract)
@@ -501,6 +527,7 @@ impl WorkloadHostService {
                 decision_id: req.decision_id.clone(),
                 last: None,
                 ingest: lease,
+                ingest_state,
             },
         );
         let started = req.method == method::PLACE && b.start;
@@ -520,6 +547,7 @@ impl WorkloadHostService {
         Ok(json!({
             "instance_id": iid, "runtime": h.runtime, "variant": b.variant,
             "package_id": pkg.package_id, "status": status, "node": self.node_id,
+            "ingest": ingest_state,
         }))
     }
 

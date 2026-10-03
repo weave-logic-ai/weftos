@@ -1,9 +1,12 @@
 //! The store an ingested batch lands in, owned by one project's kernel (or
 //! by the placing controller when the placement has no project).
 //!
-//! Dedup is honoured here, at the owner, never at the bridge: with
-//! `dedup: true` a vector is skipped when the store already holds the same
-//! id or a bit-identical value; with `dedup: false` the id is upserted.
+//! Vectors are namespaced per instance: the key is `(instance, id)`, so one
+//! instance can neither overwrite nor dedup against another instance's ids
+//! or values inside a shared project store. Dedup is honoured here, at the
+//! owner, never at the bridge: with `dedup: true` a vector is skipped when
+//! the same instance already holds that id or a bit-identical value; with
+//! `dedup: false` the id is upserted.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -32,13 +35,24 @@ pub enum StoreError {
     Backend(String),
 }
 
-/// Where did a batch come from (kept as metadata, never trusted for routing).
+/// Where a batch came from (kept as metadata, never trusted for routing).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
     /// Instance that posted it.
     pub instance_id: String,
     /// Node whose bridge forwarded it.
     pub source_node: String,
+}
+
+/// One nearest-neighbour result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hit {
+    /// Instance that wrote the vector.
+    pub instance_id: String,
+    /// The id the instance gave it.
+    pub id: u64,
+    /// Distance to the query (lower is closer).
+    pub distance: f32,
 }
 
 /// A store that takes ingested batches.
@@ -51,8 +65,8 @@ pub trait IngestStore: Send + Sync {
         dedup: bool,
     ) -> Result<IngestOutcome, StoreError>;
 
-    /// The `k` nearest stored vectors to `q` as `(id, distance)`, closest first.
-    fn query(&self, q: &[f32; DIMS], k: usize) -> Vec<(u64, f32)>;
+    /// The `k` nearest stored vectors to `q`, closest first.
+    fn query(&self, q: &[f32; DIMS], k: usize) -> Vec<Hit>;
 
     /// Vectors held.
     fn len(&self) -> usize;
@@ -63,22 +77,46 @@ pub trait IngestStore: Send + Sync {
     }
 }
 
-fn bits_key(v: &[f32; DIMS]) -> [u8; 32] {
-    let mut b = [0u8; 4 * DIMS];
-    for (c, f) in b.chunks_mut(4).zip(v) {
-        c.copy_from_slice(&f.to_le_bytes());
+fn value_key(instance: &str, v: &[f32; DIMS]) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(&(instance.len() as u64).to_le_bytes());
+    h.update(instance.as_bytes());
+    for f in v {
+        h.update(&f.to_le_bytes());
     }
-    *blake3::hash(&b).as_bytes()
+    *h.finalize().as_bytes()
 }
 
 fn dist(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt()
 }
 
+/// Per-instance value index with reference counts (an upsert frees the old
+/// value's entry only when no other id of that instance holds it).
+#[derive(Default)]
+struct ValueIndex(HashMap<[u8; 32], usize>);
+
+impl ValueIndex {
+    fn has(&self, k: &[u8; 32]) -> bool {
+        self.0.contains_key(k)
+    }
+    fn add(&mut self, k: [u8; 32]) {
+        *self.0.entry(k).or_default() += 1;
+    }
+    fn remove(&mut self, k: &[u8; 32]) {
+        if let Some(n) = self.0.get_mut(k) {
+            *n -= 1;
+            if *n == 0 {
+                self.0.remove(k);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct MemInner {
-    by_id: HashMap<u64, ([f32; DIMS], Provenance)>,
-    hashes: HashSet<[u8; 32]>,
+    by_key: HashMap<(String, u64), ([f32; DIMS], String)>,
+    values: ValueIndex,
 }
 
 /// In-memory store (tests, and a node's scratch store).
@@ -96,9 +134,14 @@ impl MemoryIngestStore {
         }
     }
 
-    /// Provenance of the vector stored under `id`.
-    pub fn provenance(&self, id: u64) -> Option<Provenance> {
-        self.inner.lock().ok()?.by_id.get(&id).map(|(_, p)| p.clone())
+    /// Provenance of the vector `instance` stored under `id`.
+    pub fn provenance(&self, instance: &str, id: u64) -> Option<Provenance> {
+        let g = self.inner.lock().ok()?;
+        let (_, node) = g.by_key.get(&(instance.to_string(), id))?;
+        Some(Provenance {
+            instance_id: instance.to_string(),
+            source_node: node.clone(),
+        })
     }
 }
 
@@ -113,59 +156,85 @@ impl IngestStore for MemoryIngestStore {
             .inner
             .lock()
             .map_err(|_| StoreError::Backend("store lock poisoned".into()))?;
+        let inst = &from.instance_id;
         let (mut accepted, mut deduped) = (0, 0);
         for v in vectors {
-            let key = bits_key(&v.values);
-            let present = g.by_id.contains_key(&v.id);
-            if dedup && (present || g.hashes.contains(&key)) {
+            let key = (inst.clone(), v.id);
+            let vk = value_key(inst, &v.values);
+            let present = g.by_key.contains_key(&key);
+            if dedup && (present || g.values.has(&vk)) {
                 deduped += 1;
                 continue;
             }
-            if !present && g.by_id.len() >= self.max {
-                return Err(StoreError::Full(g.by_id.len()));
+            if !present && g.by_key.len() >= self.max {
+                return Err(StoreError::Full(g.by_key.len()));
             }
-            if let Some((old, _)) = g.by_id.insert(v.id, (v.values, from.clone())) {
-                // The upserted id no longer holds its old value.
-                let old = bits_key(&old);
-                if !g.by_id.values().any(|(x, _)| bits_key(x) == old) {
-                    g.hashes.remove(&old);
-                }
+            if let Some((old, _)) = g.by_key.insert(key, (v.values, from.source_node.clone())) {
+                g.values.remove(&value_key(inst, &old));
             }
-            g.hashes.insert(key);
+            g.values.add(vk);
             accepted += 1;
         }
         Ok(IngestOutcome {
             accepted,
             deduped,
-            total: g.by_id.len(),
+            total: g.by_key.len(),
         })
     }
 
-    fn query(&self, q: &[f32; DIMS], k: usize) -> Vec<(u64, f32)> {
+    fn query(&self, q: &[f32; DIMS], k: usize) -> Vec<Hit> {
         let Ok(g) = self.inner.lock() else {
             return vec![];
         };
         let mut hits: Vec<_> = g
-            .by_id
+            .by_key
             .iter()
-            .map(|(id, (v, _))| (*id, dist(q, v)))
+            .map(|((inst, id), (v, _))| Hit {
+                instance_id: inst.clone(),
+                id: *id,
+                distance: dist(q, v),
+            })
             .collect();
-        hits.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        hits.sort_by(|a, b| {
+            a.distance
+                .total_cmp(&b.distance)
+                .then(a.id.cmp(&b.id))
+                .then(a.instance_id.cmp(&b.instance_id))
+        });
         hits.truncate(k);
         hits
     }
 
     fn len(&self) -> usize {
-        self.inner.lock().map(|g| g.by_id.len()).unwrap_or(0)
+        self.inner.lock().map(|g| g.by_key.len()).unwrap_or(0)
     }
+}
+
+#[cfg(feature = "ecc")]
+#[derive(Default)]
+struct BackendInner {
+    /// Backend id -> the (instance, id) it stands for.
+    names: HashMap<u64, (String, u64)>,
+    values: ValueIndex,
 }
 
 /// Adapter over the kernel's [`VectorBackend`](crate::vector_backend::VectorBackend)
 /// (HNSW, DiskANN, hybrid). The backend's dimensionality must be [`DIMS`].
+/// The backend id is a 64-bit hash of `(instance, id)`; a hash collision
+/// between two different pairs is refused rather than overwriting.
 #[cfg(feature = "ecc")]
 pub struct VectorBackendStore {
     backend: Arc<dyn crate::vector_backend::VectorBackend>,
-    hashes: Mutex<HashSet<[u8; 32]>>,
+    inner: Mutex<BackendInner>,
+}
+
+#[cfg(feature = "ecc")]
+fn backend_id(instance: &str, id: u64) -> u64 {
+    let mut h = blake3::Hasher::new();
+    h.update(&(instance.len() as u64).to_le_bytes());
+    h.update(instance.as_bytes());
+    h.update(&id.to_le_bytes());
+    u64::from_le_bytes(h.finalize().as_bytes()[..8].try_into().unwrap_or([0; 8]))
 }
 
 #[cfg(feature = "ecc")]
@@ -174,7 +243,7 @@ impl VectorBackendStore {
     pub fn new(backend: Arc<dyn crate::vector_backend::VectorBackend>) -> Self {
         Self {
             backend,
-            hashes: Mutex::default(),
+            inner: Mutex::default(),
         }
     }
 }
@@ -187,30 +256,41 @@ impl IngestStore for VectorBackendStore {
         vectors: &[IngestVector],
         dedup: bool,
     ) -> Result<IngestOutcome, StoreError> {
-        let mut hashes = self
-            .hashes
+        let mut g = self
+            .inner
             .lock()
             .map_err(|_| StoreError::Backend("store lock poisoned".into()))?;
+        let inst = &from.instance_id;
         let (mut accepted, mut deduped) = (0, 0);
         for v in vectors {
-            let key = bits_key(&v.values);
-            if dedup && (self.backend.contains(v.id) || hashes.contains(&key)) {
+            let bid = backend_id(inst, v.id);
+            let vk = value_key(inst, &v.values);
+            let present = match g.names.get(&bid) {
+                Some((i, id)) if i == inst && *id == v.id => true,
+                Some(_) => {
+                    return Err(StoreError::Backend("vector id hash collision".into()));
+                }
+                None => false,
+            };
+            if dedup && (present || g.values.has(&vk)) {
                 deduped += 1;
                 continue;
             }
             let meta = serde_json::json!({
                 "instance": from.instance_id,
                 "node": from.source_node,
+                "id": v.id,
             });
             self.backend
-                .insert(v.id, &format!("cog-ingest:{}", v.id), &v.values, meta)
+                .insert(bid, &format!("cog-ingest:{inst}:{}", v.id), &v.values, meta)
                 .map_err(|e| match e {
                     crate::vector_backend::VectorError::StoreFull { current, .. } => {
                         StoreError::Full(current)
                     }
                     other => StoreError::Backend(other.to_string()),
                 })?;
-            hashes.insert(key);
+            g.names.insert(bid, (inst.clone(), v.id));
+            g.values.add(vk);
             accepted += 1;
         }
         Ok(IngestOutcome {
@@ -220,11 +300,21 @@ impl IngestStore for VectorBackendStore {
         })
     }
 
-    fn query(&self, q: &[f32; DIMS], k: usize) -> Vec<(u64, f32)> {
+    fn query(&self, q: &[f32; DIMS], k: usize) -> Vec<Hit> {
+        let Ok(g) = self.inner.lock() else {
+            return vec![];
+        };
         self.backend
             .search(q, k)
             .into_iter()
-            .map(|r| (r.id, r.distance))
+            .filter_map(|r| {
+                let (instance_id, id) = g.names.get(&r.id)?.clone();
+                Some(Hit {
+                    instance_id,
+                    id,
+                    distance: r.distance,
+                })
+            })
             .collect()
     }
 
@@ -282,13 +372,16 @@ impl StoreDirectory for StaticDirectory {
 
 /// A node's stores for the projects it owns, each an in-memory HNSW index
 /// created on first use (persistence follows the project kernel's store
-/// work; a restart empties them). Only listed projects have a store here;
-/// the controller fallback exists only when enabled.
+/// work; a restart empties them). The index map is shared between
+/// [`views`](Self::view), so two views with different allow-lists (local
+/// cogs, remote forwarders) reach the same store for a project they both
+/// allow.
 #[cfg(feature = "ecc")]
+#[derive(Clone)]
 pub struct VectorDirectory {
     projects: HashSet<String>,
     fallback: bool,
-    stores: Mutex<HashMap<Option<String>, Arc<VectorBackendStore>>>,
+    stores: Arc<Mutex<HashMap<Option<String>, Arc<VectorBackendStore>>>>,
 }
 
 #[cfg(feature = "ecc")]
@@ -298,7 +391,17 @@ impl VectorDirectory {
         Self {
             projects: projects.into_iter().collect(),
             fallback,
-            stores: Mutex::default(),
+            stores: Arc::default(),
+        }
+    }
+
+    /// A view over the same stores allowing only `projects` (and the
+    /// fallback if `fallback`).
+    pub fn view(&self, projects: impl IntoIterator<Item = String>, fallback: bool) -> Self {
+        Self {
+            projects: projects.into_iter().collect(),
+            fallback,
+            stores: self.stores.clone(),
         }
     }
 }
