@@ -33,6 +33,8 @@ use crate::mesh_discovery::MeshPeerEvent;
 
 /// Notices kept for replay (oldest dropped first).
 pub const MAX_LOGGED: usize = 1024;
+/// Replays driven at once, across all peers.
+pub const MAX_CONCURRENT_REPLAYS: usize = 8;
 /// A peer is replayed to at most once per this long.
 pub const REPLAY_COOLDOWN: Duration = Duration::from_secs(60);
 /// Largest log file read at start.
@@ -230,6 +232,12 @@ impl RevocationExchange {
             if let Some(r) = g.get(&peer)
                 && (r.running || r.started.elapsed() < REPLAY_COOLDOWN)
             {
+                return;
+            }
+            // Under `observe` every peer counts as verified: bound how many
+            // replays (each a stream of signature verifications on the
+            // other side) this node drives at once.
+            if g.values().filter(|r| r.running).count() >= MAX_CONCURRENT_REPLAYS {
                 return;
             }
             // Bounded like the other per-peer maps.

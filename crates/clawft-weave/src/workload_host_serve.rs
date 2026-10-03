@@ -58,7 +58,8 @@ pub struct HostConfig {
     /// once no remote controller has been heard from for this long, so a
     /// partitioned node does not keep running a copy the controller is
     /// about to replace. Set it at or below the controller's `dead_after`
-    /// (default 30 s). Absent: off.
+    /// (default 30 s). At least 30 (three controller ticks of 10 s): a
+    /// shorter lease would stop work for ordinary jitter. Absent: off.
     #[serde(default)]
     pub lease_secs: Option<u64>,
 }
@@ -79,9 +80,9 @@ impl HostConfig {
             ));
         }
         if let Some(l) = self.lease_secs
-            && !(5..=86_400).contains(&l)
+            && !(30..=86_400).contains(&l)
         {
-            return Err(format!("{HOST_FILE}: lease_secs must be 5..=86400"));
+            return Err(format!("{HOST_FILE}: lease_secs must be 30..=86400 (at least three controller ticks)"));
         }
         if let Some(a) = &self.advertise
             && (a.is_empty()

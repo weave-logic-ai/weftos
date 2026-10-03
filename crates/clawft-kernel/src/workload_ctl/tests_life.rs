@@ -215,8 +215,13 @@ fn a_spec_needing_an_attached_sensor_or_device_is_hardware_bound() {
     use super::lifecycle::needs_attached_hardware as bound;
     assert!(!bound(&spec_requiring(&["cpu.arch.aarch64", "os.linux", "runtime.native", "mem.system"])));
     assert!(bound(&spec_requiring(&["os.linux", "sensor.csi.esp32"])));
-    assert!(bound(&spec_requiring(&["accel.npu.hailo"])));
+    assert!(bound(&spec_requiring(&["feed.esp32-csi-udp"])));
     assert!(bound(&spec_requiring(&["device.gpio"])));
+    // Not hardware: any node with the same accelerator is as good a home,
+    // and trust, store and model requirements describe policy and data.
+    for id in ["accel.npu.hailo", "trust.tier.paired", "store.tier.internal", "model.present", "net.egress"] {
+        assert!(!bound(&spec_requiring(&[id])), "{id} must not pin");
+    }
     // The real cog routes (arch, runtime) are not hardware-bound.
     let routes = super::cog_kind::arch_routes("aarch64").unwrap();
     let mut s = spec_requiring(&[]);

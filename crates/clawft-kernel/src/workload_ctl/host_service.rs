@@ -130,6 +130,10 @@ pub(super) struct Placed {
     /// Stopped because the controller lease expired (see `host_supervise`);
     /// the controller restarts it if it comes back still owning it.
     pub(super) lease_stopped: bool,
+    /// Who placed it (a controller's node id). The lease applies only to
+    /// instances placed by another node: what this node controls itself
+    /// is exempt.
+    pub(super) requester: String,
 }
 
 /// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
@@ -588,6 +592,11 @@ impl WorkloadHostService {
             }
             None => None,
         };
+        // A node derives instance ids from the workload: a fresh placement
+        // under an id this node reported as departed is no longer departed.
+        if let Ok(mut d) = self.departed.lock() {
+            d.retain(|(i, _)| i != &iid);
+        }
         let continuous = !matches!(b.config.mode, crate::workload_runtime::RunMode::Once);
         let will_start = req.method == method::PLACE && b.start;
         let mut life = super::lifecycle::InstanceLife::new(
@@ -612,6 +621,7 @@ impl WorkloadHostService {
                 continuous,
                 desired_running: will_start,
                 lease_stopped: false,
+                requester: req.requester.clone(),
             },
         );
         if let (Some(list), Some(g0)) = (self.revocations.get(), list_at_start)

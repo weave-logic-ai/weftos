@@ -180,11 +180,50 @@ async fn the_opt_in_lease_stops_continuous_instances_when_no_controller_is_heard
     let rows = plane.call(&node.id, method::STATUS, None, serde_json::json!({})).await.unwrap();
     assert_eq!(rows[0]["lease_stopped"], true);
 
-    // The controller is back and still owns it: it starts it again.
-    plane.instance(method::START, &iid).await.unwrap();
+    // The controller is back well before `dead_after` and still owns it:
+    // its next lifecycle pass starts it again, without any operator verb.
+    let ev = plane.lifecycle_tick().await;
+    assert_eq!(ev.iter().map(|e| e.action.as_str()).collect::<Vec<_>>(), ["recovered"], "{ev:#?}");
     assert_eq!(node.svc.lifecycle_of(&iid).await, Some(LifecycleState::Running));
+    assert_eq!(plane.lifecycle_of(&iid), Some(LifecycleState::Running));
     let rows = plane.call(&node.id, method::STATUS, None, serde_json::json!({})).await.unwrap();
     assert_eq!(rows[0]["lease_stopped"], false);
+    plane.instance(method::STOP, &iid).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_operator_stop_after_a_lease_stop_is_final() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "lease-cog", "#!/bin/sh\nexec sleep 60\n", &[arch()]);
+    let key = SigningKey::from_bytes(&[10; 32]);
+    let node = host_node_leased(25, board_caps("pi5"), &key, Duration::from_secs(5));
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("n", node.svc.clone());
+    let (plane, _) = controller(&key, conn);
+    plane.add_target(&addr, TrustTier::Paired).await.unwrap();
+    let iid = plane.place(&mode_order(&pkg, RunMode::Listener, None)).await.unwrap().placed.unwrap().instance_id;
+    let real_now = chrono::Utc::now().timestamp_millis() as u64;
+    node.svc.supervise(real_now + 60_000).await;
+    plane.instance(method::STOP, &iid).await.unwrap();
+    assert!(plane.lifecycle_tick().await.is_empty(), "no restart of an operator stop");
+    assert_eq!(node.svc.lifecycle_of(&iid).await, Some(LifecycleState::Stopped));
+}
+
+#[tokio::test]
+async fn the_lease_exempts_instances_this_node_placed_itself() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "lease-cog", "#!/bin/sh\nexec sleep 60\n", &[arch()]);
+    // The controller is this node's own key: requester == node id.
+    let own = SigningKey::from_bytes(&[26; 32]);
+    let node = host_node_leased(26, board_caps("pi5"), &own, Duration::from_secs(5));
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("n", node.svc.clone());
+    let (plane, _) = controller(&own, conn);
+    plane.add_target(&addr, TrustTier::Paired).await.unwrap();
+    let iid = plane.place(&mode_order(&pkg, RunMode::Listener, None)).await.unwrap().placed.unwrap().instance_id;
+    let real_now = chrono::Utc::now().timestamp_millis() as u64;
+    assert!(node.svc.supervise(real_now + 600_000).await.is_empty());
+    assert_eq!(node.svc.lifecycle_of(&iid).await, Some(LifecycleState::Running));
     plane.instance(method::STOP, &iid).await.unwrap();
 }
 

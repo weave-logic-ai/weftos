@@ -85,7 +85,7 @@ async fn a_pinned_node_that_reboots_after_the_grace_period_gets_it_back_on_the_s
 }
 
 #[tokio::test]
-async fn a_reschedule_that_finds_no_node_is_retried_with_backoff_up_to_the_cap() {
+async fn a_reschedule_that_finds_no_node_is_retried_with_backoff_and_never_abandoned() {
     let r = rig().await;
     let policy = LifecyclePolicy { max_reschedules: 2, ..LifecyclePolicy::default() };
     let placed = r.plane.place_with(&listener(&r), policy).await.unwrap().placed.unwrap();
@@ -100,19 +100,19 @@ async fn a_reschedule_that_finds_no_node_is_retried_with_backoff_up_to_the_cap()
     // Inside the backoff nothing is attempted.
     assert!(r.plane.lifecycle_tick().await.is_empty());
     assert_eq!(attempts(&r), 1);
-    // The second failure reaches the cap and says so.
+    // The second failure reaches the attempt count that is announced.
     past_backoff().await;
     let ev = r.plane.lifecycle_tick().await;
     assert_eq!(actions(&ev), ["alert"], "{ev:#?}");
-    assert!(ev[0].detail.contains("gave up"), "{}", ev[0].detail);
+    assert!(ev[0].detail.contains("still retrying"), "{}", ev[0].detail);
     assert_eq!(attempts(&r), 2);
 
-    // Capacity returns too late: the cap holds.
+    // It never gives up for good: capacity returns later and it is placed.
     assert!(r.plane.set_tier(&r.b.id, TrustTier::Paired));
     past_backoff().await;
-    r.plane.lifecycle_tick().await;
-    assert_eq!(count(&r.b).await, 0);
-    assert_eq!(attempts(&r), 2, "no further attempts");
+    let ev = r.plane.lifecycle_tick().await;
+    assert_eq!(actions(&ev), ["rescheduled"], "{ev:#?}");
+    assert_eq!(count(&r.b).await, 1);
 }
 
 #[tokio::test]
@@ -198,4 +198,48 @@ async fn a_refused_orphan_unload_backs_off_and_is_chained_once_per_reason() {
         .filter(|p| p["phase"] == "alert" && p["reason"].as_str().unwrap().contains("not unloaded"))
         .count();
     assert_eq!(alerts, 1);
+}
+
+#[tokio::test]
+async fn an_unload_done_while_the_node_was_unreachable_is_not_undone() {
+    let r = rig().await;
+    let mut o = listener(&r);
+    o.pin = Some(r.a.id.clone());
+    let old = r.plane.place(&o).await.unwrap().placed.unwrap();
+    r.net.kill(&r.addr_a);
+    r.plane.lifecycle_tick().await;
+    past_dead_after().await;
+    r.plane.lifecycle_tick().await;
+    assert_eq!(r.plane.lifecycle_of(&old.instance_id), Some(LifecycleState::Lost));
+    // Someone else unloads it on the node as it comes back.
+    r.net.revive(&r.addr_a);
+    r.plane
+        .call(&r.a.id, super::msg::method::UNLOAD, Some("cd".repeat(32)), serde_json::json!({ "instance_id": old.instance_id }))
+        .await
+        .unwrap();
+    let ev = r.plane.lifecycle_tick().await;
+    assert_eq!(actions(&ev), ["gone"], "{ev:#?}");
+    assert_eq!(count(&r.a).await + count(&r.b).await, 0, "not placed again");
+}
+
+#[tokio::test]
+async fn a_fresh_placement_clears_its_id_from_the_departed_list() {
+    let r = rig().await;
+    let mut o = listener(&r);
+    o.pin = Some(r.a.id.clone());
+    let first = r.plane.place(&o).await.unwrap().placed.unwrap();
+    r.plane
+        .call(&r.a.id, super::msg::method::UNLOAD, Some("ef".repeat(32)), serde_json::json!({ "instance_id": first.instance_id }))
+        .await
+        .unwrap();
+    let departed = |rows: &serde_json::Value, id: &str| {
+        rows.as_array().unwrap().iter().any(|x| x["departed_instance"] == id)
+    };
+    let body = || serde_json::json!({ "include_departed": true });
+    let rows = r.plane.call(&r.a.id, super::msg::method::STATUS, None, body()).await.unwrap();
+    assert!(departed(&rows, &first.instance_id));
+    let again = r.plane.place(&o).await.unwrap().placed.unwrap();
+    assert_eq!(again.instance_id, first.instance_id, "a node derives the id from the workload");
+    let rows = r.plane.call(&r.a.id, super::msg::method::STATUS, None, body()).await.unwrap();
+    assert!(!departed(&rows, &again.instance_id), "placed again: no longer departed");
 }

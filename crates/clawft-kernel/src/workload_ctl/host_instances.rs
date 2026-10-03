@@ -106,6 +106,8 @@ impl WorkloadHostService {
                 }
                 let grace = Duration::from_millis(b.grace_ms.unwrap_or(2_000).min(60_000));
                 p.desired_running = false;
+                // An operator stop is final: the lease never restarts it.
+                p.lease_stopped = false;
                 host.stop(&p.handle, grace).await.map(|ev| {
                     let audit = ev.audit();
                     super::host_supervise::enter(&mut p.life, LifecycleState::Stopped);

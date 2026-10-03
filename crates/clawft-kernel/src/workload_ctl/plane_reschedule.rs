@@ -24,9 +24,6 @@ impl PlacementControlPlane {
             Some(_) if c.reschedules >= c.policy.max_reschedules => {
                 Some(format!("already rescheduled {} times", c.reschedules))
             }
-            Some(_) if c.attempts >= c.policy.max_reschedules => {
-                Some(format!("gave up after {} attempts that found no node", c.attempts))
-            }
             Some(_) => None,
         };
         let soft = match &c.order {
@@ -116,6 +113,8 @@ impl PlacementControlPlane {
             // one just written.)
             if new.instance_id != rec.instance_id {
                 self.forget_instances(std::slice::from_ref(&rec.instance_id));
+            } else {
+                debug_assert_eq!(new.node_id, rec.node_id, "same instance id on another node");
             }
             "replaced_after_loss"
         };
@@ -149,14 +148,14 @@ impl PlacementControlPlane {
             );
             out.push(event(rec, "reschedule_failed", why));
         }
-        if attempts >= c.policy.max_reschedules {
+        if attempts == c.policy.max_reschedules {
             self.chain_event(
                 chain::EVENT_KIND_WORKLOAD_LIFECYCLE,
                 json!({ "phase": "alert", "instance_id": rec.instance_id, "node": rec.node_id,
                         "workload": rec.workload,
-                        "reason": format!("gave up after {attempts} attempts that found no node") }),
+                        "reason": format!("no node after {attempts} attempts; still retrying with backoff (at most every 5 minutes)") }),
             );
-            out.push(event(rec, "alert", format!("gave up after {attempts} attempts")));
+            out.push(event(rec, "alert", format!("no node after {attempts} attempts; still retrying")));
         }
     }
 }

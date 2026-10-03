@@ -266,14 +266,18 @@ impl Default for LifecyclePolicy {
     }
 }
 
-/// Capability namespaces any node can offer: what a spec asks of the
-/// machine and OS it runs on, not of anything attached to it.
-const GENERIC_NAMESPACES: &[&str] = &["cpu", "os", "runtime", "mem", "node", "perf"];
+/// Capability namespaces that name something physically attached to or
+/// local to one node: a sensor, a device, a data feed on a node's LAN.
+/// `accel` is deliberately not here: any node with the same accelerator is
+/// as good a home, so failover is the point. `trust`, `store`, `model`,
+/// `cpu`, `os`, `runtime`, `mem`, `node`, `perf` are not hardware either.
+const HARDWARE_NAMESPACES: &[&str] = &["sensor", "device", "feed"];
 
-/// Whether `spec` needs something attached to a particular node (a sensor
-/// feed, a device, an accelerator): any requirement outside the generic
-/// namespaces. Such a workload's data source is physically tied to its
-/// node, so moving it is not a failover; it is held and alerted instead.
+/// Whether `spec` needs something attached to (or local to) a particular
+/// node: any requirement in [`HARDWARE_NAMESPACES`]. Such a workload's data
+/// source is tied to its node, so moving it is not a failover; it is held
+/// and alerted instead. An allow-list: a new namespace never pins by
+/// accident.
 pub fn needs_attached_hardware(spec: &clawft_types::placement::engine::WorkloadSpec) -> bool {
     use clawft_types::placement::IdSelector;
     let reqs = spec
@@ -287,6 +291,6 @@ pub fn needs_attached_hardware(spec: &clawft_types::placement::engine::WorkloadS
             IdSelector::Prefix(p) => p.as_str(),
         };
         let ns = id.split('.').next().unwrap_or(id);
-        !GENERIC_NAMESPACES.contains(&ns)
+        HARDWARE_NAMESPACES.contains(&ns)
     })
 }

@@ -74,7 +74,10 @@ impl WorkloadHostService {
 
     /// Opt in to the node-side lease: continuous instances stop once no
     /// controller other than this node itself has been heard from for
-    /// `lease`. Set it at or below the controller's `dead_after`, so the
+    /// `lease`, and only for instances another node placed. It must be
+    /// longer than the controller's tick (a lease shorter than a few ticks
+    /// would stop work for ordinary jitter) and, to stop the old copy before
+    /// a replacement starts, at most the controller's `dead_after`. Set it at or below the controller's `dead_after`, so the
     /// copy on a partitioned node stops before the controller starts a
     /// replacement. Off by default.
     pub fn with_lease(mut self, lease: Duration) -> Self {
@@ -102,7 +105,11 @@ impl WorkloadHostService {
         {
             let mut map = self.instances.lock().await;
             for (id, p) in map.iter_mut() {
-                if !p.continuous || !p.desired_running || !p.life.state.is_live() {
+                if !p.continuous
+                    || !p.desired_running
+                    || !p.life.state.is_live()
+                    || p.requester == self.node_id
+                {
                     continue;
                 }
                 let Some(host) = self.routes.get(&p.route).cloned() else {

@@ -306,6 +306,18 @@ impl PlacementControlPlane {
                     .find(|r| r["instance_id"].as_str() == Some(rec.instance_id.as_str()));
                 match row {
                     None => self.missing_on_node(rec, &rows, state, out).await,
+                    Some(r) if r["lease_stopped"] == true => {
+                        // The node stopped it because it heard no controller;
+                        // one is here now. Start it (never mirror this as an
+                        // operator stop).
+                        match self.instance(method::START, &rec.instance_id).await {
+                            Ok(_) => {
+                                self.set_state(rec, LifecycleState::Running, "restarted after a lease stop", true);
+                                out.push(event(rec, "recovered", "restarted after the node's lease stopped it"));
+                            }
+                            Err(e) => out.push(event(rec, "alert", format!("lease-stopped instance not restarted: {e}"))),
+                        }
+                    }
                     Some(r) => {
                         let to = serde_json::from_value::<LifecycleState>(r["lifecycle"].clone()).ok();
                         if let Some(to) = to
@@ -388,13 +400,26 @@ impl PlacementControlPlane {
     /// (restarting it when the node's lease stopped it), otherwise place it
     /// again.
     async fn rejoined(&self, rec: &PlacementRecord, out: &mut Vec<LifecycleEvent>) {
-        let Ok(Value::Array(rows)) = self.call(&rec.node_id, method::STATUS, None, json!({})).await else {
+        let body = json!({ "include_departed": true });
+        let Ok(Value::Array(rows)) = self.call(&rec.node_id, method::STATUS, None, body).await else {
             return;
         };
         let row = rows
             .iter()
             .find(|r| r["instance_id"].as_str() == Some(rec.instance_id.as_str()));
         let Some(row) = row else {
+            // Taken down on purpose while we could not see it (an unload
+            // during a partition): not undone.
+            if let Some(why) = rows
+                .iter()
+                .find(|r| r["departed_instance"].as_str() == Some(rec.instance_id.as_str()))
+                .and_then(|r| r["reason"].as_str())
+            {
+                self.set_state(rec, LifecycleState::Unloaded, &format!("taken down while unreachable: {why}"), true);
+                self.forget_instances(std::slice::from_ref(&rec.instance_id));
+                out.push(event(rec, "gone", format!("the node took it down while unreachable ({why})")));
+                return;
+            }
             return self.reschedule(rec, false, out).await;
         };
         if row["lease_stopped"] == true
