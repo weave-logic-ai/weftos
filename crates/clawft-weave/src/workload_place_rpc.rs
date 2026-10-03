@@ -172,6 +172,26 @@ fn licence_posture(
     Arc::new(move || p)
 }
 
+/// How often the daemon ticks the licence store.
+const LICENCE_TICK: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Tick the grant store every `every`: it records the clock and persists the
+/// floor's high-water mark and any restrictive record that failed to save.
+/// Nothing else writes on the read side, so the licence path needs this loop.
+/// The task ends with the store.
+fn spawn_licence_tick(store: Arc<clawft_kernel::licence::CheckoutGrantStore>, every: std::time::Duration) {
+    let weak = Arc::downgrade(&store);
+    drop(store);
+    tokio::spawn(async move {
+        let mut t = tokio::time::interval(every);
+        loop {
+            t.tick().await;
+            let Some(s) = weak.upgrade() else { break };
+            s.tick();
+        }
+    });
+}
+
 /// Start the licence exchange (ADR-106 phase 1b): chain the store's events,
 /// open the approval store, and with a mesh carry bindings, grants and
 /// approvals by flood and catch-up sync. Inert while the local mesh id is
@@ -190,6 +210,7 @@ fn wire_licence(
     let sink: Arc<dyn l::LicenceEventSink> = Arc::new(l::ChainLicenceSink::new(chain.clone()));
     let store = policy.store().clone();
     store.set_sink(sink.clone());
+    spawn_licence_tick(store.clone(), LICENCE_TICK);
     let Some(runtime) = mesh else { return };
     let anchors = Arc::new(anchors.clone());
     let approvals = Arc::new(l::ApprovalStore::open_or_poisoned(
@@ -678,5 +699,85 @@ mod revocation_wiring_tests {
         local.set(Some(mesh));
         send(rt, serde_json::to_value(&signed).unwrap()).await;
         assert_eq!(policy.store().held_binding().map(|b| b.0), Some(1));
+    }
+
+    #[tokio::test]
+    async fn the_daemon_tick_loop_persists_the_clock_floor() {
+        use clawft_kernel::licence::{
+            AdmissionPosture, BindState, BindingRecord, LocalMeshId, MeshCheckoutPolicy, MeshId,
+            NoExtraChecks, sign_binding, CheckoutGrant, GrantArtifact, LicenceRef, sign_grant,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let key = SigningKey::from_bytes(&[4; 32]);
+        let hex = clawft_kernel::workload_pkg::codec::hex_encode;
+        let mut anchors = TrustAnchors::default();
+        anchors.push_signer("op", &hex(&key.verifying_key().to_bytes()), KeyOrigin::Operator).unwrap();
+        let gk = SigningKey::from_bytes(&[6; 32]);
+        let mesh = MeshId::derive(&[1; 32], &[2; 32]);
+        let list = Arc::new(RevocationList::new(tmp.path().join("revoked.json")));
+        let policy = MeshCheckoutPolicy::open(tmp.path(), anchors, list, LocalMeshId::new(mesh));
+        let rec = BindingRecord {
+            v: 2,
+            device_id: "seed-x".into(),
+            device_pubkey: hex(&[5; 32]),
+            mesh_id: mesh.to_hex(),
+            grant_pubkey: hex(&gk.verifying_key().to_bytes()),
+            steward_node_id: "steward".into(),
+            steward_pubkey: hex(&[7; 32]),
+            state: BindState::Bound,
+            seq: 1,
+            bound_at: 1,
+        };
+        let posture = AdmissionPosture { enforce: true, verdict_source_bound: true, open_membership: false };
+        policy
+            .store()
+            .accept_binding(&sign_binding(&rec, &key).unwrap(), posture, &NoExtraChecks)
+            .unwrap();
+        // The floor records the clock only once a grant has been accepted.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let grant = CheckoutGrant {
+            v: 1,
+            grant_id: String::new(),
+            mesh_id: mesh.to_hex(),
+            seed_device_id: "seed-x".into(),
+            grant_key_id: String::new(),
+            source: "cognitum".into(),
+            registry: "registry.example".into(),
+            cog_id: "probe".into(),
+            version: "1.0.0".into(),
+            artifacts: vec![GrantArtifact {
+                arch: "x86_64".into(),
+                size: 1,
+                sha256: hex(&[1; 32]),
+                blake3: hex(&[2; 32]),
+            }],
+            manifest_sha256: hex(&[3; 32]),
+            licence: LicenceRef { ref_sha256: hex(&[4; 32]), expires: now + 86_400 },
+            seq: 1,
+            issued_at: now,
+            expires_at: now + 3600,
+        };
+        policy.store().accept_grant(&sign_grant(&grant, &gk).unwrap()).unwrap();
+        let file = tmp.path().join("licence").join("checkout_grants.json");
+        let floors = |p: &std::path::Path| -> usize {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+            v["floors"].as_object().map_or(0, |m| m.len())
+        };
+        let hw = |p: &std::path::Path| -> u64 {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+            v["floors"].as_object().and_then(|m| m.values().next()).map_or(0, |f| f["hw"].as_u64().unwrap_or(0))
+        };
+        assert_eq!(hw(&file), 0, "the grant save carries no clock high-water mark");
+        spawn_licence_tick(policy.store().clone(), std::time::Duration::from_millis(10));
+        for _ in 0..200 {
+            if hw(&file) >= now {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the tick loop never persisted the floor");
     }
 }

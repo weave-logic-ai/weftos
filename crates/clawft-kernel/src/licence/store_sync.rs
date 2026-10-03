@@ -20,8 +20,7 @@ impl CheckoutGrantStore {
 
     /// The grant key of the binding in effect, lower-case hex.
     pub fn bound_grant_key(&self) -> Option<String> {
-        let mut g = self.lock();
-        self.binding_in_effect(&mut g).ok().map(|b| b.grant_pubkey)
+        self.run(|g, ev| self.binding_in_effect(g, ev).ok().map(|b| b.grant_pubkey))
     }
 
     /// The current grant held for `cog_id` `version`, with its `seq`.
@@ -39,18 +38,18 @@ impl CheckoutGrantStore {
     /// grant)`, sorted by that tuple. Empty unless a binding is in effect.
     /// Expired and withdrawn grants are included: they are `seq` tombstones.
     pub fn sync_grants(&self) -> Vec<(u64, String, String, SignedGrant)> {
-        let mut g = self.lock();
-        if self.binding_in_effect(&mut g).is_err() {
-            return Vec::new();
-        }
-        let mut out: Vec<_> = g
-            .slots
-            .iter()
-            .filter_map(|((cog, ver), s)| {
-                let h = s.current.as_ref()?;
-                Some((h.body.seq, cog.clone(), ver.clone(), h.signed.clone()))
-            })
-            .collect();
+        let mut out: Vec<_> = self.run(|g, ev| {
+            if self.binding_in_effect(g, ev).is_err() {
+                return Vec::new();
+            }
+            g.slots
+                .iter()
+                .filter_map(|((cog, ver), s)| {
+                    let h = s.current.as_ref()?;
+                    Some((h.body.seq, cog.clone(), ver.clone(), h.signed.clone()))
+                })
+                .collect()
+        });
         out.sort_by(|a, b| (a.0, &a.1, &a.2).cmp(&(b.0, &b.1, &b.2)));
         out
     }

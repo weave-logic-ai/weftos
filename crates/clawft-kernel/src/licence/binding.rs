@@ -4,9 +4,10 @@ use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BINDING_DOMAIN, LicenceError, MeshId, SignedEnvelope, envelope_key, parse_canonical,
+    BINDING_DOMAIN, LicenceError, MAX_UNIX_TIME, MeshId, SignedEnvelope, envelope_key, parse_canonical,
     sign_envelope, valid_hex32, valid_token, verify_envelope,
 };
+use crate::workload_pkg::codec::hex_decode_exact;
 use crate::workload_pkg::{KeyOrigin, TrustAnchors};
 
 /// Whether a binding binds or unbinds.
@@ -103,6 +104,18 @@ pub(crate) fn verify_binding_signature(
     .all(|s| valid_hex32(s));
     if !hex_ok || !valid_token(&rec.device_id) || !valid_token(&rec.steward_node_id) {
         return Err(LicenceError::Malformed("binding field".into()));
+    }
+    // The grant and steward keys must not be a pinned trust-anchor key, or a
+    // binding could hand an operator or release key the role of a Seed key.
+    for hex in [&rec.grant_pubkey, &rec.steward_pubkey] {
+        let pk = hex_decode_exact::<32>(hex).unwrap_or_default();
+        let anchored = anchors.signers.iter().chain(&anchors.cognitum).any(|k| k.public_key == pk);
+        if anchored {
+            return Err(LicenceError::Malformed("binding key is a trust anchor".into()));
+        }
+    }
+    if rec.bound_at > MAX_UNIX_TIME {
+        return Err(LicenceError::Malformed("binding bounds".into()));
     }
     Ok(rec)
 }

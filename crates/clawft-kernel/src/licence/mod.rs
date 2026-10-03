@@ -34,6 +34,7 @@ mod grant;
 mod persist;
 mod policy;
 mod store;
+mod store_accept;
 mod store_load;
 mod store_sync;
 
@@ -45,6 +46,8 @@ mod tests_exchange;
 mod tests_sync;
 #[cfg(test)]
 mod tests_policy;
+#[cfg(test)]
+mod tests_review;
 #[cfg(test)]
 mod tests_store;
 #[cfg(test)]
@@ -97,8 +100,14 @@ pub const MAX_STORE_BYTES: u64 = 8 * 1024 * 1024;
 pub const GRANT_SKEW_SECS: u64 = 300;
 /// Longest grant lifetime (`expires_at - issued_at`): 7 days.
 pub const MAX_GRANT_TTL_SECS: u64 = 7 * 24 * 3600;
-/// A floor this far ahead of the newest accepted `issued_at` is poisoning.
+/// The clock high-water mark grows at most this far past the newest accepted `issued_at`.
 pub const FAR_FUTURE_CLAMP_SECS: u64 = 30 * 24 * 3600;
+/// Latest time accepted in any record or floor (2100-01-01), unix seconds.
+pub const MAX_UNIX_TIME: u64 = 4_102_444_800;
+/// Largest artifact size a grant may list: 1 GiB.
+pub const MAX_ARTIFACT_BYTES: u64 = 1 << 30;
+/// Most floor entries a store file may hold (one per grant key, in practice one).
+pub const MAX_FLOORS: usize = 8;
 /// Most (cog, version) grant slots held.
 pub const MAX_GRANT_SLOTS: usize = 512;
 /// Most approvals held.
@@ -278,13 +287,6 @@ pub enum LicenceEvent {
         /// The contested `seq`.
         seq: u64,
     },
-    /// The persisted floor was far in the future and was clamped.
-    FloorClamped {
-        /// Floor before.
-        from: u64,
-        /// Floor after.
-        to: u64,
-    },
     /// An operator reset the floor.
     FloorReset(u64),
     /// A sync response carried a bad signature; the peer is banned from sync.
@@ -302,14 +304,14 @@ impl LicenceEvent {
             Self::BindingConflict(_) => "binding_conflict",
             Self::BindingOrphaned { .. } => "binding_orphaned",
             Self::GrantConflict { .. } => "grant_conflict",
-            Self::FloorClamped { .. } => "floor_clamped",
             Self::FloorReset(_) => "floor_reset",
             Self::SyncBadSignature { .. } => "sync_bad_signature",
         }
     }
 }
 
-/// Receives [`LicenceEvent`]s.
+/// Receives [`LicenceEvent`]s. Called after the store's lock is released, but
+/// a sink must still not call back into the store.
 pub trait LicenceEventSink: Send + Sync {
     /// Handle one event.
     fn emit(&self, event: LicenceEvent);

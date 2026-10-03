@@ -41,7 +41,6 @@ impl ChainLicenceSink {
             LicenceEvent::GrantConflict { cog_id, version, seq } => {
                 json!({ "cog_id": cog_id, "version": version, "seq": seq })
             }
-            LicenceEvent::FloorClamped { from, to } => json!({ "from": from, "to": to }),
             LicenceEvent::FloorReset(to) => json!({ "to": to }),
             LicenceEvent::SyncBadSignature { peer } => json!({ "peer": peer }),
         }

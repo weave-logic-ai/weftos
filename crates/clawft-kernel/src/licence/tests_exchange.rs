@@ -131,7 +131,7 @@ async fn binding_grant_and_approval_reach_every_node_once() {
     .await;
     for n in [&l.a, &l.b, &l.c] {
         assert!(bound(n) && has_grant(n, "1.2.0") && n.fx.approvals.len() == 1, "{}", n.id);
-        assert!(n.fx.store.valid_grant_for_sha256("fall-detect", "1.2.0", &shas[0]).is_some());
+        assert!(n.fx.store.valid_grant_for_artifact("fall-detect", "1.2.0", &shas[0], &b3_of("x86_64")).is_some());
     }
     // A repeat is known everywhere and goes nowhere new.
     assert_eq!(l.a.ex.issue_binding(binding(1, BindState::Bound)).await, Ok(Receipt::Known));
@@ -284,7 +284,6 @@ fn every_licence_event_reaches_the_chain() {
         LicenceEvent::BindingConflict(3),
         LicenceEvent::BindingOrphaned { stored: "a".into(), local: "b".into() },
         LicenceEvent::GrantConflict { cog_id: "c".into(), version: "1".into(), seq: 2 },
-        LicenceEvent::FloorClamped { from: 9, to: 1 },
         LicenceEvent::FloorReset(5),
         LicenceEvent::SyncBadSignature { peer: "node-x".into() },
     ];

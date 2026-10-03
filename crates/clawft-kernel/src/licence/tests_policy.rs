@@ -67,13 +67,29 @@ fn without_a_binding_the_policy_equals_manifest_policy() {
         vec![cognitum("1.2.0")],
         vec![opt_in(), cognitum("1.2.0")],
         vec![opt_in(), not_flagged()],
+        vec![cognitum("1.2.0"), not_flagged()],
     ];
     for g in &lists {
         for a in &audiences {
             assert_eq!(allowed(&p, g, a), allowed(&base, g, a), "{g:?} / {a:?}");
         }
     }
-    // Also with a poisoned store and a refused binding (open membership).
+    // A poisoned store (bad file) behaves the same way.
+    let bad = tempfile::tempdir().unwrap();
+    std::fs::write(bad.path().join("checkout_grants.json"), b"garbage").unwrap();
+    let poisoned = MeshCheckoutPolicy::new(Arc::new(CheckoutGrantStore::open_or_poisoned(
+        bad.path(),
+        anchors(),
+        LocalMeshId::new(mesh()),
+        system_clock(),
+    )));
+    assert!(poisoned.store().poisoned().is_some());
+    for g in &lists {
+        for a in &audiences {
+            assert_eq!(allowed(&poisoned, g, a), allowed(&base, g, a), "poisoned {g:?} / {a:?}");
+        }
+    }
+    // Also with a refused binding (open membership).
     let open = AdmissionPosture { open_membership: true, ..posture() };
     let _ = fx.store.accept_binding(&binding(1, BindState::Bound), open, &NoExtraChecks);
     for g in &lists {
@@ -250,12 +266,15 @@ fn a_revoked_hash_is_not_granted_by_grant_checkout() {
 
 // ── run gate ─────────────────────────────────────────────────────
 
-fn req<'a>(sha: &'a str) -> RunRequest<'a> {
-    RunRequest { cog_id: "fall-detect", version: "1.2.0", sha256: sha }
+fn gate_with(fx: &Fx, sha: &str, b3: &str) -> Result<RunPermit, RunDenied> {
+    let req = RunRequest { cog_id: "fall-detect", version: "1.2.0", sha256: sha, blake3: b3 };
+    may_run(&fx.store, &fx.approvals, &req)
 }
 
+/// The gate for the test binary of `arch` (hashes computed as the caller would).
 fn gate(fx: &Fx, sha: &str) -> Result<RunPermit, RunDenied> {
-    may_run(&fx.store, &fx.approvals, &req(sha))
+    let arch = ["aarch64", "x86_64"].into_iter().find(|a| sha_of(a) == sha).unwrap_or("aarch64");
+    gate_with(fx, sha, &b3_of(arch))
 }
 
 #[test]
@@ -320,5 +339,22 @@ fn an_artifact_hash_revocation_withdraws_the_approval() {
     fx.approvals.accept(&approval(&[sha_of("aarch64")])).unwrap();
     assert!(gate(&fx, &sha_of("aarch64")).is_ok());
     list.revoke_subject(RevocationKind::ArtifactHash, &b3_of("aarch64"), "withdrawn").unwrap();
+    assert_eq!(gate(&fx, &sha_of("aarch64")), Err(RunDenied::HashRevoked));
+}
+
+#[test]
+fn the_gate_checks_the_blake3_computed_from_the_bytes_not_the_grants_claim() {
+    let fx = Fx::new();
+    bind_and_grant(&fx);
+    fx.approvals.accept(&approval(&[sha_of("aarch64")])).unwrap();
+    // The right sha256 with a blake3 the grant does not list: refused, so a
+    // revocation of the real blake3 cannot be dodged by lying about it.
+    assert_eq!(
+        gate_with(&fx, &sha_of("aarch64"), &b3_of("x86_64")),
+        Err(RunDenied::NoValidGrant)
+    );
+    let list = Arc::new(RevocationList::new(fx.dir.path().join("revoked.json")));
+    fx.store.attach_revocations(list.clone());
+    list.revoke_subject(RevocationKind::ArtifactHash, &b3_of("aarch64"), "bad").unwrap();
     assert_eq!(gate(&fx, &sha_of("aarch64")), Err(RunDenied::HashRevoked));
 }
