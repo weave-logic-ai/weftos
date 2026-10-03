@@ -27,6 +27,8 @@ use crate::mesh_cog::CogMesh;
 use crate::mesh_delivery::PeerCtx;
 
 pub(super) const STEWARD_NODE: &str = "node-steward";
+/// The request clock the tests use, past the COG-011 floor.
+pub(super) const REQUEST_NOW_MS: u64 = super::tests_request::NOW_MS;
 pub(super) const STEWARD_BUDGET: u32 = 20;
 pub(super) const UNSIGNED_POOL: u32 = 30;
 
@@ -117,11 +119,10 @@ impl StubLicence {
         if req.path == "/licence/v1/identity" {
             return Self::reply(200, json!({ "device_id": "seed-test" }));
         }
-        let now = self.clock.load(Ordering::SeqCst);
         let steward = sk(21).verifying_key().to_bytes();
         {
             let mut st = self.st.lock().unwrap();
-            if let Err(why) = verify_request(&req, &steward, now, &mut st.replay) {
+            if let Err(why) = verify_request(&req, &steward, STEWARD_NODE, REQUEST_NOW_MS, &mut st.replay) {
                 // Refused callers share the small pool; the steward's budget
                 // is untouched.
                 if st.unsigned_left == 0 {
@@ -179,8 +180,8 @@ impl LicenceTransport for StubLink {
     }
 }
 
-pub(super) fn steward_client(stub: &Arc<StubLicence>, clock: &Arc<AtomicU64>) -> Arc<dyn LicenceClient> {
-    SignedLicenceClient::new(sk(21), STEWARD_NODE, StubLink(stub.clone()), clock_of(clock))
+pub(super) fn steward_client(stub: &Arc<StubLicence>, _clock: &Arc<AtomicU64>) -> Arc<dyn LicenceClient> {
+    SignedLicenceClient::new(sk(21), STEWARD_NODE, StubLink(stub.clone()), Arc::new(|| REQUEST_NOW_MS))
 }
 
 /// What a test gate answers.

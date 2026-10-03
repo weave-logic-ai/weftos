@@ -272,7 +272,7 @@ async fn the_stub_refuses_unsigned_and_forged_requests_and_the_stewards_budget_i
     assert_eq!(r.stub.handle(ident).unwrap().status, 200);
 
     let budget = r.stub.steward_budget_left();
-    let forged = sign_request(&sk(99), STEWARD_NODE, "POST", CHECKOUT_PATH, b"{}".to_vec(), T0, [3; 16]);
+    let forged = sign_request(&sk(99), STEWARD_NODE, "POST", CHECKOUT_PATH, b"{}".to_vec(), REQUEST_NOW_MS, "forgednonce0123456789");
     // The unsigned GET above already used one slot of the pool.
     for _ in 0..UNSIGNED_POOL - 1 {
         assert_eq!(r.stub.handle(forged.clone()).unwrap().status, 401);
@@ -364,4 +364,30 @@ async fn a_ctl_connection_serves_checkout_bytes_only_to_a_peer_it_knows_is_verif
     // Unverified is the default: the checkout policy refuses to serve it.
     assert!(matches!(ctl_meta_reply(&r.steward, false).await, ArtifactMsg::Reject { .. }));
     assert!(matches!(ctl_meta_reply(&r.steward, true).await, ArtifactMsg::Meta { .. }));
+}
+
+#[tokio::test]
+async fn an_admitted_leaf_gets_no_licensed_serve_no_checkout_and_is_not_a_flood_target() {
+    use crate::mesh_admit::PeerClass;
+    use crate::mesh_artifact_tunnel::licensed_peer;
+    let r = rig(true, Duration::ZERO);
+    r.steward.mesh.checkout_local(&wire("aarch64")).await.unwrap();
+    // The class check every licensed serve and flood uses.
+    let mut leaf = admitted("leaf-1");
+    leaf.class = PeerClass::Leaf;
+    assert!(licensed_peer(&admitted("node-1")));
+    assert!(!licensed_peer(&leaf), "a verified leaf is not a licensed peer");
+    assert!(!licensed_peer(&PeerCtx::unauthenticated("x")));
+
+    // A leaf stamped by the service: its artifact session and checkout are refused.
+    let l = add_member(&r.net, "leaf-1", |_, _| None);
+    r.net.stamps.lock().unwrap().insert("leaf-1".into(), Stamp::Leaf);
+    let got = l
+        .ex
+        .swarm_fetch(l.mesh.tunnel().dialer(), vec![PeerCandidate::new("a")], content("aarch64"), &SwarmFetchOptions::default())
+        .await;
+    assert!(got.is_err());
+    assert_eq!(r.steward.mesh.tunnel().counters.served_sessions.load(Ordering::SeqCst), 0);
+    assert!(l.mesh.request_checkout("a", wire("aarch64"), Duration::from_millis(150)).await.is_err());
+    assert_eq!(r.stub.checkouts.load(Ordering::SeqCst), 1, "only the steward's own checkout reached the licence");
 }

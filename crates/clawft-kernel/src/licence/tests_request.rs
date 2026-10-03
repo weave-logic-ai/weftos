@@ -5,6 +5,9 @@ use super::tests_common::*;
 use super::*;
 
 const NODE: &str = "node-steward";
+/// A time past the clock floor, in ms.
+pub(super) const NOW_MS: u64 = 1_790_000_000_000;
+const NONCE: &str = "abcdefghijklmnop0123456789ABCDEF";
 
 fn steward() -> ed25519_dalek::SigningKey {
     sk(21)
@@ -15,31 +18,48 @@ fn pk() -> [u8; 32] {
 }
 
 fn signed(path: &str, body: &[u8], ts: u64) -> LicenceRequest {
-    sign_request(&steward(), NODE, "POST", path, body.to_vec(), ts, [7; 16])
+    sign_request(&steward(), NODE, "POST", path, body.to_vec(), ts, NONCE)
+}
+
+fn verify(r: &LicenceRequest, now: u64, g: &mut ReplayGuard) -> Result<(), RequestRefused> {
+    verify_request(r, &pk(), NODE, now, g)
 }
 
 #[test]
-fn the_signed_string_starts_with_the_request_domain_and_binds_every_field() {
-    let b = signing_bytes("POST", "/licence/v1/checkout", NODE, T0, "ab", b"{}");
-    let s = String::from_utf8(b).unwrap();
-    let lines: Vec<&str> = s.split('\n').collect();
-    assert_eq!(lines[0], REQUEST_DOMAIN);
+fn golden_vector_matches_weft_licence() {
+    // The exact string `weft-licence` (crates/weft-licence/src/request.rs,
+    // `signing_string`) builds for these inputs: method, target, node,
+    // timestamp in milliseconds, nonce, sha256 of the body.
+    let s = signing_string("POST", "/licence/v1/checkout", "node-steward", 1_790_000_000_000, "abcdefghijklmnop", b"{\"a\":1}");
+    assert_eq!(
+        s,
+        "weft-licence-v1/request\nPOST\n/licence/v1/checkout\nnode-steward\n1790000000000\n\
+         abcdefghijklmnop\n015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862"
+    );
     assert_eq!(REQUEST_DOMAIN, "weft-licence-v1/request");
-    assert_eq!(&lines[1..6], &["POST", "/licence/v1/checkout", NODE, &T0.to_string(), "ab"]);
-    assert_eq!(lines[6], sha256_hex(b"{}"));
+    assert_eq!(REQUEST_WINDOW_MS, 120_000);
+    assert_eq!(CLOCK_FLOOR_SECS, 1_780_000_000);
+}
+
+#[test]
+fn nonces_are_16_to_64_alphanumerics() {
+    assert!(valid_nonce(&"a".repeat(16)) && valid_nonce(&"Z9".repeat(32)));
+    assert!(!valid_nonce(&"a".repeat(15)) && !valid_nonce(&"a".repeat(65)));
+    assert!(!valid_nonce("abcdefghijklmnop-"));
+    assert!(valid_nonce(&super::request_nonce()), "generated nonces are accepted");
 }
 
 #[test]
 fn a_good_request_verifies_once_and_a_replay_is_refused() {
-    let r = signed("/licence/v1/checkout", b"{\"a\":1}", T0);
+    let r = signed("/licence/v1/checkout", b"{\"a\":1}", NOW_MS);
     let mut g = ReplayGuard::default();
-    assert_eq!(verify_request(&r, &pk(), T0 + 5, &mut g), Ok(()));
-    assert_eq!(verify_request(&r, &pk(), T0 + 5, &mut g), Err(RequestRefused::Replay));
+    assert_eq!(verify(&r, NOW_MS + 5_000, &mut g), Ok(()));
+    assert_eq!(verify(&r, NOW_MS + 5_000, &mut g), Err(RequestRefused::Replay));
 }
 
 #[test]
 fn changing_any_signed_field_breaks_the_signature() {
-    let base = signed("/licence/v1/checkout", b"body", T0);
+    let base = signed("/licence/v1/checkout", b"body", NOW_MS);
     let mut cases = Vec::new();
     let mut r = base.clone();
     r.method = "GET".into();
@@ -51,61 +71,70 @@ fn changing_any_signed_field_breaks_the_signature() {
     r.body = b"other".to_vec();
     cases.push(("body", r));
     let mut r = base.clone();
-    r.auth.as_mut().unwrap().node = "another".into();
-    cases.push(("node", r));
-    let mut r = base.clone();
-    r.auth.as_mut().unwrap().timestamp += 1;
+    r.auth.as_mut().unwrap().timestamp_ms += 1;
     cases.push(("timestamp", r));
     let mut r = base.clone();
-    r.auth.as_mut().unwrap().nonce = "00".repeat(16);
+    r.auth.as_mut().unwrap().nonce = "z".repeat(32);
     cases.push(("nonce", r));
     for (what, r) in cases {
         let mut g = ReplayGuard::default();
-        assert_eq!(verify_request(&r, &pk(), T0, &mut g), Err(RequestRefused::BadSignature), "{what}");
+        assert_eq!(verify(&r, NOW_MS, &mut g), Err(RequestRefused::BadSignature), "{what}");
     }
 }
 
 #[test]
-fn unsigned_wrong_key_stale_and_oversized_requests_are_refused_before_the_signature() {
+fn unsigned_wrong_node_stale_malformed_and_oversized_requests_are_refused() {
     let mut g = ReplayGuard::default();
-    let mut r = signed("/p", b"", T0);
+    let mut r = signed("/p", b"", NOW_MS);
     r.auth = None;
-    assert_eq!(verify_request(&r, &pk(), T0, &mut g), Err(RequestRefused::Unsigned));
+    assert_eq!(verify(&r, NOW_MS, &mut g), Err(RequestRefused::Unsigned));
 
-    let r = sign_request(&sk(99), NODE, "POST", "/p", vec![], T0, [1; 16]);
-    assert_eq!(verify_request(&r, &pk(), T0, &mut g), Err(RequestRefused::WrongKey));
+    let r = sign_request(&steward(), "another-node", "POST", "/p", vec![], NOW_MS, NONCE);
+    assert_eq!(verify(&r, NOW_MS, &mut g), Err(RequestRefused::WrongNode));
 
-    let r = signed("/p", b"", T0);
-    let late = T0 + REQUEST_WINDOW_SECS + 1;
-    assert_eq!(verify_request(&r, &pk(), late, &mut g), Err(RequestRefused::Stale));
-    assert_eq!(verify_request(&r, &pk(), T0 - REQUEST_WINDOW_SECS - 1, &mut g), Err(RequestRefused::Stale));
+    let r = sign_request(&sk(99), NODE, "POST", "/p", vec![], NOW_MS, NONCE);
+    assert_eq!(verify(&r, NOW_MS, &mut g), Err(RequestRefused::BadSignature), "another key");
+
+    let r = signed("/p", b"", NOW_MS);
+    assert_eq!(verify(&r, NOW_MS + REQUEST_WINDOW_MS + 1, &mut g), Err(RequestRefused::Stale));
+    assert_eq!(verify(&r, NOW_MS - REQUEST_WINDOW_MS - 1, &mut g), Err(RequestRefused::Stale));
+    assert_eq!(verify(&r, NOW_MS + REQUEST_WINDOW_MS, &mut g), Ok(()), "the window edge is inside");
+
+    let r = sign_request(&steward(), NODE, "POST", "/p", vec![], NOW_MS, "short");
+    assert_eq!(verify(&r, NOW_MS, &mut g), Err(RequestRefused::Malformed));
 
     let big = vec![0u8; MAX_REQUEST_BODY + 1];
-    let r = signed("/p", &big, T0);
-    assert_eq!(verify_request(&r, &pk(), T0, &mut g), Err(RequestRefused::TooLarge));
+    let r = signed("/p", &big, NOW_MS);
+    assert_eq!(verify(&r, NOW_MS, &mut g), Err(RequestRefused::TooLarge));
 }
 
 #[test]
 fn a_refused_request_does_not_use_up_a_nonce() {
-    // Only a request whose signature verified is remembered, so a forger
-    // cannot burn the steward's nonces.
-    let good = signed("/p", b"x", T0);
+    let good = signed("/p", b"x", NOW_MS);
     let mut forged = good.clone();
     forged.body = b"y".to_vec();
     let mut g = ReplayGuard::default();
-    assert_eq!(verify_request(&forged, &pk(), T0, &mut g), Err(RequestRefused::BadSignature));
-    assert_eq!(verify_request(&good, &pk(), T0, &mut g), Ok(()));
+    assert_eq!(verify(&forged, NOW_MS, &mut g), Err(RequestRefused::BadSignature));
+    assert_eq!(verify(&good, NOW_MS, &mut g), Ok(()));
 }
 
 #[test]
-fn a_grant_or_binding_signature_is_not_a_request_signature() {
-    // Domain separation: the grant key's grant envelope cannot be replayed as
-    // request headers even over identical bytes.
+fn a_grant_signature_is_not_a_request_signature() {
     let env = grant(1, T0, 1000, &["aarch64"]);
-    let mut r = signed("/p", b"", T0);
-    let a = r.auth.as_mut().unwrap();
-    a.public_key = env.public_key.clone();
-    a.signature = env.signature.clone();
+    let mut r = signed("/p", b"", NOW_MS);
+    r.auth.as_mut().unwrap().signature = env.signature.clone();
     let mut g = ReplayGuard::default();
-    assert!(verify_request(&r, &hex_decode_exact::<32>(&env.public_key).unwrap(), T0, &mut g).is_err());
+    assert!(verify(&r, NOW_MS, &mut g).is_err());
+}
+
+#[tokio::test]
+async fn a_client_whose_clock_is_below_the_floor_signs_nothing() {
+    use super::tests_stub::*;
+    use std::sync::atomic::AtomicU64;
+    let stub = StubLicence::new(Arc::new(AtomicU64::new(T0)), std::time::Duration::ZERO);
+    let early: ClockMs = Arc::new(|| (CLOCK_FLOOR_SECS - 1) * 1000);
+    let c = SignedLicenceClient::new(sk(21), STEWARD_NODE, StubLink(stub.clone()), early);
+    let e = c.checkout(&wire("aarch64")).await.unwrap_err();
+    assert_eq!(e, LicenceClientError::Refused { status: 0, code: "clock_not_set".into() });
+    assert_eq!(stub.checkouts.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

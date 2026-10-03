@@ -1,16 +1,26 @@
 //! Steward to `weft-licence` request signing (ADR-106 sections 4 and 7).
 //!
-//! Every endpoint of `weft-licence` except `GET /licence/v1/identity` needs a
-//! valid steward signature, `GET /licence/v1/grants` included. The signed
-//! string uses the COG-011 field layout under its own domain tag:
+//! The layout matches `weft-licence`'s server (`crates/weft-licence/src/request.rs`
+//! on the phase 2 branch) exactly, which follows the COG-011 bridge: one field
+//! per line under its own domain,
 //!
 //! ```text
-//! weft-licence-v1/request \n METHOD \n path \n node \n timestamp \n nonce \n sha256(body)
+//! weft-licence-v1/request \n METHOD \n target \n node \n ts_ms \n nonce \n sha256(body)
 //! ```
 //!
-//! `path` includes the query string. The transport is plain HTTP in
-//! production (phase 2); this module owns only the bytes that are signed, so
-//! the stub proxy in the tests and the real service share one definition.
+//! `target` is the path and query. The timestamp is unix MILLISECONDS. The
+//! nonce is 16 to 64 ASCII alphanumerics. The request headers are
+//! `x-licence-node`, `x-licence-ts`, `x-licence-nonce` and `x-licence-sig`;
+//! the verifier already knows the bound steward key, so none is sent.
+//!
+//! The builder is duplicated here rather than shared: `weft-licence-wire`
+//! carries only the grant wire types, and the kernel must not depend on the
+//! Seed service crate. [`tests::golden_vector_matches_weft_licence`] pins the
+//! bytes so a change on either side shows up. Moving [`signing_string`] into
+//! `weft-licence-wire` would make this one definition.
+//!
+//! Open: phase 2 will add `seed_device_id` (the audience) as one more signed
+//! line. Add it to [`signing_string`] and the client when that lands.
 
 use std::collections::HashSet;
 
@@ -22,24 +32,27 @@ use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 /// Domain tag of steward to licence requests.
 pub const REQUEST_DOMAIN: &str = "weft-licence-v1/request";
 /// A request timestamp may differ from the verifier's clock by this much.
-pub const REQUEST_WINDOW_SECS: u64 = 300;
+pub const REQUEST_WINDOW_MS: u64 = 120_000;
+/// Latest accepted timestamp (year 2100), in ms.
+pub const MAX_TS_MS: u64 = 4_102_444_800_000;
+/// A signer whose clock is below this (unix seconds) is not set: it refuses
+/// to sign, as the COG-011 bridge does.
+pub const CLOCK_FLOOR_SECS: u64 = 1_780_000_000;
 /// Largest request body the signer will produce or a verifier accept.
 pub const MAX_REQUEST_BODY: usize = 16 * 1024;
-/// Replay memory of one verifier: nonces newer than the window, at most this many.
+/// Replay memory of one verifier.
 const MAX_NONCES: usize = 4096;
 
 /// The signature headers of one request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestAuth {
-    /// The steward's node id.
+    /// The steward's node id (`x-licence-node`).
     pub node: String,
-    /// The steward's Ed25519 public key, 64 hex chars.
-    pub public_key: String,
-    /// Signing time, unix seconds.
-    pub timestamp: u64,
-    /// 32 hex chars, unique per request.
+    /// Signing time, unix milliseconds (`x-licence-ts`).
+    pub timestamp_ms: u64,
+    /// 16 to 64 alphanumerics (`x-licence-nonce`).
     pub nonce: String,
-    /// Ed25519 signature over [`signing_bytes`], 128 hex chars.
+    /// Ed25519 signature over [`signing_string`], 128 hex (`x-licence-sig`).
     pub signature: String,
 }
 
@@ -57,41 +70,40 @@ pub struct LicenceRequest {
 }
 
 /// The bytes the steward key signs.
-pub fn signing_bytes(
+pub fn signing_string(
     method: &str,
-    path: &str,
+    target: &str,
     node: &str,
-    timestamp: u64,
+    ts_ms: u64,
     nonce: &str,
     body: &[u8],
-) -> Vec<u8> {
-    format!(
-        "{REQUEST_DOMAIN}\n{method}\n{path}\n{node}\n{timestamp}\n{nonce}\n{}",
-        sha256_hex(body)
-    )
-    .into_bytes()
+) -> String {
+    format!("{REQUEST_DOMAIN}\n{method}\n{target}\n{node}\n{ts_ms}\n{nonce}\n{}", sha256_hex(body))
 }
 
-/// Sign a request with the steward key.
+/// A nonce the server accepts: 16 to 64 ASCII alphanumerics.
+pub fn valid_nonce(n: &str) -> bool {
+    (16..=64).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Sign a request with the steward key. `nonce` must satisfy [`valid_nonce`].
 pub fn sign_request(
     key: &SigningKey,
     node: &str,
     method: &str,
     path: &str,
     body: Vec<u8>,
-    timestamp: u64,
-    nonce: [u8; 16],
+    ts_ms: u64,
+    nonce: &str,
 ) -> LicenceRequest {
-    let nonce = hex_encode(&nonce);
-    let sig = key.sign(&signing_bytes(method, path, node, timestamp, &nonce, &body));
+    let sig = key.sign(signing_string(method, path, node, ts_ms, nonce, &body).as_bytes());
     LicenceRequest {
         method: method.to_owned(),
         path: path.to_owned(),
         auth: Some(RequestAuth {
             node: node.to_owned(),
-            public_key: hex_encode(&key.verifying_key().to_bytes()),
-            timestamp,
-            nonce,
+            timestamp_ms: ts_ms,
+            nonce: nonce.to_owned(),
             signature: hex_encode(&sig.to_bytes()),
         }),
         body,
@@ -107,10 +119,10 @@ pub enum RequestRefused {
     /// Body over [`MAX_REQUEST_BODY`].
     #[error("request body too large")]
     TooLarge,
-    /// Signed by a key other than the bound steward key.
-    #[error("request is signed by a key that is not the bound steward")]
-    WrongKey,
-    /// Timestamp outside [`REQUEST_WINDOW_SECS`].
+    /// A node id other than the bound steward's.
+    #[error("request names a node that is not the bound steward")]
+    WrongNode,
+    /// Timestamp outside the window.
     #[error("request timestamp is outside the window")]
     Stale,
     /// A malformed header value.
@@ -124,15 +136,15 @@ pub enum RequestRefused {
     Replay,
 }
 
-/// Verifier-side replay memory: remembers recent nonces.
+/// Verifier-side replay memory.
 #[derive(Debug, Default)]
 pub struct ReplayGuard {
     seen: HashSet<String>,
 }
 
 impl ReplayGuard {
-    /// Record `nonce`; false when it was already seen. When the memory is
-    /// full it is cleared: the timestamp window still bounds any replay.
+    /// Record `nonce`; false when already seen. When full it is cleared: the
+    /// timestamp window still bounds any replay.
     pub fn first_use(&mut self, nonce: &str) -> bool {
         if self.seen.len() >= MAX_NONCES {
             self.seen.clear();
@@ -141,34 +153,32 @@ impl ReplayGuard {
     }
 }
 
-/// Verify `req` against the bound `steward_pubkey`. The cheap checks (header
-/// present, size, key, window) come first; the signature is checked last, and
-/// only a request whose signature verified is charged a nonce.
+/// Verify `req` against the bound steward. Cheap checks first; the signature
+/// last; only a request whose signature verified is charged a nonce.
 pub fn verify_request(
     req: &LicenceRequest,
     steward_pubkey: &[u8; 32],
-    now: u64,
+    steward_node: &str,
+    now_ms: u64,
     replay: &mut ReplayGuard,
 ) -> Result<(), RequestRefused> {
     let auth = req.auth.as_ref().ok_or(RequestRefused::Unsigned)?;
     if req.body.len() > MAX_REQUEST_BODY {
         return Err(RequestRefused::TooLarge);
     }
-    let pk = hex_decode_exact::<32>(&auth.public_key).ok_or(RequestRefused::Malformed)?;
-    if &pk != steward_pubkey {
-        return Err(RequestRefused::WrongKey);
-    }
-    if auth.timestamp.abs_diff(now) > REQUEST_WINDOW_SECS {
-        return Err(RequestRefused::Stale);
-    }
-    if hex_decode_exact::<16>(&auth.nonce).is_none() {
+    if auth.timestamp_ms > MAX_TS_MS || !valid_nonce(&auth.nonce) {
         return Err(RequestRefused::Malformed);
     }
     let sig = hex_decode_exact::<64>(&auth.signature).ok_or(RequestRefused::Malformed)?;
-    let vk = VerifyingKey::from_bytes(&pk).map_err(|_| RequestRefused::BadSignature)?;
-    let bytes =
-        signing_bytes(&req.method, &req.path, &auth.node, auth.timestamp, &auth.nonce, &req.body);
-    vk.verify_strict(&bytes, &Signature::from_bytes(&sig))
+    if auth.node != steward_node {
+        return Err(RequestRefused::WrongNode);
+    }
+    if auth.timestamp_ms.abs_diff(now_ms) > REQUEST_WINDOW_MS {
+        return Err(RequestRefused::Stale);
+    }
+    let vk = VerifyingKey::from_bytes(steward_pubkey).map_err(|_| RequestRefused::BadSignature)?;
+    let s = signing_string(&req.method, &req.path, &auth.node, auth.timestamp_ms, &auth.nonce, &req.body);
+    vk.verify_strict(s.as_bytes(), &Signature::from_bytes(&sig))
         .map_err(|_| RequestRefused::BadSignature)?;
     if !replay.first_use(&auth.nonce) {
         return Err(RequestRefused::Replay);

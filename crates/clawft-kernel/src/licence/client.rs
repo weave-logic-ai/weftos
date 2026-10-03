@@ -10,11 +10,23 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-use super::request::{LicenceRequest, MAX_REQUEST_BODY, sign_request};
-use super::{Clock, SignedGrant, valid_token};
+use super::request::{CLOCK_FLOOR_SECS, LicenceRequest, MAX_REQUEST_BODY, sign_request};
+use super::{SignedGrant, valid_token};
+
+/// Source of unix milliseconds. Injected so tests control the clock.
+pub type ClockMs = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+/// The wall clock in milliseconds.
+pub fn system_clock_ms() -> ClockMs {
+    Arc::new(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0)
+    })
+}
 
 /// Path of the checkout endpoint.
 pub const CHECKOUT_PATH: &str = "/licence/v1/checkout";
@@ -126,12 +138,12 @@ pub struct SignedLicenceClient<T: LicenceTransport> {
     key: SigningKey,
     node: String,
     transport: T,
-    clock: Clock,
+    clock: ClockMs,
 }
 
 impl<T: LicenceTransport> SignedLicenceClient<T> {
     /// A client for the steward `node` (its node id) holding `key`.
-    pub fn new(key: SigningKey, node: impl Into<String>, transport: T, clock: Clock) -> Arc<Self> {
+    pub fn new(key: SigningKey, node: impl Into<String>, transport: T, clock: ClockMs) -> Arc<Self> {
         Arc::new(Self { key, node: node.into(), transport, clock })
     }
 
@@ -145,9 +157,13 @@ impl<T: LicenceTransport> SignedLicenceClient<T> {
         if body.len() > MAX_REQUEST_BODY {
             return Err(LicenceClientError::BadResponse("request body too large".into()));
         }
-        let mut nonce = [0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        let req = sign_request(&self.key, &self.node, method, path, body, (self.clock)(), nonce);
+        let ts_ms = (self.clock)();
+        // A clock that was never set signs nothing (COG-011 floor).
+        if ts_ms / 1000 < CLOCK_FLOOR_SECS {
+            return Err(LicenceClientError::Refused { status: 0, code: "clock_not_set".into() });
+        }
+        let nonce = super::request_nonce();
+        let req = sign_request(&self.key, &self.node, method, path, body, ts_ms, &nonce);
         let resp = self.transport.call(req).await?;
         if resp.status != 200 {
             let code = serde_json::from_slice::<ErrorBody>(&resp.body)

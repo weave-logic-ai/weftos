@@ -70,7 +70,7 @@ pub use binding::{
     sign_binding, verify_binding_member,
 };
 pub use client::{
-    ARTIFACT_PATH, CHECKOUT_PATH, CheckoutWire, GRANTS_PATH, LicenceClient, LicenceClientError,
+    ARTIFACT_PATH, CHECKOUT_PATH, CheckoutWire, ClockMs, system_clock_ms, GRANTS_PATH, LicenceClient, LicenceClientError,
     LicenceResponse, LicenceTransport, SignedLicenceClient,
 };
 pub use floor::FloorState;
@@ -84,8 +84,8 @@ pub use relay::{
     EVENT_KIND_CHECKOUT_REFUSED, GATE_ACTION, GrantFlood, NoFlood, install_grant,
 };
 pub use request::{
-    LicenceRequest, REQUEST_DOMAIN, ReplayGuard, RequestAuth, RequestRefused, sign_request,
-    signing_bytes, verify_request,
+    CLOCK_FLOOR_SECS, LicenceRequest, REQUEST_DOMAIN, REQUEST_WINDOW_MS, ReplayGuard,
+    RequestAuth, RequestRefused, sign_request, signing_string, valid_nonce, verify_request,
 };
 pub use store::{CheckoutGrantStore, VerifiedCheckoutGrant};
 
@@ -427,6 +427,14 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// the operator compares at `init` time.
 pub fn key_id(pk: &[u8; 32]) -> String {
     format!("ed25519:{}", &sha256_hex(pk)[..16])
+}
+
+/// A fresh request nonce: 32 lower-case hex chars (inside the server's 16 to 64 alphanumerics).
+pub(crate) fn request_nonce() -> String {
+    use rand::RngCore;
+    let mut b = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut b);
+    hex_encode(&b)
 }
 
 /// A short token: 1 to 128 chars of `[A-Za-z0-9._-+@/]`.

@@ -119,7 +119,11 @@ pub struct ArtifactTunnel {
     pub counters: TunnelCounters,
 }
 
-fn verified_node(from: &PeerCtx) -> bool {
+/// Whether `from` may be served licensed content or sent licence floods:
+/// admission verified it (the service-stamped `AdmittedPeer`) and its class
+/// is `node`. A verified leaf is not: leaves never get licensed bytes or
+/// grant floods. Every serve, checkout and flood decision goes through this.
+pub fn licensed_peer(from: &PeerCtx) -> bool {
     from.node_verified && from.class == PeerClass::Node
 }
 
@@ -170,7 +174,7 @@ impl ArtifactTunnel {
     /// from the service-stamped origin; anything but a verified node is
     /// dropped and counted.
     pub async fn on_message(self: &Arc<Self>, from: &PeerCtx, msg: KernelMessage) {
-        if !verified_node(from) {
+        if !licensed_peer(from) {
             self.counters.refused_unverified.fetch_add(1, Ordering::Relaxed);
             return;
         }

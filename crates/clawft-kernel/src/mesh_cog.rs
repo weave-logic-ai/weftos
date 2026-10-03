@@ -29,9 +29,8 @@ use crate::licence::{
     CheckoutCaller, CheckoutGrantStore, CheckoutRefusal, CheckoutRelay, CheckoutWire, SignedGrant,
     install_grant,
 };
-use crate::mesh_admit::PeerClass;
 use crate::mesh_artifact::ArtifactExchange;
-use crate::mesh_artifact_tunnel::{ArtifactTunnel, PeerSender, TOPIC_TUNNEL};
+use crate::mesh_artifact_tunnel::{ArtifactTunnel, PeerSender, TOPIC_TUNNEL, licensed_peer};
 use crate::mesh_delivery::{LocalDelivery, PeerCtx};
 use crate::mesh_ipc::Scope;
 
@@ -80,10 +79,6 @@ pub struct CogMesh {
     pending: DashMap<String, Pending>,
     /// Counters.
     pub counters: CogMeshCounters,
-}
-
-fn verified_node(from: &PeerCtx) -> bool {
-    from.node_verified && from.class == PeerClass::Node
 }
 
 impl CogMesh {
@@ -233,7 +228,7 @@ impl CogMesh {
         if !known {
             return false;
         }
-        if !verified_node(from) {
+        if !licensed_peer(from) {
             self.counters.refused_unverified.fetch_add(1, Ordering::Relaxed);
             return true;
         }
