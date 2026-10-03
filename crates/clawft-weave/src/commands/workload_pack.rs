@@ -64,8 +64,22 @@ pub struct PackArgs {
     /// Sign the package as redistributable: other nodes may be seeded and
     /// served its files over the swarm. Off by default; a package that
     /// carries a Cognitum attestation is never redistributed regardless.
+    ///
+    /// Requires evidence that the binary is not a licensed Cognitum one: a
+    /// `provenance.json` (from `--provenance`, the cog dir, or next to a
+    /// `--bin`, where `weaver cog install` writes it) with a trust other than
+    /// `cognitum-sha256`, and whose sha256 matches a packed binary. Without
+    /// one, `--redistributable` is refused unless `--no-provenance-ok` is given.
     #[arg(long)]
     pub redistributable: bool,
+    /// Explicit `provenance.json` for the binaries (default: the cog dir's,
+    /// then one next to each `--bin`).
+    #[arg(long)]
+    pub provenance: Option<PathBuf>,
+    /// Allow `--redistributable` with no `provenance.json` anywhere (your own
+    /// build from source). You are asserting the binary is not a Cognitum one.
+    #[arg(long)]
+    pub no_provenance_ok: bool,
     /// Also verify and store the package in this file-backed ArtifactStore.
     #[arg(long, requires = "trust")]
     pub store: Option<PathBuf>,
@@ -188,6 +202,8 @@ fn pack(a: PackArgs) -> anyhow::Result<()> {
         },
         cognitum_record: a.cognitum_record.clone(),
         redistributable: a.redistributable,
+        provenance: a.provenance.clone(),
+        allow_no_provenance: a.no_provenance_ok,
     };
     let mut env = pack_cog(&input, &a.out)?;
     if let Some(key_path) = &a.key {

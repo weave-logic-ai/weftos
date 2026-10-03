@@ -44,6 +44,14 @@ pub struct CogPackInput {
     /// Sign the package as redistributable (see
     /// [`CogPackageBody::redistributable`]). Default for a packer: false.
     pub redistributable: bool,
+    /// Explicit `provenance.json` describing the binaries. Otherwise the cog
+    /// dir's is read, and one next to each binary (where `weaver cog install`
+    /// writes it).
+    pub provenance: Option<PathBuf>,
+    /// Allow `redistributable` with no `provenance.json` anywhere. Without it,
+    /// sharing a package needs evidence the binary is not a licensed Cognitum
+    /// one.
+    pub allow_no_provenance: bool,
 }
 
 /// Packing failure.
@@ -122,35 +130,119 @@ fn place(out: &Path, rel: &str, content: &[u8], executable: bool) -> Result<File
     })
 }
 
-/// Read `<cog_dir>/provenance.json`. When it says `trust = "cognitum-sha256"`
-/// return the bytes of a minimal stamp (no licence account) to carry as an
-/// attestation; `Ok(None)` when the file is absent or says anything else.
-/// An unreadable or malformed file is an error, since silently ignoring it
-/// could let a licensed binary be packed as shareable.
-fn cognitum_install_stamp(
-    cog_dir: &Path,
+/// A `provenance.json` found for the package.
+struct FoundProvenance {
+    /// Arch of the `--bin` it sits next to; `None` for the cog dir's or an explicit one.
+    beside: Option<String>,
+    trust: Option<String>,
+    sha256: Option<String>,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Every `provenance.json` that describes this package: the explicit one,
+/// the cog dir's, and one beside each binary. A file that exists but cannot
+/// be read or parsed is an error, since ignoring it could let a licensed
+/// binary be packed as shareable.
+fn find_provenance(input: &CogPackInput) -> Result<Vec<FoundProvenance>, PackError> {
+    let mut candidates: Vec<(Option<String>, PathBuf)> = Vec::new();
+    if let Some(p) = &input.provenance {
+        if !p.is_file() {
+            return Err(PackError::Input(format!("--provenance {}: no such file", p.display())));
+        }
+        candidates.push((None, p.clone()));
+    }
+    candidates.push((None, input.cog_dir.join(PROVENANCE_FILE)));
+    for (arch, bin) in &input.binaries {
+        if let Some(dir) = bin.parent() {
+            candidates.push((Some(arch.clone()), dir.join(PROVENANCE_FILE)));
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for (beside, path) in candidates {
+        if !path.is_file() {
+            continue;
+        }
+        let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        // A file seen again beside a binary keeps that association.
+        if !seen.insert((canon, beside.clone())) {
+            continue;
+        }
+        let bytes = read_limited(&path, 64 * 1024)?;
+        let doc: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| PackError::Input(format!("{}: {e}", path.display())))?;
+        let get = |k: &str| doc.get(k).and_then(Value::as_str).map(str::to_string);
+        out.push(FoundProvenance { beside, trust: get("trust"), sha256: get("sha256") });
+    }
+    Ok(out)
+}
+
+/// Decide what provenance means for this pack. Returns the bytes of a
+/// Cognitum stamp to carry when any provenance marks a licensed Cognitum
+/// install. With `redistributable`, refuses a Cognitum install, and refuses
+/// when there is no provenance (unless `allow_no_provenance`), when the
+/// provenance names no recognised non-Cognitum trust or no sha256, or when its
+/// sha256 does not match the binary it describes.
+fn provenance_decision(
+    input: &CogPackInput,
     id: &str,
     version: &str,
+    bin_sha: &BTreeMap<String, String>,
 ) -> Result<Option<Vec<u8>>, PackError> {
-    let path = cog_dir.join(PROVENANCE_FILE);
-    if !path.exists() {
+    let found = find_provenance(input)?;
+    let cognitum = found.iter().find(|f| f.trust.as_deref() == Some(TRUST_COGNITUM_SHA256));
+    if let Some(c) = cognitum {
+        if input.redistributable {
+            return Err(PackError::Input(format!(
+                "{PROVENANCE_FILE} marks {id}@{version} as a licensed Cognitum install \
+                 (trust = {TRUST_COGNITUM_SHA256}); --redistributable is refused"
+            )));
+        }
+        let stamp = serde_json::json!({
+            "trust": TRUST_COGNITUM_SHA256,
+            "cog_id": id,
+            "version": version,
+            "sha256": c.sha256,
+        });
+        return serde_json::to_vec_pretty(&stamp)
+            .map(Some)
+            .map_err(|e| PackError::Input(format!("{PROVENANCE_FILE}: {e}")));
+    }
+    if !input.redistributable {
         return Ok(None);
     }
-    let bytes = read_limited(&path, 64 * 1024)?;
-    let doc: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| PackError::Input(format!("{PROVENANCE_FILE}: {e}")))?;
-    if doc.get("trust").and_then(Value::as_str) != Some(TRUST_COGNITUM_SHA256) {
-        return Ok(None);
+    if found.is_empty() {
+        if input.allow_no_provenance {
+            return Ok(None);
+        }
+        return Err(PackError::Input(format!(
+            "--redistributable needs a {PROVENANCE_FILE} (--provenance, in the cog dir, or beside a --bin) \
+             showing {id}@{version} is not a licensed Cognitum binary; for your own build from source \
+             pass --no-provenance-ok"
+        )));
     }
-    let stamp = serde_json::json!({
-        "trust": TRUST_COGNITUM_SHA256,
-        "cog_id": id,
-        "version": version,
-        "sha256": doc.get("sha256").and_then(Value::as_str),
-    });
-    serde_json::to_vec_pretty(&stamp)
-        .map(Some)
-        .map_err(|e| PackError::Input(format!("{PROVENANCE_FILE}: {e}")))
+    for f in &found {
+        let (Some(_), Some(want)) = (&f.trust, &f.sha256) else {
+            return Err(PackError::Input(format!(
+                "{PROVENANCE_FILE} has no trust or sha256, so it cannot show the binary is shareable; --redistributable is refused"
+            )));
+        };
+        let want = want.to_ascii_lowercase();
+        let matches = match &f.beside {
+            Some(arch) => bin_sha.get(arch).is_some_and(|h| *h == want),
+            None => bin_sha.values().any(|h| *h == want),
+        };
+        if !matches {
+            return Err(PackError::Input(format!(
+                "{PROVENANCE_FILE} sha256 {want} does not match the binary being packed; --redistributable is refused"
+            )));
+        }
+    }
+    Ok(None)
 }
 
 /// Build an unsigned cog package in `out_dir` (which must not exist or be
@@ -192,8 +284,10 @@ pub fn pack_cog(input: &CogPackInput, out_dir: &Path) -> Result<ManifestEnvelope
     let cog_toml = place(out_dir, "cog.toml", &toml_bytes, false)?;
 
     let mut binaries = BTreeMap::new();
+    let mut bin_sha = BTreeMap::new();
     for (arch, path) in &seen {
         let content = read_limited(path, MAX_FILE_BYTES)?;
+        bin_sha.insert(arch.clone(), sha256_hex(&content));
         binaries.insert(
             arch.clone(),
             place(out_dir, &binary_path(arch, &id), &content, true)?,
@@ -211,13 +305,7 @@ pub fn pack_cog(input: &CogPackInput, out_dir: &Path) -> Result<ManifestEnvelope
         });
     }
 
-    if let Some(stamp) = cognitum_install_stamp(&input.cog_dir, &id, &version)? {
-        if input.redistributable {
-            return Err(PackError::Input(format!(
-                "{PROVENANCE_FILE} marks {id}@{version} as a licensed Cognitum install \
-                 (trust = {TRUST_COGNITUM_SHA256}); --redistributable is refused"
-            )));
-        }
+    if let Some(stamp) = provenance_decision(input, &id, &version, &bin_sha)? {
         attestations.push(AttestationRef {
             kind: COGNITUM_PROVENANCE_KIND.to_string(),
             file: place(out_dir, COGNITUM_PROVENANCE_PATH, &stamp, false)?,

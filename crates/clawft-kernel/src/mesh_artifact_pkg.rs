@@ -78,22 +78,30 @@ pub(crate) fn signer_keys(verified: &VerifiedPackage, anchors: &TrustAnchors) ->
 
 /// Licence standing of a package, from its signed manifest. Fails closed:
 /// `OptIn` only when the signer wrote `redistributable = true`, and never
-/// when the package carries a Cognitum attestation (an attestation whose
-/// kind starts with `cognitum.`: a release record, or the install-provenance
-/// stamp `weaver workload pack` adds for a `provenance.json` with
-/// `trust = "cognitum-sha256"`), even if the flag is set. The release URL is
-/// provenance text only and is not consulted.
+/// when the package carries Cognitum provenance, even if the flag is set.
+/// Two signals, either of which marks it Cognitum: an attestation whose kind
+/// starts with `cognitum.` (a release record, or the install-provenance stamp
+/// `weaver workload pack` adds for a `provenance.json` with
+/// `trust = "cognitum-sha256"`), or a release URL containing `cognitum`.
+/// The URL is a substring heuristic and can only add Cognitum standing, never
+/// remove it; it stays as a backstop for packs that carry no attestation.
 /// Cognitum cogs are licence-gated, and nothing here checks a licence or that
 /// a peer belongs to the same operator. An operator re-pack of such a binary
-/// that drops the attestation is `NotFlagged`, so it is still not shared
+/// that drops both signals is `NotFlagged`, so it is still not shared
 /// unless its signer explicitly opts in.
 pub(crate) fn grant_origin(verified: &VerifiedPackage) -> GrantOrigin {
-    let cognitum = verified
+    let cognitum_record = verified
         .body
         .attestations
         .iter()
         .any(|a| a.kind.to_ascii_lowercase().starts_with("cognitum."));
-    if cognitum {
+    let cognitum_url = verified
+        .body
+        .source
+        .release_url
+        .as_deref()
+        .is_some_and(|u| u.to_ascii_lowercase().contains("cognitum"));
+    if cognitum_record || cognitum_url {
         GrantOrigin::Cognitum {
             cog_id: verified.body.id.clone(),
             version: verified.body.version.clone(),

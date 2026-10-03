@@ -750,6 +750,8 @@ fn pack(
         source: PackageSource { repo: None, commit: Some(commit.into()), release_url: None },
         cognitum_record: record.then_some(rec),
         redistributable,
+        provenance: None,
+        allow_no_provenance: true,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();
@@ -1165,7 +1167,7 @@ async fn a_provenance_json_stamp_makes_the_grant_cognitum_origin() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_cognitum_release_url_alone_no_longer_marks_cognitum_origin() {
+async fn a_cognitum_release_url_alone_still_marks_cognitum_origin() {
     let tmp = tempfile::tempdir().unwrap();
     let k = key(1);
     let dir = pack(tmp.path(), 1024 * 1024, &k, "aaaaaaa", false, true);
@@ -1177,7 +1179,11 @@ async fn a_cognitum_release_url_alone_no_longer_marks_cognitum_origin() {
     let holder = swarm_node("holder", cfg());
     let pkg = holder.ex.seed_package_dir(&dir, &anchors_for(&k)).unwrap();
     let g = holder.ex.grants.get(&binary_hash(&pkg)).unwrap().clone();
-    assert_eq!(g[0].origin, crate::mesh_swarm_state::GrantOrigin::OptIn, "the URL is provenance text, not a signal");
+    assert_eq!(
+        g[0].origin,
+        crate::mesh_swarm_state::GrantOrigin::Cognitum { cog_id: "swarm-probe".into(), version: "0.1.0".into() },
+        "a cognitum release URL is a fail-closed second signal, even with redistributable set"
+    );
 }
 
 #[tokio::test(start_paused = true)]

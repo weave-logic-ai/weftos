@@ -75,6 +75,8 @@ pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf 
         },
         cognitum_record: None,
         redistributable: true,
+        provenance: None,
+        allow_no_provenance: true,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();
