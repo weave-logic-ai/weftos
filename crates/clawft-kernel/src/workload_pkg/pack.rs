@@ -18,6 +18,17 @@ use super::verify::MAX_FILE_BYTES;
 const MAX_COG_TOML_BYTES: u64 = 256 * 1024;
 /// Path of a packaged Cognitum release record.
 pub const COGNITUM_RECORD_PATH: &str = "attestations/cognitum-release-record.json";
+/// Attestation kind stamped when the cog dir's `provenance.json` says the
+/// binary is a licensed Cognitum install (`trust = "cognitum-sha256"`).
+/// Unlike [`COGNITUM_RECORD_KIND`] it is not a signed release record and is
+/// never parsed as one; it only marks the package Cognitum-origin.
+pub const COGNITUM_PROVENANCE_KIND: &str = "cognitum.install.provenance.v1";
+/// Path of the stamped provenance attestation.
+pub const COGNITUM_PROVENANCE_PATH: &str = "attestations/cognitum-provenance.json";
+/// `provenance.json` in an installed cog dir (written by `weaver cog install`).
+const PROVENANCE_FILE: &str = "provenance.json";
+/// `provenance.json` trust value for a licensed Cognitum binary.
+const TRUST_COGNITUM_SHA256: &str = "cognitum-sha256";
 
 /// Inputs to [`pack_cog`].
 #[derive(Debug, Clone, Default)]
@@ -111,6 +122,37 @@ fn place(out: &Path, rel: &str, content: &[u8], executable: bool) -> Result<File
     })
 }
 
+/// Read `<cog_dir>/provenance.json`. When it says `trust = "cognitum-sha256"`
+/// return the bytes of a minimal stamp (no licence account) to carry as an
+/// attestation; `Ok(None)` when the file is absent or says anything else.
+/// An unreadable or malformed file is an error, since silently ignoring it
+/// could let a licensed binary be packed as shareable.
+fn cognitum_install_stamp(
+    cog_dir: &Path,
+    id: &str,
+    version: &str,
+) -> Result<Option<Vec<u8>>, PackError> {
+    let path = cog_dir.join(PROVENANCE_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = read_limited(&path, 64 * 1024)?;
+    let doc: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| PackError::Input(format!("{PROVENANCE_FILE}: {e}")))?;
+    if doc.get("trust").and_then(Value::as_str) != Some(TRUST_COGNITUM_SHA256) {
+        return Ok(None);
+    }
+    let stamp = serde_json::json!({
+        "trust": TRUST_COGNITUM_SHA256,
+        "cog_id": id,
+        "version": version,
+        "sha256": doc.get("sha256").and_then(Value::as_str),
+    });
+    serde_json::to_vec_pretty(&stamp)
+        .map(Some)
+        .map_err(|e| PackError::Input(format!("{PROVENANCE_FILE}: {e}")))
+}
+
 /// Build an unsigned cog package in `out_dir` (which must not exist or be
 /// empty) and return its envelope. Sign it with
 /// [`super::sign::sign_envelope`] and persist with [`write_manifest`].
@@ -166,6 +208,19 @@ pub fn pack_cog(input: &CogPackInput, out_dir: &Path) -> Result<ManifestEnvelope
         attestations.push(AttestationRef {
             kind: COGNITUM_RECORD_KIND.to_string(),
             file: place(out_dir, COGNITUM_RECORD_PATH, &content, false)?,
+        });
+    }
+
+    if let Some(stamp) = cognitum_install_stamp(&input.cog_dir, &id, &version)? {
+        if input.redistributable {
+            return Err(PackError::Input(format!(
+                "{PROVENANCE_FILE} marks {id}@{version} as a licensed Cognitum install \
+                 (trust = {TRUST_COGNITUM_SHA256}); --redistributable is refused"
+            )));
+        }
+        attestations.push(AttestationRef {
+            kind: COGNITUM_PROVENANCE_KIND.to_string(),
+            file: place(out_dir, COGNITUM_PROVENANCE_PATH, &stamp, false)?,
         });
     }
 

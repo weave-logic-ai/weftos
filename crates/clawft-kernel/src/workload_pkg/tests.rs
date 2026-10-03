@@ -631,3 +631,67 @@ fn one_bad_hex_signature_entry_does_not_fail_the_whole_verify() {
         Err(VerifyError::BadSignature { .. })
     ));
 }
+
+/// Pack the fixture cog dir again with a `provenance.json` beside `cog.toml`.
+fn pack_with_provenance(
+    fx: &Fixture,
+    provenance: &str,
+    redistributable: bool,
+) -> Result<(ManifestEnvelope, PathBuf), PackError> {
+    let cog_dir = fx.root.join("vendor/cogs/src/cogs/anomaly-detect");
+    std::fs::write(cog_dir.join("provenance.json"), provenance).unwrap();
+    let input = CogPackInput {
+        cog_dir,
+        binaries: vec![("aarch64".into(), fx.root.join("a64"))],
+        source: PackageSource {
+            repo: None,
+            commit: Some("8970f99".into()),
+            release_url: None,
+        },
+        cognitum_record: None,
+        redistributable,
+    };
+    let out = fx.root.join("pkg-prov");
+    pack_cog(&input, &out).map(|e| (e, out))
+}
+
+const COGNITUM_PROVENANCE: &str = r#"{"source":"cognitum","kind":"cognitum","registry":"r",
+    "cog_id":"anomaly-detect","version":"1.2.0","arch":"aarch64","sha256":"ab12",
+    "trust":"cognitum-sha256","licence_account":"acct-secret","placement_eligible":false,
+    "fetched_at":"2026-01-01T00:00:00Z"}"#;
+
+#[test]
+fn pack_stamps_a_cognitum_attestation_from_provenance_json() {
+    let fx = fixture(None);
+    let (env, out) = pack_with_provenance(&fx, COGNITUM_PROVENANCE, false).unwrap();
+    let body = env.cog_body().unwrap();
+    let att = body
+        .attestations
+        .iter()
+        .find(|a| a.kind == pack::COGNITUM_PROVENANCE_KIND)
+        .expect("stamped");
+    let stamp = std::fs::read_to_string(out.join(&att.file.path)).unwrap();
+    assert!(!stamp.contains("acct-secret"), "licence account is not carried");
+    assert!(stamp.contains("cognitum-sha256"));
+    assert!(!body.redistributable);
+}
+
+#[test]
+fn pack_refuses_redistributable_for_a_cognitum_install() {
+    let fx = fixture(None);
+    let err = pack_with_provenance(&fx, COGNITUM_PROVENANCE, true).unwrap_err();
+    assert!(err.to_string().contains("--redistributable is refused"), "{err}");
+}
+
+#[test]
+fn pack_ignores_signed_provenance_and_rejects_a_malformed_file() {
+    let fx = fixture(None);
+    let signed = r#"{"trust":"ed25519-signed","sha256":"ab"}"#;
+    let (env, _) = pack_with_provenance(&fx, signed, true).unwrap();
+    let body = env.cog_body().unwrap();
+    assert!(body.attestations.is_empty());
+    assert!(body.redistributable);
+
+    let fx = fixture(None);
+    assert!(pack_with_provenance(&fx, "not json", true).is_err());
+}
