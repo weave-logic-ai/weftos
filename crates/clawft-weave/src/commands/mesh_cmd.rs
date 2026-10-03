@@ -95,6 +95,11 @@ pub enum MeshCmd {
     },
     /// Pin the service's machine key after verifying its fingerprint out of band.
     Trust(TrustArgs),
+    /// Mesh nonce for the Seed licence mesh id (ADR-106); runs locally.
+    Nonce {
+        #[command(subcommand)]
+        cmd: super::mesh_nonce::NonceCmd,
+    },
     /// PRINT a reviewed shell script that installs the service (runs nothing).
     InstallService(super::mesh_install::InstallArgs),
     /// PRINT the inverse script (keeps node.key unless --purge-key; runs nothing).
@@ -224,6 +229,7 @@ pub async fn execute(cmd: MeshCmd, w: &mut dyn Write) -> Result<()> {
             journal_verify(w, &conn, accept_truncate, seq, floor).await
         }
         MeshCmd::Trust(t) => trust(w, t).await,
+        MeshCmd::Nonce { cmd } => super::mesh_nonce::run(cmd, w),
         MeshCmd::InstallService(a) => super::mesh_install::run_install(&a, w),
         MeshCmd::UninstallService(a) => super::mesh_install::run_uninstall(&a, w),
     }

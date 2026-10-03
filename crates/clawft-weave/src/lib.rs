@@ -194,6 +194,15 @@ pub mod workload_place_rpc;
 /// Operator policy files for placement (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_place_policy;
+/// Seed licence path at daemon boot: mesh id, checkout policy, binder (ADR-106).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_boot;
+/// `workload.node.bind | unbind | binding` (ADR-106 phase 1d).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_rpc;
+/// `weaver doctor` findings for the Seed licence path (ADR-106).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_doctor;
 /// This node's cog ingest bridge and store owner (mesh-placement-10).
 #[cfg(all(feature = "placement", unix))]
 pub mod cog_ingest_serve;

@@ -27,9 +27,11 @@ mod binding;
 mod floor;
 mod gate;
 mod grant;
+mod mesh_config;
 mod persist;
 mod policy;
 mod store;
+mod steward;
 mod store_load;
 
 #[cfg(test)]
@@ -62,7 +64,9 @@ pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
 pub use grant::{
     CheckoutGrant, GrantArtifact, LicenceRef, SignedGrant, sign_grant, verify_grant,
 };
+pub use mesh_config::{MeshIdConfigError, mesh_id_from_config};
 pub use policy::MeshCheckoutPolicy;
+pub use steward::StewardCheck;
 pub use store::{CheckoutGrantStore, VerifiedCheckoutGrant};
 
 /// Domain tag of the mesh id hash.

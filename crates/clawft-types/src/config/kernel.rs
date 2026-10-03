@@ -954,6 +954,16 @@ pub struct MeshConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genesis_hash: Option<String>,
 
+    /// Mesh nonce (64 hex chars = 32 random bytes), the same on every node of
+    /// the mesh, written by the operator next to `genesis_hash` (ADR-106
+    /// section 3). With the genesis pin it derives the mesh id a Seed binding,
+    /// checkout grant and hash approval are for. It is not a secret.
+    /// Generate one with `weaver mesh nonce generate`. Absent: the licence
+    /// path stays inert and behaves like `ManifestPolicy`; a changed nonce
+    /// orphans the binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_nonce: Option<String>,
+
     /// Allow `admission = "enforce"` without a governance gate, i.e. admit
     /// every peer that presents a valid hello for the right genesis. Off by
     /// default: without it enforce refuses everyone when no gate exists.
@@ -1047,6 +1057,7 @@ impl Default for MeshConfig {
             noise_key_path: None,
             admission: MeshAdmissionMode::default(),
             genesis_hash: None,
+            mesh_nonce: None,
             admission_open_membership: false,
             max_connections_per_ip: default_mesh_max_connections_per_ip(),
             first_frame_timeout_secs: default_mesh_first_frame_timeout_secs(),

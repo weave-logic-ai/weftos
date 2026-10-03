@@ -194,12 +194,17 @@ async fn build(
     // a binding that arrives later needs no restart; with none (or no mesh id
     // yet) it is exactly `ManifestPolicy`.
     let cfg = ExchangeConfig {
-        redistribution: clawft_kernel::licence::MeshCheckoutPolicy::open(
-            dir,
-            anchors.clone(),
-            revocations.clone(),
-            clawft_kernel::licence::LocalMeshId::unset(),
-        ),
+        // The daemon built the policy at boot (`licence_boot`), with the mesh
+        // id from the configured nonce and the store the bind RPC writes to.
+        redistribution: match crate::licence_boot::runtime() {
+            Some(l) => l.policy.clone(),
+            None => clawft_kernel::licence::MeshCheckoutPolicy::open(
+                dir,
+                anchors.clone(),
+                revocations.clone(),
+                clawft_kernel::licence::LocalMeshId::unset(),
+            ),
+        },
         ..ExchangeConfig::default()
     };
     let mut ex = ArtifactExchange::new(&id, Arc::new(store), cfg)

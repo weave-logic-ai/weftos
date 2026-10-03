@@ -64,6 +64,8 @@ mod tests_seed;
 #[cfg(test)]
 mod tests_seed_bind;
 #[cfg(test)]
+mod tests_seed_bind_v2;
+#[cfg(test)]
 mod tests_seed_host;
 #[cfg(test)]
 mod tests_seed_install;
@@ -90,8 +92,8 @@ pub use logical::{
 pub use native::{NativeConfig, NativeRuntime};
 pub use seed::{SeedApiRuntime, SeedConfig, SeedPin};
 pub use seed_bind::{
-    BindError, BindRecord, Binding, SeedBinder, SignedBind, attest_seed_facts, seed_node_id,
-    sign_bind,
+    BindError, BindRecord, Binding, SeedBinder, SignedBind, StewardBind, attest_seed_facts,
+    grant_fingerprint, seed_node_id, sign_bind,
 };
 pub use seed_creds::FileCredentials;
 pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};

@@ -271,6 +271,20 @@ impl CheckoutGrantStore {
         self.binding_in_effect(&mut inner)
     }
 
+    /// The stored binding whatever its state (bound, unbound or orphaned), for
+    /// the steward's `seq` rule and for status. Not for gating anything.
+    pub fn held_binding(&self) -> Option<BindingRecord> {
+        self.lock().binding.as_ref().map(|h| h.body.clone())
+    }
+
+    /// The MEMBER profile against this store's anchors and local mesh id,
+    /// without storing anything (the steward verifies before it spends any
+    /// replay state).
+    pub fn verify_member(&self, signed: &SignedBinding) -> Result<BindingRecord, LicenceError> {
+        let local = self.local.get().ok_or(LicenceError::NoLocalMesh)?;
+        verify_binding_member(signed, &self.anchors, &local)
+    }
+
     /// Accept a binding. `posture` is the node's admission state; `extra` is
     /// the steward profile hook (use [`super::NoExtraChecks`] for members).
     pub fn accept_binding(

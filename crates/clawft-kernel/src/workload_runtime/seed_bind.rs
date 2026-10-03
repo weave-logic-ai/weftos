@@ -18,6 +18,11 @@
 //!
 //! Bearer tokens never reach a record, an error or a chain event: the only
 //! Seed data used is the (public) identity.
+//!
+//! ADR-106 phase 1d adds the licence form: [`SeedBinder::bind_v2`] verifies an
+//! operator-signed `licence::BindingRecord` v2 under the steward profile (the
+//! checks above, plus the grant key fingerprint, `mesh_id` and `seq`), and
+//! [`SeedBinder::unbind_v2`] withdraws it. Both live in `seed_bind/v2.rs`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -44,8 +49,8 @@ pub const BIND_DOMAIN: &[u8] = b"weftos.workload.node.bind.v1\0";
 /// Default age after which a bind record is no longer accepted.
 pub const DEFAULT_MAX_BIND_AGE_SECS: u64 = 600;
 /// File name of the persisted bind state, beside `workload-placements.json`.
-// not yet wired: no daemon or RPC path reaches `SeedBinder`; when wired it
-// must use `dir.join(BIND_STATE_FILE)` (the runtime dir).
+/// The daemon's `workload.node.bind` uses `dir.join(BIND_STATE_FILE)` (the
+/// runtime dir).
 pub const BIND_STATE_FILE: &str = "workload-seed-binds.json";
 const MAX_STATE_BYTES: u64 = 256 * 1024;
 const MAX_BOUND_DEVICES: usize = 1000;
@@ -141,6 +146,16 @@ pub enum BindError {
     /// The link to the Seed is not pinned (and no lab opt-in is set).
     #[error("{0}")]
     UnpinnedTransport(String),
+    /// A licence-record check failed (v2 binding: signature, mesh id,
+    /// steward profile, admission posture).
+    #[error("{0}")]
+    Licence(crate::licence::LicenceError),
+    /// The device is already bound to another mesh here; unbind first.
+    #[error("device {device_id} is already bound to another mesh (seed_bound_elsewhere); unbind it first")]
+    SeedBoundElsewhere {
+        /// The Seed's device id.
+        device_id: String,
+    },
     /// The bind state could not be saved, so nothing was bound.
     #[error("bind state not saved: {0}")]
     State(String),
@@ -162,6 +177,8 @@ impl BindError {
             Self::Replayed => "replayed",
             Self::NodeTaken(_) => "node_taken",
             Self::UnpinnedTransport(_) => "unpinned_transport",
+            Self::Licence(e) => v2::licence_code(e),
+            Self::SeedBoundElsewhere { .. } => "seed_bound_elsewhere",
             Self::State(_) => "state_unwritable",
             Self::Seed(_) => "seed_unreachable",
         }
@@ -189,6 +206,8 @@ pub struct SeedBinder {
     seen: Mutex<HashSet<[u8; 32]>>,
     /// Device id to (bound_at, node id).
     bound: Mutex<BTreeMap<String, (u64, String)>>,
+    /// Device id to the mesh id (hex) it is bound to under a v2 record.
+    meshes: Mutex<BTreeMap<String, String>>,
     state_file: Option<std::path::PathBuf>,
 }
 
@@ -198,6 +217,10 @@ struct BindState {
     version: u32,
     /// Device id to its latest accepted `bound_at` and node id.
     bound: BTreeMap<String, BoundEntry>,
+    /// Device id to the mesh id it is bound to (v2 records; absent in files
+    /// written before phase 1d).
+    #[serde(default)]
+    meshes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -210,6 +233,7 @@ struct BoundEntry {
 fn write_state(
     path: &std::path::Path,
     bound: &BTreeMap<String, (u64, String)>,
+    meshes: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -227,6 +251,7 @@ fn write_state(
                 )
             })
             .collect(),
+        meshes: meshes.clone(),
     };
     let bytes = serde_json::to_vec_pretty(&st).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
@@ -251,6 +276,7 @@ impl SeedBinder {
             max_age_secs: DEFAULT_MAX_BIND_AGE_SECS,
             seen: Mutex::new(HashSet::new()),
             bound: Mutex::new(BTreeMap::new()),
+            meshes: Mutex::new(BTreeMap::new()),
             state_file: None,
         }
     }
@@ -279,6 +305,9 @@ impl SeedBinder {
                     b.insert(d, (e.bound_at, e.node_id));
                 }
             }
+            if let Ok(mut m) = self.meshes.lock() {
+                *m = st.meshes;
+            }
         }
         self.state_file = Some(path);
         Ok(self)
@@ -301,9 +330,14 @@ impl SeedBinder {
     }
 
     fn refuse(&self, signed: &SignedBind, e: &BindError) {
-        let record_hash = hex_encode(&Sha256::digest(signed.record.as_bytes()));
+        self.refuse_record(&signed.record, e);
+    }
+
+    /// Chain a refusal for the record text `record` (v1 or v2 payload).
+    fn refuse_record(&self, record: &str, e: &BindError) {
+        let record_hash = hex_encode(&Sha256::digest(record.as_bytes()));
         // Only identifiers, clipped: never the record or any token.
-        let claimed = serde_json::from_str::<Value>(&signed.record).unwrap_or(Value::Null);
+        let claimed = serde_json::from_str::<Value>(record).unwrap_or(Value::Null);
         let clip = |k: &str| {
             claimed
                 .get(k)
@@ -431,7 +465,8 @@ impl SeedBinder {
             (record.bound_at, record.node_id.clone()),
         );
         if let Some(path) = &self.state_file {
-            write_state(path, &next).map_err(BindError::State)?;
+            let meshes = self.meshes.lock().map_err(|_| bad("binder poisoned"))?;
+            write_state(path, &next, &meshes).map_err(BindError::State)?;
         }
         *bound = next;
         seen.insert(digest);
@@ -448,6 +483,9 @@ impl SeedBinder {
         Ok(Binding { record })
     }
 }
+
+mod v2;
+pub use v2::{StewardBind, grant_fingerprint};
 
 impl SeedApiRuntime {
     /// This adapter's operator-assigned node id.

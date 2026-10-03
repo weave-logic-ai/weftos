@@ -31,6 +31,8 @@ pub mod mesh_cmd;
 pub mod mesh_install;
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_install_key;
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_nonce;
 pub mod resource_cmd;
 pub mod service_cmd;
 pub mod soul_cmd;
@@ -42,6 +44,8 @@ pub mod workload_cmd;
 pub mod workload_pack;
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_place_cmd;
+#[cfg(all(feature = "placement", unix))]
+pub mod workload_node_cmd;
 
 use std::path::Path;
 

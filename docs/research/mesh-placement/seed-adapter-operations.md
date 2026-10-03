@@ -58,7 +58,7 @@ Peer-list trust on first use for workload-host peers (`apply_operator_peers`) is
 
 ## 5. Fleet identity binding and adapter-attested facts (ea705398)
 
-**Status: Seed bind is a tested library; no daemon/RPC path reaches it yet; when wired it must use `dir.join(BIND_STATE_FILE)` (the runtime dir).**
+**Status: wired in ADR-106 phase 1d.** The daemon's `workload.node.bind` (Admin) runs `SeedBinder` over `dir.join(BIND_STATE_FILE)` (the runtime dir) with the steward profile (`SeedBinder::bind_v2`: the checks below, plus the grant key fingerprint the operator confirmed, `mesh_id` and `seq`), over an operator-signed `licence::BindingRecord` v2; `workload.node.unbind` withdraws it. CLI: `weaver workload node bind|unbind|status`. The v1 `BindRecord` form below remains a tested library. The state file now also records the mesh id each device is bound to (`seed_bound_elsewhere`; unbind first).
 
 `workload_runtime/seed_bind.rs`. A Seed has an Ed25519 device identity but no WeftOS node key, so:
 
