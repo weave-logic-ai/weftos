@@ -1,6 +1,6 @@
 # How a project gets cogs: sources, licences and private repos
 
-Design record: [ADR-105](../adr/adr-105-cog-sources.md). Commands: `weaver cog ...`, `weaver workload catalog --kind cog`, and `weft-cog-repo` for authoring. This page is the how-to. What is built and what is only designed is listed at the end.
+Design record: [ADR-105](../adr/adr-105-cog-sources.md). Commands: the `weaver cog` group, `weaver workload catalog --kind cog`, and `weft-cog-repo` for authoring. This page is the how-to. What is built and what is only designed is listed at the end.
 
 A WeftOS project gets cogs from a **list of sources**. Three kinds exist:
 
@@ -37,16 +37,18 @@ The file is hand-editable. Every field:
 name        = "acme-private"        # namespace; [a-z0-9][a-z0-9_-]{0,31}; no ':'
 kind        = "private"             # weftos | cognitum | private
 url         = "https://cogs.acme.example/"   # repo dir/URL holding registry.json, or the registry.json / app-registry.json itself
-pinned_keys = ["<64-hex public key>"]   # Ed25519 public keys, 64 hex. Required for private
+pinned_keys = ["<64-hex public key>"]   # Ed25519 public keys, 64 hex. Required for private; refused on weftos
 priority    = 50                    # default 0; higher wins when a bare id is in several sources
 enabled     = true                  # default true
 ```
 
 What each kind trusts:
 
-- `weftos`: the pinned WeaveLogic release key (`WEAVELOGIC_PUBKEY_HEX`), the compiled-in WeftOS package signers (`WEFTOS_PINNED_SIGNERS`, empty today), and any `pinned_keys` you add.
+- `weftos`: the pinned WeaveLogic release key (`WEAVELOGIC_PUBKEY_HEX`) and the compiled-in WeftOS package signers (`WEFTOS_PINNED_SIGNERS`, empty today). **Nothing from a config file is added**: a `weftos` source with `pinned_keys` is refused, because a project file could otherwise make its own key count as WeaveLogic. Put your own key in a `private` source. Only a cog verified by one of those two compiled-in anchors is recorded as WeaveLogic on install; anything else is recorded as a local signed install.
 - `private`: **only** the keys in `pinned_keys`. The WeaveLogic key is never implicitly trusted by a private source.
-- `cognitum`: no signature (Cognitum's registry binaries are unsigned); `pinned_keys` would pin release-record keys for the optional verifier.
+- `cognitum`: no signature (Cognitum's registry binaries are unsigned), so trust is the registry sha256 alone. For that reason a `cognitum` source must use `https://` (a local path or `http://` needs the development-only `allow_insecure = true`), and a registry that points its binaries at a non-https location is refused (`insecure_transport`). The HTTP client also refuses a redirect from https to http. `pinned_keys` is accepted but unused today.
+
+A project file can redefine a source you set in `~/.weftos/cog-sources.toml`. Because a cloned repository ships its own `.weftos/cog-sources.toml`, `weaver cog` prints a warning when a project entry replaces a user entry and changes its url or keys, refuses a changed `kind`, and warns on plain `http://` sources. `weaver cog install` prints the resolved `source:id` and where the source was defined before it fetches anything, and `--enable` on a bare id that resolved to a project-defined source needs the namespaced id or `--confirm-project-source`.
 
 The file holds URLs, public keys and licence declarations. Never put a private key or a token in it.
 
@@ -127,7 +129,7 @@ acme-cogs/dist/<id>/    staged, unsigned: cog-<id>-arm[-arm64] + manifest.json
 acme-cogs/repo/         signed output: registry.json + cogs/<arch>/...   (this is what you host)
 ```
 
-`weft-cog-repo verify <dir-or-url> --pin <pubkey>` and `install ... --pin <pubkey>` check any COG-008 repo against your own key (without `--pin` they check the WeaveLogic key).
+`weft-cog-repo verify <dir-or-url> --pin <pubkey>` and `install ... --pin <pubkey>` check any COG-008 repo against your own key (without `--pin` they check the WeaveLogic key; for a private repo directory `verify` without `--pin` uses the key in `repo.toml`). An explicit `--pin` always wins, also for a directory with a `repo.toml`: a pin that is not the signing key fails.
 
 ## 5. Key management
 
@@ -154,7 +156,7 @@ Until step 3 ships, use an operator-pinned key: put `{"key_id": "...", "public_k
 
 ### Your private-repo key
 
-`weft-cog-repo keygen` writes a PKCS#8 PEM with mode 0600, never overwrites an existing file, and refuses a path inside the repo directory. Keep it in a secret store or an encrypted volume, and back it up: losing it means you cannot sign updates under the pinned key, and every project must re-pin a new key. Rotating means: generate a new key, sign the repo with it, and ship the new public key to each project (`weaver cog source remove` / `add --key`), or pin both keys during the changeover (`--key` is repeatable). A compromised key means: stop publishing, generate a new one, re-sign, re-pin everywhere, and treat binaries signed since the compromise as untrusted.
+`weft-cog-repo keygen` writes a PKCS#8 PEM with mode 0600, never overwrites an existing file, and refuses a path inside the repo directory, including one whose parent directories do not exist yet and one that reaches the repo through `..`. Keep it in a secret store or an encrypted volume, and back it up: losing it means you cannot sign updates under the pinned key, and every project must re-pin a new key. Rotating means: generate a new key, sign the repo with it, and ship the new public key to each project (`weaver cog source remove` / `add --key`), or pin both keys during the changeover (`--key` is repeatable). A compromised key means: stop publishing, generate a new one, re-sign, re-pin everywhere, and treat binaries signed since the compromise as untrusted.
 
 ## 6. The catalog
 

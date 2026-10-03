@@ -116,9 +116,23 @@ pub struct InstallReq {
     pub enable: bool,
 }
 
+/// Cog ids are lower-case alphanumerics separated by single hyphens (max 64). The id names a
+/// directory under the host root, so anything else (`../x`, `a/b`, an empty id) is refused.
+pub fn valid_cog_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && !s.contains("--")
+        && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 /// Verify and install an uploaded cog. Signed cogs must pass Ed25519 against the pinned WeaveLogic
 /// key (signed-only, COG-008); unsigned (e.g. Cognitum mirror) must at least match their sha256.
 pub fn install(root: &Path, req: &InstallReq) -> Result<CogRecord, String> {
+    if !valid_cog_id(&req.id) {
+        return Err(format!("bad cog id {:?}", req.id));
+    }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(req.binary_b64.trim())
         .map_err(|e| format!("base64 decode: {e}"))?;
@@ -175,6 +189,9 @@ pub struct VerifiedInstall<'a> {
 
 /// Write an already-verified cog binary and its record under `root`. Does no verification.
 pub fn install_verified(root: &Path, v: &VerifiedInstall<'_>) -> Result<CogRecord, String> {
+    if !valid_cog_id(v.id) {
+        return Err(format!("bad cog id {:?}", v.id));
+    }
     let binary = format!("cog-{}-arm", v.id);
     let dir = root.join(v.id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {dir:?}: {e}"))?;
@@ -262,6 +279,29 @@ mod tests {
         let bad = InstallReq { sha256: "00".repeat(32), ..good.clone() };
         assert!(install(&root, &bad).is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_refuses_path_like_ids() {
+        let root = std::env::temp_dir().join(format!("cog-host-inst3-{}", std::process::id()));
+        let bytes = b"x".to_vec();
+        for id in ["../x", "a/b", "", "UP", "-a", "a--b", "x/../../y"] {
+            let req = InstallReq {
+                id: id.into(),
+                version: "1".into(),
+                source: Source::Cognitum,
+                args: vec![],
+                signed: false,
+                sha256: sha256_hex(&bytes),
+                sig: None,
+                binary_b64: b64(&bytes),
+                enable: false,
+            };
+            assert!(install(&root, &req).unwrap_err().contains("bad cog id"), "{id}");
+            let v = VerifiedInstall { id, version: "1", source: Source::Local, signed: true, args: &[], enable: false, bytes: &bytes };
+            assert!(install_verified(&root, &v).is_err(), "{id}");
+        }
+        assert!(!root.exists(), "nothing was created");
     }
 
     #[test]

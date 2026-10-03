@@ -82,6 +82,16 @@ pub enum SourceError {
         /// Source name.
         source_name: String,
     },
+    /// A Cognitum binary location is not https.
+    #[error("refusing {id} from '{source_name}': binary location {location} is not https:// (Cognitum binaries are trusted by sha256 alone)")]
+    Insecure {
+        /// Cog id.
+        id: String,
+        /// Source name.
+        source_name: String,
+        /// The offending location.
+        location: String,
+    },
     /// Reading a registry or binary failed.
     #[error("fetch {location}: {msg}")]
     Fetch {
@@ -123,6 +133,7 @@ impl SourceError {
             Self::Unsigned { .. } => "unsigned",
             Self::Verify { .. } => "verify_failed",
             Self::NoPinnedHash { .. } => "no_pinned_hash",
+            Self::Insecure { .. } => "insecure_transport",
             Self::Fetch { .. } => "fetch_failed",
             Self::Parse { .. } => "parse_failed",
             Self::Io { .. } => "io_error",

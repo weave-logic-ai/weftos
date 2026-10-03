@@ -110,20 +110,45 @@ fn random_seed() -> R<[u8; 32]> {
     Ok(seed)
 }
 
-fn inside(path: &Path, dir: &Path) -> bool {
-    let canon = |p: &Path| p.canonicalize().ok();
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    match (canon(parent), canon(dir)) {
-        (Some(p), Some(d)) => p.starts_with(d),
-        _ => false,
+/// Resolve `path` without requiring it to exist: canonicalize the nearest existing ancestor and
+/// append the rest. A `..` in the part that does not exist yet is refused (it could climb back
+/// into a directory we are guarding).
+fn resolve_lenient(path: &Path) -> R<PathBuf> {
+    use std::path::Component;
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_err(|e| format!("cwd: {e}"))?.join(path)
+    };
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = abs.as_path();
+    loop {
+        if let Ok(real) = cur.canonicalize() {
+            let mut out = real;
+            for c in rest.iter().rev() {
+                out.push(c);
+            }
+            return Ok(out);
+        }
+        match cur.components().next_back() {
+            Some(Component::Normal(n)) => rest.push(n.to_os_string()),
+            Some(Component::ParentDir) => return Err(format!("refusing a '..' component in {path:?} below a directory that does not exist yet")),
+            Some(Component::CurDir) => {}
+            _ => return Err(format!("cannot resolve {path:?}")),
+        }
+        cur = cur.parent().ok_or_else(|| format!("cannot resolve {path:?}"))?;
     }
+}
+
+fn inside(path: &Path, dir: &Path) -> R<bool> {
+    Ok(resolve_lenient(path)?.starts_with(resolve_lenient(dir)?))
 }
 
 pub fn cmd_keygen(args: &[String]) -> R<()> {
     let out = PathBuf::from(arg(args, "--out").ok_or("keygen needs --out <key.pem>")?);
     let repo = arg(args, "--repo").map(PathBuf::from);
     if let Some(r) = &repo {
-        if inside(&out, r) {
+        if inside(&out, r)? {
             return Err(format!(
                 "refusing to write the private key inside the repo directory {}: it could be committed. Choose a path outside it (e.g. ~/.config/weftos/keys/)",
                 r.display()
@@ -253,9 +278,11 @@ pub fn cmd_sign(dir: &str, args: &[String]) -> R<()> {
     sign_tree(from.to_str().ok_or("bad path")?, &dir.join("repo"), &cfg.name, &key)
 }
 
-/// Checks every artifact of `<dir>/repo` against the key in repo.toml; returns the artifact count.
-fn verify_repo(dir: &Path) -> R<usize> {
-    let key = repo_key(dir)?;
+/// Checks every artifact of `<dir>/repo` against `pins`, or the key in repo.toml when `pins` is
+/// empty; returns the artifact count. A `--pin` that differs from repo.toml fails, it is never
+/// silently replaced by the repo's own key.
+fn verify_repo(dir: &Path, pins: &[VerifyingKey]) -> R<usize> {
+    let keys: Vec<VerifyingKey> = if pins.is_empty() { vec![repo_key(dir)?] } else { pins.to_vec() };
     let base = dir.join("repo");
     let base_s = base.to_str().ok_or("bad path")?;
     let reg: Registry = serde_json::from_slice(&fetch(base_s, "registry.json")?).map_err(|e| format!("parse registry.json: {e}"))?;
@@ -263,7 +290,7 @@ fn verify_repo(dir: &Path) -> R<usize> {
     let mut bad = Vec::new();
     for cog in &reg.cogs {
         for (arch, art) in &cog.artifacts {
-            match fetch(base_s, &art.path).and_then(|b| verify_any(&b, art, &[key]).map_err(|e| e.to_string())) {
+            match fetch(base_s, &art.path).and_then(|b| verify_any(&b, art, &keys).map_err(|e| e.to_string())) {
                 Ok(()) => n += 1,
                 Err(e) => bad.push(format!("{} [{arch}]: {e}", cog.id)),
             }
@@ -275,9 +302,13 @@ fn verify_repo(dir: &Path) -> R<usize> {
     Ok(n)
 }
 
-pub fn cmd_verify(dir: &str) -> R<()> {
-    let n = verify_repo(Path::new(dir))?;
-    eprintln!("{n} artifact(s) verified against the key in {dir}/{REPO_TOML}");
+pub fn cmd_verify(dir: &str, pins: &[VerifyingKey]) -> R<()> {
+    let n = verify_repo(Path::new(dir), pins)?;
+    if pins.is_empty() {
+        eprintln!("{n} artifact(s) verified against the key in {dir}/{REPO_TOML}");
+    } else {
+        eprintln!("{n} artifact(s) verified against the {} key(s) given with --pin", pins.len());
+    }
     Ok(())
 }
 
@@ -302,7 +333,7 @@ pub fn cmd_publish(args: &[String]) -> R<()> {
     let dir = PathBuf::from(args.first().filter(|a| !a.starts_with("--")).ok_or("publish needs <repo-dir>")?);
     let to = PathBuf::from(arg(args, "--to").ok_or("publish needs --to <dir>")?);
     let cfg = load_config(&dir)?;
-    let n = verify_repo(&dir)?; // never publish something that does not verify
+    let n = verify_repo(&dir, &[])?; // never publish something that does not verify
     copy_tree(&dir.join("repo"), &to)?;
     let pubkey = cfg.pubkey.clone().unwrap_or_default();
     eprintln!("published {n} verified artifact(s) to {}", to.display());
@@ -338,7 +369,7 @@ mod tests {
     fn init_keygen_add_sign_verify_publish_round_trip() {
         let (tmp, repo, key) = setup();
         cmd_sign(&s(&repo), &a(&["--key", &s(&key)])).unwrap();
-        cmd_verify(&s(&repo)).unwrap();
+        cmd_verify(&s(&repo), &[]).unwrap();
         let reg: Registry = serde_json::from_slice(&std::fs::read(repo.join("repo/registry.json")).unwrap()).unwrap();
         assert_eq!(reg.repo, "acme-private");
         assert_eq!(reg.cogs[0].id, "acme-gauge");
@@ -359,6 +390,24 @@ mod tests {
     }
 
     #[test]
+    fn verify_pin_wins_over_repo_toml() {
+        let (tmp, repo, key) = setup();
+        cmd_sign(&s(&repo), &a(&["--key", &s(&key)])).unwrap();
+        // repo.toml declares the signing key; a --pin for another key must fail, not be ignored
+        let other = tmp.path().join("other.pem");
+        let other_pub = {
+            cmd_keygen(&a(&["--out", &s(&other)])).unwrap();
+            let k = SigningKey::from_pkcs8_pem(&std::fs::read_to_string(&other).unwrap()).unwrap();
+            k.verifying_key()
+        };
+        assert!(cmd_verify(&s(&repo), &[other_pub]).is_err());
+        // pinning the real key passes, and so does pinning both
+        let real = parse_pubkey(&load_config(&repo).unwrap().pubkey.unwrap()).unwrap();
+        cmd_verify(&s(&repo), &[real]).unwrap();
+        cmd_verify(&s(&repo), &[other_pub, real]).unwrap();
+    }
+
+    #[test]
     fn key_is_0600_never_overwritten_and_refused_inside_the_repo() {
         let (tmp, repo, key) = setup();
         #[cfg(unix)]
@@ -374,6 +423,16 @@ mod tests {
         let e = cmd_keygen(&a(&["--out", &s(&repo.join("dist/oops.pem")), "--repo", &s(&repo)])).unwrap_err();
         assert!(e.contains("inside the repo"), "{e}");
         assert!(!repo.join("dist/oops.pem").exists());
+        // ... also when the parent directory does not exist yet
+        let e = cmd_keygen(&a(&["--out", &s(&repo.join("keys/new/acme.pem")), "--repo", &s(&repo)])).unwrap_err();
+        assert!(e.contains("inside the repo"), "{e}");
+        assert!(!repo.join("keys").exists(), "nothing was created inside the repo");
+        // ... and with a relative path and a `..` that climbs back in
+        let e = cmd_keygen(&a(&["--out", &s(&tmp.path().join("fresh/../acme/keys/k.pem")), "--repo", &s(&repo)])).unwrap_err();
+        assert!(e.contains("inside the repo") || e.contains("'..'"), "{e}");
+        assert!(!repo.join("keys").exists());
+        // a path outside the repo whose parent does not exist yet is fine
+        cmd_keygen(&a(&["--out", &s(&tmp.path().join("brand/new/dir/k.pem"))])).unwrap();
         // .gitignore guards keys
         assert!(std::fs::read_to_string(repo.join(".gitignore")).unwrap().contains("*.pem"));
         let _ = tmp;
@@ -394,7 +453,7 @@ mod tests {
         let (tmp, repo, key) = setup();
         cmd_sign(&s(&repo), &a(&["--key", &s(&key)])).unwrap();
         std::fs::write(repo.join("repo/cogs/arm/cog-acme-gauge-arm"), b"\x7fELF evil gauge!").unwrap();
-        assert!(cmd_verify(&s(&repo)).is_err());
+        assert!(cmd_verify(&s(&repo), &[]).is_err());
         let out = tmp.path().join("hosted");
         assert!(cmd_publish(&a(&[&s(&repo), "--to", &s(&out)])).is_err());
         assert!(!out.exists(), "nothing is published when verification fails");

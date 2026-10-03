@@ -82,6 +82,10 @@ pub enum CogCommand {
         /// cog-host root (default `$WEFTOS_COG_ROOT` or `~/.weftos/cogs`).
         #[arg(long)]
         root: Option<PathBuf>,
+        /// Allow `--enable` for a bare id that resolved to a source defined only in this
+        /// project's cog-sources.toml (a cloned repo can define its own sources).
+        #[arg(long)]
+        confirm_project_source: bool,
     },
 }
 
@@ -109,6 +113,9 @@ pub enum SourceCommand {
         /// Edit the user default list instead of the project.
         #[arg(long)]
         user: bool,
+        /// Development only: let a cognitum source use http:// or a local path.
+        #[arg(long)]
+        allow_insecure: bool,
     },
     /// List the effective sources (project overlaid on user defaults).
     List {
@@ -245,7 +252,11 @@ fn roots() -> Roots {
 
 impl Roots {
     fn effective(&self) -> anyhow::Result<EffectiveSources> {
-        Ok(load_effective(self.user_file.as_deref(), self.project_file.as_deref())?)
+        let e = load_effective(self.user_file.as_deref(), self.project_file.as_deref())?;
+        for w in &e.warnings {
+            eprintln!("warning: {w}");
+        }
+        Ok(e)
     }
 
     /// The file an edit goes to.
@@ -270,6 +281,14 @@ impl Roots {
 }
 
 /// The compiled-in WeftOS package signer keys (extra trusted keys of `weftos` sources).
+/// `workload_pkg` is built only with `ecc` + `exochain`; without them no signer is compiled in.
+#[cfg(not(all(feature = "ecc", feature = "exochain")))]
+fn weftos_signer_keys() -> Vec<String> {
+    Vec::new()
+}
+
+/// The compiled-in WeftOS package signer keys (extra trusted keys of `weftos` sources).
+#[cfg(all(feature = "ecc", feature = "exochain"))]
 fn weftos_signer_keys() -> Vec<String> {
     clawft_kernel::workload_pkg::trust::WEFTOS_PINNED_SIGNERS
         .iter()
@@ -296,11 +315,23 @@ fn print_failures(failures: &[(String, weftos_cog_sources::SourceError)]) {
 /// Run `weaver cog ...`.
 pub async fn run(args: CogArgs) -> anyhow::Result<()> {
     // The HTTP reader is blocking; keep it off the async runtime threads.
-    tokio::task::spawn_blocking(move || run_blocking(args)).await?
+    tokio::task::spawn_blocking(move || run_blocking(args)).await?.map_err(coded)
+}
+
+/// Prefix a source error with its stable code: `[cog_unlicensed] ...`.
+pub fn coded(e: anyhow::Error) -> anyhow::Error {
+    match e.downcast_ref::<weftos_cog_sources::SourceError>() {
+        Some(s) => anyhow!("[{}] {}", s.code(), s),
+        None => e,
+    }
 }
 
 /// Run `weaver workload catalog`.
 pub fn run_catalog(a: CatalogArgs) -> anyhow::Result<()> {
+    run_catalog_inner(a).map_err(coded)
+}
+
+fn run_catalog_inner(a: CatalogArgs) -> anyhow::Result<()> {
     if a.kind != "cog" {
         bail!("only `--kind cog` has a catalog today (got {:?})", a.kind);
     }
@@ -377,13 +408,30 @@ fn run_blocking(args: CogArgs) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        CogCommand::Install { reference, arch, enable, args, root } => {
+        CogCommand::Install { reference, arch, enable, args, root, confirm_project_source } => {
             let eff = roots.effective()?;
             let reader = HttpReader::new();
             let loaded = load_all(&eff, &reader);
             print_failures(&loaded.failures);
-            let r = resolve(&eff, &loaded.loaded, &parse_ref(&reference)?)?;
+            let cref = parse_ref(&reference)?;
+            let r = resolve(&eff, &loaded.loaded, &cref)?;
             let keys = weftos_signer_keys();
+            // Say what will be fetched, and from where, before anything is downloaded.
+            let origin = if eff.from_project(&r.loaded.source.name) { "this project's cog-sources.toml" } else { "your user sources" };
+            eprintln!(
+                "resolved {} -> {} [{} source from {origin}]; {} key(s) can sign it",
+                reference,
+                r.namespaced(),
+                r.loaded.source.kind.label(),
+                r.loaded.source.effective_keys(&keys).len()
+            );
+            if enable && cref.source.is_none() && eff.from_project(&r.loaded.source.name) && !confirm_project_source {
+                bail!(
+                    "'{reference}' resolved to {} from this project's own source list. Use the namespaced id ({}) or pass --confirm-project-source to start it",
+                    r.namespaced(),
+                    r.namespaced()
+                );
+            }
             let ctx = FetchCtx { reader: &reader, licences: &eff.licences, now: Utc::now(), extra_weftos_keys: &keys };
             let fetched = fetch_verified(r.loaded, &r.cog.id, &arch, &ctx)?;
             let root = root.unwrap_or_else(weftos_cog_sources::default_host_root);
@@ -403,7 +451,7 @@ fn run_blocking(args: CogArgs) -> anyhow::Result<()> {
 
 fn source(roots: &Roots, cmd: SourceCommand) -> anyhow::Result<()> {
     match cmd {
-        SourceCommand::Add { name, kind, url, keys, priority, user } => {
+        SourceCommand::Add { name, kind, url, keys, priority, user, allow_insecure } => {
             let kind: SourceKind = kind.into();
             let url = match (url, kind) {
                 (Some(u), _) => u,
@@ -411,7 +459,7 @@ fn source(roots: &Roots, cmd: SourceCommand) -> anyhow::Result<()> {
                 (None, _) => bail!("--url is required for a {} source", kind.label()),
             };
             let p = roots.edit(user, |f| {
-                f.add_source(CogSource { name: name.clone(), kind, url, pinned_keys: keys, priority, enabled: true })
+                f.add_source(CogSource { name: name.clone(), kind, url, pinned_keys: keys, priority, enabled: true, allow_insecure })
             })?;
             println!("added source '{name}' to {}", p.display());
             if kind == SourceKind::Cognitum {

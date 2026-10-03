@@ -22,7 +22,8 @@ A **cog source** is one entry of a `[[cog_source]]` list:
 | `name` | namespace, `[a-z0-9][a-z0-9_-]{0,31}`, never contains `:` |
 | `kind` | `weftos`, `cognitum` or `private` |
 | `url` | `registry.json` / `app-registry.json` URL or path, or a repo directory or URL prefix holding `registry.json` |
-| `pinned_keys` | Ed25519 public keys, 64 hex. Required for `private`. For `weftos` they are added to the defaults. For `cognitum` they pin release-record keys (optional verifier) |
+| `pinned_keys` | Ed25519 public keys, 64 hex. Required for `private`. **Refused on `weftos`**: the WeftOS anchors are compiled in and a project file cannot add to them. Accepted but unused today on `cognitum` (reserved for the optional release-record verifier) |
+| `allow_insecure` | default false; development only, lets a `cognitum` source use `http://` or a local path |
 | `priority` | integer, default 0, higher wins |
 | `enabled` | default true; a disabled source is kept in the file and skipped |
 
@@ -36,9 +37,11 @@ There is no built-in default `weftos` source URL: the WeaveLogic registry has no
 
 | Kind | Listing | Install requires | Binary check | Placement-eligible |
 |---|---|---|---|---|
-| `weftos` | COG-008 `registry.json` | nothing | size, sha256, Ed25519 signature by the pinned WeaveLogic release key, any compiled-in WeftOS package signer, or a key in `pinned_keys` | yes, after packing (below) |
+| `weftos` | COG-008 `registry.json` | nothing | size, sha256, Ed25519 signature by the pinned WeaveLogic release key or a compiled-in WeftOS package signer. Only these may label a cog WeaveLogic | yes, after packing (below) |
 | `private` | same COG-008 format | nothing | size, sha256, Ed25519 signature by a key in `pinned_keys`. The WeaveLogic key is never implicitly trusted here | yes, after packing |
-| `cognitum` | Cognitum `app-registry.json` | a licence entitlement for that cog (section 3) | sha256 listed by the registry (a registry entry without a usable sha256 is refused); optional release record | no, until an operator hashes and signs it (ADR-100 6.3) |
+| `cognitum` | Cognitum `app-registry.json` | a licence entitlement for that cog (section 3) | sha256 listed by the registry (a registry entry without a usable sha256 is refused); the source and the binary location must be `https://` (`insecure_transport`), and a redirect from https to http is refused; optional release record | no, until an operator hashes and signs it (ADR-100 6.3) |
+
+The project file is untrusted input (a clone ships its own). It cannot widen the `weftos` anchors, it cannot change the kind of a source the user defined, and a project entry that replaces a user entry is reported with what changed; `weaver cog install` states the resolved `source:id` and signer count before fetching and asks for the namespaced id (or a flag) before `--enable` on a bare id that resolved to a project-defined source.
 
 Signed-only is unchanged for the first two kinds: unsigned, signed by another key, or a size or hash mismatch are each refused, and the check runs before the binary is written anywhere. "Placement-eligible after packing" means: governed placement (ADR-099) needs a `cogpkg` signed by a pinned signer (`weaver workload pack`), whatever source supplied the binary. Installing a cog from a registry into a cog-host root (the appliance path, `weftos-cog-host`) and placing it as a governed workload are two different operations; this ADR covers the first and records the second as the follow-up (open question 3).
 
@@ -79,7 +82,7 @@ The resolved package carries its provenance: source name and kind, registry loca
 Four findings in `workload_pkg`, each with a test:
 
 1. **`WEFTOS_PINNED_SIGNERS` provisioning** is now documented (`docs/cogs/cog-sources.md`, "Key management"): how the WeftOS package signer is generated, kept in a secret and pinned, with a test of the documented flow. The set is still empty in this tree: the key has not been provisioned, so every accepted package signature is operator-pinned.
-2. **Record-only trust is bound to `cog.toml` and the source.** A Cognitum release record binds cog id, version, source commit and one binary digest; it does not cover `cog.toml`. A package trusted through a record alone is now accepted only if the record's `sourceCommit` matches the package's `source.commit` and the package's `cog.toml` BLAKE3 is in `VerifyPolicy.record_cog_toml_pins` (`--cog-toml-pin`). Otherwise the package needs an operator signature, which covers `cog.toml`.
+2. **Record-only trust is bound to `cog.toml` and the source.** A Cognitum release record binds cog id, version, source commit and one binary digest; it does not cover `cog.toml`. A package trusted through a record alone is now accepted only if the package's `cog.toml` BLAKE3 is in `VerifyPolicy.record_cog_toml_pins` (`--cog-toml-pin`, compared case-insensitively). **That pin is the binding.** The record's `sourceCommit` is checked too, but only as a consistency check (both sides at least 7 hex characters, case-insensitive prefix match): it ties the record to the same source the package claims, it does not bind `cog.toml`. Otherwise the package needs an operator signature, which covers `cog.toml`.
 3. **An attached record is checked on operator-signed packages.** With the verifier on, a record that is forged, mismatched or unpinned fails the package even when a valid operator signature is also present. With the verifier off the attachment is inert, as before.
 4. **One bad signature entry does not fail the whole verify.** An entry whose public key or signature is not valid hex of the right length is skipped like an unpinned one. It neither authenticates nor vetoes. A well-formed signature from a pinned key that fails to verify is still fatal (a tampered manifest still fails).
 
@@ -106,3 +109,4 @@ Cost and limits: a licence is a declaration, not enforcement. Registry installs 
 5. **Registry hosting for WeftOS.** The WeaveLogic registry has no fixed public URL in this tree, hence no default `weftos` source.
 6. **Compiled-in signer provisioning.** Generate and pin the first `WEFTOS_PINNED_SIGNERS` key (owner action; see the key management section of the guide). Until then the compiled set is empty.
 7. **Cognitum release records on the registry path.** Installs from a Cognitum source check sha256 only; verifying a release record there needs the record published next to the binary, which the app registry does not do (only `anomaly-detect` is release-eligible upstream).
+8. **Rollback and substitution in COG-008.** COG-008 signs only the binary bytes and `registry.json` itself is unsigned, so a mirror can serve an older signed binary (rollback) or a different signed binary under another cog id (cross-id substitution); version and id are not covered. Future fix: sign a statement over `(id, version, arch, sha256)` and verify it with the binary signature.

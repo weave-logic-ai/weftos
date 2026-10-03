@@ -234,19 +234,21 @@ pub fn require_record_only_binding(
                 .into(),
         ));
     };
-    let ok_commit = !facts.source_commit.is_empty()
-        && commit.len() >= 7
-        && (facts.source_commit.starts_with(commit) || commit.starts_with(&facts.source_commit));
+    let is_hex = |c: &str| c.len() >= 7 && c.bytes().all(|b| b.is_ascii_hexdigit());
+    let (pkg, rec) = (commit.to_ascii_lowercase(), facts.source_commit.to_ascii_lowercase());
+    // Both sides need at least 7 hex characters, so an empty or tiny prefix cannot match anything.
+    let ok_commit = is_hex(&pkg) && is_hex(&rec) && (rec.starts_with(&pkg) || pkg.starts_with(&rec));
     if !ok_commit {
         return Err(reject(format!(
             "record sourceCommit {:?} does not match package source commit {commit}",
             facts.source_commit
         )));
     }
+    let want = body.cog_toml.blake3.to_ascii_lowercase();
     if !policy
         .record_cog_toml_pins
         .iter()
-        .any(|p| p == &body.cog_toml.blake3)
+        .any(|p| p.trim().to_ascii_lowercase() == want)
     {
         return Err(reject(format!(
             "cog.toml {} is not bound: a record does not cover cog.toml, so record-only trust needs an operator-pinned cog.toml hash (or an operator signature)",

@@ -515,7 +515,8 @@ fn record_only_trust_needs_cog_toml_pin_and_matching_source_commit() {
         accept_cognitum_release: true,
         record_cog_toml_pins: vec!["0".repeat(64)],
     };
-    assert!(verify_dir(&fx.pkg, &anchors, &other_pin).is_err());
+    let err = verify_dir(&fx.pkg, &anchors, &other_pin).unwrap_err();
+    assert!(err.to_string().contains("cog.toml"), "{err}");
 
     // Pinned, source commit matches: accepted.
     assert!(verify_dir(&fx.pkg, &anchors, &record_only_policy()).is_ok());
@@ -532,6 +533,25 @@ fn record_only_trust_needs_cog_toml_pin_and_matching_source_commit() {
     let fx2 = fixture_arches(Some(&other_src), &["aarch64"]);
     let err = verify_dir(&fx2.pkg, &anchors, &record_only_policy()).unwrap_err();
     assert!(err.to_string().contains("sourceCommit"), "{err}");
+
+    // A record commit shorter than 7 hex chars is a prefix of anything: refused.
+    let resign = |mut rec: Value| {
+        let st = canonical_statement(&rec).unwrap();
+        rec["provenance"]["detachedSignature"]["payloadDigest"] = json!(format!("sha256:{}", hex_encode(&Sha256::digest(&st))));
+        rec["provenance"]["detachedSignature"]["signature"] = json!(b64url(&ck.sign(&st).to_bytes()));
+        rec
+    };
+    let mut short = cognitum_record(&ck, bin);
+    short["sourceCommit"] = json!("8970f9");
+    let fx3 = fixture_arches(Some(&resign(short)), &["aarch64"]);
+    assert!(verify_dir(&fx3.pkg, &anchors, &record_only_policy()).is_err());
+    // Case does not matter for commits or for the cog.toml pin.
+    let mut upper = cognitum_record(&ck, bin);
+    upper["sourceCommit"] = json!("8970F99AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let fx4 = fixture_arches(Some(&resign(upper)), &["aarch64"]);
+    let mut pol = record_only_policy();
+    pol.record_cog_toml_pins = pol.record_cog_toml_pins.iter().map(|p| p.to_ascii_uppercase()).collect();
+    assert!(verify_dir(&fx4.pkg, &anchors, &pol).is_ok());
 }
 
 #[test]

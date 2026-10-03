@@ -16,6 +16,8 @@
 # Scope (the parts of the docs that were verified against the CLI):
 #   docs/guides/agents.md                     whole file
 #   docs/guides/weftos-deployment-sops.md     SOP 1 and SOP 3
+#   docs/cogs/cog-sources.md                  whole file
+#   docs/cogs/operator-guide.md               whole file
 # Extracted: `weaver`/`weft` commands in fenced lines and inline code spans, at
 # the start of a line or after `&&`, `;`, `|`, `$(`, leading `VAR=val` words and
 # `sudo`; and `ExecStart=.../weaver ...` lines. A command is cut at ` > `,
@@ -48,7 +50,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-DOCS="${DOC_SPECS:-docs/guides/agents.md:all docs/guides/weftos-deployment-sops.md:sop}"
+DOCS="${DOC_SPECS:-docs/guides/agents.md:all docs/guides/weftos-deployment-sops.md:sop docs/cogs/cog-sources.md:all docs/cogs/operator-guide.md:all}"
 MESH_SRC="crates/clawft-types/src/config/kernel.rs"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/doc-commands.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT

@@ -80,7 +80,7 @@ pub fn cognitum_repo(dir: &Path, cogs: &[&str]) -> PathBuf {
 }
 
 pub fn source(name: &str, kind: SourceKind, url: &Path, keys: &[String], priority: i32) -> CogSource {
-    CogSource { name: name.into(), kind, url: url.to_string_lossy().into(), pinned_keys: keys.to_vec(), priority, enabled: true }
+    CogSource { name: name.into(), kind, url: url.to_string_lossy().into(), pinned_keys: keys.to_vec(), priority, enabled: true, allow_insecure: kind == SourceKind::Cognitum }
 }
 
 pub fn licence(source: &str, cogs: LicensedCogs, expires: Option<&str>) -> CogLicence {

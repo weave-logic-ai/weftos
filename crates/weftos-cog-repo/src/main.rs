@@ -230,15 +230,21 @@ fn load_registry(base: &str) -> R<Registry> {
 
 /// Keys a repo is checked against: every `--pin <hex>`, or the pinned WeaveLogic key when none.
 fn pins(args: &[String]) -> R<Vec<VerifyingKey>> {
+    let mut keys = explicit_pins(args)?;
+    if keys.is_empty() {
+        keys.push(weavelogic_key());
+    }
+    Ok(keys)
+}
+
+/// Only the keys given with `--pin` (empty when there are none).
+fn explicit_pins(args: &[String]) -> R<Vec<VerifyingKey>> {
     let mut keys = Vec::new();
     for (i, a) in args.iter().enumerate() {
         if a == "--pin" {
             let hex_key = args.get(i + 1).ok_or("--pin needs a public key (64 hex chars)")?;
             keys.push(private::parse_pubkey(hex_key)?);
         }
-    }
-    if keys.is_empty() {
-        keys.push(weavelogic_key());
     }
     Ok(keys)
 }
@@ -260,7 +266,8 @@ fn verify_any(bytes: &[u8], art: &Artifact, keys: &[VerifyingKey]) -> Result<(),
 fn cmd_verify(args: &[String]) -> R<()> {
     let base = args.first().ok_or("verify needs <repo-url|repo-dir>")?;
     if Path::new(base).join("repo.toml").is_file() {
-        return private::cmd_verify(base);
+        // An explicit --pin wins over the repo's own declared key (and fails on a mismatch).
+        return private::cmd_verify(base, &explicit_pins(args)?);
     }
     let reg = load_registry(base)?;
     let key = pins(args)?;

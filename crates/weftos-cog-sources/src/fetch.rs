@@ -84,10 +84,26 @@ impl HttpReader {
     pub fn new() -> Self {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
+            .redirect(reqwest::redirect::Policy::custom(redirect_decision))
             .build()
             .expect("reqwest client");
         Self { client }
     }
+}
+
+/// Follow up to 5 redirects, but never from https down to http: Cognitum
+/// binaries are trusted by sha256 alone, so a downgrade would let a network
+/// attacker replace the binary.
+#[cfg(feature = "net")]
+fn redirect_decision(attempt: reqwest::redirect::Attempt<'_>) -> reqwest::redirect::Action {
+    if attempt.previous().len() >= 5 {
+        return attempt.error("too many redirects");
+    }
+    let from_https = attempt.previous().last().is_some_and(|u| u.scheme() == "https");
+    if from_https && attempt.url().scheme() != "https" {
+        return attempt.error("refusing a redirect from https to http");
+    }
+    attempt.follow()
 }
 
 #[cfg(feature = "net")]

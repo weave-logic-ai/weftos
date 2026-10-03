@@ -15,11 +15,15 @@ use crate::testkit::*;
 use weftos_cog_repo::WEAVELOGIC_PUBKEY_HEX;
 
 fn eff(sources: Vec<CogSource>, licences: Vec<crate::config::CogLicence>) -> EffectiveSources {
-    EffectiveSources { sources, licences }
+    EffectiveSources { sources, licences, ..Default::default() }
 }
 
 fn ctx<'a>(reader: &'a dyn crate::fetch::Reader, eff: &'a EffectiveSources) -> FetchCtx<'a> {
     FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: &[] }
+}
+
+fn ctx_with<'a>(reader: &'a dyn crate::fetch::Reader, eff: &'a EffectiveSources, keys: &'a [String]) -> FetchCtx<'a> {
+    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: keys }
 }
 
 // ── config ────────────────────────────────────────────────────────────────
@@ -87,6 +91,16 @@ fn config_rejects_bad_input() {
     assert!(bad("[[cog_licence]]\nsource=\"cognitum\"\ncogs=\"some\"\n").to_string().contains("\"all\" or a list"));
     assert!(bad("[[cog_licence]]\nsource=\"cognitum\"\ncogs=[]\n").to_string().contains("empty"));
     assert_eq!(bad("[[cog_source]]\nname=\"a\"\nkind=\"nope\"\nurl=\"/x\"\n").code(), "config_invalid");
+    // a weftos source cannot add its own trust anchor (F1)
+    let k = pub_hex(&key(2));
+    assert!(bad(&format!("[[cog_source]]\nname=\"w\"\nkind=\"weftos\"\nurl=\"/x\"\npinned_keys=[\"{k}\"]\n")).to_string().contains("cannot carry pinned_keys"));
+    // cognitum needs https unless explicitly allowed for development (F5)
+    for u in ["http://example.invalid/r.json", "/local/app-registry.json", "file:///x"] {
+        let e = bad(&format!("[[cog_source]]\nname=\"c\"\nkind=\"cognitum\"\nurl=\"{u}\"\n"));
+        assert!(e.to_string().contains("https://"), "{u}: {e}");
+    }
+    assert!(SourcesFile::parse("[[cog_source]]\nname=\"c\"\nkind=\"cognitum\"\nurl=\"/dev\"\nallow_insecure=true\n").is_ok());
+    assert!(SourcesFile::parse("[[cog_source]]\nname=\"c\"\nkind=\"cognitum\"\nurl=\"https://x.example/r.json\"\n").is_ok());
 }
 
 #[test]
@@ -94,13 +108,13 @@ fn project_overlays_user_defaults_and_can_disable() {
     let tmp = tempfile::tempdir().unwrap();
     let up = tmp.path().join("user.toml");
     let pp = tmp.path().join("proj.toml");
-    std::fs::write(&up, "[[cog_source]]\nname=\"weftos\"\nkind=\"weftos\"\nurl=\"/user-wl\"\n[[cog_source]]\nname=\"cognitum\"\nkind=\"cognitum\"\nurl=\"/user-cg\"\n[[cog_licence]]\nsource=\"cognitum\"\ncogs=\"all\"\n").unwrap();
-    std::fs::write(&pp, "[[cog_source]]\nname=\"cognitum\"\nkind=\"cognitum\"\nurl=\"/proj-cg\"\nenabled=false\n").unwrap();
+    std::fs::write(&up, "[[cog_source]]\nname=\"weftos\"\nkind=\"weftos\"\nurl=\"/user-wl\"\n[[cog_source]]\nname=\"cognitum\"\nkind=\"cognitum\"\nurl=\"https://user.example/cg.json\"\n[[cog_licence]]\nsource=\"cognitum\"\ncogs=\"all\"\n").unwrap();
+    std::fs::write(&pp, "[[cog_source]]\nname=\"cognitum\"\nkind=\"cognitum\"\nurl=\"https://proj.example/cg.json\"\nenabled=false\n").unwrap();
     let e = load_effective(Some(&up), Some(&pp)).unwrap();
     assert_eq!(e.sources.len(), 2);
     assert_eq!(e.source("weftos").unwrap().url, "/user-wl", "user-only entry kept");
     let cg = e.source("cognitum").unwrap();
-    assert_eq!((cg.url.as_str(), cg.enabled), ("/proj-cg", false), "project entry replaces the user one");
+    assert_eq!((cg.url.as_str(), cg.enabled), ("https://proj.example/cg.json", false), "project entry replaces the user one");
     assert_eq!(e.enabled().count(), 1);
     assert_eq!(e.licences.len(), 1, "user licence still applies");
     // missing files are empty
@@ -133,9 +147,14 @@ fn edit_helpers_add_remove_enable_and_save() {
 fn effective_keys_follow_the_kind() {
     let k = pub_hex(&key(3));
     let extra = pub_hex(&key(4));
-    let w = source("w", SourceKind::Weftos, &PathBuf::from("/x"), &[k.clone()], 0);
-    let keys = w.effective_keys(&[extra.clone()]);
-    assert_eq!(keys, vec![WEAVELOGIC_PUBKEY_HEX.to_string(), extra, k.clone()]);
+    let w = source("w", SourceKind::Weftos, &PathBuf::from("/x"), &[], 0);
+    assert_eq!(w.effective_keys(&[extra.clone()]), vec![WEAVELOGIC_PUBKEY_HEX.to_string(), extra.clone()]);
+    // nothing from a config file can enter the weftos key set: the only inputs are the
+    // WeaveLogic key and the compiled-in signers the caller passes.
+    let mut tampered = w.clone();
+    tampered.pinned_keys = vec![k.clone()];
+    assert!(!tampered.effective_keys(&[]).contains(&k));
+    assert!(SourcesFile { cog_source: vec![tampered], ..Default::default() }.validate().is_err());
     let p = source("p", SourceKind::Private, &PathBuf::from("/x"), &[k.clone()], 0);
     assert_eq!(p.effective_keys(&[pub_hex(&key(4))]), vec![k], "a private source never trusts the WeaveLogic key implicitly");
     let c = source("c", SourceKind::Cognitum, &PathBuf::from("/x"), &[], 0);
@@ -145,24 +164,56 @@ fn effective_keys_follow_the_kind() {
 // ── weftos + private sources (signed) ─────────────────────────────────────
 
 #[test]
-fn weftos_source_installs_when_signed_by_a_pinned_key() {
+fn weftos_source_installs_only_when_signed_by_an_anchor_key() {
     let tmp = tempfile::tempdir().unwrap();
     let k = key(5);
     let reg = signed_repo(&tmp.path().join("wl"), &k, &["fall-detect"]);
-    let s = source("weftos", SourceKind::Weftos, &reg, &[pub_hex(&k)], 0);
+    let s = source("weftos", SourceKind::Weftos, &reg, &[], 0);
     let e = eff(vec![s.clone()], vec![]);
     let l = load_source(&s, &FsReader).unwrap();
-    let f = fetch_verified(&l, "fall-detect", "arm", &ctx(&FsReader, &e)).unwrap();
+
+    // `k` is a compiled-in WeftOS signer (passed by the caller): accepted, labelled WeaveLogic.
+    let anchors = vec![pub_hex(&k)];
+    let f = fetch_verified(&l, "fall-detect", "arm", &ctx_with(&FsReader, &e, &anchors)).unwrap();
     assert_eq!(f.bytes, bin("fall-detect"));
     assert_eq!(f.provenance.trust, "ed25519-signed");
-    assert_eq!(f.provenance.signer_pubkey.as_deref(), Some(pub_hex(&k).as_str()));
-    assert!(f.provenance.placement_eligible);
+    assert!(f.provenance.weftos_anchor && f.provenance.placement_eligible);
+    let root = tmp.path().join("host");
+    let rec = install_into_host(&root, &f, false, &[]).unwrap();
+    assert_eq!(rec.source, weftos_cog_host::Source::WeaveLogic);
 
-    // The same repo signed by an unpinned key is refused.
-    let other = source("weftos", SourceKind::Weftos, &reg, &[], 0);
-    let l2 = load_source(&other, &FsReader).unwrap();
-    let err = fetch_verified(&l2, "fall-detect", "arm", &ctx(&FsReader, &e)).unwrap_err();
+    // The same repo signed by a key that is not an anchor is refused.
+    let err = fetch_verified(&l, "fall-detect", "arm", &ctx(&FsReader, &e)).unwrap_err();
     assert_eq!(err.code(), "verify_failed", "{err}");
+}
+
+#[test]
+fn a_non_anchor_signer_never_yields_weaverlogic() {
+    // A private source, pinned to a key the project controls, installs fine but is never
+    // labelled WeaveLogic, even if its source is named "weftos".
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(6);
+    let reg = signed_repo(&tmp.path().join("pv"), &k, &["x-cog"]);
+    let s = source("weftos", SourceKind::Private, &reg, &[pub_hex(&k)], 0);
+    let e = eff(vec![s.clone()], vec![]);
+    let l = load_source(&s, &FsReader).unwrap();
+    let f = fetch_verified(&l, "x-cog", "arm", &ctx(&FsReader, &e)).unwrap();
+    assert!(!f.provenance.weftos_anchor);
+    let rec = install_into_host(&tmp.path().join("host"), &f, false, &[]).unwrap();
+    assert_eq!(rec.source, weftos_cog_host::Source::Local);
+    assert!(rec.signed);
+
+    // Even a hand-built provenance claiming kind=weftos without an anchor stays Local.
+    let mut forged = f.clone();
+    forged.provenance.kind = "weftos".into();
+    let rec = install_into_host(&tmp.path().join("host2"), &forged, false, &[]).unwrap();
+    assert_eq!(rec.source, weftos_cog_host::Source::Local);
+
+    // And the anchor flag is computed from the signer, not the config: a private source whose
+    // key happens to be passed as a compiled-in signer is still not a weftos-kind source.
+    let anchors = vec![pub_hex(&k)];
+    let f2 = fetch_verified(&l, "x-cog", "arm", &ctx_with(&FsReader, &e, &anchors)).unwrap();
+    assert!(!f2.provenance.weftos_anchor, "only weftos-kind sources can be anchors");
 }
 
 #[test]
@@ -298,7 +349,7 @@ fn world(priorities: (i32, i32, i32)) -> World {
     let cg = cognitum_repo(&tmp.path().join("cg"), &["fall-detect", "sleep-apnea"]);
     let eff = eff(
         vec![
-            source("weftos", SourceKind::Weftos, &wl, &[pub_hex(&k)], priorities.0),
+            source("weftos", SourceKind::Weftos, &wl, &[], priorities.0),
             source("acme-private", SourceKind::Private, &pv, &[pub_hex(&k)], priorities.1),
             source("cognitum", SourceKind::Cognitum, &cg, &[], priorities.2),
         ],
@@ -444,7 +495,7 @@ fn catalog_lists_cogs_across_sources_with_run_mode_policy_and_access() {
     .unwrap();
     let e = eff(
         vec![
-            source("weftos", SourceKind::Weftos, &wl, &[pub_hex(&k)], 0),
+            source("weftos", SourceKind::Weftos, &wl, &[], 0),
             source("cognitum", SourceKind::Cognitum, &cg, &[], 0),
         ],
         vec![licence("cognitum", LicensedCogs::List(vec!["baby-cry".into()]), None)],
@@ -496,4 +547,84 @@ fn signing_helper_matches_registry_format() {
     assert!(weftos_cog_repo::verify_artifact(&bin("x"), art, &key(21).verifying_key()).is_ok());
     assert!(weftos_cog_repo::verify_artifact(&bin("x"), art, &key(22).verifying_key()).is_err());
     let _ = a.sign(b"");
+}
+
+// ── review round: overrides, transport, provenance ───────────────────────
+
+#[test]
+fn project_entry_replacing_a_user_source_warns_and_a_kind_change_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let up = tmp.path().join("user.toml");
+    let pp = tmp.path().join("proj.toml");
+    std::fs::write(&up, "[[cog_source]]\nname=\"weftos\"\nkind=\"weftos\"\nurl=\"/user-wl\"\n").unwrap();
+    std::fs::write(&pp, "[[cog_source]]\nname=\"weftos\"\nkind=\"weftos\"\nurl=\"/evil\"\n[[cog_source]]\nname=\"extra\"\nkind=\"weftos\"\nurl=\"/y\"\n").unwrap();
+    let e = load_effective(Some(&up), Some(&pp)).unwrap();
+    assert!(e.warnings.iter().any(|w| w.contains("replaces your user source 'weftos'") && w.contains("/evil")), "{:?}", e.warnings);
+    assert!(e.from_project("weftos") && e.from_project("extra"));
+    // unchanged override: no warning
+    std::fs::write(&pp, "[[cog_source]]\nname=\"weftos\"\nkind=\"weftos\"\nurl=\"/user-wl\"\npriority=5\n").unwrap();
+    assert!(load_effective(Some(&up), Some(&pp)).unwrap().warnings.is_empty());
+    // a kind change is refused outright
+    let k = pub_hex(&key(1));
+    std::fs::write(&pp, format!("[[cog_source]]\nname=\"weftos\"\nkind=\"private\"\nurl=\"/evil\"\npinned_keys=[\"{k}\"]\n")).unwrap();
+    let err = load_effective(Some(&up), Some(&pp)).unwrap_err();
+    assert!(err.to_string().contains("different kind"), "{err}");
+    // plain http is flagged
+    std::fs::write(&pp, "[[cog_source]]\nname=\"w2\"\nkind=\"weftos\"\nurl=\"http://example.invalid/r\"\n").unwrap();
+    assert!(load_effective(None, Some(&pp)).unwrap().warnings.iter().any(|w| w.contains("plain http")));
+}
+
+#[test]
+fn cognitum_binary_location_must_be_https() {
+    use crate::resolve::{Listing, LoadedSource};
+    let tmp = tempfile::tempdir().unwrap();
+    let mk = |base: &str, allow: bool| {
+        let reg = weftos_cog_market::CognitumRegistry::parse(
+            format!(r#"{{"binary_base_url":"{base}","cogs":[{{"id":"baby-cry","version":"1","sha256":"{}"}}]}}"#, "ab".repeat(32)).as_bytes(),
+        )
+        .unwrap();
+        let mut src = source("cognitum", SourceKind::Cognitum, &tmp.path().join("r.json"), &[], 0);
+        src.url = "https://example.invalid/app-registry.json".into();
+        src.allow_insecure = allow;
+        LoadedSource { source: src, listing: Listing::Cognitum(reg) }
+    };
+    let lic = vec![licence("cognitum", LicensedCogs::All("all".into()), None)];
+    let e = eff(vec![], lic);
+    // an http binary base, even from an https registry, is refused before any read
+    let reader = CountingReader { needle: "example.invalid".into(), hits: Default::default() };
+    let err = fetch_verified(&mk("http://example.invalid/cg", false), "baby-cry", "arm", &ctx(&reader, &e)).unwrap_err();
+    assert_eq!(err.code(), "insecure_transport", "{err}");
+    assert_eq!(*reader.hits.borrow(), 0);
+    // a local path is refused too
+    let err = fetch_verified(&mk("/tmp/cg", false), "baby-cry", "arm", &ctx(&reader, &e)).unwrap_err();
+    assert_eq!(err.code(), "insecure_transport");
+    // https passes the scheme check (the offline reader then refuses the network)
+    let err = fetch_verified(&mk("https://example.invalid/cg", false), "baby-cry", "arm", &ctx(&reader, &e)).unwrap_err();
+    assert_eq!(err.code(), "fetch_failed", "{err}");
+    // the development flag lifts the scheme check (fails later, on the missing file)
+    let err = fetch_verified(&mk("/definitely/not/here", true), "baby-cry", "arm", &ctx(&reader, &e)).unwrap_err();
+    assert_eq!(err.code(), "fetch_failed");
+}
+
+#[test]
+fn provenance_is_written_atomically_before_the_record() {
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(14);
+    let reg = signed_repo(&tmp.path().join("pv"), &k, &["acme-gauge"]);
+    let s = source("acme-private", SourceKind::Private, &reg, &[pub_hex(&k)], 0);
+    let e = eff(vec![s.clone()], vec![]);
+    let l = load_source(&s, &FsReader).unwrap();
+    let f = fetch_verified(&l, "acme-gauge", "arm", &ctx(&FsReader, &e)).unwrap();
+    let root = tmp.path().join("host");
+    // a cog dir whose binary path cannot be written fails after provenance, never leaving a
+    // record without provenance: here the record is what is missing.
+    std::fs::create_dir_all(root.join("acme-gauge/cog-acme-gauge-arm.new")).unwrap();
+    assert!(install_into_host(&root, &f, true, &[]).is_err());
+    assert!(root.join("acme-gauge/provenance.json").is_file());
+    assert!(!root.join("acme-gauge/cog.json").exists(), "no enabled record without a finished install");
+    std::fs::remove_dir_all(root.join("acme-gauge/cog-acme-gauge-arm.new")).unwrap();
+    install_into_host(&root, &f, true, &[]).unwrap();
+    let leftovers: Vec<_> = std::fs::read_dir(root.join("acme-gauge")).unwrap().flatten().filter(|d| d.file_name().to_string_lossy().ends_with(".tmp")).collect();
+    assert!(leftovers.is_empty());
+    assert!(read_provenance(&root, "acme-gauge").is_some());
 }

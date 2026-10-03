@@ -61,8 +61,10 @@ pub struct CogSource {
     /// repository directory (a COG-008 repo directory holds `registry.json`).
     pub url: String,
     /// Ed25519 public keys (64 hex) that may sign this source's binaries.
-    /// Required for `private`; for `weftos` they are added to the defaults;
-    /// for `cognitum` they pin release-record keys (optional verifier).
+    /// Required for `private`. Refused on `weftos`: the WeftOS trust anchors are
+    /// compiled in, and a project file must not be able to add its own key to
+    /// them (put your own key in a `private` source). Accepted but unused today
+    /// on `cognitum` (reserved for the optional release-record verifier).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinned_keys: Vec<String>,
     /// Higher wins when a bare id is listed by several enabled sources.
@@ -71,6 +73,16 @@ pub struct CogSource {
     /// Disabled sources are skipped by search, resolution and install.
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Development and tests only: let a `cognitum` source use a local path or
+    /// `http://`, for the registry and for the binaries it lists. Cognitum
+    /// binaries are trusted by sha256 alone, so over plain http the hash and
+    /// the binary can both be replaced in transit.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_insecure: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn yes() -> bool {
@@ -79,11 +91,12 @@ fn yes() -> bool {
 
 impl CogSource {
     /// Keys that can verify this source's signed artifacts. For `weftos`
-    /// that is `pinned_keys` + the WeaveLogic release key + `extra_weftos`
-    /// (the caller passes the compiled-in `WEFTOS_PINNED_SIGNERS` keys; this
-    /// crate does not link the kernel). For `private` it is `pinned_keys`
-    /// only: the WeaveLogic key is never implicitly trusted by a private
-    /// source. For `cognitum` it is empty (binaries are not signed).
+    /// that is the WeaveLogic release key + `extra_weftos` (the caller passes
+    /// the compiled-in `WEFTOS_PINNED_SIGNERS` keys; this crate does not link
+    /// the kernel). Nothing from the config file is added to it. For
+    /// `private` it is `pinned_keys` only: the WeaveLogic key is never
+    /// implicitly trusted by a private source. For `cognitum` it is empty
+    /// (binaries are not signed).
     pub fn effective_keys(&self, extra_weftos: &[String]) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         let mut push = |k: &str| {
@@ -96,7 +109,6 @@ impl CogSource {
             SourceKind::Weftos => {
                 push(WEAVELOGIC_PUBKEY_HEX);
                 extra_weftos.iter().for_each(|k| push(k));
-                self.pinned_keys.iter().for_each(|k| push(k));
             }
             SourceKind::Private => self.pinned_keys.iter().for_each(|k| push(k)),
             SourceKind::Cognitum => {}
@@ -119,6 +131,12 @@ impl CogSource {
             if !valid_pubkey(k) {
                 return bad(format!("pinned key {k:?} is not a 64-hex Ed25519 public key"));
             }
+        }
+        if self.kind == SourceKind::Weftos && !self.pinned_keys.is_empty() {
+            return bad("a weftos source cannot carry pinned_keys: the WeftOS anchors are compiled in. Put your own key in a `private` source".into());
+        }
+        if self.kind == SourceKind::Cognitum && !self.allow_insecure && !self.url.starts_with("https://") {
+            return bad("a cognitum source must use an https:// url (its binaries are trusted by sha256 alone); allow_insecure = true is for development only".into());
         }
         if self.kind == SourceKind::Private && self.pinned_keys.is_empty() {
             return bad("a private source must pin at least one key (the project's own signing key)".into());
@@ -182,6 +200,13 @@ pub fn valid_cog_id(s: &str) -> bool {
         && !s.ends_with('-')
         && !s.contains("--")
         && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// True when `key_hex` is the WeaveLogic release key or one of `extra_weftos`
+/// (the compiled-in WeftOS signers): the only keys that may label a cog WeaveLogic.
+pub fn is_weftos_anchor(key_hex: &str, extra_weftos: &[String]) -> bool {
+    let k = key_hex.trim().to_ascii_lowercase();
+    k == WEAVELOGIC_PUBKEY_HEX || extra_weftos.iter().any(|e| e.trim().to_ascii_lowercase() == k)
 }
 
 /// 64 hex chars that decode to a valid Ed25519 point.
@@ -264,9 +289,13 @@ impl SourcesFile {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
-        let tmp = path.with_extension("toml.tmp");
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let tmp = path.with_extension(format!("toml.{}.{nanos}.tmp", std::process::id()));
         std::fs::write(&tmp, self.to_toml()?).map_err(io)?;
-        std::fs::rename(&tmp, path).map_err(io)
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            io(e)
+        })
     }
 
     /// Add a source; refuses a duplicate name.
@@ -327,22 +356,59 @@ pub struct EffectiveSources {
     pub sources: Vec<CogSource>,
     /// Licences: project entries first, then user entries.
     pub licences: Vec<CogLicence>,
+    /// Names of sources whose effective entry comes from the project file.
+    pub project_names: BTreeSet<String>,
+    /// Things the operator should see: a project entry replacing a user entry
+    /// and changing its url or keys, and plain-http sources.
+    pub warnings: Vec<String>,
 }
 
 impl EffectiveSources {
     /// Overlay `project` on `user`: a project source replaces a user source
-    /// of the same name (including to disable it).
+    /// of the same name (including to disable it). Use [`check_overrides`]
+    /// (done by [`load_effective`]) to refuse a changed kind.
     pub fn merge(user: &SourcesFile, project: &SourcesFile) -> Self {
         let mut sources: Vec<CogSource> = project.cog_source.clone();
+        let mut warnings = Vec::new();
         for u in &user.cog_source {
-            if !sources.iter().any(|p| p.name == u.name) {
-                sources.push(u.clone());
+            match project.cog_source.iter().find(|p| p.name == u.name) {
+                None => sources.push(u.clone()),
+                Some(p) => {
+                    let mut changed = Vec::new();
+                    if p.url != u.url {
+                        changed.push(format!("url {} -> {}", u.url, p.url));
+                    }
+                    if p.pinned_keys != u.pinned_keys {
+                        changed.push("pinned keys".to_string());
+                    }
+                    if p.kind != u.kind {
+                        changed.push(format!("kind {} -> {}", u.kind.label(), p.kind.label()));
+                    }
+                    if !changed.is_empty() {
+                        warnings.push(format!(
+                            "this project's cog-sources.toml replaces your user source '{}' and changes its {}",
+                            u.name,
+                            changed.join(", ")
+                        ));
+                    }
+                }
             }
         }
         sources.sort_by(|a, b| a.name.cmp(&b.name));
+        for s in &sources {
+            if s.url.starts_with("http://") {
+                warnings.push(format!("source '{}' uses plain http://; registry and binaries can be altered in transit (signed sources still verify signatures)", s.name));
+            }
+        }
         let mut licences = project.cog_licence.clone();
         licences.extend(user.cog_licence.iter().cloned());
-        Self { sources, licences }
+        let project_names = project.cog_source.iter().map(|s| s.name.clone()).collect();
+        Self { sources, licences, project_names, warnings }
+    }
+
+    /// True when the effective entry for `name` came from the project file.
+    pub fn from_project(&self, name: &str) -> bool {
+        self.project_names.contains(name)
     }
 
     /// Enabled sources only.
@@ -354,6 +420,24 @@ impl EffectiveSources {
     pub fn source(&self, name: &str) -> Option<&CogSource> {
         self.sources.iter().find(|s| s.name == name)
     }
+}
+
+/// Refuse a project entry that replaces a user entry with a different kind:
+/// a clone must not be able to turn the user's `weftos` source into something else.
+pub fn check_overrides(user: &SourcesFile, project: &SourcesFile) -> Result<()> {
+    for u in &user.cog_source {
+        if let Some(p) = project.cog_source.iter().find(|p| p.name == u.name)
+            && p.kind != u.kind
+        {
+            return Err(SourceError::Config(format!(
+                "the project file redefines your user source '{}' with a different kind ({} -> {}); rename it",
+                u.name,
+                u.kind.label(),
+                p.kind.label()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// `<project root>/.weftos/cog-sources.toml`.
@@ -371,5 +455,6 @@ pub fn user_sources_path(home: &Path) -> PathBuf {
 pub fn load_effective(user_file: Option<&Path>, project_file: Option<&Path>) -> Result<EffectiveSources> {
     let user = user_file.map(SourcesFile::load).transpose()?.unwrap_or_default();
     let project = project_file.map(SourcesFile::load).transpose()?.unwrap_or_default();
+    check_overrides(&user, &project)?;
     Ok(EffectiveSources::merge(&user, &project))
 }

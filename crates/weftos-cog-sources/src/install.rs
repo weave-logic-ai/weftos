@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use weftos_cog_host::{install_verified, CogRecord, Source as HostSource, VerifiedInstall};
 use weftos_cog_repo::{sha256_hex, verify_artifact, Artifact, VerifyError};
 
-use crate::config::{valid_cog_id, CogLicence, SourceKind};
+use crate::config::{is_weftos_anchor, valid_cog_id, CogLicence, SourceKind};
 use crate::error::{Result, SourceError};
 use crate::fetch::{join, Reader, MAX_BINARY_BYTES};
 use crate::licence::entitlement;
@@ -57,6 +57,10 @@ pub struct Provenance {
     /// Licence account that allowed a Cognitum install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub licence_account: Option<String>,
+    /// True when the verifying key is the WeaveLogic release key or a compiled-in
+    /// WeftOS signer. Only then may the cog be labelled WeaveLogic on install.
+    #[serde(default)]
+    pub weftos_anchor: bool,
     /// False for Cognitum binaries until an operator hashes and signs them (ADR-100 6.3).
     pub placement_eligible: bool,
     /// RFC 3339 time of the fetch.
@@ -126,6 +130,9 @@ pub fn fetch_verified(loaded: &LoadedSource, cog_id: &str, arch: &str, ctx: &Fet
                 location: src.url.clone(),
                 msg: "registry has no binary_base_url".into(),
             })?;
+            if !src.allow_insecure && !url.starts_with("https://") {
+                return Err(SourceError::Insecure { id: cog_id.into(), source_name: src.name.clone(), location: url });
+            }
             let bytes = ctx.reader.read(&url, MAX_BINARY_BYTES)?;
             let got = sha256_hex(&bytes);
             if got != want {
@@ -157,6 +164,7 @@ pub fn fetch_verified(loaded: &LoadedSource, cog_id: &str, arch: &str, ctx: &Fet
                     signer_pubkey: None,
                     signer_key_id: None,
                     licence_account: Some(lic.account.clone()),
+                    weftos_anchor: false,
                     placement_eligible: false,
                     fetched_at,
                 },
@@ -181,6 +189,7 @@ pub fn fetch_verified(loaded: &LoadedSource, cog_id: &str, arch: &str, ctx: &Fet
                 source_name: src.name.clone(),
                 reason,
             })?;
+            let anchor = src.kind == SourceKind::Weftos && is_weftos_anchor(&signer, ctx.extra_weftos_keys);
             Ok(Fetched {
                 provenance: Provenance {
                     source: src.name.clone(),
@@ -194,6 +203,7 @@ pub fn fetch_verified(loaded: &LoadedSource, cog_id: &str, arch: &str, ctx: &Fet
                     signer_key_id: Some(key_id(&signer)),
                     signer_pubkey: Some(signer),
                     licence_account: None,
+                    weftos_anchor: anchor,
                     placement_eligible: true,
                     fetched_at,
                 },
@@ -228,22 +238,35 @@ fn verify_with_any(bytes: &[u8], art: &Artifact, keys_hex: &[String]) -> std::re
 }
 
 /// Write a verified cog into a cog-host root and record its provenance.
+///
+/// Provenance is written first (temp file + rename), so a cog that is enabled
+/// is never without it. A cog is labelled WeaveLogic only when the verifying
+/// key is a WeftOS anchor; a signature from any other pinned key is recorded as
+/// a local, signed install.
 pub fn install_into_host(root: &Path, f: &Fetched, enable: bool, args: &[String]) -> Result<CogRecord> {
     let p = &f.provenance;
     let (source, signed) = match p.trust.as_str() {
-        "ed25519-signed" if p.kind == "weftos" => (HostSource::WeaveLogic, true),
+        "ed25519-signed" if p.kind == "weftos" && p.weftos_anchor => (HostSource::WeaveLogic, true),
         "ed25519-signed" => (HostSource::Local, true),
         _ => (HostSource::Cognitum, false),
     };
-    let rec = install_verified(
+    let io = |path: &Path, e: std::io::Error| SourceError::Io { path: path.display().to_string(), msg: e.to_string() };
+    let dir = root.join(&p.cog_id);
+    std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
+    let json = serde_json::to_vec_pretty(p).map_err(|e| SourceError::Parse { what: "provenance".into(), msg: e.to_string() })?;
+    let path = dir.join(PROVENANCE_FILE);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = dir.join(format!("{PROVENANCE_FILE}.{}.{nanos}.tmp", std::process::id()));
+    std::fs::write(&tmp, json).map_err(|e| io(&tmp, e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io(&path, e)
+    })?;
+    install_verified(
         root,
         &VerifiedInstall { id: &p.cog_id, version: &p.version, source, signed, args, enable, bytes: &f.bytes },
     )
-    .map_err(|msg| SourceError::Io { path: root.display().to_string(), msg })?;
-    let path = root.join(&p.cog_id).join(PROVENANCE_FILE);
-    let json = serde_json::to_vec_pretty(p).map_err(|e| SourceError::Parse { what: "provenance".into(), msg: e.to_string() })?;
-    std::fs::write(&path, json).map_err(|e| SourceError::Io { path: path.display().to_string(), msg: e.to_string() })?;
-    Ok(rec)
+    .map_err(|msg| SourceError::Io { path: root.display().to_string(), msg })
 }
 
 /// Read the provenance of an installed cog, if recorded.
