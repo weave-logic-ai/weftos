@@ -209,3 +209,67 @@ fn dead_placed_endpoint_falls_back_and_invalidates() {
         assert_eq!(r.calls.load(Ordering::SeqCst), 2, "failure invalidated the cache");
     });
 }
+
+async fn status_server(code: u16) -> MockServer {
+    let s = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(code).set_body_string("nope"))
+        .mount(&s)
+        .await;
+    s
+}
+
+#[test]
+fn a_503_from_the_placed_endpoint_falls_back() {
+    // The loopback proxy answers 503 when nothing serves the role.
+    run(async {
+        let (fallback, placed) = (server("fallback").await, status_server(503).await);
+        let r = Fixed::new(Some(&format!("{}/v1", placed.uri())));
+        let rt = router(&fallback.uri(), r.clone(), Duration::from_secs(60), &[("local", "hermes")]);
+        assert_eq!(who(&rt).await.unwrap(), "fallback");
+        assert_eq!(placed.received_requests().await.unwrap().len(), 1);
+        r.set(None);
+        assert_eq!(who(&rt).await.unwrap(), "fallback");
+        assert_eq!(r.calls.load(Ordering::SeqCst), 2, "the failure dropped the cached answer");
+    });
+}
+
+#[test]
+fn only_gateway_class_failures_are_retried() {
+    run(async {
+        for code in [502u16, 504] {
+            let (fallback, placed) = (server("fallback").await, status_server(code).await);
+            let r = Fixed::new(Some(&format!("{}/v1", placed.uri())));
+            let rt = router(&fallback.uri(), r, Duration::from_secs(60), &[("local", "hermes")]);
+            assert_eq!(who(&rt).await.unwrap(), "fallback", "{code}");
+        }
+        // The server's real answer is returned, not replayed elsewhere.
+        for code in [400u16, 401, 404, 429, 500] {
+            let (fallback, placed) = (server("fallback").await, status_server(code).await);
+            let r = Fixed::new(Some(&format!("{}/v1", placed.uri())));
+            let rt = router(&fallback.uri(), r, Duration::from_secs(60), &[("local", "hermes")]);
+            assert!(who(&rt).await.is_err(), "{code}");
+            assert_eq!(fallback.received_requests().await.unwrap().len(), 0, "{code}: replayed on the fallback");
+        }
+    });
+}
+
+#[test]
+fn a_placed_endpoint_that_redirects_is_not_followed() {
+    run(async {
+        let (fallback, other) = (server("fallback").await, server("elsewhere").await);
+        let placed = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(307).insert_header("location", format!("{}/v1/chat/completions", other.uri())),
+            )
+            .mount(&placed)
+            .await;
+        let r = Fixed::new(Some(&format!("{}/v1", placed.uri())));
+        let rt = router(&fallback.uri(), r, Duration::from_secs(60), &[("local", "hermes")]);
+        assert!(who(&rt).await.is_err());
+        assert_eq!(other.received_requests().await.unwrap().len(), 0, "the redirect was followed");
+    });
+}

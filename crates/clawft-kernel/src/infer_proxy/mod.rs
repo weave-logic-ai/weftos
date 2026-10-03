@@ -23,6 +23,7 @@
 pub mod http;
 pub mod listener;
 pub mod mesh_forward;
+pub mod mesh_policy;
 pub mod table;
 pub mod types;
 pub mod upstream;
@@ -35,13 +36,15 @@ mod tests_http;
 #[cfg(test)]
 mod tests_mesh;
 #[cfg(test)]
+mod tests_mesh_serve;
+#[cfg(test)]
 mod tests_proxy;
 
 #[cfg(feature = "exochain")]
 pub use types::ChainAudit;
 pub use listener::{InferProxy, OccupiedPolicy, ProxyStats, Started};
-pub use mesh_forward::{InferPeer, Served, forward_remote, serve_infer};
-pub use table::{PlacementTable, SERVICE_PREFIX, SyncOutcome};
+pub use mesh_forward::{InferPeer, ServeGate, Served, forward_remote, serve_infer};
+pub use table::{MeshLocal, PlacementTable, SERVICE_PREFIX, SyncOutcome};
 pub use types::{
     MeshDialer, Method, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink, Target,
 };

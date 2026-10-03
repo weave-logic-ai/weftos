@@ -9,26 +9,28 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use super::listener::{InferProxy, OccupiedPolicy, Started};
-use super::mesh_forward::{InferPeer, Served, forward_remote, serve_infer};
+use super::mesh_forward::{InferPeer, ServeGate, Served, forward_remote, serve_infer};
 use super::support::*;
 use super::table::PlacementTable;
 use super::types::*;
 use super::upstream::Upstream;
 use super::wire::{self, Resp};
 use crate::mesh::MeshStream;
-use super::mesh_forward::{read_frame, write_frame};
+use crate::mesh_framing::{read_frame, write_frame};
 use crate::mesh_framing::{FrameType, MeshFrame};
+use crate::mesh_admit::{Grant, PeerClass, PeerLimits};
+use super::table::MeshLocal;
 use crate::mesh_test_support::connected_pair;
 
-struct Cluster {
-    a: Arc<PlacementTable>,
-    b: Arc<PlacementTable>,
-    mesh: Arc<FakeMesh>,
-    up_b: Fake,
-    audit: Arc<Audit>,
+pub(super) struct Cluster {
+    pub a: Arc<PlacementTable>,
+    pub b: Arc<PlacementTable>,
+    pub mesh: Arc<FakeMesh>,
+    pub up_b: Fake,
+    pub audit: Arc<Audit>,
 }
 
-async fn cluster(reply: Reply) -> Cluster {
+pub(super) async fn cluster(reply: Reply) -> Cluster {
     let audit = Arc::new(Audit::default());
     let mesh = {
         let mut m = FakeMesh::new("node-a");
@@ -48,13 +50,14 @@ async fn cluster(reply: Reply) -> Cluster {
     Cluster { a, b, mesh, up_b, audit }
 }
 
-fn advertise(c: &Cluster) -> bool {
+pub(super) fn advertise(c: &Cluster) -> bool {
     c.b.expose_to_mesh("hermes", true);
+    c.a.allow_remote_node("hermes", "node-b", true);
     let ad = c.b.advertisement("hermes", 100).unwrap();
-    c.a.ingest_advertisement(&ad)
+    c.a.ingest_advertisement("node-b", &ad)
 }
 
-async fn proxy_a(c: &Cluster) -> InferProxy {
+pub(super) async fn proxy_a(c: &Cluster) -> InferProxy {
     match InferProxy::start(
         "hermes",
         "127.0.0.1:0".parse().unwrap(),
@@ -84,7 +87,8 @@ async fn a_request_through_the_proxy_reaches_a_workload_on_another_node() {
     assert_eq!(status(&resp), 200, "{resp}");
     assert_eq!(body(&resp), r#"{"from":"b"}"#);
     let seen = c.up_b.last();
-    assert_eq!(seen.body, br#"{"q":1}"#);
+    let sent: serde_json::Value = serde_json::from_slice(&seen.body).unwrap();
+    assert_eq!(sent, serde_json::json!({"q": 1, "model": "m"}), "model pinned by the serving side");
     assert_eq!(seen.header("authorization"), None, "client credentials must not cross the mesh");
     assert_eq!(p.stats().remote.load(Ordering::Relaxed), 1);
     assert_eq!(c.mesh.dials.lock().unwrap().as_slice(), ["node-b"]);
@@ -127,20 +131,113 @@ async fn local_instance_is_preferred_over_a_remote_one() {
 async fn adverts_from_unadmitted_peers_are_ignored_and_audited() {
     let c = cluster(Reply::ok("b")).await;
     c.b.expose_to_mesh("hermes", true);
+    c.a.allow_remote_node("hermes", "node-evil", true);
     let mut ad = c.b.advertisement("hermes", 100).unwrap();
     ad.node_id = "node-evil".into();
-    assert!(!c.a.ingest_advertisement(&ad));
+    assert!(!c.a.ingest_advertisement("node-evil", &ad), "not admitted");
     assert_eq!(c.a.resolve("hermes"), None);
     assert!(c.audit.kinds().contains(&"infer.advert.refused".to_string()));
     // Not an infer service, malformed role, or our own node: all ignored.
     let mut other = c.b.advertisement("hermes", 100).unwrap();
     other.name = "llm".into();
-    assert!(!c.a.ingest_advertisement(&other));
+    assert!(!c.a.ingest_advertisement("node-b", &other));
     other.name = "infer.a/b".into();
-    assert!(!c.a.ingest_advertisement(&other));
-    let mut own = c.b.advertisement("hermes", 100).unwrap();
-    own.node_id = "node-a".into();
-    assert!(!c.a.ingest_advertisement(&own));
+    assert!(!c.a.ingest_advertisement("node-b", &other));
+    let ad = c.b.advertisement("hermes", 100).unwrap();
+    assert!(!c.a.ingest_advertisement("node-a", &ad), "own node id");
+}
+
+#[tokio::test]
+async fn an_admitted_sender_cannot_advertise_for_another_node() {
+    let c = cluster(Reply::ok("b")).await;
+    c.b.expose_to_mesh("hermes", true);
+    // node-b is admitted and allowlisted; node-x is allowlisted and admitted too.
+    c.a.allow_remote_node("hermes", "node-b", true);
+    c.a.allow_remote_node("hermes", "node-x", true);
+    c.mesh.add_node("node-x", c.b.clone(), true);
+    // node-b claims to be node-x (or node-x's advert is relayed by node-b).
+    let mut ad = c.b.advertisement("hermes", 1).unwrap();
+    ad.node_id = "node-x".into();
+    assert!(!c.a.ingest_advertisement("node-b", &ad));
+    assert_eq!(c.a.resolve("hermes"), None);
+    assert!(c.audit.0.lock().unwrap().iter().any(|(k, p)| k == "infer.advert.refused"
+        && p["why"].as_str().unwrap().contains("another node")));
+}
+
+#[tokio::test]
+async fn only_enforced_full_nodes_with_trusted_scope_are_heard() {
+    let c = cluster(Reply::ok("b")).await;
+    c.b.expose_to_mesh("hermes", true);
+    c.a.allow_remote_node("hermes", "node-b", true);
+    let ad = c.b.advertisement("hermes", 1).unwrap();
+    let base = c.mesh.standing("node-b").unwrap();
+    let cases: Vec<(&str, Grant)> = vec![
+        ("leaf", Grant { class: PeerClass::Leaf, ..base.clone() }),
+        ("legacy", Grant { class: PeerClass::Legacy, ..base.clone() }),
+        ("observe (not enforced)", Grant { admitted: false, ..base.clone() }),
+        ("untrusted scope", Grant { trust_scope: false, ..base.clone() }),
+        ("would have been refused", Grant {
+            observed: Some(crate::mesh_admit::Refusal { code: "x", detail: String::new() }),
+            ..base.clone()
+        }),
+    ];
+    for (name, g) in cases {
+        c.mesh.overrides.lock().unwrap().insert("node-b".into(), g);
+        assert!(!c.a.ingest_advertisement("node-b", &ad), "{name}");
+        assert_eq!(c.a.resolve("hermes"), None, "{name}");
+    }
+    c.mesh.overrides.lock().unwrap().clear();
+    assert!(c.a.ingest_advertisement("node-b", &ad));
+    // Standing downgraded after the advert was taken: stops resolving at once.
+    c.mesh.overrides.lock().unwrap().insert("node-b".into(), Grant { class: PeerClass::Leaf, ..base });
+    assert_eq!(c.a.resolve("hermes"), None);
+}
+
+#[tokio::test]
+async fn a_node_the_consumer_did_not_allowlist_is_ignored() {
+    let c = cluster(Reply::ok("b")).await;
+    c.b.expose_to_mesh("hermes", true);
+    let ad = c.b.advertisement("hermes", 1).unwrap();
+    assert!(!c.a.ingest_advertisement("node-b", &ad), "default deny");
+    assert_eq!(c.a.resolve("hermes"), None);
+    // Allowlist for another role does not help.
+    c.a.allow_remote_node("other", "node-b", true);
+    assert!(!c.a.ingest_advertisement("node-b", &ad));
+    c.a.allow_remote_node("hermes", "node-b", true);
+    assert!(c.a.ingest_advertisement("node-b", &ad));
+    assert!(c.a.resolve("hermes").is_some());
+    // Withdrawing the allowance stops resolution immediately.
+    c.a.allow_remote_node("hermes", "node-b", false);
+    assert_eq!(c.a.resolve("hermes"), None);
+    assert!(c.audit.kinds().contains(&"infer.remote.allow".to_string()));
+}
+
+#[tokio::test]
+async fn adverts_expire_by_receive_time_and_refresh_when_repeated() {
+    let audit = Arc::new(Audit::default());
+    let mesh = FakeMesh::new("node-a");
+    let a = PlacementTable::new("node-a", Some(mesh.clone() as Arc<dyn MeshDialer>), Some(audit))
+        .with_advert_ttl(Duration::from_millis(150));
+    let b = Arc::new(PlacementTable::new("node-b", None, None));
+    let up = fake(Reply::ok("b")).await;
+    b.register_local("hermes", &up.base(), None, "openai-v1", "LlamaCpp").unwrap();
+    b.expose_to_mesh("hermes", true);
+    mesh.add_node("node-b", b.clone(), true);
+    a.allow_remote_node("hermes", "node-b", true);
+    // The peer's own timestamp claims the far future: it buys nothing.
+    let ad = b.advertisement("hermes", u64::MAX).unwrap();
+    assert!(a.ingest_advertisement("node-b", &ad));
+    assert!(a.resolve("hermes").is_some());
+    tokio::time::sleep(Duration::from_millis(90)).await;
+    assert!(a.ingest_advertisement("node-b", &ad), "a repeat refreshes");
+    tokio::time::sleep(Duration::from_millis(90)).await;
+    assert!(a.resolve("hermes").is_some(), "refreshed within the TTL");
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(a.resolve("hermes"), None, "expired without a refresh");
+    // An ancient peer timestamp does not make a fresh advert stale.
+    let old = b.advertisement("hermes", 0).unwrap();
+    assert!(a.ingest_advertisement("node-b", &old));
+    assert!(a.resolve("hermes").is_some());
 }
 
 #[tokio::test]
@@ -183,9 +280,10 @@ async fn the_serving_side_refuses_an_unverified_peer() {
     let p = proxy_a(&c).await;
     let resp = raw(p.addr(), &get(p.addr(), "/v1/models")).await;
     assert_eq!(status(&resp), 502, "{resp}");
-    assert!(body(&resp).contains("not verified"), "{resp}");
+    assert!(body(&resp).contains("peer: refused"), "{resp}");
+    assert!(!body(&resp).contains("verified"), "internal reasons stay local: {resp}");
     assert_eq!(c.up_b.count(), 0, "an unverified peer reached the model server");
-    assert!(c.audit.kinds().contains(&"infer.mesh.refused".to_string()));
+    assert!(c.audit.kinds().contains(&"infer.mesh.failed".to_string()));
 }
 
 #[tokio::test]
@@ -199,7 +297,8 @@ async fn a_role_not_exposed_to_the_mesh_is_not_served() {
         ad
     };
     assert!(c.b.advertisement("hermes", 101).is_none(), "unexposed roles are not advertised");
-    c.a.ingest_advertisement(&ad);
+    c.a.allow_remote_node("hermes", "node-b", true);
+    c.a.ingest_advertisement("node-b", &ad);
     let p = proxy_a(&c).await;
     let resp = raw(p.addr(), &get(p.addr(), "/v1/models")).await;
     assert_eq!(status(&resp), 502, "{resp}");
@@ -218,7 +317,8 @@ async fn a_peer_cannot_make_the_server_forward_onward() {
     c_table.register_local("hermes", &up_c.base(), None, "openai-v1", "LlamaCpp").unwrap();
     c_table.expose_to_mesh("hermes", true);
     mesh_b.add_node("node-c", c_table.clone(), true);
-    b.ingest_advertisement(&c_table.advertisement("hermes", 5).unwrap());
+    b.allow_remote_node("hermes", "node-c", true);
+    assert!(b.ingest_advertisement("node-c", &c_table.advertisement("hermes", 5).unwrap()));
     b.expose_to_mesh("hermes", true);
     assert!(matches!(b.resolve("hermes"), Some(Target::Remote { .. })));
 
@@ -227,7 +327,7 @@ async fn a_peer_cannot_make_the_server_forward_onward() {
     let bt = b.clone();
     let f = move |r: &str| bt.local_for_mesh(r);
     let peer = InferPeer { node_id: "node-a".into(), verified: true };
-    let h = tokio::spawn(async move { serve_infer(&mut server, &peer, &f, &up, Some(audit.as_ref())).await });
+    let h = tokio::spawn(async move { serve_infer(&mut server, &peer, &f, &up, &ServeGate::default(), Some(audit.as_ref())).await });
     let req = ProxyRequest {
         role: "hermes".into(), method: Method::Get, path: "/v1/models".into(),
         content_type: None, accept: None, authorization: None, body: vec![],
@@ -243,7 +343,7 @@ async fn a_peer_cannot_make_the_server_forward_onward() {
 #[tokio::test]
 async fn the_server_rejects_the_wrong_frame_and_malformed_requests() {
     let up = Upstream::new(small_limits()).unwrap();
-    let f = |_: &str| None::<String>;
+    let f = |_: &str| None::<MeshLocal>;
     let peer = InferPeer { node_id: "n".into(), verified: true };
     for frame in [
         MeshFrame { frame_type: FrameType::Heartbeat, payload: vec![1] },
@@ -252,17 +352,19 @@ async fn the_server_rejects_the_wrong_frame_and_malformed_requests() {
     ] {
         let (mut client, mut server) = connected_pair().await.unwrap();
         write_frame(&mut client, &frame).await.unwrap();
-        let r = serve_infer(&mut server, &peer, &f, &up, None).await.unwrap();
+        let r = serve_infer(&mut server, &peer, &f, &up, &ServeGate::default(), None).await.unwrap();
         assert!(matches!(r, Served::Failed(_)), "{:?}", frame.frame_type);
     }
 }
 
 /// A peer that answers with a scripted list of frames.
-struct Script(Vec<Vec<u8>>, bool);
+pub(super) struct Script(pub Vec<Vec<u8>>, pub bool);
 
 #[async_trait]
 impl MeshDialer for Script {
-    fn is_admitted(&self, _: &str) -> bool { true }
+    fn standing(&self, _: &str) -> Option<Grant> {
+        Some(Grant { limits: PeerLimits::None, class: PeerClass::Node, admitted: true, trust_scope: true, observed: None })
+    }
     async fn dial(&self, _: &str) -> Result<Box<dyn MeshStream>, ProxyError> {
         let (client, mut server) = connected_pair().await.unwrap();
         let (frames, stall) = (self.0.clone(), self.1);
@@ -279,7 +381,7 @@ impl MeshDialer for Script {
     }
 }
 
-struct Collect(Vec<u8>, Option<u16>);
+pub(super) struct Collect(Vec<u8>, Option<u16>);
 
 #[async_trait]
 impl ResponseSink for Collect {
@@ -287,7 +389,7 @@ impl ResponseSink for Collect {
     async fn chunk(&mut self, d: &[u8]) -> Result<(), ProxyError> { self.0.extend_from_slice(d); Ok(()) }
 }
 
-async fn drive(frames: Vec<Vec<u8>>, stall: bool, limits: ProxyLimits) -> (Result<(), ProxyError>, Collect) {
+pub(super) async fn drive(frames: Vec<Vec<u8>>, stall: bool, limits: ProxyLimits) -> (Result<(), ProxyError>, Collect) {
     let req = ProxyRequest {
         role: "hermes".into(), method: Method::Get, path: "/v1/models".into(),
         content_type: None, accept: None, authorization: None, body: vec![],
@@ -297,9 +399,9 @@ async fn drive(frames: Vec<Vec<u8>>, stall: bool, limits: ProxyLimits) -> (Resul
     (r, sink)
 }
 
-fn head() -> Vec<u8> { wire::encode_resp(&Resp::Head { status: 200, content_type: None }) }
-fn chunk(n: usize) -> Vec<u8> { wire::encode_resp(&Resp::Chunk(vec![b'x'; n])) }
-fn end() -> Vec<u8> { wire::encode_resp(&Resp::End) }
+pub(super) fn head() -> Vec<u8> { wire::encode_resp(&Resp::Head { status: 200, content_type: None }) }
+pub(super) fn chunk(n: usize) -> Vec<u8> { wire::encode_resp(&Resp::Chunk(vec![b'x'; n])) }
+pub(super) fn end() -> Vec<u8> { wire::encode_resp(&Resp::End) }
 
 #[tokio::test]
 async fn a_hostile_peer_cannot_break_the_consumer() {
@@ -345,20 +447,23 @@ async fn advertisement_shape_and_generation() {
     assert_eq!(ad.metadata["role"], "hermes");
     assert_eq!(ad.metadata["api"], "openai-v1");
     assert_eq!(ad.metadata["model"], "m");
-    assert_eq!(ad.metadata["port"], c.up_b.addr.port().to_string());
+    assert!(!ad.metadata.contains_key("port"), "the instance port is internal");
+    assert!(!format!("{ad:?}").contains(&c.up_b.addr.port().to_string()));
     assert!(ad.methods.iter().any(|m| m == "chat.completions"));
     assert_eq!(c.b.advertisements(42).len(), 1);
 
     let rx = c.a.subscribe();
+    c.a.allow_remote_node("hermes", "node-b", true);
     let g = c.a.generation();
-    assert!(c.a.ingest_advertisement(&ad));
+    assert!(c.a.ingest_advertisement("node-b", &ad));
     assert!(c.a.generation() > g);
     assert!(rx.has_changed().unwrap());
-    // A stale advert changes nothing.
+    // A repeat of the same advert is heard (it refreshes) but changes nothing.
     let g = c.a.generation();
-    assert!(!c.a.ingest_advertisement(&ad));
+    assert!(c.a.ingest_advertisement("node-b", &ad));
     assert_eq!(c.a.generation(), g);
     c.a.remove_node("node-b");
     assert!(c.a.generation() > g);
     assert_eq!(c.a.resolve("hermes"), None);
 }
+

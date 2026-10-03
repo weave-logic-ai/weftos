@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
@@ -27,16 +28,38 @@ pub const SERVICE_PREFIX: &str = "infer.";
 #[derive(Debug, Clone)]
 struct LocalEntry {
     base: String,
-    port: u16,
     model: Option<String>,
     api: String,
     runtime: String,
 }
 
+/// How long a received advertisement counts without being refreshed.
+pub const DEFAULT_ADVERT_TTL: Duration = Duration::from_secs(60);
+
+struct RemoteEntry {
+    ad: ServiceAdvertisement,
+    /// When *we* received it. The peer's own timestamp is never trusted
+    /// for freshness.
+    received: Instant,
+}
+
+/// A local instance a peer's request may reach.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshLocal {
+    /// Verified loopback base URL.
+    pub base: String,
+    /// The model the server knows the instance by; requests are pinned to it.
+    pub model: Option<String>,
+    /// Server software (`LlamaCpp`, `MlxLm`, `Ollama`).
+    pub runtime: String,
+}
+
 #[derive(Default)]
 struct Inner {
     local: HashMap<String, LocalEntry>,
-    remote: HashMap<String, BTreeMap<String, ServiceAdvertisement>>,
+    remote: HashMap<String, BTreeMap<String, RemoteEntry>>,
+    /// Consumer-side: nodes allowed to serve each role. Default deny.
+    allow: HashMap<String, HashSet<String>>,
     exposed: HashSet<String>,
     proxy_ports: HashMap<String, u16>,
 }
@@ -59,6 +82,7 @@ pub struct PlacementTable {
     audit: Option<Arc<dyn ProxyAudit>>,
     inner: RwLock<Inner>,
     gen_tx: watch::Sender<u64>,
+    advert_ttl: Duration,
 }
 
 fn valid_role(role: &str) -> bool {
@@ -79,6 +103,36 @@ impl PlacementTable {
             audit,
             inner: RwLock::new(Inner::default()),
             gen_tx: watch::channel(0).0,
+            advert_ttl: DEFAULT_ADVERT_TTL,
+        }
+    }
+
+    /// Lifetime of a received advertisement (refreshed by each repeat).
+    pub fn with_advert_ttl(mut self, ttl: Duration) -> Self {
+        self.advert_ttl = ttl;
+        self
+    }
+
+    /// Allow or stop allowing `node` to serve `role` to this node. This is
+    /// the consumer-side counterpart of [`expose_to_mesh`](Self::expose_to_mesh)
+    /// and the governed decision to send this node's prompts to that node:
+    /// without it no remote instance resolves, however it advertises.
+    pub fn allow_remote_node(&self, role: &str, node: &str, on: bool) {
+        let changed = {
+            let mut g = self.inner.write().unwrap();
+            let set = g.allow.entry(role.to_string()).or_default();
+            if on {
+                set.insert(node.to_string())
+            } else {
+                set.remove(node)
+            }
+        };
+        if changed {
+            self.audit(
+                "infer.remote.allow",
+                serde_json::json!({"role": role, "node": node, "allowed": on, "consumer": self.node_id}),
+            );
+            self.bump();
         }
     }
 
@@ -125,10 +179,9 @@ impl PlacementTable {
         if !valid_role(role) {
             return Err(ProxyError::BadRequest(format!("bad role '{role}'")));
         }
-        let (_, port) = parse_loopback_base(base)?;
+        parse_loopback_base(base)?;
         let entry = LocalEntry {
             base: base.trim_end_matches('/').to_string(),
-            port,
             model,
             api: api.to_string(),
             runtime: runtime.to_string(),
@@ -165,6 +218,7 @@ impl PlacementTable {
         let health = rt.health(h).await.ok().map(|r| r.health);
         let endpoint = rt.endpoint(h).await;
         let spec = rt.spec_of(h).await;
+        let served = rt.served_model(h).await;
         let up = matches!(health, Some(Health::Up));
         let mut registered = false;
         if let (true, Some(base), Some(spec)) = (up, endpoint, spec) {
@@ -172,7 +226,7 @@ impl PlacementTable {
                 .register_local(
                     role,
                     &base,
-                    spec.model.clone(),
+                    served,
                     &spec.api,
                     &format!("{:?}", spec.runtime),
                 )
@@ -218,38 +272,52 @@ impl PlacementTable {
             .insert(role.to_string(), port);
     }
 
-    /// Take a peer's `infer.<role>` advertisement. Only admitted, verified
-    /// peers are heard; anything else is dropped.
-    pub fn ingest_advertisement(&self, ad: &ServiceAdvertisement) -> bool {
+    /// Take an `infer.<role>` advertisement received from `sender`, the
+    /// node id the connection was verified as. Heard only when the
+    /// advertisement is the sender's own (`ad.node_id == sender`), the sender
+    /// is an enforced-admission full node with a trusted scope, and this
+    /// node allowlisted `sender` for the role. A repeat refreshes the TTL.
+    pub fn ingest_advertisement(&self, sender: &str, ad: &ServiceAdvertisement) -> bool {
         let Some(role) = ad.name.strip_prefix(SERVICE_PREFIX) else {
             return false;
         };
-        if !valid_role(role) || ad.node_id == self.node_id {
+        if !valid_role(role) || sender == self.node_id {
             return false;
         }
-        let admitted = self.dialer.as_ref().is_some_and(|d| d.is_admitted(&ad.node_id));
-        if !admitted {
+        let refuse = |why: &str| {
             self.audit(
                 "infer.advert.refused",
-                serde_json::json!({"role": role, "node_id": ad.node_id, "why": "peer not admitted"}),
+                serde_json::json!({"role": role, "sender": sender, "advertised_node": ad.node_id, "why": why}),
             );
-            return false;
-        }
-        let changed = {
-            let mut g = self.inner.write().unwrap();
-            let per = g.remote.entry(role.to_string()).or_default();
-            match per.get(&ad.node_id) {
-                Some(old) if old.last_updated >= ad.last_updated => false,
-                _ => {
-                    per.insert(ad.node_id.clone(), ad.clone());
-                    true
-                }
-            }
+            false
         };
+        if ad.node_id != sender {
+            return refuse("advertisement is for another node");
+        }
+        if !self.dialer.as_ref().is_some_and(|d| d.is_admitted(sender)) {
+            return refuse("peer not admitted as a trusted node");
+        }
+        let mut g = self.inner.write().unwrap();
+        if !g.allow.get(role).is_some_and(|s| s.contains(sender)) {
+            drop(g);
+            return refuse("node is not allowed to serve this role");
+        }
+        let per = g.remote.entry(role.to_string()).or_default();
+        let changed = per.get(sender).is_none_or(|e| {
+            e.ad.metadata != ad.metadata || e.ad.methods != ad.methods || e.received.elapsed() > self.advert_ttl
+        });
+        per.insert(
+            sender.to_string(),
+            RemoteEntry {
+                ad: ad.clone(),
+                received: Instant::now(),
+            },
+        );
+        drop(g);
         if changed {
             self.bump();
         }
-        changed
+        true
     }
 
     /// A peer left or was revoked: forget what it advertised.
@@ -279,21 +347,32 @@ impl PlacementTable {
             });
         }
         let dialer = self.dialer.as_ref()?;
+        let allowed = g.allow.get(role)?;
         g.remote
             .get(role)?
-            .keys()
-            .find(|n| dialer.is_admitted(n))
-            .map(|n| Target::Remote { node_id: n.clone() })
+            .iter()
+            .find(|(n, e)| {
+                allowed.contains(*n)
+                    && e.received.elapsed() <= self.advert_ttl
+                    && dialer.is_admitted(n)
+            })
+            .map(|(n, _)| Target::Remote { node_id: n.clone() })
     }
 
     /// The local instance of `role`, only when it is exposed to the mesh:
     /// what a peer's forwarded request may reach. Never a remote target, so
     /// a request cannot be bounced from node to node.
-    pub fn local_for_mesh(&self, role: &str) -> Option<String> {
+    pub fn local_for_mesh(&self, role: &str) -> Option<MeshLocal> {
         let g = self.inner.read().unwrap();
         g.exposed
             .contains(role)
-            .then(|| g.local.get(role).map(|l| l.base.clone()))
+            .then(|| {
+                g.local.get(role).map(|l| MeshLocal {
+                    base: l.base.clone(),
+                    model: l.model.clone(),
+                    runtime: l.runtime.clone(),
+                })
+            })
             .flatten()
     }
 
@@ -318,7 +397,6 @@ impl PlacementTable {
         let mut metadata = HashMap::new();
         metadata.insert("role".to_string(), role.to_string());
         metadata.insert("node_id".to_string(), self.node_id.clone());
-        metadata.insert("port".to_string(), l.port.to_string());
         metadata.insert("api".to_string(), l.api.clone());
         metadata.insert("runtime".to_string(), l.runtime.clone());
         metadata.insert("load".to_string(), "0".to_string());

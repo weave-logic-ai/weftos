@@ -233,6 +233,30 @@ async fn a_wildcard_listener_also_blocks_the_bind() {
 }
 
 #[tokio::test]
+async fn a_pipelined_second_request_is_never_forwarded() {
+    let up = fake(Reply::ok("one")).await;
+    let t = table();
+    local(&t, &up);
+    let p = start(&t, small_limits()).await;
+    let a = p.addr();
+    let two = format!(
+        "GET /v1/models HTTP/1.1\r\nHost: {a}\r\n\r\nGET /v1/chat/completions HTTP/1.1\r\nHost: {a}\r\n\r\n"
+    );
+    let resp = raw(a, two.as_bytes()).await;
+    assert_eq!(body_of(&resp), "one");
+    assert_eq!(up.count(), 1, "the smuggled second request reached the server");
+}
+
+#[tokio::test]
+async fn an_ipv6_listener_also_blocks_a_v4_bind() {
+    let Ok(v6) = std::net::TcpListener::bind("[::1]:0") else { return };
+    let port = v6.local_addr().unwrap().port();
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let r = InferProxy::start("hermes", addr, OccupiedPolicy::Refuse, table(), small_limits(), None).await;
+    assert!(matches!(r, Err(ProxyError::Occupied(_))), "bound next to a [::1] server");
+}
+
+#[tokio::test]
 async fn a_port_freed_later_can_be_bound() {
     let (holder, addr) = held_loopback();
     drop(holder);

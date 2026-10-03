@@ -179,6 +179,28 @@ async fn slow_and_truncated_requests_time_out_or_fail() {
     assert!(matches!(e, ProxyError::BadRequest(_)), "{e:?}");
 }
 
+#[tokio::test]
+async fn a_bare_lf_head_is_refused_at_once() {
+    let e = read(b"GET /v1/models HTTP/1.1\nHost: 127.0.0.1\n\n").await.unwrap_err();
+    assert!(matches!(e, ProxyError::BadRequest(ref m) if m.contains("bare LF")), "{e:?}");
+    let e = read(b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1\nX: y\r\n\r\n").await.unwrap_err();
+    assert!(matches!(e, ProxyError::BadRequest(_)), "{e:?}");
+}
+
+#[tokio::test]
+async fn bytes_after_the_declared_body_are_discarded() {
+    let raw = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\n{H}Content-Length: 2\r\n\r\n{{}}GET /v1/models HTTP/1.1\r\n{H}\r\n"
+    );
+    let r = read(raw.as_bytes()).await.unwrap();
+    assert_eq!(r.body, b"{}");
+    // And a GET with a pipelined request behind it carries no body at all.
+    let raw = format!("GET /v1/models HTTP/1.1\r\n{H}\r\nGET /health HTTP/1.1\r\n{H}\r\n");
+    let r = read(raw.as_bytes()).await.unwrap();
+    assert_eq!(r.path, "/v1/models");
+    assert!(r.body.is_empty());
+}
+
 #[test]
 fn header_values_from_servers_cannot_split_the_response() {
     assert!(safe_header_value("application/json").is_some());

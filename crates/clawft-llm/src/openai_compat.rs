@@ -55,6 +55,7 @@ impl OpenAiCompatProvider {
         let timeout_secs = config.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
         Self {
             http: reqwest::ClientBuilder::new()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(timeout_secs))
                 .build()
                 .expect("failed to build reqwest client"),
@@ -71,6 +72,7 @@ impl OpenAiCompatProvider {
         let timeout_secs = config.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
         Self {
             http: reqwest::ClientBuilder::new()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(timeout_secs))
                 .build()
                 .expect("failed to build reqwest client"),

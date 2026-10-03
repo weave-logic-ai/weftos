@@ -12,11 +12,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
-use super::mesh_forward::{InferPeer, serve_infer};
+use super::mesh_forward::{InferPeer, ServeGate, serve_infer};
 use super::table::PlacementTable;
 use super::types::{MeshDialer, ProxyAudit, ProxyError, ProxyLimits};
 use super::upstream::Upstream;
 use crate::mesh::MeshStream;
+use crate::mesh_admit::{Grant, PeerClass, PeerLimits};
 use crate::mesh_test_support::connected_pair;
 
 /// One request a fake upstream received.
@@ -215,6 +216,9 @@ impl Audit {
 /// table, as X's daemon would after admitting the caller.
 pub struct FakeMesh {
     pub admitted: Mutex<HashSet<String>>,
+    /// Per-node class and enforcement overrides (default: enforced Node).
+    pub overrides: Mutex<std::collections::HashMap<String, Grant>>,
+    pub gate: Arc<ServeGate>,
     pub nodes: Mutex<std::collections::HashMap<String, Arc<PlacementTable>>>,
     /// Whether the serving side sees the dialing peer as verified.
     pub verified: Mutex<bool>,
@@ -227,6 +231,8 @@ impl FakeMesh {
     pub fn new(caller: &str) -> Arc<Self> {
         Arc::new(Self {
             admitted: Mutex::new(HashSet::new()),
+            overrides: Mutex::new(Default::default()),
+            gate: Arc::new(ServeGate::new(4, 16)),
             nodes: Mutex::new(Default::default()),
             verified: Mutex::new(true),
             caller: caller.to_string(),
@@ -244,8 +250,20 @@ impl FakeMesh {
 
 #[async_trait]
 impl MeshDialer for FakeMesh {
-    fn is_admitted(&self, node_id: &str) -> bool {
-        self.admitted.lock().unwrap().contains(node_id)
+    fn standing(&self, node_id: &str) -> Option<Grant> {
+        if let Some(g) = self.overrides.lock().unwrap().get(node_id) {
+            return Some(g.clone());
+        }
+        if !self.admitted.lock().unwrap().contains(node_id) {
+            return None;
+        }
+        Some(Grant {
+            limits: PeerLimits::None,
+            class: PeerClass::Node,
+            admitted: true,
+            trust_scope: true,
+            observed: None,
+        })
     }
     async fn dial(&self, node_id: &str) -> Result<Box<dyn MeshStream>, ProxyError> {
         self.dials.lock().unwrap().push(node_id.to_string());
@@ -262,11 +280,12 @@ impl MeshDialer for FakeMesh {
             verified: *self.verified.lock().unwrap(),
         };
         let audit = self.audit.clone();
+        let gate = self.gate.clone();
         tokio::spawn(async move {
             let up = Upstream::new(small_limits()).unwrap();
             let t = table.clone();
             let f = move |role: &str| t.local_for_mesh(role);
-            let _ = serve_infer(&mut server, &peer, &f, &up, audit.as_deref()).await;
+            let _ = serve_infer(&mut server, &peer, &f, &up, &gate, audit.as_deref()).await;
         });
         Ok(Box::new(client))
     }

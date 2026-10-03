@@ -10,38 +10,30 @@
 //! - Both sides bound frame counts by bytes and time, and the server
 //!   revalidates the request as it would a client's.
 
-use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+use super::mesh_policy::{mesh_path_allowed, pin_body};
+use super::table::MeshLocal;
 use super::types::{MeshDialer, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink};
 use super::upstream::Upstream;
 use super::wire::{self, Resp};
 use crate::mesh::MeshStream;
-use crate::mesh::MAX_MESSAGE_SIZE;
-use crate::mesh_framing::{FrameType, MeshFrame};
-
-/// Send a frame the way the artifact protocol does: the transport carries
-/// `[len u32][type][payload]` as one message.
-pub async fn write_frame(s: &mut dyn MeshStream, f: &MeshFrame) -> Result<(), ProxyError> {
-    let wire = f.encode().map_err(mesh)?;
-    s.send(&wire).await.map_err(mesh)
-}
-
-/// Receive one frame sent by [`write_frame`]; the declared length must
-/// match the message exactly and stay under the mesh cap.
-pub async fn read_frame(s: &mut dyn MeshStream) -> Result<MeshFrame, ProxyError> {
-    let raw = s.recv().await.map_err(mesh)?;
-    if raw.len() < 5 {
-        return Err(mesh("short frame"));
-    }
-    let declared = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
-    if declared > MAX_MESSAGE_SIZE || declared != raw.len() - 4 {
-        return Err(mesh("bad frame length"));
-    }
-    MeshFrame::decode(&raw[4..]).map_err(mesh)
-}
+use crate::mesh_framing::{FrameType, MeshFrame, read_frame as rf, write_frame as wf};
 
 fn mesh(e: impl std::fmt::Display) -> ProxyError {
     ProxyError::Mesh(e.to_string())
+}
+
+async fn write_frame(s: &mut dyn MeshStream, f: &MeshFrame) -> Result<(), ProxyError> {
+    wf(s, f).await.map_err(mesh)
+}
+
+async fn read_frame(s: &mut dyn MeshStream) -> Result<MeshFrame, ProxyError> {
+    rf(s).await.map_err(mesh)
 }
 
 async fn recv_timeout(
@@ -171,47 +163,124 @@ impl ResponseSink for FrameSink<'_> {
     }
 }
 
+/// Concurrency limits on the serving side: a peer cannot occupy the model
+/// server with parallel requests, and the node as a whole stays bounded.
+pub struct ServeGate {
+    total: Arc<Semaphore>,
+    per_peer_max: usize,
+    per_peer: Mutex<HashMap<String, Arc<Semaphore>>>,
+}
+
+impl ServeGate {
+    /// At most `per_peer` concurrent requests from one peer and `total` in
+    /// all.
+    pub fn new(per_peer: usize, total: usize) -> Self {
+        Self {
+            total: Arc::new(Semaphore::new(total)),
+            per_peer_max: per_peer,
+            per_peer: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn acquire(&self, peer: &str) -> Option<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
+        let peer_sem = {
+            let mut m = self.per_peer.lock().unwrap();
+            // Entries with no request in flight are dropped so the table
+            // cannot grow with the peers seen.
+            m.retain(|_, s| s.available_permits() < self.per_peer_max);
+            m.entry(peer.to_string())
+                .or_insert_with(|| Arc::new(Semaphore::new(self.per_peer_max)))
+                .clone()
+        };
+        let a = peer_sem.try_acquire_owned().ok()?;
+        let b = self.total.clone().try_acquire_owned().ok()?;
+        Some((a, b))
+    }
+}
+
+#[cfg(test)]
+impl ServeGate {
+    /// Take a slot and leak it (the test never releases it).
+    pub(super) fn acquire_for_test(&self, peer: &str) -> bool {
+        match self.acquire(peer) {
+            Some((a, b)) => {
+                std::mem::forget(a);
+                std::mem::forget(b);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+impl Default for ServeGate {
+    fn default() -> Self {
+        Self::new(2, 8)
+    }
+}
+
+/// What a peer is told. Local detail (ports, paths, server messages) goes to
+/// the audit trail, never over the wire.
+fn peer_reason(e: &ProxyError) -> &'static str {
+    match e {
+        ProxyError::Refused(_) => "refused",
+        ProxyError::NoInstance(_) => "role not served here",
+        ProxyError::BadRequest(_)
+        | ProxyError::Forbidden(_)
+        | ProxyError::MethodNotAllowed
+        | ProxyError::TooLarge(_) => "request not accepted",
+        ProxyError::Timeout(_) => "timeout",
+        _ => "upstream error",
+    }
+}
+
 /// Serve one forwarded request from `peer` on `stream`. `local_for_mesh`
-/// maps a role to the base URL of the loopback instance this node exposes
-/// to the mesh for it (or `None`).
+/// maps a role to the loopback instance this node exposes to the mesh for
+/// it (or `None`). The request is held to the mesh path allowlist and its
+/// body is pinned to that instance's model.
 pub async fn serve_infer(
     stream: &mut dyn MeshStream,
     peer: &InferPeer,
-    local_for_mesh: &(dyn Fn(&str) -> Option<String> + Sync),
+    local_for_mesh: &(dyn Fn(&str) -> Option<MeshLocal> + Sync),
     upstream: &Upstream,
+    gate: &ServeGate,
     audit: Option<&dyn ProxyAudit>,
 ) -> Result<Served, ProxyError> {
     let limits = upstream.limits().clone();
     let refuse = |e: &ProxyError| {
-        let why = e.to_string();
-        if let (Some(a), ProxyError::Refused(_) | ProxyError::NoInstance(_)) = (audit, e) {
+        if let Some(a) = audit {
             a.record(
-                "infer.mesh.refused",
-                serde_json::json!({"peer": peer.node_id, "verified": peer.verified, "why": why}),
+                "infer.mesh.failed",
+                serde_json::json!({"peer": peer.node_id, "verified": peer.verified, "why": e.to_string()}),
             );
         }
-        why
+        peer_reason(e).to_string()
     };
     let mut sink = FrameSink { stream };
 
     let frame = match recv_timeout(sink.stream, &limits).await {
         Ok(f) => f,
-        Err(e) => {
-            return Ok(Served::Failed(refuse(&e)));
-        }
+        Err(e) => return Ok(Served::Failed(refuse(&e))),
     };
     let outcome: Result<(), ProxyError> = async {
         if !peer.verified {
             return Err(ProxyError::Refused("peer identity is not verified".into()));
         }
+        let Some(_permits) = gate.acquire(&peer.node_id) else {
+            return Err(ProxyError::Refused("too many concurrent requests".into()));
+        };
         if frame.frame_type != FrameType::InferRequest {
             return Err(ProxyError::BadRequest("expected an infer request".into()));
         }
-        let req = wire::decode_request(&frame.payload, &limits)?;
-        let base = local_for_mesh(&req.role).ok_or_else(|| {
+        let mut req = wire::decode_request(&frame.payload, &limits)?;
+        if !mesh_path_allowed(&req.path) {
+            return Err(ProxyError::Forbidden("path is not served to peers".into()));
+        }
+        let local = local_for_mesh(&req.role).ok_or_else(|| {
             ProxyError::NoInstance(format!("{} (not served to the mesh here)", req.role))
         })?;
-        let fwd = upstream.forward(&base, &req, false, &mut sink);
+        req.body = pin_body(&req.body, &local)?;
+        let fwd = upstream.forward(&local.base, &req, false, &mut sink);
         tokio::time::timeout(limits.request_timeout, fwd)
             .await
             .map_err(|_| ProxyError::Timeout("request".into()))??;

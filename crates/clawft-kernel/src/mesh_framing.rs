@@ -179,17 +179,31 @@ impl MeshFrame {
 
 /// Read a single framed message from a mesh stream.
 ///
-/// Expects the stream to yield the type byte + payload (the length
-/// prefix is handled by the transport layer).
+/// The transport delivers one message per `recv`, carrying exactly what
+/// [`write_frame`] sent: `[4-byte len][type][payload]`. The declared length
+/// must match the message and stay under the mesh cap.
 pub async fn read_frame(stream: &mut dyn MeshStream) -> Result<MeshFrame, MeshError> {
     let data = stream.recv().await?;
-    if data.len() > MAX_MESSAGE_SIZE {
+    if data.len() > MAX_MESSAGE_SIZE + 4 {
         return Err(MeshError::MessageTooLarge {
             size: data.len(),
             max: MAX_MESSAGE_SIZE,
         });
     }
-    MeshFrame::decode(&data)
+    if data.len() < 5 {
+        return Err(MeshError::Transport("short frame".into()));
+    }
+    let declared = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    if declared > MAX_MESSAGE_SIZE {
+        return Err(MeshError::MessageTooLarge {
+            size: declared,
+            max: MAX_MESSAGE_SIZE,
+        });
+    }
+    if declared != data.len() - 4 {
+        return Err(MeshError::Transport("frame length mismatch".into()));
+    }
+    MeshFrame::decode(&data[4..])
 }
 
 /// Write a single framed message to a mesh stream.
@@ -226,6 +240,34 @@ mod tests {
         for (byte, variant) in expected {
             assert_eq!(FrameType::from_byte(byte), Some(variant));
         }
+    }
+
+    #[tokio::test]
+    async fn write_then_read_frame_round_trips_and_checks_the_length() {
+        use crate::mesh_test_support::connected_pair;
+        let (mut a, mut b) = connected_pair().await.unwrap();
+        let f = MeshFrame {
+            frame_type: FrameType::InferRequest,
+            payload: vec![9, 8, 7],
+        };
+        write_frame(&mut a, &f).await.unwrap();
+        let g = read_frame(&mut b).await.unwrap();
+        assert_eq!(g.frame_type, FrameType::InferRequest);
+        assert_eq!(g.payload, vec![9, 8, 7]);
+        // Wrong declared length, short message, and over-cap length are refused.
+        let mut bad = f.encode().unwrap();
+        bad[3] = bad[3].wrapping_add(1);
+        a.send(&bad).await.unwrap();
+        assert!(read_frame(&mut b).await.is_err());
+        a.send(&[0, 0, 0]).await.unwrap();
+        assert!(read_frame(&mut b).await.is_err());
+        let mut huge = vec![0u8; 8];
+        huge[..4].copy_from_slice(&(MAX_MESSAGE_SIZE as u32 + 1).to_be_bytes());
+        a.send(&huge).await.unwrap();
+        assert!(matches!(
+            read_frame(&mut b).await,
+            Err(MeshError::MessageTooLarge { .. })
+        ));
     }
 
     #[test]

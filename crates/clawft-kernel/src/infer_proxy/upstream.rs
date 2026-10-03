@@ -48,8 +48,12 @@ impl Upstream {
     }
 
     /// Forward `req` to the verified loopback `base`, relaying the response
-    /// into `sink` as it arrives. `send_auth` is false for requests that
-    /// arrived over the mesh (a peer's credentials are not ours to pass on).
+    /// into `sink` as it arrives. `send_auth` is true only for a request from
+    /// a local client on this node's loopback listener: the client chose to
+    /// send that credential to this address, and a server started with
+    /// `--api-key` needs it. It is forwarded to the local instance only and
+    /// never over the mesh; it is false for every request that arrived over
+    /// the mesh (a peer's credentials are not ours to pass on).
     pub async fn forward(
         &self,
         base: &str,
@@ -91,7 +95,13 @@ impl Upstream {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
-        sink.head(resp.status().as_u16(), ct.as_deref()).await?;
+        let code = resp.status().as_u16();
+        if !(200..=599).contains(&code) {
+            // 1xx (or 101 Upgrade) is not a final answer and must not reach
+            // the client as one.
+            return Err(ProxyError::Upstream(format!("unexpected status {code}")));
+        }
+        sink.head(code, ct.as_deref()).await?;
         let mut total: u64 = 0;
         loop {
             let next = tokio::time::timeout(stall, resp.chunk())

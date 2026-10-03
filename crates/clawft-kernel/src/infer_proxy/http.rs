@@ -167,6 +167,14 @@ pub fn parse_head(raw: &[u8], limits: &ProxyLimits) -> Result<Head, ProxyError> 
     })
 }
 
+/// A `\n` not preceded by `\r`: lenient parsers elsewhere accept it, which
+/// is the root of request-smuggling disagreements, so it is refused.
+fn has_bare_lf(buf: &[u8]) -> bool {
+    buf.iter()
+        .enumerate()
+        .any(|(i, b)| *b == b'\n' && (i == 0 || buf[i - 1] != b'\r'))
+}
+
 fn find_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
@@ -190,6 +198,9 @@ where
             }
             if buf.len() > limits.max_head_bytes {
                 return Err(ProxyError::TooLarge("request head".into()));
+            }
+            if has_bare_lf(&buf) {
+                return Err(ProxyError::BadRequest("bare LF line ending".into()));
             }
             let n = s.read(&mut chunk).await.map_err(io)?;
             if n == 0 {

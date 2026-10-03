@@ -159,11 +159,18 @@ impl PlacedProvider {
         (Some(url), Some(p))
     }
 
+    /// Failures that say the placed endpoint is gone or broken: connect and
+    /// timeout errors, and 502, 503 or 504 (which includes the loopback
+    /// proxy reporting that no instance serves the role). A 4xx, a quota
+    /// 429, an auth failure or a malformed answer is the server's real
+    /// answer and is never replayed elsewhere.
     fn should_retry(err: &ProviderError) -> bool {
-        matches!(
-            err,
-            ProviderError::RequestFailed(_) | ProviderError::Timeout | ProviderError::Http(_)
-        )
+        match err {
+            ProviderError::Timeout => true,
+            ProviderError::ServerError { status, .. } => matches!(status, 502..=504),
+            ProviderError::Http(e) => e.is_connect() || e.is_timeout(),
+            _ => false,
+        }
     }
 }
 

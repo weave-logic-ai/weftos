@@ -5,6 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::mesh::MeshStream;
+use crate::mesh_admit::{Grant, PeerClass};
 
 /// Hard limits. Every one bounds something a client or a peer controls.
 #[derive(Debug, Clone)]
@@ -172,14 +173,26 @@ pub trait ResponseSink: Send {
     async fn chunk(&mut self, data: &[u8]) -> Result<(), ProxyError>;
 }
 
+/// A peer's standing is good enough to serve inference: admission was
+/// enforced (not observe or off), the peer is a full node (not a leaf or
+/// legacy device), and its scope is trusted.
+pub fn qualifies(g: &Grant) -> bool {
+    g.admitted && g.class == PeerClass::Node && g.trust_scope && g.observed.is_none()
+}
+
 /// The mesh side of the proxy. The implementation is the only authority on
 /// who is admitted: `dial` must return a stream only to a peer that passed
 /// admission and whose id was verified against the connection (an
 /// authenticated Noise channel), never to an address a client named.
 #[async_trait]
 pub trait MeshDialer: Send + Sync + 'static {
-    /// Whether `node_id` is an admitted, verified peer right now.
-    fn is_admitted(&self, node_id: &str) -> bool;
+    /// The admission grant of the connected peer `node_id`, if any.
+    fn standing(&self, node_id: &str) -> Option<Grant>;
+    /// Whether `node_id` is an enforced-admission full node with a trusted
+    /// scope right now.
+    fn is_admitted(&self, node_id: &str) -> bool {
+        self.standing(node_id).is_some_and(|g| qualifies(&g))
+    }
     /// An authenticated stream to the peer.
     async fn dial(&self, node_id: &str) -> Result<Box<dyn MeshStream>, ProxyError>;
 }

@@ -9,7 +9,8 @@
 //! - The socket is bound without `SO_REUSEADDR`, so a wildcard listener on
 //!   the same port also makes the bind fail instead of being shadowed.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -195,11 +196,13 @@ impl InferProxy {
             note("infer.proxy.refused", serde_json::json!("not loopback"));
             return Err(ProxyError::NotLoopback(addr.to_string()));
         }
-        // Probe the same port on the loopback names a client might use, so
-        // a server bound to the wildcard or to ::1 is seen as well.
+        // Probe the same port on every loopback name a client might use, v4
+        // and v6, so a server bound to the wildcard or to the other family
+        // is seen as well.
         let probes = [
             addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), addr.port()),
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), addr.port()),
         ];
         for p in probes {
             if addr.port() != 0 && held(p).await {
@@ -244,9 +247,19 @@ impl InferProxy {
         });
         let permits = Arc::new(Semaphore::new(limits.max_connections));
         let task = tokio::spawn(async move {
+            let mut backoff = Duration::from_millis(10);
             loop {
-                let Ok((s, peer)) = listener.accept().await else {
-                    continue;
+                let (s, peer) = match listener.accept().await {
+                    Ok(x) => {
+                        backoff = Duration::from_millis(10);
+                        x
+                    }
+                    Err(_) => {
+                        // EMFILE and friends: do not spin.
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(Duration::from_secs(1));
+                        continue;
+                    }
                 };
                 // Loopback listener: a non-loopback peer cannot arrive, but
                 // the check costs nothing.

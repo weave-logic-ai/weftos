@@ -163,7 +163,7 @@ pub fn decode_resp(p: &[u8]) -> Result<Resp, ProxyError> {
     match kind {
         0 => {
             let h: HeadJson = serde_json::from_slice(data).map_err(|_| bad("bad response head"))?;
-            if !(100..=599).contains(&h.status) {
+            if !(200..=599).contains(&h.status) {
                 return Err(bad("bad response status"));
             }
             Ok(Resp::Head {
