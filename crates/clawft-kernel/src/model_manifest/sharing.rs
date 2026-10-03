@@ -15,9 +15,10 @@
 
 use std::fs::File;
 
+use super::adopt::{allowed_roots, contained};
 use super::body::{ModelError, ModelPackageBody, VerifiedModel, verify_model};
 use super::locality::Sharing;
-use super::registry::ModelRegistry;
+use super::registry::{ModelRegistry, ModelTrust};
 use crate::mesh_artifact::ArtifactExchange;
 use crate::mesh_artifact_types::{ArtifactId, ExchangeError};
 use crate::mesh_swarm_state::{Audience, GrantInfo, GrantOrigin, RedistributionPolicy};
@@ -103,7 +104,7 @@ pub fn seed_model(
     id_or_name: &str,
     anchors: &TrustAnchors,
 ) -> Result<SeededModel, SeedModelError> {
-    let resolved = registry.resolve(id_or_name)?;
+    let resolved = registry.resolve_with(id_or_name, &ModelTrust::new(anchors.clone()))?;
     let (_, entry) = registry.get(id_or_name)?;
     let verified = verify_model(&entry.envelope, anchors)?;
     let package_id = verified.package_id.clone();
@@ -114,9 +115,16 @@ pub fn seed_model(
     let signers = signer_keys(&verified, anchors);
     let manifest = entry.envelope.to_pretty_json().map_err(ModelError::from)?;
     let manifest_hash = *blake3::hash(&manifest).as_bytes();
-    if exchange.is_revoked_subject(&package_id, &signers, &manifest_hash) {
-        return Err(SeedModelError::Revoked(package_id));
+    let shard_hashes = body
+        .shards
+        .iter()
+        .filter_map(|s| hex_decode_exact::<32>(&s.blake3));
+    for h in std::iter::once(manifest_hash).chain(shard_hashes) {
+        if exchange.is_revoked_subject(&package_id, &signers, &h) {
+            return Err(SeedModelError::Revoked(package_id));
+        }
     }
+    let allowed = allowed_roots(&resolved.root);
     let origin = grant_origin(body);
     let mut shards = Vec::new();
     for (shard, path) in body.shards.iter().zip(&resolved.shards) {
@@ -124,7 +132,10 @@ pub fn seed_model(
             hex_decode_exact::<32>(&shard.blake3).expect("validated hash"),
             shard.size,
         );
-        let mut f = File::open(path).map_err(|e| ModelError::Io {
+        // Containment again, immediately before the open, on the resolved
+        // path: a link swapped since the check must not be read.
+        let real = contained(path, &allowed)?;
+        let mut f = File::open(real).map_err(|e| ModelError::Io {
             path: shard.path.clone(),
             msg: e.to_string(),
         })?;

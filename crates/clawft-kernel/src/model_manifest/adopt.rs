@@ -114,8 +114,44 @@ pub fn hash_file(path: &Path) -> std::io::Result<String> {
     Ok(h.finalize().to_hex().to_string())
 }
 
-fn scan_file_entry(root: &Path, rel: &str, role: FileRole) -> Result<ScannedFile, ModelError> {
-    let abs = root.join(rel);
+/// Directories a model's files may resolve into: the canonical root, and for
+/// an HF cache snapshot (`.../snapshots/<rev>`) the sibling `blobs` directory
+/// of the same repo cache, which is where its files are links to.
+pub fn allowed_roots(root: &Path) -> Vec<PathBuf> {
+    let mut v = vec![root.to_path_buf()];
+    if let Some(snaps) = root.parent()
+        && snaps.file_name().is_some_and(|n| n == "snapshots")
+        && let Some(repo) = snaps.parent()
+        && let Ok(blobs) = repo.join("blobs").canonicalize()
+        && blobs.is_dir()
+    {
+        v.push(blobs);
+    }
+    v
+}
+
+/// Resolve `path` (following symlinks) and require the result to lie under
+/// one of `allowed`. Fails closed: a link that leaves the model root is an
+/// error naming the path, not a silently followed file.
+pub fn contained(path: &Path, allowed: &[PathBuf]) -> Result<PathBuf, ModelError> {
+    let real = path.canonicalize().map_err(|e| io_err(path, e))?;
+    if allowed.iter().any(|a| real.starts_with(a)) {
+        Ok(real)
+    } else {
+        Err(ModelError::Scan(format!(
+            "{} resolves outside the model root; refusing to read it",
+            path.display()
+        )))
+    }
+}
+
+fn scan_file_entry(
+    root: &Path,
+    allowed: &[PathBuf],
+    rel: &str,
+    role: FileRole,
+) -> Result<ScannedFile, ModelError> {
+    let abs = contained(&root.join(rel), allowed)?;
     let (size, mtime_ns) = stamp(&abs).map_err(|e| io_err(&abs, e))?;
     let blake3 = hash_file(&abs).map_err(|e| io_err(&abs, e))?;
     Ok(ScannedFile {
@@ -132,23 +168,47 @@ fn is_weight(name: &str) -> bool {
         .is_some_and(|(_, ext)| WEIGHT_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
-fn walk(root: &Path, dir: &Path, depth: usize, found: &mut Vec<String>, visited: &mut usize) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
+fn walk(
+    root: &Path,
+    allowed: &[PathBuf],
+    dir: &Path,
+    depth: usize,
+    found: &mut Vec<String>,
+    visited: &mut usize,
+) -> Result<(), ModelError> {
+    let Ok(rd) = fs::read_dir(dir) else { return Ok(()) };
     for entry in rd.flatten() {
         *visited += 1;
         if *visited > MAX_VISITED {
-            return;
+            return Ok(());
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') || !valid_token(&name, 128) {
             continue;
         }
         let path = entry.path();
-        // `metadata` follows symlinks (HF snapshots link into blobs/).
+        let Ok(link) = fs::symlink_metadata(&path) else { continue };
+        if link.file_type().is_symlink() {
+            // A symlinked directory is never followed. A symlinked file is
+            // followed only when it stays inside the allowed roots; a
+            // dangling or looping link is skipped.
+            match fs::metadata(&path) {
+                Ok(m) if m.is_dir() => {
+                    return Err(ModelError::Scan(format!(
+                        "{} is a symlinked directory; refusing to follow it",
+                        path.display()
+                    )));
+                }
+                Ok(_) => {
+                    contained(&path, allowed)?;
+                }
+                Err(_) => continue,
+            }
+        }
         let Ok(meta) = fs::metadata(&path) else { continue };
         if meta.is_dir() {
             if depth < MAX_DEPTH {
-                walk(root, &path, depth + 1, found, visited);
+                walk(root, allowed, &path, depth + 1, found, visited)?;
             }
         } else if meta.is_file()
             && let Ok(rel) = path.strip_prefix(root)
@@ -156,6 +216,7 @@ fn walk(root: &Path, dir: &Path, depth: usize, found: &mut Vec<String>, visited:
             found.push(rel.to_string_lossy().replace('\\', "/"));
         }
     }
+    Ok(())
 }
 
 fn finish(
@@ -190,7 +251,9 @@ fn finish(
             })
             .collect(),
         tokenizer_blake3: tokenizer.as_ref().map(|t| t.blake3.clone()),
+        tokenizer_path: tokenizer.as_ref().map(|t| t.path.clone()),
         template_blake3: template.as_ref().map(|t| t.blake3.clone()),
+        template_path: template.as_ref().map(|t| t.path.clone()),
         source: input.source,
         redistributable: input.redistributable,
     };
@@ -209,18 +272,19 @@ pub fn scan_dir(root: &Path, input: AdoptInput) -> Result<ScannedModel, ModelErr
     if !root.is_dir() {
         return Err(ModelError::Scan(format!("{} is not a directory", root.display())));
     }
+    let allowed = allowed_roots(&root);
     let mut found = Vec::new();
-    walk(&root, &root, 0, &mut found, &mut 0);
+    walk(&root, &allowed, &root, 0, &mut found, &mut 0)?;
     found.sort();
     let mut shards = Vec::new();
     for rel in found.iter().filter(|r| is_weight(r.rsplit('/').next().unwrap_or(r))) {
-        shards.push(scan_file_entry(&root, rel, FileRole::Shard)?);
+        shards.push(scan_file_entry(&root, &allowed, rel, FileRole::Shard)?);
     }
     let pick = |names: &[&str], role| -> Result<Option<ScannedFile>, ModelError> {
         names
             .iter()
             .find(|n| found.iter().any(|f| f == *n))
-            .map(|n| scan_file_entry(&root, n, role))
+            .map(|n| scan_file_entry(&root, &allowed, n, role))
             .transpose()
     };
     let tokenizer = pick(TOKENIZER_FILES, FileRole::Tokenizer)?;
@@ -242,7 +306,7 @@ pub fn scan_file(path: &Path, input: AdoptInput) -> Result<ScannedModel, ModelEr
         .ok_or_else(|| ModelError::Scan("file has no parent directory".into()))?
         .to_path_buf();
     validate_rel_path(&name).map_err(|e| ModelError::Scan(e.to_string()))?;
-    let shard = scan_file_entry(&root, &name, FileRole::Shard)?;
+    let shard = scan_file_entry(&root, &allowed_roots(&root), &name, FileRole::Shard)?;
     finish(root, input, vec![shard], None, None)
 }
 
@@ -283,10 +347,14 @@ pub fn scan_ollama(
         }
     }
     let root = models_dir.canonicalize().map_err(|e| io_err(models_dir, e))?;
-    let mpath = root
-        .join("manifests/registry.ollama.ai/library")
-        .join(name)
-        .join(tag);
+    let allowed = allowed_roots(&root);
+    let mpath = contained(
+        &root
+            .join("manifests/registry.ollama.ai/library")
+            .join(name)
+            .join(tag),
+        &allowed,
+    )?;
     let bytes = fs::read(&mpath).map_err(|e| io_err(&mpath, e))?;
     if bytes.len() > 1024 * 1024 {
         return Err(ModelError::Scan("ollama manifest too large".into()));
@@ -302,7 +370,7 @@ pub fn scan_ollama(
             _ => continue,
         };
         let rel = ollama_blob_rel(&layer.digest)?;
-        let f = scan_file_entry(&root, &rel, role)?;
+        let f = scan_file_entry(&root, &allowed, &rel, role)?;
         if f.size != layer.size {
             return Err(ModelError::HashMismatch {
                 path: rel,

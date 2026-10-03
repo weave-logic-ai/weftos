@@ -9,15 +9,17 @@
 //! A file whose hash differs from the attestation refuses the model until an
 //! operator-run full check passes again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
 use super::adopt::{FileRole, ScannedModel, io_err};
+use super::resolve::{consistency, files_of_body};
 use super::check::{CheckMode, ModelCheck, ModelState, check_entry};
 use super::body::{ModelError, ModelFormat, ModelPackageBody, VerifiedModel, attest, verify_model};
+use crate::revocation::RevocationList;
 use crate::workload_pkg::{ManifestEnvelope, TrustAnchors};
 
 /// Registry file schema id.
@@ -54,6 +56,37 @@ pub struct ModelEntry {
     /// check passes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// Local opt-out: when true the model is not advertised in node facts
+    /// (shard hashes fingerprint which models a node holds). Not signed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+/// What a node trusts when it lets a model be used: pinned signers and the
+/// revocation list. Held by the registry; replaced with
+/// [`ModelRegistry::set_trust`] when keys or revocations change.
+#[derive(Clone)]
+pub struct ModelTrust {
+    /// Pinned signer keys.
+    pub anchors: TrustAnchors,
+    /// Revocation list consulted for the package, its signers and shard hashes.
+    pub revocations: Option<Arc<RevocationList>>,
+}
+
+impl std::fmt::Debug for ModelTrust {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelTrust")
+            .field("signers", &self.anchors.signers.len())
+            .field("revocations", &self.revocations.is_some())
+            .finish()
+    }
+}
+
+impl ModelTrust {
+    /// Anchors with no revocation list.
+    pub fn new(anchors: TrustAnchors) -> Self {
+        Self { anchors, revocations: None }
+    }
 }
 
 impl ModelEntry {
@@ -70,9 +103,9 @@ impl ModelEntry {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct RegistryFile {
-    schema: String,
-    models: BTreeMap<String, ModelEntry>,
+pub(super) struct RegistryFile {
+    pub(super) schema: String,
+    pub(super) models: BTreeMap<String, ModelEntry>,
 }
 
 /// A usable model, for an inference adapter to consume.
@@ -110,7 +143,11 @@ pub struct AdoptedModel {
 /// Adopted models, persisted as JSON when opened on a path.
 pub struct ModelRegistry {
     path: Option<PathBuf>,
-    inner: Mutex<RegistryFile>,
+    pub(super) inner: Mutex<RegistryFile>,
+    pub(super) trust: Mutex<Option<ModelTrust>>,
+    /// Models whose every byte was hashed in this process. Not persisted:
+    /// the first [`ModelRegistry::resolve`] after a start does a full check.
+    pub(super) fully_verified: Mutex<BTreeSet<String>>,
 }
 
 impl std::fmt::Debug for ModelRegistry {
@@ -128,7 +165,21 @@ impl ModelRegistry {
                 schema: REGISTRY_SCHEMA.into(),
                 models: BTreeMap::new(),
             }),
+            trust: Mutex::new(None),
+            fully_verified: Mutex::new(BTreeSet::new()),
         }
+    }
+
+    /// Set what [`resolve`](Self::resolve) verifies against.
+    pub fn with_trust(self, trust: ModelTrust) -> Self {
+        *self.trust.lock().unwrap_or_else(|p| p.into_inner()) = Some(trust);
+        self
+    }
+
+    /// Replace the trust (a key was pinned or removed, a revocation list was
+    /// swapped). Takes effect on the next resolve.
+    pub fn set_trust(&self, trust: ModelTrust) {
+        *self.trust.lock().unwrap_or_else(|p| p.into_inner()) = Some(trust);
     }
 
     /// Open (or start) the registry file at `path`.
@@ -153,17 +204,24 @@ impl ModelRegistry {
             },
             Err(e) => return Err(io_err(&path, e)),
         };
+        for (id, e) in &file.models {
+            consistency(id, e).map_err(|why| {
+                ModelError::Registry(format!("{}: entry {id} is inconsistent: {why}", path.display()))
+            })?;
+        }
         Ok(Self {
             path: Some(path),
             inner: Mutex::new(file),
+            trust: Mutex::new(None),
+            fully_verified: Mutex::new(BTreeSet::new()),
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, RegistryFile> {
+    pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, RegistryFile> {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn save(&self, f: &RegistryFile) -> Result<(), ModelError> {
+    pub(super) fn save(&self, f: &RegistryFile) -> Result<(), ModelError> {
         let Some(path) = &self.path else { return Ok(()) };
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
@@ -187,6 +245,14 @@ impl ModelRegistry {
         files: Vec<LocalFile>,
         replace: bool,
     ) -> Result<AdoptedModel, ModelError> {
+        let entry = ModelEntry {
+            envelope: verified.envelope.clone(),
+            root: root.clone(),
+            files: files.clone(),
+            refused: None,
+            hidden: false,
+        };
+        consistency(&verified.package_id, &entry).map_err(ModelError::Registry)?;
         let mut g = self.lock();
         let name = &verified.body.name;
         let clash: Vec<String> = g
@@ -211,6 +277,7 @@ impl ModelRegistry {
                 root: root.clone(),
                 files,
                 refused: None,
+                hidden: false,
             },
         );
         self.save(&g)?;
@@ -247,7 +314,13 @@ impl ModelRegistry {
                 verified: Some((f.size, f.mtime_ns)),
             })
             .collect();
-        self.insert(&verified, scanned.root, files, replace)
+        let adopted = self.insert(&verified, scanned.root, files, replace)?;
+        // The scan just hashed every byte in this process.
+        self.fully_verified
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(adopted.package_id.clone());
+        Ok(adopted)
     }
 
     /// Register an already-attested manifest (for example one fetched from
@@ -262,18 +335,7 @@ impl ModelRegistry {
     ) -> Result<AdoptedModel, ModelError> {
         let verified = verify_model(envelope, anchors)?;
         let root = root.canonicalize().map_err(|e| io_err(root, e))?;
-        let files = verified
-            .body
-            .shards
-            .iter()
-            .map(|s| LocalFile {
-                path: s.path.clone(),
-                role: FileRole::Shard,
-                size: s.size,
-                blake3: s.blake3.clone(),
-                verified: None,
-            })
-            .collect();
+        let files = files_of_body(&verified.body);
         self.insert(&verified, root, files, replace)
     }
 
@@ -285,7 +347,7 @@ impl ModelRegistry {
         self.save(&g)
     }
 
-    fn find(g: &RegistryFile, id_or_name: &str) -> Result<String, ModelError> {
+    pub(super) fn find(g: &RegistryFile, id_or_name: &str) -> Result<String, ModelError> {
         if g.models.contains_key(id_or_name) {
             return Ok(id_or_name.to_string());
         }
@@ -339,40 +401,5 @@ impl ModelRegistry {
             }
         }
         Ok(check)
-    }
-
-    /// The model for an adapter to load: lazily verified, and refused with
-    /// [`ModelError::NotReady`] unless every file is present and matches.
-    /// Paths are absolute locations of the adopted files; nothing is copied.
-    pub fn resolve(&self, id_or_name: &str) -> Result<ResolvedModel, ModelError> {
-        let check = self.check(id_or_name, CheckMode::Lazy)?;
-        let (id, entry) = self.get(id_or_name)?;
-        if let Some(why) = &entry.refused {
-            return Err(ModelError::NotReady { id, reason: format!("refused: {why}") });
-        }
-        match &check.state {
-            ModelState::Ready => {}
-            ModelState::Degraded { reason, .. } => {
-                return Err(ModelError::NotReady { id, reason: format!("degraded: {reason}") });
-            }
-            ModelState::Refused { reason } => {
-                return Err(ModelError::NotReady { id, reason: format!("refused: {reason}") });
-            }
-        }
-        let body = entry.body()?;
-        let tokenizer = entry
-            .files
-            .iter()
-            .find(|f| f.role == FileRole::Tokenizer)
-            .map(|f| entry.root.join(&f.path));
-        Ok(ResolvedModel {
-            package_id: id,
-            name: body.name.clone(),
-            format: body.format,
-            shards: body.shards.iter().map(|s| entry.root.join(&s.path)).collect(),
-            root: entry.root.clone(),
-            tokenizer,
-            body,
-        })
     }
 }

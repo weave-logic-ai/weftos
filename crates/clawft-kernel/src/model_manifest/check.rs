@@ -1,7 +1,7 @@
 //! Checking an adopted model's files against its attestation (stat-only,
 //! lazy or full), and the resulting [`ModelState`].
 
-use super::adopt::{hash_file, stamp};
+use super::adopt::{FileRole, allowed_roots, hash_file, stamp};
 use super::body::ModelError;
 use super::registry::ModelEntry;
 
@@ -27,6 +27,9 @@ pub enum FileOutcome {
     },
     /// Not on disk.
     Missing,
+    /// A symlink now resolves outside the model root (or the HF blobs
+    /// directory of its cache). Never read; the model is refused.
+    Escapes,
     /// Present but differs from the attestation.
     Mismatch {
         /// What was found (a hash, or a byte count for a size mismatch).
@@ -88,11 +91,27 @@ pub(super) fn check_entry(
     let body = entry.body()?;
     let mut outcomes = Vec::new();
     let mut stamps = Vec::new();
+    let allowed = allowed_roots(&entry.root);
     for f in &entry.files {
-        let abs = entry.root.join(&f.path);
+        // Containment is re-checked on every check: a link swapped after
+        // adoption must not be hashed or served. Only the resolved path is
+        // read from here on.
+        let abs = match entry.root.join(&f.path).canonicalize() {
+            Ok(real) if allowed.iter().any(|a| real.starts_with(a)) => real,
+            Ok(_) => {
+                outcomes.push((f.path.clone(), FileOutcome::Escapes));
+                stamps.push(None);
+                continue;
+            }
+            Err(_) => {
+                outcomes.push((f.path.clone(), FileOutcome::Missing));
+                stamps.push(None);
+                continue;
+            }
+        };
         let (outcome, st) = match stamp(&abs) {
             Err(_) => (FileOutcome::Missing, None),
-            Ok((size, _)) if size != f.size => {
+            Ok((size, _)) if (f.role == FileRole::Shard || f.size != 0) && size != f.size => {
                 (FileOutcome::Mismatch { actual: format!("{size} bytes") }, None)
             }
             Ok(s) => match mode {
@@ -109,6 +128,12 @@ pub(super) fn check_entry(
         };
         outcomes.push((f.path.clone(), outcome));
         stamps.push(st);
+    }
+    if let Some((p, _)) = outcomes.iter().find(|(_, o)| *o == FileOutcome::Escapes) {
+        let state = ModelState::Refused {
+            reason: format!("{p}: resolves outside the model root"),
+        };
+        return Ok((finish_check(id, &body, outcomes, state), stamps));
     }
     let mismatch = outcomes
         .iter()
@@ -134,6 +159,15 @@ pub(super) fn check_entry(
     } else {
         ModelState::Ready
     };
+    Ok((finish_check(id, &body, outcomes, state), stamps))
+}
+
+fn finish_check(
+    id: &str,
+    body: &super::body::ModelPackageBody,
+    outcomes: Vec<(String, FileOutcome)>,
+    state: ModelState,
+) -> ModelCheck {
     let present_shards = body
         .shards
         .iter()
@@ -144,13 +178,12 @@ pub(super) fn check_entry(
         })
         .map(|s| s.blake3.clone())
         .collect();
-    let check = ModelCheck {
+    ModelCheck {
         package_id: id.to_string(),
         name: body.name.clone(),
         state,
         files: outcomes,
         present_shards,
         total_shards: body.shards.len(),
-    };
-    Ok((check, stamps))
+    }
 }

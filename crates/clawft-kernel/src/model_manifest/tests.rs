@@ -22,6 +22,11 @@ pub(super) fn operator() -> (SigningKey, String, TrustAnchors) {
     (key, id, anchors)
 }
 
+/// A registry that trusts the test operator key and has no revocations.
+pub(super) fn new_reg() -> ModelRegistry {
+    ModelRegistry::in_memory().with_trust(ModelTrust::new(operator().2))
+}
+
 pub(super) fn input(name: &str) -> AdoptInput {
     AdoptInput {
         name: name.into(),
@@ -77,7 +82,7 @@ fn adopt_hashes_in_place_without_copying() {
     let dir = tmp.path().join("quant");
     fake_model(&dir);
     let before = listing(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     let (adopted, _, _) = adopt_fake(&reg, &dir, "Fake-Model-4bit");
     assert_eq!(listing(&dir), before, "adoption must not add or move files");
     assert_eq!(listing(tmp.path()), vec!["quant"], "nothing created beside the model");
@@ -109,6 +114,7 @@ fn adopts_an_hf_snapshot_of_symlinked_blobs() {
     std::os::unix::fs::symlink("../../blobs/missing", snap.join("model-2.safetensors")).unwrap();
     let scanned = scan_dir(&snap, input("Linked-Model")).unwrap();
     assert_eq!(scanned.body.shards.len(), 1, "dangling link skipped, live link followed");
+    assert!(scanned.root.ends_with("snapshots/abc123"));
     assert_eq!(scanned.body.shards[0].size, 1000);
 }
 
@@ -117,7 +123,7 @@ fn unpinned_operator_key_cannot_adopt() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     let stranger = SigningKey::from_bytes(&[9u8; 32]);
     let (_, _, anchors) = operator();
     let scanned = scan_dir(&dir, input("Fake")).unwrap();
@@ -136,7 +142,7 @@ fn hash_mismatch_is_refused_and_stays_refused() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     adopt_fake(&reg, &dir, "Fake");
     let shard = dir.join("model-00002-of-00002.safetensors");
     // Same size, different bytes, and a changed stamp so the lazy check looks.
@@ -158,7 +164,7 @@ fn size_mismatch_is_a_mismatch_not_a_missing_file() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     adopt_fake(&reg, &dir, "Fake");
     fs::write(dir.join("model-00001-of-00002.safetensors"), b"short").unwrap();
     let c = reg.check("Fake", CheckMode::Stat).unwrap();
@@ -170,7 +176,7 @@ fn rehash_is_lazy_but_full_always_looks() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     adopt_fake(&reg, &dir, "Fake");
     let rehashed = |c: &ModelCheck| {
         c.files.iter().filter(|(_, o)| *o == FileOutcome::Ok { rehashed: true }).count()
@@ -200,6 +206,7 @@ fn registry_persists_and_reopens() {
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     }
     let reopened = ModelRegistry::open(&path).unwrap();
+    reopened.set_trust(ModelTrust::new(operator().2));
     assert_eq!(reopened.resolve("Fake").unwrap().package_id, id);
     assert_eq!(reopened.resolve(&id).unwrap().name, "Fake");
     reopened.remove("Fake").unwrap();
@@ -215,7 +222,7 @@ fn name_conflict_needs_replace() {
     fake_model(&a);
     fake_model(&b);
     fs::write(b.join("model-00002-of-00002.safetensors"), vec![5u8; 2048]).unwrap();
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     let (_, key, anchors) = adopt_fake(&reg, &a, "Fake");
     let kid = key_id_for(&key.verifying_key().to_bytes());
     let again = scan_dir(&b, input("Fake")).unwrap();
@@ -230,9 +237,9 @@ fn attached_manifest_is_hash_checked_on_first_use() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let src = ModelRegistry::in_memory();
+    let src = new_reg();
     let (adopted, _, anchors) = adopt_fake(&src, &dir, "Fake");
-    let other = ModelRegistry::in_memory();
+    let other = new_reg();
     other.attach(&adopted.envelope, &dir, &anchors, false).unwrap();
     assert!(other.resolve("Fake").is_ok(), "hashes verify lazily on first resolve");
     let (_, _, bad_anchors) = {
@@ -253,7 +260,7 @@ fn flipping_redistributable_breaks_the_signature() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     let (adopted, _, anchors) = adopt_fake(&reg, &dir, "Fake");
     let mut env = adopted.envelope.clone();
     env.body["redistributable"] = serde_json::json!(true);
@@ -377,7 +384,7 @@ fn model_present_is_available_when_complete() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     let (adopted, _, _) = adopt_fake(&reg, &dir, "Fake");
     let caps = model_capabilities(&reg, &TierResolver::with_external_roots(vec![]));
     assert_eq!(caps.len(), 1);
@@ -396,7 +403,7 @@ fn partial_holding_is_degraded_and_unmarked() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     adopt_fake(&reg, &dir, "Fake");
     fs::remove_file(dir.join("model-00002-of-00002.safetensors")).unwrap();
     let caps = model_capabilities(&reg, &TierResolver::with_external_roots(vec![]));
@@ -410,7 +417,7 @@ fn partial_holding_is_degraded_and_unmarked() {
 #[test]
 fn unmounting_the_drive_changes_advertised_state() {
     let (tmp, drive, dir, tiers) = external_setup();
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     adopt_fake(&reg, &dir, "Fake");
     let mounted = model_capabilities(&reg, &tiers);
     assert_eq!(mounted.len(), 1, "no store marker while the drive is there");

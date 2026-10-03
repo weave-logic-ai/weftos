@@ -87,9 +87,26 @@ pub fn model_capabilities(registry: &ModelRegistry, tiers: &TierResolver) -> Vec
     let mut out = Vec::new();
     let mut detached = false;
     for (id, entry) in registry.entries() {
+        if entry.hidden {
+            // The operator opted this model out of advertising.
+            continue;
+        }
         let Ok(check) = registry.check(&id, CheckMode::Stat) else {
             continue;
         };
+        // A refused model (hash or size mismatch, escaping link, failed
+        // attestation, revocation) advertises no shard hashes: only an
+        // impaired, empty `model.present`, which the placer never offers.
+        let untrusted = registry.untrusted(&id, &entry);
+        if matches!(check.state, ModelState::Refused { .. }) || entry.refused.is_some() || untrusted {
+            if let Some(c) = cap("model.present", Provenance::Probed) {
+                out.push(
+                    c.with_attr("shards", str_list::<&str>(&[]))
+                        .with_state(CapabilityState::Degraded),
+                );
+            }
+            continue;
+        }
         let (tier, mount) = tiers.classify(&entry.root);
         let drive_gone = tier == StoreTier::External
             && mount.as_deref().is_some_and(|m| !tiers.mounted(m));

@@ -8,7 +8,7 @@ use clawft_types::placement::engine::{
 };
 use clawft_types::placement::{Capability, CapabilityId, MemoryDemand, Provenance, Requirement};
 
-use super::tests::{adopt_fake, fake_model};
+use super::tests::{adopt_fake, fake_model, new_reg};
 use super::*;
 
 const GIB: u64 = 1 << 30;
@@ -27,7 +27,9 @@ fn body_of(total_gib: &[u64], redistributable: bool) -> ModelPackageBody {
             })
             .collect(),
         tokenizer_blake3: None,
+        tokenizer_path: None,
         template_blake3: None,
+        template_path: None,
         source: ModelSource { hf_repo: Some("o/m".into()), ..ModelSource::default() },
         redistributable,
     }
@@ -180,7 +182,7 @@ fn placer_prefers_the_node_holding_the_shards_and_explains_it() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     let (adopted, _, _) = adopt_fake(&reg, &dir, "Fake-Model-4bit");
     let body = adopted.verified.body.clone();
     let tiers = TierResolver::with_external_roots(vec![]);
@@ -218,7 +220,7 @@ fn detached_drive_makes_the_placer_stop_preferring_it() {
     let dir = drive.join("quant");
     fake_model(&dir);
     let tiers = TierResolver::with_external_roots(vec![base.join("Volumes")]);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     let (adopted, _, _) = adopt_fake(&reg, &dir, "Fake");
     let body = adopted.verified.body.clone();
     let mk = |reg: &ModelRegistry| {
@@ -244,7 +246,7 @@ fn holding_is_read_back_from_advertised_capabilities() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("quant");
     fake_model(&dir);
-    let reg = ModelRegistry::in_memory();
+    let reg = new_reg();
     let (adopted, _, _) = adopt_fake(&reg, &dir, "Fake");
     let body = adopted.verified.body.clone();
     let tiers = TierResolver::with_external_roots(vec![]);
@@ -274,7 +276,7 @@ mod sharing_tests {
     use crate::mesh_artifact::{ArtifactExchange, ExchangeConfig};
     use crate::mesh_swarm_state::{Audience, ManifestPolicy, RedistributionPolicy};
     use crate::model_manifest::sharing::{SeedModelError, seed_model, sharing_for};
-    use crate::model_manifest::tests::{input, operator};
+    use crate::model_manifest::tests::{input, new_reg, operator};
 
     fn exchange() -> ArtifactExchange {
         ArtifactExchange::new("node-test", Arc::new(ArtifactStore::new_memory()), ExchangeConfig::default())
@@ -286,7 +288,7 @@ mod sharing_tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("quant");
         fake_model(&dir);
-        let reg = ModelRegistry::in_memory();
+        let reg = new_reg();
         let (adopted, _, anchors) = adopt_fake(&reg, &dir, "Fake");
         let ex = exchange();
         let err = seed_model(&ex, &reg, "Fake", &anchors).unwrap_err();
@@ -306,7 +308,7 @@ mod sharing_tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("quant");
         fake_model(&dir);
-        let reg = ModelRegistry::in_memory();
+        let reg = new_reg();
         let (key, kid, anchors) = operator();
         let mut inp = input("Shared");
         inp.redistributable = true;
@@ -342,7 +344,7 @@ mod sharing_tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("quant");
         fake_model(&dir);
-        let reg = ModelRegistry::in_memory();
+        let reg = new_reg();
         let (key, kid, anchors) = operator();
         let mut inp = input("Shared");
         inp.redistributable = true;
