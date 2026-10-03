@@ -219,10 +219,29 @@ pub fn global_plugin_metrics() -> &'static PluginMetricsRegistry {
 
 /// Default directory for persisted per-plugin metrics JSON files.
 ///
-/// Resolves to `~/.clawft/plugins/metrics/`. Returns `None` if the home
-/// directory cannot be determined.
+/// Resolves to `$WEFTOS_PLUGIN_METRICS_DIR` when set, else
+/// `~/.clawft/plugins/metrics/`. Returns `None` if the home directory
+/// cannot be determined, or when running inside a cargo test binary with no
+/// override, so tests never write the real home (persistence is skipped).
 pub fn default_metrics_dir() -> Option<PathBuf> {
+    if let Ok(d) = std::env::var("WEFTOS_PLUGIN_METRICS_DIR")
+        && !d.is_empty()
+    {
+        return Some(PathBuf::from(d));
+    }
+    if running_in_test_binary() {
+        return None;
+    }
     dirs_home().map(|h| h.join(".clawft").join("plugins").join("metrics"))
+}
+
+/// True when this process is a cargo test binary (`target/*/deps/<name>-<hash>`).
+fn running_in_test_binary() -> bool {
+    cfg!(test)
+        || std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().and_then(|d| d.file_name()).map(|n| n == "deps"))
+            .unwrap_or(false)
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -445,5 +464,13 @@ mod tests {
     fn load_missing_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         assert!(load_metrics(dir.path(), "nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn tests_never_resolve_the_real_home_metrics_dir() {
+        // A test binary with no override must not persist into ~/.clawft.
+        if std::env::var("WEFTOS_PLUGIN_METRICS_DIR").is_err() {
+            assert!(default_metrics_dir().is_none());
+        }
     }
 }
