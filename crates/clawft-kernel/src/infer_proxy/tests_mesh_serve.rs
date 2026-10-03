@@ -49,18 +49,142 @@ fn pin_body_rules() {
         runtime: rt.into(),
     };
     let v = |b: Vec<u8>| serde_json::from_slice::<serde_json::Value>(&b).unwrap();
-    let body = br#"{"model":"x","keep_alive":"1h","a":1}"#;
-    assert_eq!(v(pin_body(body, &l(Some("m"), "LlamaCpp")).unwrap()), serde_json::json!({"model":"m","a":1}));
+    let chat = "/v1/chat/completions";
+    let body = br#"{"model":"x","keep_alive":"1h","messages":[],"temperature":0.2}"#;
+    let want = |m: Option<&str>| {
+        let mut o = serde_json::json!({"messages": [], "temperature": 0.2});
+        if let Some(m) = m {
+            o["model"] = m.into();
+        }
+        o
+    };
+    assert_eq!(v(pin_body(chat, body, &l(Some("m"), "LlamaCpp")).unwrap()), want(Some("m")));
     // No pinned model: the field is dropped, not passed through.
-    assert_eq!(v(pin_body(body, &l(None, "LlamaCpp")).unwrap()), serde_json::json!({"a":1}));
+    assert_eq!(v(pin_body(chat, body, &l(None, "LlamaCpp")).unwrap()), want(None));
     // mlx_lm.server fetches whatever repo `model` names: use its placeholder.
-    assert_eq!(
-        v(pin_body(body, &l(Some("m"), "MlxLm")).unwrap()),
-        serde_json::json!({"model":"default_model","a":1})
-    );
-    assert!(pin_body(b"not json", &l(None, "Ollama")).is_err());
-    assert!(pin_body(b"[1]", &l(None, "Ollama")).is_err());
-    assert!(pin_body(b"", &l(None, "Ollama")).unwrap().is_empty());
+    assert_eq!(v(pin_body(chat, body, &l(Some("m"), "MlxLm")).unwrap()), want(Some("default_model")));
+    assert!(pin_body(chat, b"not json", &l(None, "Ollama")).is_err());
+    assert!(pin_body(chat, b"[1]", &l(None, "Ollama")).is_err());
+    assert!(pin_body(chat, b"", &l(None, "Ollama")).unwrap().is_empty());
+}
+
+#[test]
+fn pin_body_keeps_only_allowlisted_keys_per_path() {
+    use super::mesh_policy::pin_body;
+    let local = MeshLocal { base: "http://127.0.0.1:1".into(), model: Some("m".into()), runtime: "MlxLm".into() };
+    let keys = |path: &str, body: serde_json::Value| -> std::collections::BTreeSet<String> {
+        let out = pin_body(path, body.to_string().as_bytes(), &local).unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let hostile = serde_json::json!({
+        "adapters": "/tmp/x", "draft_model": "evil/draft", "num_draft_tokens": 9,
+        "keep_alive": -1, "options": {"num_ctx": 1}, "grammar": "root ::= x",
+        "cache_prompt": true, "chat_template_kwargs": {}, "role_mapping": {},
+        "id_slot": 3, "slot_id": 3, "totally_unknown": 1,
+    });
+    let mut chat = hostile.clone();
+    for (k, v) in [("messages", serde_json::json!([])), ("max_tokens", 5.into()), ("stream", true.into()),
+                   ("tools", serde_json::json!([])), ("tool_choice", "auto".into()), ("seed", 1.into()),
+                   ("logit_bias", serde_json::json!({})), ("response_format", serde_json::json!({}))] {
+        chat[k] = v;
+    }
+    let got = keys("/v1/chat/completions", chat);
+    let want: std::collections::BTreeSet<String> =
+        ["messages", "max_tokens", "stream", "tools", "tool_choice", "seed", "logit_bias", "response_format", "model"]
+            .iter().map(|s| s.to_string()).collect();
+    assert_eq!(got, want, "everything outside the allowlist is dropped");
+    // The per-path split: embeddings and completions keep their own keys only.
+    let mut emb = hostile.clone();
+    emb["input"] = "x".into();
+    emb["messages"] = serde_json::json!([]);
+    emb["encoding_format"] = "float".into();
+    assert_eq!(keys("/v1/embeddings", emb), ["input", "encoding_format", "model"].iter().map(|s| s.to_string()).collect());
+    let mut comp = hostile;
+    comp["prompt"] = "x".into();
+    comp["tools"] = serde_json::json!([]);
+    assert_eq!(keys("/v1/completions", comp), ["prompt", "model"].iter().map(|s| s.to_string()).collect());
+}
+
+#[tokio::test]
+async fn hostile_body_keys_never_reach_the_model_server() {
+    let c = cluster(Reply::ok("{}")).await;
+    advertise(&c);
+    let p = proxy_a(&c).await;
+    let body = serde_json::json!({
+        "messages": [], "adapters": "/x", "draft_model": "evil", "keep_alive": -1, "zzz": 1
+    });
+    let r = raw(p.addr(), &json_post(p.addr(), "/v1/chat/completions", body)).await;
+    assert_eq!(status(&r), 200, "{r}");
+    let sent: serde_json::Value = serde_json::from_slice(&c.up_b.last().body).unwrap();
+    for k in ["adapters", "draft_model", "keep_alive", "zzz"] {
+        assert!(sent.get(k).is_none(), "{k} reached the server");
+    }
+    assert_eq!(sent["model"], "m");
+}
+
+#[tokio::test]
+async fn the_serving_side_requires_an_enforced_node_grant_and_an_allowlist() {
+    use crate::mesh_admit::{Grant, PeerClass, Refusal};
+    let up = fake(Reply::ok("{}")).await;
+    let t = Arc::new(PlacementTable::new("node-b", None, None));
+    t.register_local("hermes", &up.base(), None, "openai-v1", "LlamaCpp").unwrap();
+    t.expose_to_mesh("hermes", true);
+    t.allow_mesh_peer("hermes", "node-a", true);
+    let base = enforced_node();
+    let cases: Vec<(&str, Option<Grant>, &str)> = vec![
+        ("no grant", None, "node-a"),
+        ("leaf", Some(Grant { class: PeerClass::Leaf, ..base.clone() }), "node-a"),
+        ("legacy", Some(Grant { class: PeerClass::Legacy, ..base.clone() }), "node-a"),
+        ("observe", Some(Grant { admitted: false, ..base.clone() }), "node-a"),
+        ("untrusted scope", Some(Grant { trust_scope: false, ..base.clone() }), "node-a"),
+        ("observed refusal", Some(Grant { observed: Some(Refusal { code: "x", detail: String::new() }), ..base.clone() }), "node-a"),
+        ("not allowlisted", Some(base.clone()), "node-z"),
+    ];
+    for (name, grant, id) in cases {
+        let (mut client, mut server) = connected_pair().await.unwrap();
+        let u = Upstream::new(small_limits()).unwrap();
+        let tt = t.clone();
+        let f = move |r: &str, p: &str| tt.local_for_peer(r, p);
+        let peer = InferPeer { node_id: id.into(), grant };
+        let h = tokio::spawn(async move { serve_infer(&mut server, &peer, &f, &u, &ServeGate::default(), None).await.unwrap() });
+        let req = ProxyRequest {
+            role: "hermes".into(), method: Method::Get, path: "/v1/models".into(),
+            content_type: None, accept: None, authorization: None, body: vec![],
+        };
+        write_frame(&mut client, &MeshFrame { frame_type: FrameType::InferRequest, payload: wire::encode_request(&req).unwrap() }).await.unwrap();
+        assert!(matches!(h.await.unwrap(), Served::Failed(_)), "{name}");
+        assert_eq!(up.count(), 0, "{name}: reached the model server");
+    }
+    // The qualifying, allowlisted peer is served; withdrawing the allowance stops it.
+    assert!(t.local_for_peer("hermes", "node-a").is_some());
+    t.allow_mesh_peer("hermes", "node-a", false);
+    assert!(t.local_for_peer("hermes", "node-a").is_none());
+}
+
+#[tokio::test]
+async fn permits_are_taken_before_a_frame_is_read() {
+    // A peer at its limit is refused without this node reading (and so
+    // buffering) its frame.
+    let gate = ServeGate::new(1, 8);
+    assert!(gate.acquire_for_test("p"));
+    let (mut client, mut server) = connected_pair().await.unwrap();
+    let u = Upstream::new(small_limits()).unwrap();
+    let f = |_: &str, _: &str| None::<MeshLocal>;
+    let peer = trusted_peer("p");
+    // Nothing was sent by the client: serve_infer must answer anyway.
+    let r = tokio::time::timeout(Duration::from_millis(300), serve_infer(&mut server, &peer, &f, &u, &gate, None))
+        .await
+        .expect("must not wait for a frame")
+        .unwrap();
+    assert!(matches!(r, Served::Failed(ref m) if m == "refused"), "{r:?}");
+    let reply = read_frame(&mut client).await.unwrap();
+    assert!(matches!(wire::decode_resp(&reply.payload).unwrap(), Resp::Error(_)));
 }
 
 #[tokio::test]
@@ -90,12 +214,13 @@ async fn peers_are_told_a_generic_reason_only() {
     let t = Arc::new(PlacementTable::new("node-b", None, None));
     t.register_local("hermes", &format!("http://127.0.0.1:{dead}"), None, "openai-v1", "LlamaCpp").unwrap();
     t.expose_to_mesh("hermes", true);
+    t.allow_mesh_peer("hermes", "node-a", true);
     drop(up);
     let (mut client, mut server) = connected_pair().await.unwrap();
     let u = Upstream::new(small_limits()).unwrap();
     let tt = t.clone();
-    let f = move |r: &str| tt.local_for_mesh(r);
-    let peer = InferPeer { node_id: "node-a".into(), verified: true };
+    let f = move |r: &str, p: &str| tt.local_for_peer(r, p);
+    let peer = trusted_peer("node-a");
     let a2 = audit.clone();
     let h = tokio::spawn(async move { serve_infer(&mut server, &peer, &f, &u, &ServeGate::default(), Some(a2.as_ref())).await });
     let req = ProxyRequest {
@@ -122,14 +247,16 @@ async fn the_serving_side_bounds_concurrency_per_peer() {
     let t = Arc::new(PlacementTable::new("node-b", None, None));
     t.register_local("hermes", &up.base(), None, "openai-v1", "LlamaCpp").unwrap();
     t.expose_to_mesh("hermes", true);
+    t.allow_mesh_peer("hermes", "p1", true);
+    t.allow_mesh_peer("hermes", "p2", true);
     let gate = Arc::new(ServeGate::new(1, 8));
     let one = |peer: &'static str| {
         let (t, gate) = (t.clone(), gate.clone());
         async move {
             let (mut client, mut server) = connected_pair().await.unwrap();
             let u = Upstream::new(small_limits()).unwrap();
-            let f = move |r: &str| t.local_for_mesh(r);
-            let p = InferPeer { node_id: peer.into(), verified: true };
+            let f = move |r: &str, p: &str| t.local_for_peer(r, p);
+            let p = trusted_peer(peer);
             let h = tokio::spawn(async move { serve_infer(&mut server, &p, &f, &u, &gate, None).await.unwrap() });
             let req = ProxyRequest {
                 role: "hermes".into(), method: Method::Get, path: "/v1/models".into(),

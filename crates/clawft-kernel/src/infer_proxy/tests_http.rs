@@ -181,6 +181,9 @@ async fn slow_and_truncated_requests_time_out_or_fail() {
 
 #[tokio::test]
 async fn a_bare_lf_head_is_refused_at_once() {
+    // Even when the head's terminating CRLF CRLF is present.
+    let e = read(b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1\r\nX: a\nY: b\r\n\r\n").await.unwrap_err();
+    assert!(matches!(e, ProxyError::BadRequest(_)), "{e:?}");
     let e = read(b"GET /v1/models HTTP/1.1\nHost: 127.0.0.1\n\n").await.unwrap_err();
     assert!(matches!(e, ProxyError::BadRequest(ref m) if m.contains("bare LF")), "{e:?}");
     let e = read(b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1\nX: y\r\n\r\n").await.unwrap_err();

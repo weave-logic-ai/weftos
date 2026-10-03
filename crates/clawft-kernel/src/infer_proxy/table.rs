@@ -60,6 +60,8 @@ struct Inner {
     remote: HashMap<String, BTreeMap<String, RemoteEntry>>,
     /// Consumer-side: nodes allowed to serve each role. Default deny.
     allow: HashMap<String, HashSet<String>>,
+    /// Serving-side: peers this node serves each role to. Default deny.
+    serve_allow: HashMap<String, HashSet<String>>,
     exposed: HashSet<String>,
     proxy_ports: HashMap<String, u16>,
 }
@@ -272,6 +274,29 @@ impl PlacementTable {
             .insert(role.to_string(), port);
     }
 
+    /// Allow or stop allowing `peer` to use this node's instance of `role`
+    /// (the serving-side counterpart of
+    /// [`allow_remote_node`](Self::allow_remote_node)). Exposure
+    /// ([`expose_to_mesh`](Self::expose_to_mesh)) says the role may leave
+    /// loopback at all; this says to whom. Default deny, audited.
+    pub fn allow_mesh_peer(&self, role: &str, peer: &str, on: bool) {
+        let changed = {
+            let mut g = self.inner.write().unwrap();
+            let set = g.serve_allow.entry(role.to_string()).or_default();
+            if on {
+                set.insert(peer.to_string())
+            } else {
+                set.remove(peer)
+            }
+        };
+        if changed {
+            self.audit(
+                "infer.mesh.allow",
+                serde_json::json!({"role": role, "peer": peer, "allowed": on, "server": self.node_id}),
+            );
+        }
+    }
+
     /// Take an `infer.<role>` advertisement received from `sender`, the
     /// node id the connection was verified as. Heard only when the
     /// advertisement is the sender's own (`ad.node_id == sender`), the sender
@@ -359,13 +384,13 @@ impl PlacementTable {
             .map(|(n, _)| Target::Remote { node_id: n.clone() })
     }
 
-    /// The local instance of `role`, only when it is exposed to the mesh:
-    /// what a peer's forwarded request may reach. Never a remote target, so
-    /// a request cannot be bounced from node to node.
-    pub fn local_for_mesh(&self, role: &str) -> Option<MeshLocal> {
+    /// The local instance of `role`, only when it is exposed to the mesh
+    /// and `peer` is on the role's serve allowlist: what that peer's
+    /// forwarded request may reach. Never a remote target, so a request
+    /// cannot be bounced from node to node.
+    pub fn local_for_peer(&self, role: &str, peer: &str) -> Option<MeshLocal> {
         let g = self.inner.read().unwrap();
-        g.exposed
-            .contains(role)
+        (g.exposed.contains(role) && g.serve_allow.get(role).is_some_and(|s| s.contains(peer)))
             .then(|| {
                 g.local.get(role).map(|l| MeshLocal {
                     base: l.base.clone(),

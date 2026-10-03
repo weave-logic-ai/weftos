@@ -214,6 +214,9 @@ where
     if end > limits.max_head_bytes {
         return Err(ProxyError::TooLarge("request head".into()));
     }
+    if has_bare_lf(&buf[..end]) {
+        return Err(ProxyError::BadRequest("bare LF line ending".into()));
+    }
     let head = parse_head(&buf[..end], limits)?;
     let mut body = buf[end + 4..].to_vec();
 

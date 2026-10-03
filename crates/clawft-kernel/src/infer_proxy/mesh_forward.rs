@@ -18,10 +18,12 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::mesh_policy::{mesh_path_allowed, pin_body};
 use super::table::MeshLocal;
+use super::types::qualifies;
 use super::types::{MeshDialer, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink};
 use super::upstream::Upstream;
 use super::wire::{self, Resp};
 use crate::mesh::MeshStream;
+use crate::mesh_admit::Grant;
 use crate::mesh_framing::{FrameType, MeshFrame, read_frame as rf, write_frame as wf};
 
 fn mesh(e: impl std::fmt::Display) -> ProxyError {
@@ -114,9 +116,9 @@ pub async fn forward_remote(
 pub struct InferPeer {
     /// Node id.
     pub node_id: String,
-    /// True only when the id was verified against the authenticated
-    /// connection (a claimed id is not enough).
-    pub verified: bool,
+    /// The peer's admission grant, from the connection (`None`: the id
+    /// was not verified against it). Serving requires [`qualifies`].
+    pub grant: Option<Grant>,
 }
 
 /// What a served exchange did, for the caller's accounting.
@@ -235,13 +237,14 @@ fn peer_reason(e: &ProxyError) -> &'static str {
 }
 
 /// Serve one forwarded request from `peer` on `stream`. `local_for_mesh`
-/// maps a role to the loopback instance this node exposes to the mesh for
-/// it (or `None`). The request is held to the mesh path allowlist and its
+/// maps `(role, peer node id)` to the loopback instance this node exposes
+/// to that peer for the role (or `None`: not exposed, or the peer is not on
+/// the role's serve allowlist). The request is held to the mesh path allowlist and its
 /// body is pinned to that instance's model.
 pub async fn serve_infer(
     stream: &mut dyn MeshStream,
     peer: &InferPeer,
-    local_for_mesh: &(dyn Fn(&str) -> Option<MeshLocal> + Sync),
+    local_for_peer: &(dyn Fn(&str, &str) -> Option<MeshLocal> + Sync),
     upstream: &Upstream,
     gate: &ServeGate,
     audit: Option<&dyn ProxyAudit>,
@@ -251,24 +254,31 @@ pub async fn serve_infer(
         if let Some(a) = audit {
             a.record(
                 "infer.mesh.failed",
-                serde_json::json!({"peer": peer.node_id, "verified": peer.verified, "why": e.to_string()}),
+                serde_json::json!({"peer": peer.node_id, "standing": peer.grant.as_ref().map(qualifies), "why": e.to_string()}),
             );
         }
         peer_reason(e).to_string()
     };
     let mut sink = FrameSink { stream };
 
+    // Take the slots before reading anything: a peer that is over its
+    // limit must not be able to make this node buffer a frame per stream.
+    let Some(_permits) = gate.acquire(&peer.node_id) else {
+        let e = ProxyError::Refused("too many concurrent requests".into());
+        let why = refuse(&e);
+        let _ = sink.send(Resp::Error(why.clone())).await;
+        return Ok(Served::Failed(why));
+    };
     let frame = match recv_timeout(sink.stream, &limits).await {
         Ok(f) => f,
         Err(e) => return Ok(Served::Failed(refuse(&e))),
     };
     let outcome: Result<(), ProxyError> = async {
-        if !peer.verified {
-            return Err(ProxyError::Refused("peer identity is not verified".into()));
+        if !peer.grant.as_ref().is_some_and(qualifies) {
+            return Err(ProxyError::Refused(
+                "peer is not an enforced-admission full node".into(),
+            ));
         }
-        let Some(_permits) = gate.acquire(&peer.node_id) else {
-            return Err(ProxyError::Refused("too many concurrent requests".into()));
-        };
         if frame.frame_type != FrameType::InferRequest {
             return Err(ProxyError::BadRequest("expected an infer request".into()));
         }
@@ -276,10 +286,10 @@ pub async fn serve_infer(
         if !mesh_path_allowed(&req.path) {
             return Err(ProxyError::Forbidden("path is not served to peers".into()));
         }
-        let local = local_for_mesh(&req.role).ok_or_else(|| {
-            ProxyError::NoInstance(format!("{} (not served to the mesh here)", req.role))
+        let local = local_for_peer(&req.role, &peer.node_id).ok_or_else(|| {
+            ProxyError::NoInstance(format!("{} (not served to this peer here)", req.role))
         })?;
-        req.body = pin_body(&req.body, &local)?;
+        req.body = pin_body(&req.path, &req.body, &local)?;
         let fwd = upstream.forward(&local.base, &req, false, &mut sink);
         tokio::time::timeout(limits.request_timeout, fwd)
             .await

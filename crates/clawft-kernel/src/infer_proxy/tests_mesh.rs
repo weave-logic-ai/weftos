@@ -9,7 +9,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use super::listener::{InferProxy, OccupiedPolicy, Started};
-use super::mesh_forward::{InferPeer, ServeGate, Served, forward_remote, serve_infer};
+use super::mesh_forward::{ServeGate, Served, forward_remote, serve_infer};
 use super::support::*;
 use super::table::PlacementTable;
 use super::types::*;
@@ -47,6 +47,7 @@ pub(super) async fn cluster(reply: Reply) -> Cluster {
     b.register_local("hermes", &up_b.base(), Some("m".into()), "openai-v1", "LlamaCpp")
         .unwrap();
     mesh.add_node("node-b", b.clone(), true);
+    b.allow_mesh_peer("hermes", "node-a", true);
     Cluster { a, b, mesh, up_b, audit }
 }
 
@@ -80,7 +81,7 @@ async fn a_request_through_the_proxy_reaches_a_workload_on_another_node() {
     assert!(advertise(&c));
     let p = proxy_a(&c).await;
     assert_eq!(c.a.resolve("hermes"), Some(Target::Remote { node_id: "node-b".into() }));
-    let req = String::from_utf8(post(p.addr(), "/v1/chat/completions", r#"{"q":1}"#))
+    let req = String::from_utf8(post(p.addr(), "/v1/chat/completions", r#"{"temperature":1}"#))
         .unwrap()
         .replace("Content-Type:", "Authorization: Bearer client-secret\r\nContent-Type:");
     let resp = raw(p.addr(), req.as_bytes()).await;
@@ -88,7 +89,7 @@ async fn a_request_through_the_proxy_reaches_a_workload_on_another_node() {
     assert_eq!(body(&resp), r#"{"from":"b"}"#);
     let seen = c.up_b.last();
     let sent: serde_json::Value = serde_json::from_slice(&seen.body).unwrap();
-    assert_eq!(sent, serde_json::json!({"q": 1, "model": "m"}), "model pinned by the serving side");
+    assert_eq!(sent, serde_json::json!({"temperature": 1, "model": "m"}), "model pinned by the serving side");
     assert_eq!(seen.header("authorization"), None, "client credentials must not cross the mesh");
     assert_eq!(p.stats().remote.load(Ordering::Relaxed), 1);
     assert_eq!(c.mesh.dials.lock().unwrap().as_slice(), ["node-b"]);
@@ -276,7 +277,7 @@ async fn forwarding_refuses_a_peer_that_is_not_admitted() {
 async fn the_serving_side_refuses_an_unverified_peer() {
     let c = cluster(Reply::ok("b")).await;
     advertise(&c);
-    *c.mesh.verified.lock().unwrap() = false;
+    *c.mesh.serve_grant.lock().unwrap() = None;
     let p = proxy_a(&c).await;
     let resp = raw(p.addr(), &get(p.addr(), "/v1/models")).await;
     assert_eq!(status(&resp), 502, "{resp}");
@@ -320,13 +321,14 @@ async fn a_peer_cannot_make_the_server_forward_onward() {
     b.allow_remote_node("hermes", "node-c", true);
     assert!(b.ingest_advertisement("node-c", &c_table.advertisement("hermes", 5).unwrap()));
     b.expose_to_mesh("hermes", true);
+    b.allow_mesh_peer("hermes", "node-a", true);
     assert!(matches!(b.resolve("hermes"), Some(Target::Remote { .. })));
 
     let (mut client, mut server) = connected_pair().await.unwrap();
     let up = Upstream::new(small_limits()).unwrap();
     let bt = b.clone();
-    let f = move |r: &str| bt.local_for_mesh(r);
-    let peer = InferPeer { node_id: "node-a".into(), verified: true };
+    let f = move |r: &str, p: &str| bt.local_for_peer(r, p);
+    let peer = trusted_peer("node-a");
     let h = tokio::spawn(async move { serve_infer(&mut server, &peer, &f, &up, &ServeGate::default(), Some(audit.as_ref())).await });
     let req = ProxyRequest {
         role: "hermes".into(), method: Method::Get, path: "/v1/models".into(),
@@ -343,8 +345,8 @@ async fn a_peer_cannot_make_the_server_forward_onward() {
 #[tokio::test]
 async fn the_server_rejects_the_wrong_frame_and_malformed_requests() {
     let up = Upstream::new(small_limits()).unwrap();
-    let f = |_: &str| None::<MeshLocal>;
-    let peer = InferPeer { node_id: "n".into(), verified: true };
+    let f = |_: &str, _: &str| None::<MeshLocal>;
+    let peer = trusted_peer("n");
     for frame in [
         MeshFrame { frame_type: FrameType::Heartbeat, payload: vec![1] },
         MeshFrame { frame_type: FrameType::InferRequest, payload: b"garbage".to_vec() },

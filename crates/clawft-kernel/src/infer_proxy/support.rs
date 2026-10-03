@@ -220,8 +220,8 @@ pub struct FakeMesh {
     pub overrides: Mutex<std::collections::HashMap<String, Grant>>,
     pub gate: Arc<ServeGate>,
     pub nodes: Mutex<std::collections::HashMap<String, Arc<PlacementTable>>>,
-    /// Whether the serving side sees the dialing peer as verified.
-    pub verified: Mutex<bool>,
+    /// The grant the serving side holds for the dialing peer.
+    pub serve_grant: Mutex<Option<Grant>>,
     pub caller: String,
     pub dials: Mutex<Vec<String>>,
     pub audit: Option<Arc<dyn ProxyAudit>>,
@@ -234,7 +234,13 @@ impl FakeMesh {
             overrides: Mutex::new(Default::default()),
             gate: Arc::new(ServeGate::new(4, 16)),
             nodes: Mutex::new(Default::default()),
-            verified: Mutex::new(true),
+            serve_grant: Mutex::new(Some(Grant {
+                limits: PeerLimits::None,
+                class: PeerClass::Node,
+                admitted: true,
+                trust_scope: true,
+                observed: None,
+            })),
             caller: caller.to_string(),
             dials: Mutex::new(Vec::new()),
             audit: None,
@@ -277,16 +283,34 @@ impl MeshDialer for FakeMesh {
         let (client, mut server) = connected_pair().await.map_err(|e| ProxyError::Mesh(e.to_string()))?;
         let peer = InferPeer {
             node_id: self.caller.clone(),
-            verified: *self.verified.lock().unwrap(),
+            grant: self.serve_grant.lock().unwrap().clone(),
         };
         let audit = self.audit.clone();
         let gate = self.gate.clone();
         tokio::spawn(async move {
             let up = Upstream::new(small_limits()).unwrap();
             let t = table.clone();
-            let f = move |role: &str| t.local_for_mesh(role);
+            let f = move |role: &str, peer: &str| t.local_for_peer(role, peer);
             let _ = serve_infer(&mut server, &peer, &f, &up, &gate, audit.as_deref()).await;
         });
         Ok(Box::new(client))
+    }
+}
+
+/// A peer holding an enforced-admission full-node grant.
+pub fn enforced_node() -> Grant {
+    Grant {
+        limits: PeerLimits::None,
+        class: PeerClass::Node,
+        admitted: true,
+        trust_scope: true,
+        observed: None,
+    }
+}
+
+pub fn trusted_peer(id: &str) -> InferPeer {
+    InferPeer {
+        node_id: id.into(),
+        grant: Some(enforced_node()),
     }
 }
