@@ -83,7 +83,13 @@ impl PlacementControlPlane {
             .seeds
             .write()
             .ok()
-            .and_then(|mut s| s.get_mut(node_id).map(|e| e.1 = tier))
+            .and_then(|mut s| {
+                s.get_mut(node_id).map(|e| {
+                    e.1 = tier;
+                    // The host's own gate calls read this live.
+                    e.0.set_node_tier(super::facts::governance_tier(tier));
+                })
+            })
             .is_some();
         self.persist();
         known || seed

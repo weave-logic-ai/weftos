@@ -19,7 +19,7 @@ use crate::chain;
 use crate::gate::GateDecision;
 use crate::workload_pkg::codec::hex_encode;
 use crate::workload_runtime::{
-    HostContract, InstanceHandle, VerifiedWorkload, WorkloadConfig, WorkloadHost,
+    HostContract, InstanceHandle, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadHost,
 };
 
 use clawft_types::placement::TrustTier;
@@ -79,6 +79,13 @@ impl PlacementControlPlane {
                 "seed node id must be a plain token".into(),
             ));
         }
+        // A remote.api node must be reached over a pinned link (or an
+        // explicit lab opt-in); otherwise it is not registered at all.
+        host.runtime()
+            .link_security()
+            .require_pinned(node_id)
+            .map_err(PlaneError::Invalid)?;
+        host.set_node_tier(governance_tier(tier));
         if let Ok(mut s) = self.seeds.write() {
             s.insert(node_id.to_string(), (host, tier));
         }
@@ -239,16 +246,19 @@ impl PlacementControlPlane {
         // the instance (the Seed must still hold the pinned cog) so every
         // verb below works on it again.
         let adopted = async {
-            let w =
-                VerifiedWorkload::store_pin(&registry, &h.workload_id, &version, sha256.as_deref())
-                    .map_err(err)?;
-            host.adopt(&h, &w).await.map_err(err)
+            let w = VerifiedWorkload::store_pin(
+                &registry,
+                &h.workload_id,
+                &version,
+                sha256.as_deref(),
+            )?;
+            host.adopt(&h, &w).await
         }
         .await;
         if let Err(e) = adopted {
             // The Seed no longer holds the cog (removed out of band): an
             // unload has nothing left to do but forget the record.
-            if m == method::UNLOAD && e.to_string().contains("is not installed on the Seed") {
+            if m == method::UNLOAD && matches!(e, RuntimeError::NotInstalled(_)) {
                 if let Ok(mut s) = self.seed_handles.lock() {
                     s.remove(&rec.instance_id);
                 }
@@ -260,7 +270,7 @@ impl PlacementControlPlane {
                     json!({ "unloaded": rec.instance_id, "note": "not on the Seed" }),
                 ));
             }
-            return Some(Err(e));
+            return Some(Err(err(e)));
         }
         Some(match m {
             method::STATUS => {

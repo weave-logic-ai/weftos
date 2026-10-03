@@ -401,3 +401,64 @@ mod project_permits {
         assert!(bad.validate().is_err());
     }
 }
+
+fn stop_permit() -> WorkloadPermitRule {
+    let mut p = WorkloadPermitRule::new("permit-cog-stop", ["workload.stop"], ["cog"]);
+    p.min_node_tier = NodeTrustTier::Paired;
+    p
+}
+
+#[test]
+fn teardown_waives_a_node_tier_denial_and_chains_the_waiver() {
+    let cm = chain();
+    let gate = WorkloadGate::new(0.8, false)
+        .with_chain(cm.clone())
+        .with_permit(stop_permit())
+        .unwrap();
+    let demoted = with(cog_ctx(), "node_tier", json!("discovered"));
+    assert!(gate.check("a", "workload.stop", &demoted).is_deny());
+    assert!(
+        gate.check_teardown("a", "workload.stop", &demoted)
+            .is_permit()
+    );
+    assert_eq!(last_payload(&cm)["teardown_node_tier_waived"], true);
+}
+
+#[test]
+fn teardown_never_waives_a_revocation_or_a_default_deny() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = Arc::new(RevocationList::new(dir.path().join("revoked_hosts.json")));
+    list.revoke_subject(RevocationKind::Package, "cog.fall-detect", "bad")
+        .unwrap();
+    let gate = WorkloadGate::new(0.8, false)
+        .with_permit(stop_permit())
+        .unwrap()
+        .with_revocations(list);
+    let demoted = with(cog_ctx(), "node_tier", json!("discovered"));
+    let paired = cog_ctx();
+    // Revoked: denied on a paired node and on a demoted one.
+    assert!(gate.check_teardown("a", "workload.stop", &paired).is_deny());
+    assert!(
+        gate.check_teardown("a", "workload.stop", &demoted)
+            .is_deny()
+    );
+    // No permit for the action at all: a default deny stays a deny.
+    let bare = WorkloadGate::new(0.8, false);
+    assert!(
+        bare.check_teardown("a", "workload.stop", &demoted)
+            .is_deny()
+    );
+    // A permit for another kind of workload does not cover this one either.
+    let other = WorkloadGate::new(0.8, false)
+        .with_permit(WorkloadPermitRule::new(
+            "other",
+            ["workload.stop"],
+            ["inference"],
+        ))
+        .unwrap();
+    assert!(
+        other
+            .check_teardown("a", "workload.stop", &demoted)
+            .is_deny()
+    );
+}

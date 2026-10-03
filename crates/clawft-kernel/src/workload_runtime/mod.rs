@@ -81,7 +81,7 @@ pub use evidence::RunEvidence;
 pub use fleet_inventory::{
     FleetCandidate, FleetCheck, FleetError, FleetInventory, FleetMcp, ReadOnlyFleet,
 };
-pub use fleet_mcp::{HttpFleetMcp, OAuthTokens};
+pub use fleet_mcp::{COGNITUM_MCP_URL, OAuthTokens};
 pub use host::{RUNTIME_CHAIN_SOURCE, WorkloadHost};
 pub use host_contract::HostContract;
 pub use logical::{
@@ -97,7 +97,7 @@ pub use seed_creds::FileCredentials;
 pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};
 pub use seed_ops::{SeedBackup, UpgradeOutcome};
 pub use types::{
-    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, Preemption,
+    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, LinkSecurity, Preemption,
     ProjectPayload, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
     WorkloadSource,
 };

@@ -50,7 +50,11 @@ async fn rig_with(identity: serde_json::Value) -> Rig {
             pins: vec![SeedPin::new("fall-detect", "1.0.0")],
             concurrency_cap: SEED_CONCURRENCY_CAP,
         },
-        Arc::new(HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap()),
+        Arc::new(
+            HttpSeedTransport::new(&server.uri(), SeedTls::WebPki)
+                .unwrap()
+                .allow_unpinned_lab_link(),
+        ),
         Arc::new(MemoryCredentials::with(&node, TOKEN)),
     )
     .unwrap();
@@ -235,7 +239,7 @@ async fn a_replayed_or_older_record_is_refused() {
 #[tokio::test]
 async fn an_expired_or_future_record_is_refused() {
     let r = rig().await;
-    let old = r.signed(NOW - 2 * 24 * 3600);
+    let old = r.signed(NOW - 3600);
     assert_eq!(
         r.binder.bind(&old, &r.rt, NOW).await.unwrap_err(),
         BindError::Expired
@@ -288,4 +292,104 @@ async fn no_bearer_token_reaches_the_chain_or_an_error() {
     )
     .unwrap();
     assert!(!serde_json::to_string(&facts).unwrap().contains(TOKEN));
+}
+
+#[tokio::test]
+async fn a_bind_over_an_unpinned_link_is_refused_before_the_seed_is_asked() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let adapter = SigningKey::from_bytes(&[61; 32]);
+    let node = seed_node_id(&adapter);
+    // No pin and no lab opt-in.
+    let rt = SeedApiRuntime::new(
+        SeedConfig {
+            node_id: node.clone(),
+            pins: vec![SeedPin::new("fall-detect", "1.0.0")],
+            concurrency_cap: SEED_CONCURRENCY_CAP,
+        },
+        Arc::new(HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap()),
+        Arc::new(MemoryCredentials::with(&node, TOKEN)),
+    )
+    .unwrap();
+    let operator = SigningKey::from_bytes(&[62; 32]);
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let binder = SeedBinder::new(vec![operator.verifying_key().to_bytes()], chain.clone());
+    let rec = BindRecord {
+        device_id: DEVICE.into(),
+        device_pubkey: DEVICE_KEY.into(),
+        node_id: node,
+        bound_at: NOW,
+    };
+    let e = binder
+        .bind(&sign_bind(&rec, &operator), &rt, NOW)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, BindError::UnpinnedTransport(_)), "{e}");
+    let codes: Vec<_> = chain
+        .tail(chain.len())
+        .into_iter()
+        .filter(|e| e.kind == EVENT_KIND_WORKLOAD_REFUSE)
+        .map(|e| e.payload.unwrap()["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, ["unpinned_transport"]);
+}
+
+#[tokio::test]
+async fn a_replayed_record_is_refused_after_a_restart() {
+    let r = rig().await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(super::seed_bind::BIND_STATE_FILE);
+    let key = r.operator.verifying_key().to_bytes();
+    let first = r.signed(NOW);
+    {
+        let b = SeedBinder::new(vec![key], r.chain.clone())
+            .with_state_file(&file)
+            .unwrap();
+        b.bind(&first, &r.rt, NOW).await.unwrap();
+    }
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    // "Restart": a new binder, same file.
+    let b = SeedBinder::new(vec![key], r.chain.clone())
+        .with_state_file(&file)
+        .unwrap();
+    assert_eq!(
+        b.bind(&first, &r.rt, NOW + 1).await.unwrap_err(),
+        BindError::Replayed
+    );
+    assert_eq!(
+        b.bind(&r.signed(NOW - 5), &r.rt, NOW + 1)
+            .await
+            .unwrap_err(),
+        BindError::Replayed
+    );
+    // Strictly newer still binds, and stays monotonic.
+    b.bind(&r.signed(NOW + 5), &r.rt, NOW + 6).await.unwrap();
+    // A malformed state file is refused and left alone.
+    std::fs::write(&file, "{not json").unwrap();
+    assert!(
+        SeedBinder::new(vec![key], r.chain.clone())
+            .with_state_file(&file)
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{not json");
+}
+
+#[tokio::test]
+async fn a_binding_that_cannot_be_saved_is_not_made() {
+    let r = rig().await;
+    let key = r.operator.verifying_key().to_bytes();
+    let b = SeedBinder::new(vec![key], r.chain.clone())
+        .with_state_file("/nonexistent-dir-for-bind-state/binds.json")
+        .unwrap();
+    let e = b.bind(&r.signed(NOW), &r.rt, NOW).await.unwrap_err();
+    assert!(matches!(e, BindError::State(_)), "{e}");
+    assert!(b.device_of(&seed_node_id(&r.adapter)).is_none());
 }

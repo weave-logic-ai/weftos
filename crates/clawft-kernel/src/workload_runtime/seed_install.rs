@@ -99,8 +99,6 @@ pub(super) fn pinned_on_seed(
             "the Seed has {id}@{} installed but the operator pinned {version}",
             c.version
         ))),
-        None => Err(RuntimeError::AdmissionRefused(format!(
-            "{id} is not installed on the Seed"
-        ))),
+        None => Err(RuntimeError::NotInstalled(id.to_string())),
     }
 }

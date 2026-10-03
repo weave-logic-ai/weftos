@@ -18,7 +18,9 @@
 //!   controller never offers this node a container variant;
 //! - `workload-seeds.json`: Cognitum Seeds on operator-assigned node ids
 //!   (`[{"node_id": "seed-kitchen", "url": "https://seed:8443",
-//!   "tls_sha256": "sha256:<64 hex>", "tier": "paired",
+//!   "tls_spki_sha256": "spki-sha256:<64 hex>" (or the older "tls_sha256"),
+//!   "tier": "paired", (a Seed with no pin is refused unless
+//!   "allow_unpinned_lab_link": true, for a USB or lab link only),
 //!   "pins": [{"id": "fall-detect", "version": "1.0.0"}]}]`); tokens are
 //!   read from `secrets/workload.seed/<node_id>.token` under the runtime dir.
 
@@ -206,6 +208,14 @@ struct SeedEntry {
     url: String,
     #[serde(default)]
     tls_sha256: Option<String>,
+    /// `spki-sha256:<hex>`: pin the Seed's public key (survives the
+    /// Seed's certificate renewals). Preferred over `tls_sha256`.
+    #[serde(default)]
+    tls_spki_sha256: Option<String>,
+    /// A USB or lab link that cannot be pinned (plain http). Off by
+    /// default: a Seed without a pin cannot be bound or placed on.
+    #[serde(default)]
+    allow_unpinned_lab_link: bool,
     #[serde(default = "paired")]
     tier: TrustTier,
     pins: Vec<SeedPin>,
@@ -235,12 +245,24 @@ pub fn load_seeds(
     seeds
         .into_iter()
         .map(|s| {
-            let tls = match &s.tls_sha256 {
-                Some(f) => SeedTls::pinned(f).map_err(|e| format!("{SEEDS_FILE}: {e}"))?,
-                None => SeedTls::WebPki,
+            let tls = match (&s.tls_spki_sha256, &s.tls_sha256) {
+                (Some(_), Some(_)) => {
+                    return Err(format!(
+                        "{SEEDS_FILE}: {}: give tls_spki_sha256 or tls_sha256, not both",
+                        s.node_id
+                    ));
+                }
+                (Some(f), None) => {
+                    SeedTls::pinned_spki(f).map_err(|e| format!("{SEEDS_FILE}: {e}"))?
+                }
+                (None, Some(f)) => SeedTls::pinned(f).map_err(|e| format!("{SEEDS_FILE}: {e}"))?,
+                (None, None) => SeedTls::WebPki,
             };
-            let transport = HttpSeedTransport::new(&s.url, tls)
+            let mut transport = HttpSeedTransport::new(&s.url, tls)
                 .map_err(|e| format!("{SEEDS_FILE}: {}: {e}", s.node_id))?;
+            if s.allow_unpinned_lab_link {
+                transport = transport.allow_unpinned_lab_link();
+            }
             let rt = SeedApiRuntime::new(
                 SeedConfig {
                     node_id: s.node_id.clone(),

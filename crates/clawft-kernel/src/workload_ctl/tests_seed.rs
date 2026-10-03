@@ -78,7 +78,11 @@ async fn store_pin_goes_to_the_seed_adapter_on_its_operator_assigned_id() {
             pins: vec![SeedPin::new("fall-detect", "1.0.0")],
             concurrency_cap: 3,
         },
-        Arc::new(HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap()),
+        Arc::new(
+            HttpSeedTransport::new(&server.uri(), SeedTls::WebPki)
+                .unwrap()
+                .allow_unpinned_lab_link(),
+        ),
         Arc::new(Creds),
     )
     .unwrap();
@@ -219,7 +223,11 @@ pub(super) fn seed_plane_at(
             pins: vec![SeedPin::new("fall-detect", "1.0.0")],
             concurrency_cap: 3,
         },
-        Arc::new(HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap()),
+        Arc::new(
+            HttpSeedTransport::new(&server.uri(), SeedTls::WebPki)
+                .unwrap()
+                .allow_unpinned_lab_link(),
+        ),
         Arc::new(Creds),
     )
     .unwrap();

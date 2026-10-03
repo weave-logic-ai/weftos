@@ -223,6 +223,7 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
         &runtime,
         SEEDS_FILE,
         &json!([{ "node_id": "seed-lab", "url": seed_url, "tier": "paired",
+                  "allow_unpinned_lab_link": true,
                   "pins": [{ "id": "fall-detect", "version": "1.0.0" }] }]),
     );
     seed_token(&runtime, "seed-lab");

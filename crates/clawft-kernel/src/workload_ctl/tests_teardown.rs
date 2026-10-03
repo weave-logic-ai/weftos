@@ -86,12 +86,13 @@ async fn stop_and_unload_work_on_a_demoted_peer_but_start_does_not() {
         .unwrap();
     assert!(plane.placements().is_empty());
 
-    // The audit shows the override, not a silent bypass.
+    // The audit shows the waiver (chained by the gate), not a silent bypass.
     let stops = events(&chain, crate::chain::EVENT_KIND_WORKLOAD_STOP);
     assert!(
-        stops.iter().any(|(_, p)| p["phase"] == "request"
-            && p["gate_denial_overridden_for_teardown"].is_string()),
-        "override chained: {stops:?}"
+        stops
+            .iter()
+            .any(|(_, p)| p["teardown_node_tier_waived"] == true),
+        "waiver chained: {stops:?}"
     );
 }
 
@@ -182,19 +183,51 @@ async fn a_restarted_controller_refuses_a_seed_that_no_longer_has_the_pinned_cog
 }
 
 #[tokio::test]
-async fn stop_and_unload_work_on_a_demoted_seed_but_a_new_place_does_not() {
-    let tmp = tempfile::tempdir().unwrap();
+async fn stop_and_unload_work_on_a_demoted_seed_but_start_and_place_do_not() {
     let server = mock_seed_start(200, 1).await;
     teardown_mocks(&server).await;
     let (plane, _, _) = seed_plane_at(&server, TrustTier::Paired, None);
     let rec = plane.place_store_pin(&pin_order(true)).await.unwrap();
-    drop(tmp);
 
     assert!(plane.set_tier(NODE, TrustTier::Discovered), "seed is known");
+    // Growth is refused, on an instance that was placed before the demotion.
     let err = plane.place_store_pin(&pin_order(false)).await.unwrap_err();
     assert!(matches!(err, PlaneError::Governance(_)), "{err}");
-
+    let err = plane
+        .instance(ctl::START, &rec.instance_id)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("workload.start denied"), "{err}");
+    // Taking it down is not, because teardown waives the node tier.
     plane.instance(ctl::STOP, &rec.instance_id).await.unwrap();
     plane.instance(ctl::UNLOAD, &rec.instance_id).await.unwrap();
     assert!(plane.placements().is_empty());
+}
+
+#[tokio::test]
+async fn adopt_after_a_restart_on_a_demoted_seed_works_but_start_is_denied() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("workload-placements.json");
+    let server = mock_seed_start(200, 1).await;
+    teardown_mocks(&server).await;
+    let rec = {
+        let (plane, _, _) = seed_plane_at(&server, TrustTier::Paired, Some(&state));
+        plane.place_store_pin(&pin_order(true)).await.unwrap()
+    };
+    // Restarted with the Seed demoted: re-adoption (gated as a load) is
+    // waived, a start is not.
+    let (plane, _, seed_chain) = seed_plane_at(&server, TrustTier::Discovered, Some(&state));
+    let st = plane.instance(ctl::STATUS, &rec.instance_id).await.unwrap();
+    assert_eq!(st["instance_id"], rec.instance_id.as_str());
+    let err = plane
+        .instance(ctl::START, &rec.instance_id)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("workload.start denied"), "{err}");
+    assert!(
+        events(&seed_chain, EVENT_KIND_WORKLOAD_LOAD)
+            .iter()
+            .any(|(_, p)| p["phase"] == "readopted")
+    );
+    plane.instance(ctl::STOP, &rec.instance_id).await.unwrap();
 }

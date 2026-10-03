@@ -26,8 +26,11 @@ pub trait OAuthTokens: Send + Sync {
     fn access_token(&self) -> Result<SecretString, FleetError>;
 }
 
-/// reqwest-backed MCP client.
-pub struct HttpFleetMcp {
+/// reqwest-backed MCP client. Crate-private on purpose: it can call any
+/// tool, so the only public way to use it is through
+/// [`ReadOnlyFleet::http`](super::fleet_inventory::ReadOnlyFleet::http),
+/// which refuses everything but the read tools.
+pub(crate) struct HttpFleetMcp {
     url: String,
     client: reqwest::Client,
     tokens: Box<dyn OAuthTokens>,
@@ -35,12 +38,24 @@ pub struct HttpFleetMcp {
 
 impl HttpFleetMcp {
     /// Client for `url`: `https://`, or plain `http://` to a loopback stub.
-    pub fn new(url: &str, tokens: Box<dyn OAuthTokens>) -> Result<Self, FleetError> {
-        let loopback = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
-        if !(url.starts_with("https://") || loopback) {
-            return Err(FleetError::Transport(
-                "the fleet MCP URL must be https:// (or a loopback stub)".into(),
-            ));
+    pub(crate) fn new(url: &str, tokens: Box<dyn OAuthTokens>) -> Result<Self, FleetError> {
+        let bad = || {
+            FleetError::Transport(
+                "the fleet MCP URL must be https:// (or http:// to localhost, 127.0.0.1 or ::1)"
+                    .into(),
+            )
+        };
+        let parsed = reqwest::Url::parse(url).map_err(|_| bad())?;
+        // `Url` normalises the host, so the comparison is exact: a prefix
+        // such as `127.0.0.1.evil.com` is a different host.
+        let local = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+        let ok = match parsed.scheme() {
+            "https" => parsed.host_str().is_some_and(|h| !h.is_empty()),
+            "http" => local && parsed.username().is_empty(),
+            _ => false,
+        };
+        if !ok {
+            return Err(bad());
         }
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -88,9 +103,22 @@ impl HttpFleetMcp {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .is_some_and(|t| t.starts_with("text/event-stream"));
-        let bytes = resp.bytes().await.map_err(fail)?;
-        if bytes.len() > MAX_REPLY_BYTES {
-            return Err(FleetError::Transport("reply too large".into()));
+        let too_large = || FleetError::Transport("reply too large".into());
+        if resp
+            .content_length()
+            .is_some_and(|n| n > MAX_REPLY_BYTES as u64)
+        {
+            return Err(too_large());
+        }
+        // Chunk by chunk, so the cap bounds memory even without a (or with
+        // a lying) Content-Length.
+        let mut resp = resp;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(fail)? {
+            if bytes.len() + chunk.len() > MAX_REPLY_BYTES {
+                return Err(too_large());
+            }
+            bytes.extend_from_slice(&chunk);
         }
         let text = String::from_utf8_lossy(&bytes);
         let payload = if sse {

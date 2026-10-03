@@ -12,7 +12,7 @@ use clawft_types::secret::SecretString;
 use serde_json::Value;
 
 use super::seed_tls::SeedTls;
-use super::types::RuntimeError;
+use super::types::{LinkSecurity, RuntimeError};
 
 /// HTTP method subset the Seed API uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,11 @@ pub trait SeedTransport: Send + Sync {
         token: &SecretString,
         timeout: Duration,
     ) -> Result<(u16, Value), RuntimeError>;
+
+    /// How this link authenticates the Seed. Fails closed.
+    fn link_security(&self) -> LinkSecurity {
+        LinkSecurity::Unpinned
+    }
 }
 
 /// Validate a Seed base URL: `http(s)://host[:port]`, nothing else.
@@ -85,6 +90,8 @@ pub fn validate_path(path: &str) -> Result<(), RuntimeError> {
 pub struct HttpSeedTransport {
     base: String,
     client: reqwest::Client,
+    pinned: bool,
+    lab_opt_in: bool,
 }
 
 impl HttpSeedTransport {
@@ -107,7 +114,8 @@ impl HttpSeedTransport {
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .pool_max_idle_per_host(0);
-        if matches!(tls, SeedTls::PinnedSha256(_) | SeedTls::PinnedSpki(_)) {
+        let pinned = matches!(tls, SeedTls::PinnedSha256(_) | SeedTls::PinnedSpki(_));
+        if pinned {
             if !base.starts_with("https://") {
                 return Err(RuntimeError::InvalidConfig(
                     "a seed TLS pin needs an https:// base URL".into(),
@@ -121,12 +129,36 @@ impl HttpSeedTransport {
         let client = builder
             .build()
             .map_err(|e| RuntimeError::Backend(format!("http client: {e}")))?;
-        Ok(Self { base, client })
+        Ok(Self {
+            base,
+            client,
+            pinned,
+            lab_opt_in: false,
+        })
+    }
+
+    /// Operator opt-in for a USB or lab link that cannot be pinned (plain
+    /// http, or https verified only by WebPKI). Off by default: without it
+    /// a Seed on this link cannot be bound or placed on.
+    pub fn allow_unpinned_lab_link(mut self) -> Self {
+        tracing::warn!(base = %self.base, "unpinned Seed lab link enabled by operator opt-in");
+        self.lab_opt_in = true;
+        self
     }
 }
 
 #[async_trait]
 impl SeedTransport for HttpSeedTransport {
+    fn link_security(&self) -> LinkSecurity {
+        if self.pinned {
+            LinkSecurity::Pinned
+        } else if self.lab_opt_in {
+            LinkSecurity::LabOptIn
+        } else {
+            LinkSecurity::Unpinned
+        }
+    }
+
     async fn request(
         &self,
         method: Method,

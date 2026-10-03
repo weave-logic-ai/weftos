@@ -300,12 +300,14 @@ fn a_key_pin_on_a_plain_http_base_is_refused() {
     assert!(matches!(r, Err(RuntimeError::InvalidConfig(_))));
 }
 
-/// Plain-http Seed (the USB base `http://169.254.42.1`): a stub that
-/// closes each connection after its response while advertising
-/// keep-alive, as the Seed does after a few idle seconds. A pooled stale
-/// connection makes the second request fail with "error sending request".
+/// Plain-http Seed (the USB base `http://169.254.42.1`) with the real
+/// firmware's keep-alive behaviour: the first request on a connection is
+/// answered with `Connection: keep-alive`, and a second request on the
+/// same socket is never answered (a stall, not a FIN). A client that pools
+/// idle connections reuses the socket and hangs; one that does not opens a
+/// fresh connection each time and always gets an answer.
 #[tokio::test]
-async fn plain_http_survives_a_server_that_drops_keep_alive_connections() {
+async fn plain_http_never_reuses_a_connection_the_seed_will_stall_on() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let heads = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -315,28 +317,42 @@ async fn plain_http_survives_a_server_that_drops_keep_alive_connections() {
             let Ok((mut s, _)) = listener.accept().await else {
                 return;
             };
-            let mut buf = [0u8; 4096];
-            let n = s.read(&mut buf).await.unwrap_or(0);
-            log.lock()
-                .unwrap()
-                .push(String::from_utf8_lossy(&buf[..n]).into_owned());
-            let _ = s
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                      Content-Length: 2\r\nConnection: keep-alive\r\n\r\n[]",
-                )
-                .await;
-            let _ = s.shutdown().await; // ...but the connection goes away
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                log.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = s
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                          Content-Length: 2\r\nConnection: keep-alive\r\n\r\n[]",
+                    )
+                    .await;
+                // A second request on this socket is read and ignored.
+                let _ = s.read(&mut buf).await;
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            });
         }
     });
     let t = HttpSeedTransport::new(&format!("http://127.0.0.1:{port}"), SeedTls::WebPki).unwrap();
     for i in 0..3 {
-        let (status, body) = get(&t).await.unwrap_or_else(|e| panic!("request {i}: {e}"));
+        let (status, body) = t
+            .request(
+                Method::Get,
+                "/api/v1/apps",
+                None,
+                &SecretString::new(TOKEN.to_string()),
+                Duration::from_millis(1500),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("request {i} stalled on a reused connection: {e}"));
         assert_eq!((status, body), (200, serde_json::json!([])));
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let heads = heads.lock().unwrap();
-    assert_eq!(heads.len(), 3);
+    assert_eq!(heads.len(), 3, "one fresh connection per request");
     assert!(
         heads[0]
             .to_ascii_lowercase()

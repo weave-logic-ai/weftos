@@ -42,7 +42,11 @@ pub const BIND_CHAIN_SOURCE: &str = "workload.bind";
 /// Domain tag signed before a bind record.
 pub const BIND_DOMAIN: &[u8] = b"weftos.workload.node.bind.v1\0";
 /// Default age after which a bind record is no longer accepted.
-pub const DEFAULT_MAX_BIND_AGE_SECS: u64 = 24 * 3600;
+pub const DEFAULT_MAX_BIND_AGE_SECS: u64 = 600;
+/// File name of the persisted bind state, beside `workload-placements.json`.
+pub const BIND_STATE_FILE: &str = "workload-seed-binds.json";
+const MAX_STATE_BYTES: u64 = 256 * 1024;
+const MAX_BOUND_DEVICES: usize = 1000;
 /// Tolerated clock skew for `bound_at`.
 pub const BIND_CLOCK_SKEW_SECS: u64 = 60;
 /// Facts lifetime for an adapter-attested Seed.
@@ -132,6 +136,12 @@ pub enum BindError {
     /// The node is already bound to a different device.
     #[error("node {0} is already bound to another device")]
     NodeTaken(String),
+    /// The link to the Seed is not pinned (and no lab opt-in is set).
+    #[error("{0}")]
+    UnpinnedTransport(String),
+    /// The bind state could not be saved, so nothing was bound.
+    #[error("bind state not saved: {0}")]
+    State(String),
     /// The Seed could not be asked.
     #[error("could not read the Seed identity: {0}")]
     Seed(String),
@@ -149,6 +159,8 @@ impl BindError {
             Self::Expired => "expired",
             Self::Replayed => "replayed",
             Self::NodeTaken(_) => "node_taken",
+            Self::UnpinnedTransport(_) => "unpinned_transport",
+            Self::State(_) => "state_unwritable",
             Self::Seed(_) => "seed_unreachable",
         }
     }
@@ -175,6 +187,57 @@ pub struct SeedBinder {
     seen: Mutex<HashSet<[u8; 32]>>,
     /// Device id to (bound_at, node id).
     bound: Mutex<BTreeMap<String, (u64, String)>>,
+    state_file: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BindState {
+    version: u32,
+    /// Device id to its latest accepted `bound_at` and node id.
+    bound: BTreeMap<String, BoundEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BoundEntry {
+    bound_at: u64,
+    node_id: String,
+}
+
+fn write_state(
+    path: &std::path::Path,
+    bound: &BTreeMap<String, (u64, String)>,
+) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let st = BindState {
+        version: 1,
+        bound: bound
+            .iter()
+            .map(|(d, (at, n))| {
+                (
+                    d.clone(),
+                    BoundEntry {
+                        bound_at: *at,
+                        node_id: n.clone(),
+                    },
+                )
+            })
+            .collect(),
+    };
+    let bytes = serde_json::to_vec_pretty(&st).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(|e| e.to_string())?;
+    f.write_all(&bytes).map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 impl SeedBinder {
@@ -186,7 +249,37 @@ impl SeedBinder {
             max_age_secs: DEFAULT_MAX_BIND_AGE_SECS,
             seen: Mutex::new(HashSet::new()),
             bound: Mutex::new(BTreeMap::new()),
+            state_file: None,
         }
+    }
+
+    /// Persist each device's latest `bound_at` to `path` (mode 0600,
+    /// atomic) and restore it now, so a replayed or older record is still
+    /// refused after a restart. A missing file starts empty; a malformed,
+    /// oversized or non-regular one is refused (nothing is overwritten).
+    pub fn with_state_file(
+        mut self,
+        path: impl Into<std::path::PathBuf>,
+    ) -> Result<Self, BindError> {
+        let path = path.into();
+        let bad = |m: String| BindError::State(format!("{}: {m}", path.display()));
+        if let Ok(meta) = std::fs::symlink_metadata(&path) {
+            if !meta.file_type().is_file() || meta.len() > MAX_STATE_BYTES {
+                return Err(bad("not a regular file of at most 256 KiB".into()));
+            }
+            let text = std::fs::read_to_string(&path).map_err(|e| bad(e.to_string()))?;
+            let st: BindState = serde_json::from_str(&text).map_err(|e| bad(e.to_string()))?;
+            if st.version != 1 || st.bound.len() > MAX_BOUND_DEVICES {
+                return Err(bad("unsupported version or too many devices".into()));
+            }
+            if let Ok(mut b) = self.bound.lock() {
+                for (d, e) in st.bound {
+                    b.insert(d, (e.bound_at, e.node_id));
+                }
+            }
+        }
+        self.state_file = Some(path);
+        Ok(self)
     }
 
     /// Accept records for at most `secs` after `bound_at`.
@@ -250,6 +343,11 @@ impl SeedBinder {
         now: u64,
     ) -> Result<Binding, BindError> {
         let bad = |m: &str| BindError::Malformed(m.into());
+        // Before anything is read from the Seed: an identity read over an
+        // unauthenticated link proves nothing.
+        rt.link_security()
+            .require_pinned(rt.node_id())
+            .map_err(BindError::UnpinnedTransport)?;
         if signed.record.len() > MAX_RECORD_BYTES {
             return Err(bad("record too large"));
         }
@@ -320,11 +418,21 @@ impl SeedBinder {
         {
             return Err(BindError::NodeTaken(record.node_id));
         }
-        seen.insert(digest);
-        bound.insert(
+        if !bound.contains_key(&record.device_id) && bound.len() >= MAX_BOUND_DEVICES {
+            return Err(BindError::State("too many bound devices".into()));
+        }
+        // Saved before it is accepted: if the replay memory cannot be
+        // persisted, nothing is bound.
+        let mut next = bound.clone();
+        next.insert(
             record.device_id.clone(),
             (record.bound_at, record.node_id.clone()),
         );
+        if let Some(path) = &self.state_file {
+            write_state(path, &next).map_err(BindError::State)?;
+        }
+        *bound = next;
+        seen.insert(digest);
         self.chain.append(
             BIND_CHAIN_SOURCE,
             EVENT_KIND_WORKLOAD_NODE_BIND,

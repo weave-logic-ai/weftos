@@ -29,8 +29,8 @@ mod install;
 use super::evidence::RunEvidence;
 use super::seed_http::{Method, SeedCredentials, SeedTransport};
 use super::types::{
-    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, Preemption,
-    RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
+    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, LinkSecurity,
+    Preemption, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
 };
 use crate::workload_governance::NetworkPolicy;
 use crate::workload_pkg::manifest::{valid_cog_id, valid_token};
@@ -402,6 +402,10 @@ impl WorkloadRuntime for SeedApiRuntime {
 
     fn control_mode(&self) -> ControlMode {
         ControlMode::Managed
+    }
+
+    fn link_security(&self) -> LinkSecurity {
+        self.transport.link_security()
     }
 
     /// The Seed firmware, not WeftOS, decides what its cogs can reach; the

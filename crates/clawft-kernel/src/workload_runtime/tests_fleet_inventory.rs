@@ -50,7 +50,11 @@ fn inventory() -> (FleetInventory, Arc<Recorder>, Arc<ChainManager>) {
     let rec = Arc::new(Recorder::default());
     let chain = Arc::new(ChainManager::new(0, 1000));
     (
-        FleetInventory::new(rec.clone(), chain.clone(), "cognitum-oauth"),
+        FleetInventory::new(
+            ReadOnlyFleet::new(rec.clone()),
+            chain.clone(),
+            "cognitum-oauth",
+        ),
         rec,
         chain,
     )
@@ -244,7 +248,11 @@ async fn the_http_transport_speaks_mcp_with_the_bearer_and_only_calls_fleet_stat
         .await;
     let t = HttpFleetMcp::new(&server.uri(), Box::new(Token)).unwrap();
     let chain = Arc::new(ChainManager::new(0, 1000));
-    let inv = FleetInventory::new(Arc::new(t), chain.clone(), "cognitum-oauth");
+    let inv = FleetInventory::new(
+        ReadOnlyFleet::new(Arc::new(t)),
+        chain.clone(),
+        "cognitum-oauth",
+    );
     let list = inv.candidates(None).await.unwrap();
     assert_eq!(list.len(), 3);
     assert_eq!(
@@ -277,7 +285,54 @@ async fn a_rejected_credential_is_reported_without_the_token() {
 }
 
 #[test]
-fn the_transport_refuses_a_plain_http_remote_url() {
-    assert!(HttpFleetMcp::new("http://api.cognitum.one/v1/mcp", Box::new(Token)).is_err());
-    assert!(HttpFleetMcp::new("https://api.cognitum.one/v1/mcp", Box::new(Token)).is_ok());
+fn the_transport_accepts_https_and_exact_loopback_only() {
+    for ok in [
+        "https://api.cognitum.one/v1/mcp",
+        "http://127.0.0.1:8080/mcp",
+        "http://localhost/mcp",
+        "http://[::1]:9/mcp",
+    ] {
+        assert!(HttpFleetMcp::new(ok, Box::new(Token)).is_ok(), "{ok}");
+    }
+    for bad in [
+        "http://api.cognitum.one/v1/mcp",
+        "http://127.0.0.1.evil.com/mcp",
+        "http://localhost.evil.com/mcp",
+        "http://127.0.0.1@evil.com/mcp",
+        "http://user@127.0.0.1/mcp",
+        "ftp://127.0.0.1/mcp",
+        "https://",
+        "not a url",
+    ] {
+        assert!(HttpFleetMcp::new(bad, Box::new(Token)).is_err(), "{bad}");
+    }
+    assert!(ReadOnlyFleet::http("http://127.0.0.1.evil.com/", Box::new(Token)).is_err());
+}
+
+#[tokio::test]
+async fn an_oversize_reply_is_cut_off_at_the_cap() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(vec![b' '; 5 * 1024 * 1024], "application/json"),
+        )
+        .mount(&server)
+        .await;
+    let t = HttpFleetMcp::new(&server.uri(), Box::new(Token)).unwrap();
+    let e = t.call_tool("fleet_status", json!({})).await.unwrap_err();
+    assert!(e.to_string().contains("too large"), "{e}");
+}
+
+#[tokio::test]
+async fn the_public_http_guard_refuses_a_write_tool() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let g = ReadOnlyFleet::http(&server.uri(), Box::new(Token)).unwrap();
+    let e = g.call("device_register", json!({})).await.unwrap_err();
+    assert!(matches!(e, FleetError::NonReadTool(_)));
 }

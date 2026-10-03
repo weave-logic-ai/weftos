@@ -68,6 +68,17 @@ impl ReadOnlyFleet {
         Self { inner }
     }
 
+    /// A guard over the Cognitum cloud MCP at `url` with the operator's
+    /// OAuth token source: the only public way to reach the HTTP client.
+    pub fn http(
+        url: &str,
+        tokens: Box<dyn super::fleet_mcp::OAuthTokens>,
+    ) -> Result<Self, FleetError> {
+        Ok(Self::new(Arc::new(super::fleet_mcp::HttpFleetMcp::new(
+            url, tokens,
+        )?)))
+    }
+
     /// Call a read tool; any other name is refused without a request.
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, FleetError> {
         if !READ_TOOLS.contains(&name) {
@@ -164,11 +175,11 @@ pub struct FleetInventory {
 }
 
 impl FleetInventory {
-    /// Inventory over `transport`. `label` names the credential (never its
-    /// value) in chain events.
-    pub fn new(transport: Arc<dyn FleetMcp>, chain: Arc<ChainManager>, label: &str) -> Self {
+    /// Inventory over a read-only `fleet`. `label` names the credential
+    /// (never its value) in chain events.
+    pub fn new(fleet: ReadOnlyFleet, chain: Arc<ChainManager>, label: &str) -> Self {
         Self {
-            fleet: ReadOnlyFleet::new(transport),
+            fleet,
             chain,
             label: label.chars().take(64).collect(),
         }
