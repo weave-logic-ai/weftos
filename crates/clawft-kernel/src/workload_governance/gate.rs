@@ -63,18 +63,39 @@ pub struct WorkloadGate {
     permits: Vec<WorkloadPermitRule>,
     chain: Option<Arc<ChainManager>>,
     revocations: Option<Arc<RevocationList>>,
+    /// Set by [`WorkloadGate::exempt`]: why there is no revocation list.
+    exempt_reason: Option<&'static str>,
     /// Project this gate decides for, overriding the kernel's instance
     /// attestation (tests; a kernel serves one project, set at boot).
     attestation: Option<ProjectAttestation>,
 }
 
 impl WorkloadGate {
-    /// Gate with the shipped [`default_rules`] and no permits (denies all).
-    pub fn new(risk_threshold: f64, human_approval: bool) -> Self {
-        Self::with_rules(risk_threshold, human_approval, default_rules())
+    /// Gate with the shipped [`default_rules`] and no permits (denies all),
+    /// checking `revocations` on every request. The list is required: a gate
+    /// built without one never denies a revoked package. A gate that
+    /// genuinely has no subject list says why with [`Self::exempt`].
+    pub fn new(
+        risk_threshold: f64,
+        human_approval: bool,
+        revocations: Arc<RevocationList>,
+    ) -> Self {
+        Self::with_rules(risk_threshold, human_approval, default_rules(), revocations)
     }
 
-    /// Gate over a distributed rule set (e.g. `RuleDistribution::active_rules`).
+    /// [`Self::new`] without a revocation list, for a gate whose workloads
+    /// are not revoked through the subject list (the project supervisor:
+    /// project certificates revoke through the project identity record) and
+    /// for tests. `why` is kept and shown by [`Self::exempt_reason`]; the
+    /// population test allows this only in a short list of files.
+    pub fn exempt(risk_threshold: f64, human_approval: bool, why: &'static str) -> Self {
+        let mut g = Self::build(risk_threshold, human_approval, default_rules(), None);
+        g.exempt_reason = Some(why);
+        g
+    }
+
+    /// Gate over a distributed rule set (e.g. `RuleDistribution::active_rules`)
+    /// checking `revocations`.
     ///
     /// Only rules whose selectors can match `workload.*` actions matter; the
     /// rest are carried but never match.
@@ -82,6 +103,21 @@ impl WorkloadGate {
         risk_threshold: f64,
         human_approval: bool,
         rules: Vec<GovernanceRule>,
+        revocations: Arc<RevocationList>,
+    ) -> Self {
+        Self::build(risk_threshold, human_approval, rules, Some(revocations))
+    }
+
+    /// Why this gate does not check the subject revocation list, if it does not.
+    pub fn exempt_reason(&self) -> Option<&'static str> {
+        self.exempt_reason
+    }
+
+    fn build(
+        risk_threshold: f64,
+        human_approval: bool,
+        rules: Vec<GovernanceRule>,
+        revocations: Option<Arc<RevocationList>>,
     ) -> Self {
         let mut permitted_engine = GovernanceEngine::new(risk_threshold, human_approval);
         let mut default_rule_ids = Vec::new();
@@ -102,7 +138,8 @@ impl WorkloadGate {
             default_rule_ids,
             permits: Vec::new(),
             chain: None,
-            revocations: None,
+            revocations,
+            exempt_reason: None,
             attestation: None,
         }
     }
@@ -123,9 +160,11 @@ impl WorkloadGate {
         self
     }
 
-    /// Attach the revocation list checked on every request.
+    /// Replace the revocation list checked on every request (an exempt gate
+    /// becomes one that checks it).
     pub fn with_revocations(mut self, list: Arc<RevocationList>) -> Self {
         self.revocations = Some(list);
+        self.exempt_reason = None;
         self
     }
 

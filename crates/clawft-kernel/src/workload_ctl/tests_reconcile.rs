@@ -61,7 +61,7 @@ fn no_start(chain: &Arc<crate::chain::ChainManager>) -> Arc<WorkloadGate> {
     );
     permit.max_network = NetworkPolicy::Egress;
     Arc::new(
-        WorkloadGate::new(0.95, false)
+        WorkloadGate::exempt(0.95, false, "test")
             .with_permit(permit)
             .unwrap()
             .with_chain(chain.clone()),

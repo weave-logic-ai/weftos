@@ -29,6 +29,19 @@ pub fn decide(
     context: &serde_json::Value,
     fail_closed: bool,
 ) -> Result<(), String> {
+    decide_as(DAEMON_PRINCIPAL, gate, action, context, fail_closed)
+}
+
+#[cfg(feature = "exochain")]
+/// [`decide`] as `principal` (the gate's agent id, which permit rules can
+/// match on). The workload catalog verbs decide as `catalog`.
+pub fn decide_as(
+    principal: &str,
+    gate: Option<&dyn GateBackend>,
+    action: &str,
+    context: &serde_json::Value,
+    fail_closed: bool,
+) -> Result<(), String> {
     let Some(gate) = gate else {
         return if fail_closed {
             Err(format!(
@@ -39,7 +52,7 @@ pub fn decide(
             Ok(())
         };
     };
-    match gate.check(DAEMON_PRINCIPAL, action, context) {
+    match gate.check(principal, action, context) {
         GateDecision::Permit { .. } => Ok(()),
         GateDecision::Deny { reason, .. } => {
             Err(format!("governance denied '{action}': {reason}"))

@@ -237,7 +237,7 @@ async fn a_firmware_upgrade_is_gated_by_version_and_applies_only_the_pinned_one(
     let mut rule = WorkloadPermitRule::new("fw", ["workload.install"], ["seed-firmware"]);
     rule.min_package_trust = PackageTrust::OperatorAttested;
     rule.max_network = NetworkPolicy::Egress;
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(chain.clone())
         .with_permit(rule)
         .unwrap();

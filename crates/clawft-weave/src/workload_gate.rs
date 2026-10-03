@@ -37,7 +37,7 @@ pub type Effective = (Vec<GovernanceRule>, f64, bool);
 const MAX_THRESHOLD: f64 = 0.95;
 
 /// A workload gate over the operator's permits in `dir`, chaining to
-/// `chain` and consulting `revocations`. `effective` is the project
+/// `chain` and consulting `revocations` (a required argument of the gate). `effective` is the project
 /// kernel's rule set; `None` uses the shipped default-deny rules.
 pub fn build(
     dir: &Path,
@@ -47,13 +47,11 @@ pub fn build(
 ) -> Result<Arc<WorkloadGate>, String> {
     let base = match effective {
         Some((rules, threshold, human)) => {
-            WorkloadGate::with_rules(threshold.min(MAX_THRESHOLD), human, rules)
+            WorkloadGate::with_rules(threshold.min(MAX_THRESHOLD), human, rules, revocations)
         }
-        None => WorkloadGate::new(MAX_THRESHOLD, false),
+        None => WorkloadGate::new(MAX_THRESHOLD, false, revocations),
     };
-    let mut g = base
-        .with_chain(chain.clone())
-        .with_revocations(revocations);
+    let mut g = base.with_chain(chain.clone());
     for p in load_permits(dir)? {
         g = g.with_permit(p)?;
     }

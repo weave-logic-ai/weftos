@@ -42,7 +42,7 @@ pub(crate) fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
     let mut p = WorkloadPermitRule::new("t", ["workload.*"], ["cog"]);
     p.max_network = NetworkPolicy::Egress;
     Arc::new(
-        WorkloadGate::new(0.95, false)
+        WorkloadGate::exempt(0.95, false, "test")
             .with_permit(p)
             .unwrap()
             .with_chain(chain.clone()),
@@ -161,6 +161,26 @@ fn policy_files_fail_closed() {
     assert!(load_permits(dir.path()).is_err());
     std::fs::write(dir.path().join(TRUST_FILE), "[]").unwrap();
     assert!(load_anchors(dir.path()).is_err());
+}
+
+#[test]
+fn a_policy_file_others_could_have_written_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join(PERMITS_FILE);
+    std::fs::write(&f, "[]").unwrap();
+    for (mode, ok) in [(0o600, true), (0o644, true), (0o664, false), (0o666, false), (0o620, false)] {
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(mode)).unwrap();
+        let r = load_permits(dir.path());
+        assert_eq!(r.is_ok(), ok, "{mode:o}: {r:?}");
+        if !ok {
+            assert!(r.unwrap_err().contains("writable"));
+        }
+    }
+    // The trust file is held to the same rule.
+    std::fs::write(dir.path().join(TRUST_FILE), "{}").unwrap();
+    std::fs::set_permissions(dir.path().join(TRUST_FILE), std::fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(load_anchors(dir.path()).unwrap_err().contains("writable"));
 }
 
 #[test]

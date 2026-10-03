@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use clawft_kernel::Kernel;
 use clawft_kernel::chain::ChainManager;
+use clawft_kernel::revocation::RevocationKind;
 use clawft_kernel::node_facts_advert::sign_node_facts;
 use clawft_kernel::workload_ctl::{WorkloadHostService, listen_tcp, serve_listener};
 use clawft_kernel::workload_ctl::OperatorPeer;
@@ -238,6 +239,36 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
     let paired = json!([{ "addr": pi_addr, "tier": "paired" }]);
     write(&runtime, PEERS_FILE, &paired);
     init(node_key.clone(), runtime.clone());
+
+    // Incident: the permits file is broken, so the placement plane cannot be
+    // built. Revoking a leaked key must still work, against the kernel's
+    // list alone, and be chained. (The plane is built, and the file fixed,
+    // below.)
+    let good_permits = std::fs::read(runtime.join(PERMITS_FILE)).unwrap();
+    std::fs::write(runtime.join(PERMITS_FILE), "{broken").unwrap();
+    let early = call(&kernel, "workload.revoke", json!({ "package": "cog.early-probe" }))
+        .await
+        .unwrap();
+    assert_eq!(early["newly_revoked"], true, "{early}");
+    assert!(
+        call(&kernel, "workload.status", json!({})).await.unwrap_err().contains("placement unavailable"),
+        "the plane really could not be built"
+    );
+    assert!(kernel.read().await.revocation_list().is_subject_revoked(RevocationKind::Package, "cog.early-probe"));
+    std::fs::write(runtime.join(PERMITS_FILE), good_permits).unwrap();
+
+    // After a governance push the plane refuses until restart; the verb does not.
+    let stale = Some("an-older-hash".to_string());
+    let r = dispatch_checked("workload.status", json!({}), kernel.clone(), Some(&stale)).await;
+    assert!(!r.ok && r.error.unwrap().contains("governance changed"));
+    let r = dispatch_checked(
+        "workload.revoke",
+        json!({ "package": "cog.after-push" }),
+        kernel.clone(),
+        Some(&stale),
+    )
+    .await;
+    assert!(r.ok, "{:?}", r.error);
 
     let pkg = package(&tmp.path().join("pkgsrc"), &signer);
     let params = json!({ "package_dir": pkg, "mode": "listener", "csi_port": 15027 });

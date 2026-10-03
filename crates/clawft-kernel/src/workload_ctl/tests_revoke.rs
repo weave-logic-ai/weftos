@@ -49,7 +49,7 @@ fn revoking_gate(
     let mut permit = WorkloadPermitRule::new("revoke-test", actions.iter().copied(), ["cog"]);
     permit.max_network = NetworkPolicy::Egress;
     Arc::new(
-        WorkloadGate::new(0.95, false)
+        WorkloadGate::exempt(0.95, false, "test")
             .with_permit(permit)
             .unwrap()
             .with_chain(chain.clone())
@@ -204,4 +204,171 @@ async fn a_revoked_package_cannot_be_placed_or_started_but_can_be_stopped() {
     r.plane.instance(ctl::STOP, &iid).await.unwrap();
     r.plane.instance(ctl::UNLOAD, &iid).await.unwrap();
     assert!(r.plane.placements().is_empty());
+}
+
+// ── a revocation racing a place ──
+
+use crate::gate::{GateBackend, GateDecision};
+
+/// Revokes `signer` in `list` at the moment `on` is asked about, `before`
+/// or after the real gate decides: the race a slow place can lose.
+struct RaceGate {
+    inner: Arc<WorkloadGate>,
+    list: Arc<RevocationList>,
+    on: &'static str,
+    before: bool,
+    fired: std::sync::atomic::AtomicBool,
+}
+
+impl RaceGate {
+    fn fire(&self, action: &str) {
+        if action == self.on && !self.fired.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let key = hex_encode(&signer().verifying_key().to_bytes());
+            self.list
+                .revoke_subject_by(RevocationKind::SignerKey, &key, "raced", "test")
+                .unwrap();
+        }
+    }
+}
+
+impl GateBackend for RaceGate {
+    fn check(&self, a: &str, action: &str, ctx: &serde_json::Value) -> GateDecision {
+        if self.before {
+            self.fire(action);
+        }
+        let d = self.inner.check(a, action, ctx);
+        if !self.before {
+            self.fire(action);
+        }
+        d
+    }
+    fn check_teardown(&self, a: &str, action: &str, ctx: &serde_json::Value) -> GateDecision {
+        self.inner.check_teardown(a, action, ctx)
+    }
+}
+
+/// A node whose host gate races `on`, permitting only `actions`.
+fn race_node(
+    list: &Arc<RevocationList>,
+    controller: &SigningKey,
+    on: &'static str,
+    before: bool,
+    actions: &[&str],
+) -> HostNode {
+    use crate::node_facts_advert::sign_node_facts;
+    use crate::workload_runtime::{NativeConfig, NativeRuntime, WorkloadHost};
+    use clawft_types::placement::NodeFacts;
+    let key = SigningKey::from_bytes(&[61; 32]);
+    let id = crate::node_id_from_pubkey(&key.verifying_key().to_bytes());
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let tmp = tempfile::tempdir().unwrap();
+    let gate: Arc<dyn GateBackend> = Arc::new(RaceGate {
+        inner: revoking_gate(&chain, list, actions),
+        list: list.clone(),
+        on,
+        before,
+        fired: Default::default(),
+    });
+    let rt = NativeRuntime::new(NativeConfig {
+        root: tmp.path().join("instances"),
+        run_as: None,
+        allow_interpreted: true,
+    });
+    let host = Arc::new(
+        WorkloadHost::new(
+            Arc::new(rt),
+            gate.clone(),
+            id.clone(),
+            crate::workload_governance::NodeTrustTier::Paired,
+        )
+        .with_chain(chain.clone()),
+    );
+    let mut facts = NodeFacts::new(id.clone(), chrono::Utc::now().timestamp() as u64, 600, 1);
+    facts.capabilities = board_caps("pi5");
+    let svc = WorkloadHostService::new(key.clone(), exchange(&id, &chain), anchors(), gate)
+        .with_route("native", host)
+        .with_controllers(vec![controller.verifying_key().to_bytes()])
+        .with_chain(chain.clone());
+    svc.set_facts(sign_node_facts(&facts, &key).unwrap());
+    assert!(svc.set_revocations(list.clone()));
+    HostNode { svc: Arc::new(svc), chain, id, _tmp: tmp }
+}
+
+use super::host_service::WorkloadHostService;
+
+async fn raced_place(
+    on: &'static str,
+    before: bool,
+    actions: &[&str],
+) -> (Arc<RevocationList>, HostNode, PlacementControlPlane, super::plane_place::PlaceReport) {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "race-cog", SCRIPT, &[arch()]);
+    let key = SigningKey::from_bytes(&[60; 32]);
+    let list = Arc::new(RevocationList::new(tmp.path().join("revoked_hosts.json")));
+    let node = race_node(&list, &key, on, before, actions);
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("pi", node.svc.clone());
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let id = crate::node_id_from_pubkey(&key.verifying_key().to_bytes());
+    // The controller's own gate does not race (it has already decided).
+    let plane = PlacementControlPlane::new(
+        key,
+        gate(&chain),
+        chain.clone(),
+        exchange(&id, &chain),
+        anchors(),
+        conn,
+    );
+    plane
+        .apply_operator_peers(&[OperatorPeer::new(addr, TrustTier::Paired)], &[])
+        .await;
+    let report = plane.place(&order(&pkg)).await.unwrap();
+    std::mem::forget(tmp);
+    (list, node, plane, report)
+}
+
+async fn instances_on(plane: &PlacementControlPlane, node: &str) -> usize {
+    plane
+        .call(node, ctl::STATUS, None, serde_json::json!({}))
+        .await
+        .unwrap()
+        .as_array()
+        .map_or(0, |a| a.len())
+}
+
+#[tokio::test]
+async fn a_revocation_landing_between_the_load_check_and_the_listing_is_swept() {
+    // The gate permits the load, then the signer is revoked: without the
+    // check after listing, the sweep that follows the revocation would have
+    // run before the instance existed and nothing would ever stop it.
+    let (_l, node, plane, report) = raced_place("workload.load", false, ALL).await;
+    assert!(report.placed.is_none(), "{}", report.explain);
+    assert!(
+        report.attempts.iter().any(|a| a.reason.as_deref().is_some_and(|r| r.contains("revoked while"))),
+        "{:?}",
+        report.attempts
+    );
+    assert_eq!(instances_on(&plane, &node.id).await, 0, "nothing left running");
+    assert!(
+        events(&node.chain, EVENT_KIND_WORKLOAD_UNLOAD)
+            .iter()
+            .any(|(_, p)| p["forced_by_revocation"]["kind"] == "signer_key"),
+        "torn down by the revocation"
+    );
+}
+
+#[tokio::test]
+async fn a_start_refused_for_a_revocation_is_rolled_back_without_an_unload_permit() {
+    // Revoked after the placement check but before the start check; the
+    // operator never permitted unload, yet the instance must not stay listed.
+    let (_l, node, plane, report) = raced_place(
+        "workload.start",
+        true,
+        &["workload.place", "workload.load", "workload.start"],
+    )
+    .await;
+    assert!(report.placed.is_none(), "{}", report.explain);
+    assert_eq!(instances_on(&plane, &node.id).await, 0, "rolled back, not left listed");
+    let why = report.attempts.iter().filter_map(|a| a.reason.clone()).collect::<String>();
+    assert!(why.contains("unloaded"), "{why}");
 }

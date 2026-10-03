@@ -22,11 +22,14 @@ use clawft_types::placement::{AttrValue, NodeFacts, TrustTier};
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 
+use clawft_kernel::mesh_artifact::ArtifactExchange;
+
 use super::*;
 use crate::workload_place_rpc::tests::{anchors, cap, exchange, package};
 
 struct Rig {
     revoker: Revoker,
+    ex: Arc<ArtifactExchange>,
     plane: Arc<PlacementControlPlane>,
     svc: Arc<WorkloadHostService>,
     chain: Arc<ChainManager>,
@@ -57,7 +60,7 @@ async fn rig(list_at: impl FnOnce(&std::path::Path) -> PathBuf) -> Rig {
     let mut permit = WorkloadPermitRule::new("t", ["workload.*"], ["cog"]);
     permit.max_network = NetworkPolicy::Egress;
     let gate = Arc::new(
-        WorkloadGate::new(0.95, false)
+        WorkloadGate::exempt(0.95, false, "test")
             .with_permit(permit)
             .unwrap()
             .with_chain(chain.clone())
@@ -107,15 +110,10 @@ async fn rig(list_at: impl FnOnce(&std::path::Path) -> PathBuf) -> Rig {
     .result
     .expect("placed");
     let iid = placed["placed"]["instance_id"].as_str().unwrap().to_string();
-    let revoker = Revoker {
-        list: list.clone(),
-        exchange: ex,
-        host: Some(svc.clone()),
-        plane: Some(plane.clone()),
-        notices: None,
-        notice_key: None,
-    };
-    Rig { revoker, plane, svc, chain, list, ctl, iid, _tmp: tmp }
+    let revoker = Revoker::new(list.clone());
+    revoker.set_exchange(ex.clone());
+    revoker.attach(Some(svc.clone()), plane.clone(), None, None);
+    Rig { revoker, ex, plane, svc, chain, list, ctl, iid, _tmp: tmp }
 }
 
 use crate::workload_place_rpc::route;
@@ -212,20 +210,11 @@ async fn a_failed_write_is_reported_but_the_revocation_still_bites() {
 
 fn mesh_revoker(r: &Rig, anchors: TrustAnchors, key: Option<SigningKey>) -> Revoker {
     let rt = Arc::new(MeshRuntime::new("n".into()));
-    let notices = RevocationExchange::start(
-        r.revoker.exchange.clone(),
-        r.list.clone(),
-        anchors,
-        rt,
-    );
-    Revoker {
-        list: r.list.clone(),
-        exchange: r.revoker.exchange.clone(),
-        host: Some(r.svc.clone()),
-        plane: Some(r.plane.clone()),
-        notices: Some(notices),
-        notice_key: key,
-    }
+    let notices = RevocationExchange::start(r.ex.clone(), r.list.clone(), anchors, rt);
+    let m = Revoker::new(r.list.clone());
+    m.set_exchange(r.ex.clone());
+    m.attach(Some(r.svc.clone()), r.plane.clone(), Some(notices), key);
+    m
 }
 
 #[tokio::test]
@@ -252,4 +241,59 @@ async fn a_notice_is_issued_only_with_a_pinned_operator_key() {
         "{out}"
     );
     assert!(r.list.is_subject_revoked(RevocationKind::ArtifactHash, &"ef".repeat(32)));
+}
+
+// ── incident cases: a revoker with little attached, an early notice, retries ──
+
+#[tokio::test]
+async fn the_verb_works_on_the_list_alone() {
+    // The plane could not be built (a broken policy file): only the list exists.
+    let tmp = tempfile::tempdir().unwrap();
+    let list = Arc::new(RevocationList::new(plain(tmp.path())));
+    let chain = Arc::new(ChainManager::new(0, 100));
+    chain_revocations(&list, chain.clone());
+    let r = Revoker::new(list.clone());
+    let out = r.revoke(json!({ "signer": "ab".repeat(32), "reason": "leaked" })).await.unwrap();
+    assert_eq!(out["newly_revoked"], true, "{out}");
+    assert_eq!(out["forced"], json!([]));
+    assert_eq!(out["artifacts_swept"], 0);
+    assert!(list.is_subject_revoked(RevocationKind::SignerKey, &"ab".repeat(32)));
+    assert_eq!(kinds(&chain, "workload.revoke").len(), 1);
+}
+
+#[tokio::test]
+async fn a_notice_that_beats_the_host_is_caught_by_the_startup_sweep() {
+    let r = rig(plain).await;
+    let pid = r.plane.placements().pop().unwrap().package_id.unwrap();
+    // The daemon's revoker exists first, with nothing attached ...
+    let early = Revoker::new(r.list.clone());
+    // ... a notice lands on the list and its hook runs: nothing to enforce yet.
+    r.list.revoke_subject_by(RevocationKind::Package, &pid, "early notice", "mesh:test").unwrap();
+    assert!(early.enforce().await.is_empty(), "no host attached yet");
+    assert_eq!(r.plane.placements().len(), 1, "still running");
+    // The build finishes and sweeps once: the early notice is enforced.
+    early.attach(Some(r.svc.clone()), r.plane.clone(), None, None);
+    let swept = early.enforce().await;
+    assert_eq!(swept.len(), 1, "{swept:?}");
+    assert!(swept[0].unloaded);
+    assert!(r.plane.placements().is_empty());
+}
+
+#[tokio::test]
+async fn the_tick_retries_without_another_revocation() {
+    let r = rig(plain).await;
+    let pid = r.plane.placements().pop().unwrap().package_id.unwrap();
+    let m = Arc::new(Revoker::new(r.list.clone()));
+    m.attach(Some(r.svc.clone()), r.plane.clone(), None, None);
+    let tick = m.spawn_tick(std::time::Duration::from_millis(40));
+    // Revoked behind the revoker's back (no hook, no verb): only the tick can act.
+    r.list.revoke_subject_by(RevocationKind::Package, &pid, "quiet", "test").unwrap();
+    for _ in 0..100 {
+        if r.plane.placements().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+    tick.abort();
+    assert!(r.plane.placements().is_empty(), "the tick tore it down");
 }

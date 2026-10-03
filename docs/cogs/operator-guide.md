@@ -80,4 +80,17 @@ Revoking a signer key is how you respond to a leaked package key; also remove it
 
 **Limits:** instances on a Cognitum Seed are not stopped by a revocation (the Seed holds its own store; a revoked store cog is refused at the next place or start). A remote `workload-host` that is not connected when you revoke keeps its instances until it receives the notice or you stop them.
 
-The catalog verbs `weaver workload install` and `unload` are default-deny: they need an entry in `workload-permits.json`. The catalog verifies nothing, so its packages count as `unsigned` and the permit must say `"min_package_trust": "unsigned"` (and `"actions": ["workload.install", "workload.unload"]`, `"kinds": ["cog"]`). Without one the verb is refused and the refusal is chained.
+The catalog verbs `weaver workload install` and `unload` are default-deny: they need an entry in `workload-permits.json`. They decide as the principal `catalog`, on packages that count as `unsigned` because the catalog only records a name, kind and manifest hash and verifies nothing. So the permit has to say both, and a permit that accepts unsigned packages without naming principals is refused when the file is read (the daemon then refuses every catalog verb until it is fixed):
+
+```json
+[{"id": "catalog", "actions": ["workload.install", "workload.unload"], "kinds": ["cog"],
+  "min_package_trust": "unsigned", "principals": ["catalog"]}]
+```
+
+Without a matching permit the verb is refused and the refusal is chained. Policy files in the runtime dir (`workload-permits.json`, `workload-trust.json`, peers, container, seeds) must be owned by the daemon's user (or root) and not group- or world-writable (`chmod 600`); the daemon refuses a file that is not.
+
+**Catalog revocation is by name only.** The catalog does not verify what it records, so `workload revoke --package <name>` is the only revocation that reaches a `workload install` entry (and a `blake3:` manifest hash revokes it as an artifact hash). Revoking the signer key of a package you installed elsewhere does not stop a catalog entry of the same name: revoke the name too.
+
+**Store (Seed) cogs** are revoked by the synthetic package id `store.<cog id>.<version>`, for example `weaver workload revoke --package store.fall-detect.1.0.0`. A package id that is 64 hex characters is matched case-insensitively.
+
+**Retries.** A forced unload that fails (an adapter busy) is retried every 60 seconds by the daemon, and once at start-up, so you do not have to revoke again.

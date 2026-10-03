@@ -56,7 +56,14 @@ impl RevocationKind {
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@' | '/' | ':' | '+'));
                 if ok_len && ok_first && ok_chars {
-                    Ok(id.to_owned())
+                    // A package id that is a BLAKE3 hex (the usual shape)
+                    // is lowercased like the other hex ids, so `AB..` and
+                    // `ab..` revoke the same package.
+                    if id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+                        Ok(id.to_ascii_lowercase())
+                    } else {
+                        Ok(id.to_owned())
+                    }
                 } else {
                     Err(RevocationError::InvalidId {
                         kind: self,
@@ -202,6 +209,13 @@ impl RevocationList {
         f(&mut inner.subjects)
     }
 
+    /// How many times the subject list has changed in this process. A caller
+    /// that read the list, then did something slow, compares this to know a
+    /// revocation landed in between.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Install the sink every revocation and un-revocation is recorded in
     /// (first call wins). The kernel points it at the chain at boot, so a
     /// revocation applied by the operator, by a mesh notice or by any other
@@ -276,6 +290,7 @@ impl RevocationList {
         let Some(save_err) = added else {
             return Ok(false);
         };
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         info!(%kind, id, reason, "subject revoked");
         self.emit(
             sink,
@@ -337,6 +352,7 @@ impl RevocationList {
         let Some(save_err) = removed else {
             return Ok(false);
         };
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         info!(%kind, id, "subject unrevoked");
         self.emit(
             sink,

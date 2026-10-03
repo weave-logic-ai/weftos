@@ -12,7 +12,9 @@ use std::sync::Arc;
 use clawft_kernel::Kernel;
 use clawft_kernel::chain::ChainEvent;
 use clawft_kernel::revocation::RevocationKind;
-use clawft_kernel::workload_governance::{NodeTrustTier, PackageTrust, WorkloadPermitRule};
+use clawft_kernel::workload_governance::{
+    CATALOG_PRINCIPAL, NodeTrustTier, PackageTrust, WorkloadPermitRule,
+};
 use clawft_platform::NativePlatform;
 use clawft_types::config::{ChainConfig, Config, KernelConfig};
 use serde_json::{Value, json};
@@ -53,6 +55,10 @@ fn permit(actions: &[&str], trust: PackageTrust) -> Value {
     let mut p = WorkloadPermitRule::new("operator-catalog", actions.iter().copied(), ["cog"]);
     p.min_package_trust = trust;
     p.min_node_tier = NodeTrustTier::Pinned;
+    if trust == PackageTrust::Unsigned {
+        // Required: a permit that accepts unsigned packages names who it is for.
+        p.principals = vec![CATALOG_PRINCIPAL.into()];
+    }
     json!([p])
 }
 
@@ -117,6 +123,19 @@ async fn install_is_denied_and_chained_without_a_permit_and_permitted_and_chaine
     .unwrap();
     let e = call(&k, &dir, "workload.install", install("gate-probe-c")).await.unwrap_err();
     assert!(e.contains("default deny"), "{e}");
+
+    // An unsigned-floor permit that names no principal is refused outright
+    // (it would otherwise admit any caller), and fails closed.
+    let mut open = permit(&["workload.install"], PackageTrust::Unsigned);
+    open[0].as_object_mut().unwrap().remove("principals");
+    std::fs::write(dir.join(PERMITS_FILE), serde_json::to_vec(&open).unwrap()).unwrap();
+    let e = call(&k, &dir, "workload.install", install("gate-probe-c2")).await.unwrap_err();
+    assert!(e.contains("fail closed") && e.contains("principals"), "{e}");
+    std::fs::write(
+        dir.join(PERMITS_FILE),
+        serde_json::to_vec(&permit(&["workload.install"], PackageTrust::PinnedSigner)).unwrap(),
+    )
+    .unwrap();
 
     // Unload is governed too: allowed by its permit, denied without one.
     let e = call(&k, &dir, "workload.unload", json!({ "name": "gate-probe-b" })).await.unwrap_err();

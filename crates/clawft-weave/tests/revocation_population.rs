@@ -1,20 +1,27 @@
 //! Population test for revocation (card "Revocation cannot be bypassed and
-//! is always chained"). A `WorkloadGate` that was built without the
-//! revocation list never denies a revoked package, so "every place, load and
-//! start path consults the list" is held by this scan of every crate's
-//! production sources (`src`; test files, `#[cfg(test)]` code, `examples`,
-//! `benches` and `tests` are not production gates):
+//! is always chained"). The first guarantee is the type: a `WorkloadGate` is
+//! built with its revocation list (`WorkloadGate::new(.., list)`,
+//! `with_rules(.., list)`), so a gate that never denies a revoked package
+//! cannot be written by accident. The one way around it is the explicit
+//! `WorkloadGate::exempt(.., why)`. This test is the backstop, over every
+//! crate's production sources (`crates/*/src`; unit-test files and
+//! `#[cfg(test)]` items are cut out, the code after them is still scanned;
+//! `examples`, `benches` and `tests` are not production):
 //!
-//! * every `WorkloadGate::new(` / `WorkloadGate::with_rules(` is followed,
-//!   in the same builder chain (the next 25 lines), by `.with_revocations(`,
-//!   or carries a `revocation-exempt:` comment (within 8 lines either side)
-//!   that says why the subject list does not apply there;
+//! * `exempt(` appears only in the files listed in `EXEMPT_ALLOWED`, each
+//!   with the reason the subject list does not apply there;
 //! * a revocation is applied, and lifted, only through the forms that name
 //!   who acted (`revoke_subject_by` / `revoke_audited`, `unrevoke_subject_by`
 //!   / `unrevoke_audited`): every bare `.revoke_subject(` / `.unrevoke_subject(`
 //!   call in production code (outside the kernel's `revocation` module) is a
 //!   failure, so the `workload.revoke` / `workload.unrevoke` record always
 //!   says `revoked_by` / `unrevoked_by`.
+
+/// Production files that may build an exempt gate, and why.
+const EXEMPT_ALLOWED: &[(&str, &str)] = &[(
+    "clawft-weave/src/project_supervisor/mod.rs",
+    "a project workload is authorised by a project certificate, revoked through project_identity",
+)];
 
 use std::path::{Path, PathBuf};
 
@@ -33,8 +40,47 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// `text` with `//` comments and every `#[cfg(test)]` item (a `mod` block, a
+/// `mod x;`, a `use`, a `fn`) removed. The code after such an item is kept.
+fn strip_test_items(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().map(|l| l.split("//").next().unwrap_or("")).collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if !lines[i].trim_start().starts_with("#[cfg(test)]") {
+            out.push(lines[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        // Further attributes, then the item itself.
+        while i < lines.len() && lines[i].trim_start().starts_with("#[") {
+            i += 1;
+        }
+        let (mut depth, mut opened) = (0i32, false);
+        while i < lines.len() {
+            let l = lines[i];
+            i += 1;
+            for c in l.chars() {
+                match c {
+                    '{' => {
+                        depth += 1;
+                        opened = true;
+                    }
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if (opened && depth <= 0) || (!opened && l.trim_end().ends_with(';')) {
+                break;
+            }
+        }
+    }
+    out.join("\n")
+}
+
 /// Production sources: `crates/*/src/**/*.rs`, minus unit-test files, with
-/// the text from the first `#[cfg(test)]` on dropped.
+/// `#[cfg(test)]` items cut out.
 fn production() -> Vec<(String, String)> {
     let mut files = Vec::new();
     for c in std::fs::read_dir(crates_dir()).unwrap().flatten() {
@@ -53,51 +99,48 @@ fn production() -> Vec<(String, String)> {
         if test_file {
             continue;
         }
-        let text = std::fs::read_to_string(&f).unwrap();
-        let prod = match text.find("#[cfg(test)]") {
-            Some(i) => text[..i].to_owned(),
-            None => text,
-        };
-        out.push((rel, prod));
+        out.push((rel, strip_test_items(&std::fs::read_to_string(&f).unwrap())));
     }
     out
 }
 
-fn lines_of(text: &str) -> Vec<&str> {
-    text.lines().collect()
+#[test]
+fn the_scan_cuts_test_items_but_keeps_the_code_after_them() {
+    let src = "fn a() {}\n#[cfg(test)]\nuse x::y;\nfn prod() { WorkloadGate::exempt(1) }\n\
+               #[cfg(test)]\nmod t {\n  fn n() { WorkloadGate::exempt(2) }\n}\nfn after() { z() }\n";
+    let out = strip_test_items(src);
+    assert!(out.contains("exempt(1)"), "code after a cfg(test) use is kept: {out}");
+    assert!(!out.contains("exempt(2)"), "the test module is cut: {out}");
+    assert!(out.contains("fn after"), "{out}");
 }
 
 #[test]
-fn every_production_workload_gate_consults_the_revocation_list() {
-    let mut found = 0;
+fn only_listed_production_files_build_an_exempt_workload_gate() {
     let mut bad = Vec::new();
+    let mut seen = Vec::new();
     for (path, text) in production() {
-        let lines = lines_of(&text);
-        for (i, l) in lines.iter().enumerate() {
-            let code = l.split("//").next().unwrap_or("");
-            if !(code.contains("WorkloadGate::new(") || code.contains("WorkloadGate::with_rules(")) {
-                continue;
-            }
-            // The kernel's own doc examples and the constructor definitions.
-            if code.trim_start().starts_with("pub fn") || path.ends_with("workload_governance/gate.rs") {
-                continue;
-            }
-            found += 1;
-            let window = lines[i..lines.len().min(i + 25)].join("\n");
-            let around = lines[i.saturating_sub(8)..lines.len().min(i + 8)].join("\n");
-            if !window.contains(".with_revocations(") && !around.contains("revocation-exempt:") {
-                bad.push(format!("{path}:{}: {}", i + 1, l.trim()));
+        if path.ends_with("workload_governance/gate.rs") {
+            continue; // the definition
+        }
+        for (i, l) in text.lines().enumerate() {
+            if l.contains("WorkloadGate::exempt(") {
+                seen.push(path.clone());
+                if !EXEMPT_ALLOWED.iter().any(|(f, _)| path == *f) {
+                    bad.push(format!("{path}:{}: {}", i + 1, l.trim()));
+                }
             }
         }
     }
-    assert!(found >= 2, "the scan found {found} gate constructions: it is looking in the wrong place");
     assert!(
         bad.is_empty(),
-        "a WorkloadGate built without the revocation list never denies a revoked \
-         package. Attach it (`.with_revocations(list)`) or say why not with a \
-         `revocation-exempt:` comment:\n  {}",
+        "a WorkloadGate without the revocation list never denies a revoked package. Pass the \
+         list to WorkloadGate::new / with_rules, or add the file to EXEMPT_ALLOWED with the \
+         reason:\n  {}",
         bad.join("\n  ")
     );
+    for (f, _) in EXEMPT_ALLOWED {
+        assert!(seen.iter().any(|p| p == f), "{f} is allowed but no longer builds an exempt gate: drop it");
+    }
 }
 
 #[test]

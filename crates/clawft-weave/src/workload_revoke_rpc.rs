@@ -20,7 +20,7 @@
 //!    says no notice was issued and why: the revocation then holds on this
 //!    node only.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use clawft_kernel::mesh_artifact::ArtifactExchange;
 use clawft_kernel::mesh_swarm_revoke::{RevocationExchange, sign_revocation};
@@ -46,20 +46,89 @@ struct Params {
     reason: Option<String>,
 }
 
-/// What the daemon revokes against.
+/// How often the daemon re-runs [`Revoker::enforce`], so a teardown that
+/// failed (an adapter busy, a host not up yet) is retried without waiting
+/// for another revocation.
+pub const ENFORCE_TICK: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// What the daemon revokes against. Built from the kernel's list alone, so
+/// the verb works when the placement plane could not be built (a broken
+/// policy file during an incident); the rest is attached as it comes up.
 pub struct Revoker {
-    /// This node's subject revocation list.
-    pub list: Arc<RevocationList>,
-    /// The artifact exchange holding the bytes.
-    pub exchange: Arc<ArtifactExchange>,
+    /// This node's subject revocation list (the kernel's).
+    list: Arc<RevocationList>,
+    /// The artifact exchange holding the bytes, once built.
+    exchange: RwLock<Option<Arc<ArtifactExchange>>>,
     /// This node's `workload-host`, when it has one.
-    pub host: Option<Arc<WorkloadHostService>>,
+    host: OnceLock<Arc<WorkloadHostService>>,
     /// The controller, whose records of torn-down instances are dropped.
-    pub plane: Option<Arc<PlacementControlPlane>>,
+    plane: OnceLock<Arc<PlacementControlPlane>>,
     /// Mesh revocation notices, when there is a mesh.
-    pub notices: Option<Arc<RevocationExchange>>,
+    notices: OnceLock<Arc<RevocationExchange>>,
     /// The key notices are signed with, when it is a pinned operator key.
-    pub notice_key: Option<SigningKey>,
+    notice_key: OnceLock<SigningKey>,
+}
+
+impl Revoker {
+    /// A revoker over `list`, with nothing else attached yet.
+    pub fn new(list: Arc<RevocationList>) -> Self {
+        Self {
+            list,
+            exchange: RwLock::new(None),
+            host: OnceLock::new(),
+            plane: OnceLock::new(),
+            notices: OnceLock::new(),
+            notice_key: OnceLock::new(),
+        }
+    }
+
+    /// Sweep this exchange when something is revoked (a later build replaces it).
+    pub fn set_exchange(&self, ex: Arc<ArtifactExchange>) {
+        if let Ok(mut g) = self.exchange.write() {
+            *g = Some(ex);
+        }
+    }
+
+    /// Attach the pieces that exist once placement is up (first call wins).
+    pub fn attach(
+        &self,
+        host: Option<Arc<WorkloadHostService>>,
+        plane: Arc<PlacementControlPlane>,
+        notices: Option<Arc<RevocationExchange>>,
+        notice_key: Option<SigningKey>,
+    ) {
+        if let Some(h) = host {
+            let _ = self.host.set(h);
+        }
+        let _ = self.plane.set(plane);
+        if let Some(n) = notices {
+            let _ = self.notices.set(n);
+        }
+        if let Some(k) = notice_key {
+            let _ = self.notice_key.set(k);
+        }
+    }
+
+    /// Run [`Self::enforce`] every `period` for as long as the runtime lives.
+    pub fn spawn_tick(self: &Arc<Self>, period: std::time::Duration) -> tokio::task::JoinHandle<()> {
+        let me = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut t = tokio::time::interval(period);
+            t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            t.tick().await; // the first tick is immediate; the caller sweeps at start
+            loop {
+                t.tick().await;
+                let forced = me.enforce().await;
+                if !forced.is_empty() {
+                    tracing::warn!(
+                        n = forced.len(),
+                        left = forced.iter().filter(|f| !f.unloaded).count(),
+                        "revocation sweep"
+                    );
+                }
+            }
+        })
+    }
 }
 
 fn target(p: &Params) -> Result<(RevocationKind, String), String> {
@@ -82,11 +151,11 @@ impl Revoker {
     /// Stop and unload what the list now revokes on this node, then drop
     /// the controller's records of what went. Safe to call repeatedly.
     pub async fn enforce(&self) -> Vec<ForcedTeardown> {
-        let Some(host) = &self.host else {
+        let Some(host) = self.host.get() else {
             return Vec::new();
         };
         let forced = host.enforce_revocations(&self.list).await;
-        if let Some(plane) = &self.plane {
+        if let Some(plane) = self.plane.get() {
             let gone: Vec<String> = forced
                 .iter()
                 .filter(|f| f.unloaded)
@@ -117,7 +186,8 @@ impl Revoker {
             Err(clawft_kernel::revocation::RevocationError::Persist(e)) => (true, Some(e)),
             Err(e) => return Err(e.to_string()),
         };
-        let swept = self.exchange.apply_revocations();
+        let ex = self.exchange.read().ok().and_then(|g| g.clone());
+        let swept = ex.map_or(0, |ex| ex.apply_revocations().len());
         let forced = self.enforce().await;
         let notice = self.issue(kind, &id, &reason).await;
         Ok(json!({
@@ -125,17 +195,19 @@ impl Revoker {
             "newly_revoked": newly,
             "persisted": persist_error.is_none(),
             "persist_error": persist_error,
-            "artifacts_swept": swept.len(),
+            "artifacts_swept": swept,
             "forced": forced,
             "notice": notice,
         }))
     }
 
     async fn issue(&self, kind: RevocationKind, id: &str, reason: &str) -> String {
-        let Some(notices) = &self.notices else {
-            return "not issued: this node has no mesh, the revocation holds here only".into();
+        let Some(notices) = self.notices.get() else {
+            return "not issued: this node has no mesh (or placement is not up), the revocation \
+                    holds here only"
+                .into();
         };
-        let Some(key) = &self.notice_key else {
+        let Some(key) = self.notice_key.get() else {
             return "not issued: this node's key is not a pinned operator key in \
                     workload-trust.json, the revocation holds here only"
                 .into();

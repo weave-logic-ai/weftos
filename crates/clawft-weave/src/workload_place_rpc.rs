@@ -67,7 +67,17 @@ static PLANE: OnceCell<Arc<PlacementControlPlane>> = OnceCell::const_new();
 static BUILT_RULES: OnceLock<Option<String>> = OnceLock::new();
 /// What `workload.revoke` and the mesh revocation hook act on, set once the
 /// control plane is built.
-static REVOKER: OnceLock<crate::workload_revoke_rpc::Revoker> = OnceLock::new();
+static REVOKER: OnceLock<Arc<crate::workload_revoke_rpc::Revoker>> = OnceLock::new();
+
+/// The daemon's revoker, made on first use from the kernel's list (so a
+/// notice or the verb that arrives before placement is up still has one).
+fn revoker_for(
+    list: Arc<clawft_kernel::revocation::RevocationList>,
+) -> Arc<crate::workload_revoke_rpc::Revoker> {
+    REVOKER
+        .get_or_init(|| Arc::new(crate::workload_revoke_rpc::Revoker::new(list)))
+        .clone()
+}
 /// This node's `workload-host` (in-process target and, when configured,
 /// served to other nodes).
 static HOST: OnceLock<Arc<WorkloadHostService>> = OnceLock::new();
@@ -177,7 +187,7 @@ fn enforce_in_background() {
         return;
     };
     rt.spawn(async {
-        if let Some(r) = REVOKER.get() {
+        if let Some(r) = REVOKER.get().cloned() {
             let forced = r.enforce().await;
             if !forced.is_empty() {
                 tracing::warn!(n = forced.len(), "instances stopped by a mesh revocation");
@@ -227,6 +237,10 @@ async fn build(
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
+    // The revoker exists before the first notice can arrive: a notice that
+    // beats the rest of this build is enforced by the sweep at its end.
+    let revoker = revoker_for(revocations.clone());
+    revoker.set_exchange(ex.clone());
     let notices = wire_revocations(&ex, revocations.clone(), &anchors, mesh);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
@@ -302,14 +316,14 @@ async fn build(
             )
         })
         .map(|_| boot.key.clone());
-    let _ = REVOKER.set(crate::workload_revoke_rpc::Revoker {
-        list: revocations,
-        exchange: ex.clone(),
-        host: HOST.get().cloned(),
-        plane: Some(plane.clone()),
-        notices,
-        notice_key,
-    });
+    revoker.attach(HOST.get().cloned(), plane.clone(), notices, notice_key);
+    // Startup sweep (a revocation that arrived while this node was down or
+    // before placement was up) and the periodic retry of failed teardowns.
+    let swept = revoker.enforce().await;
+    if !swept.is_empty() {
+        tracing::warn!(n = swept.len(), "instances stopped by a revocation at startup");
+    }
+    revoker.spawn_tick(crate::workload_revoke_rpc::ENFORCE_TICK);
     Ok(plane)
 }
 
@@ -469,10 +483,6 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
                 let r = plane.place(&o).await.map_err(|e| e.to_string())?;
                 serde_json::to_value(r).map_err(|e| e.to_string())
             }
-            "workload.revoke" => {
-                let r = REVOKER.get().ok_or("revocation is not available: placement did not start")?;
-                r.revoke(params).await
-            }
             "workload.status" if params.get("instance_id").is_none() => {
                 plane.settle_unsettled().await;
                 let mut rows = Vec::new();
@@ -505,12 +515,46 @@ pub async fn dispatch(
     params: Value,
     kernel: Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Response {
+    dispatch_checked(m, params, kernel, BUILT_RULES.get()).await
+}
+
+/// `workload.revoke` is served before every guard below and does not need
+/// the control plane: it is the incident verb. A broken permits, trust,
+/// container, host or Seed file stops `build`, a governance push stops
+/// `dispatch_checked` until restart, and a bad peers file stops `sync_peers`;
+/// none of them may stop an operator revoking a leaked key. The plane is
+/// still tried (so instances can be torn down and the exchange swept); when
+/// it cannot be built the revocation is applied to the kernel's list alone,
+/// which every gate and exchange the daemon builds reads.
+async fn revoke_dispatch(params: Value, kernel: &Arc<RwLock<Kernel<NativePlatform>>>) -> Response {
+    let list = kernel.read().await.revocation_list().clone();
+    let revoker = revoker_for(list);
+    if let Err(e) = PLANE.get_or_try_init(|| build(kernel)).await {
+        tracing::warn!(error = %e, "placement unavailable: revoking against the revocation list alone");
+    }
+    match revoker.revoke(params).await {
+        Ok(v) => Response::success(v),
+        Err(e) => Response::error(e),
+    }
+}
+
+/// [`dispatch`] with the governance the plane was built from given (so a
+/// test can stand in for a later governance push).
+pub(crate) async fn dispatch_checked(
+    m: &str,
+    params: Value,
+    kernel: Arc<RwLock<Kernel<NativePlatform>>>,
+    built: Option<&Option<String>>,
+) -> Response {
+    if m == "workload.revoke" {
+        return revoke_dispatch(params, &kernel).await;
+    }
     let plane = match PLANE.get_or_try_init(|| build(&kernel)).await {
         Ok(p) => p.clone(),
         Err(e) => return Response::error(format!("placement unavailable: {e}")),
     };
     let now = kernel.read().await.governance_overlay().map(|o| o.applied().effective_hash);
-    if let Err(e) = governance_changed(BUILT_RULES.get(), now.as_deref()) {
+    if let Err(e) = governance_changed(built, now.as_deref()) {
         return Response::error(e);
     }
     if HOST.get().is_some() && !plane.targets().iter().any(|t| t.addr == LOCAL_ADDR) {

@@ -165,11 +165,11 @@ fn permitted(g: &WorkloadGate, who: &str, action: &str, kind: &str) -> bool {
 #[test]
 fn only_the_supervisor_principal_may_run_a_project() {
     // Default deny for everyone, supervisor included, without the permit.
-    let bare = WorkloadGate::new(0.95, false);
+    let bare = WorkloadGate::exempt(0.95, false, "test");
     for a in ["workload.load", "workload.start", "workload.stop"] {
         assert!(!permitted(&bare, SUPERVISOR_PRINCIPAL, a, "project"), "{a} must default-deny");
     }
-    let g = WorkloadGate::new(0.95, false).with_permit(project_supervisor_permit()).unwrap();
+    let g = WorkloadGate::exempt(0.95, false, "test").with_permit(project_supervisor_permit()).unwrap();
     for a in ["workload.load", "workload.start", "workload.stop", "workload.unload"] {
         assert!(permitted(&g, SUPERVISOR_PRINCIPAL, a, "project"), "{a}");
         assert!(!permitted(&g, "someone-else", a, "project"), "{a} for another principal");
@@ -189,7 +189,7 @@ fn a_cog_permit_with_any_kind_does_not_accept_a_project_cert() {
     // Operator permits ask for a signed-package minimum; ProjectCert is below it.
     let mut any = WorkloadPermitRule::new("ANY", ["workload.start"], ["*"]);
     any.min_package_trust = crate::workload_governance::PackageTrust::OperatorAttested;
-    let g = WorkloadGate::new(0.95, false).with_permit(any).unwrap();
+    let g = WorkloadGate::exempt(0.95, false, "test").with_permit(any).unwrap();
     assert!(!permitted(&g, "operator", "workload.start", "project"));
 }
 
@@ -272,7 +272,7 @@ async fn the_host_runs_a_project_end_to_end_only_for_the_supervisor() {
     let root = tmp.path().to_path_buf();
     let fake = Arc::new(Fake::default());
     let gate: Arc<dyn GateBackend> =
-        Arc::new(WorkloadGate::new(0.95, false).with_permit(project_supervisor_permit()).unwrap());
+        Arc::new(WorkloadGate::exempt(0.95, false, "test").with_permit(project_supervisor_permit()).unwrap());
     let host = WorkloadHost::new(
         Arc::new(LogicalRuntime::new(fake.clone())),
         gate.clone(),

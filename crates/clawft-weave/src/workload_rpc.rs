@@ -33,13 +33,14 @@ use clawft_kernel::refusal_budget::RefusalBudget;
 use clawft_rpc::Response;
 use serde_json::{Value, json};
 
-use crate::rpc_gate::{Audit, decide};
+use crate::rpc_gate::{Audit, decide_as};
 use crate::workload_registry::{
     InstallRequest, WorkloadRecord, WorkloadRegistry, WorkloadState, validate_name,
 };
 
 // Governance action and chain event names are the kernel's (ADR-099
 // sections 4 and 7): the action string and the chain kind are the same.
+use clawft_kernel::workload_governance::CATALOG_PRINCIPAL;
 use clawft_kernel::chain::{
     EVENT_KIND_WORKLOAD_INSTALL as WORKLOAD_INSTALL, EVENT_KIND_WORKLOAD_REFUSE as WORKLOAD_REFUSE,
     EVENT_KIND_WORKLOAD_UNLOAD as WORKLOAD_UNLOAD,
@@ -63,6 +64,9 @@ const NOT_YET: &[&str] = &[
 /// operator revokes with `--package`), and a `blake3:` manifest hash is also
 /// named as an artifact, so a revocation of either denies the install. The
 /// node is this one (`pinned`) and nothing here touches the network. The
+/// decision is made as the `catalog` principal ([`CATALOG_PRINCIPAL`]), so
+/// the permit that accepts unsigned packages can be, and has to be, limited
+/// to it: it cannot also admit an unsigned placement. The
 /// gate derives its own effect vector from these fields and ignores a
 /// hand-written `effect`.
 fn workload_ctx(kind: &str, name: &str, manifest_hash: Option<&str>) -> Value {
@@ -163,7 +167,7 @@ pub fn handle_install(
     ctx["manifest_hash"] = json!(&req.manifest_hash);
     ctx["node_id"] = json!(node_id);
     ctx["effect"] = json!({ "risk": 0.4, "security": 0.4 });
-    if let Err(reason) = decide(gate, WORKLOAD_INSTALL, &ctx, true) {
+    if let Err(reason) = decide_as(CATALOG_PRINCIPAL, gate, WORKLOAD_INSTALL, &ctx, true) {
         return refuse(audit, WORKLOAD_INSTALL, &req.name, reason);
     }
     let record = WorkloadRecord {
@@ -212,7 +216,7 @@ pub fn handle_unload(
     ctx["manifest_hash"] = json!(&rec.manifest_hash);
     ctx["node_id"] = json!(&rec.node_id);
     ctx["effect"] = json!({ "risk": 0.2, "security": 0.1 });
-    if let Err(reason) = decide(gate, WORKLOAD_UNLOAD, &ctx, true) {
+    if let Err(reason) = decide_as(CATALOG_PRINCIPAL, gate, WORKLOAD_UNLOAD, &ctx, true) {
         return refuse(audit, WORKLOAD_UNLOAD, &name, reason);
     }
     match reg.remove(&name) {

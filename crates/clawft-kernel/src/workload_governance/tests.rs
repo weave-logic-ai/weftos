@@ -34,6 +34,11 @@ fn with(mut ctx: Value, key: &str, v: Value) -> Value {
     ctx
 }
 
+/// A list that is never written (nothing in these tests revokes through it).
+fn unused_list() -> Arc<RevocationList> {
+    Arc::new(RevocationList::new(std::path::PathBuf::from("unused/revoked_hosts.json")))
+}
+
 fn chain() -> Arc<ChainManager> {
     Arc::new(ChainManager::new(0, 1000))
 }
@@ -53,7 +58,7 @@ fn cog_place_permit() -> WorkloadPermitRule {
 #[test]
 fn default_rules_deny_and_chain_every_governed_action() {
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false).with_chain(cm.clone());
+    let gate = WorkloadGate::exempt(0.8, false, "test").with_chain(cm.clone());
     for action in GOVERNED_ACTIONS {
         let d = gate.check("agent-1", action, &cog_ctx());
         assert!(d.is_deny(), "{action} should be denied by default");
@@ -72,7 +77,7 @@ fn default_rules_deny_and_chain_every_governed_action() {
 #[test]
 fn unknown_workload_action_is_refused_and_chained() {
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_permit(WorkloadPermitRule::new("all", ["workload.*"], ["*"]))
         .unwrap();
@@ -85,7 +90,7 @@ fn unknown_workload_action_is_refused_and_chained() {
 #[test]
 fn non_workload_action_is_denied_and_not_chained() {
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false).with_chain(cm.clone());
+    let gate = WorkloadGate::exempt(0.8, false, "test").with_chain(cm.clone());
     assert!(gate.check("a", "tool.exec", &cog_ctx()).is_deny());
     assert!(workload_events(&cm).is_empty());
 }
@@ -93,7 +98,7 @@ fn non_workload_action_is_denied_and_not_chained() {
 #[test]
 fn permit_rule_allows_and_chains() {
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_permit(cog_place_permit())
         .unwrap();
@@ -116,7 +121,7 @@ fn permit_rule_allows_and_chains() {
 
 #[test]
 fn permit_rule_conditions_are_all_enforced() {
-    let gate = WorkloadGate::new(0.8, false).with_permit(cog_place_permit()).unwrap();
+    let gate = WorkloadGate::exempt(0.8, false, "test").with_permit(cog_place_permit()).unwrap();
     let cases = [
         ("package_trust", json!("signed_unpinned")),
         ("node_tier", json!("discovered")),
@@ -130,14 +135,14 @@ fn permit_rule_conditions_are_all_enforced() {
     }
     let mut cost_cap = cog_place_permit();
     cost_cap.max_resource_cost = 0.1;
-    let capped = WorkloadGate::new(0.8, false).with_permit(cost_cap).unwrap();
+    let capped = WorkloadGate::exempt(0.8, false, "test").with_permit(cost_cap).unwrap();
     assert!(capped.check("a", "workload.place", &cog_ctx()).is_deny());
 
     // Opt-ins lift the matching condition only.
     let mut opt = cog_place_permit();
     opt.allow_emulated = true;
     opt.accelerators = vec!["accel.gpu.*".into()];
-    let gate = WorkloadGate::new(0.8, false).with_permit(opt).unwrap();
+    let gate = WorkloadGate::exempt(0.8, false, "test").with_permit(opt).unwrap();
     let emulated = with(cog_ctx(), "emulated", json!(true));
     assert!(gate.check("a", "workload.place", &emulated).is_permit());
     let metal = with(cog_ctx(), "accelerator", json!("accel.gpu.metal"));
@@ -150,6 +155,7 @@ fn permit_rule_conditions_are_all_enforced() {
 fn permissive() -> WorkloadPermitRule {
     let mut p = WorkloadPermitRule::new("permissive", ["workload.*"], ["*"]);
     p.min_package_trust = PackageTrust::Unsigned;
+    p.principals = vec!["a".into()];
     p.min_node_tier = NodeTrustTier::Discovered;
     p.max_network = NetworkPolicy::Egress;
     p
@@ -164,7 +170,7 @@ fn risky_ctx() -> Value {
 #[test]
 fn effect_ceiling_denies_high_effect_even_with_permit() {
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_permit(permissive())
         .unwrap();
@@ -182,7 +188,7 @@ fn effect_ceiling_denies_high_effect_even_with_permit() {
 #[test]
 fn human_approval_turns_ceiling_deny_into_defer() {
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, true)
+    let gate = WorkloadGate::exempt(0.8, true, "test")
         .with_chain(cm.clone())
         .with_permit(permissive())
         .unwrap();
@@ -195,7 +201,7 @@ fn human_approval_turns_ceiling_deny_into_defer() {
 fn secrets_require_pinned_node_even_when_permitted() {
     let mut p = cog_place_permit();
     p.allow_secrets = true;
-    let gate = WorkloadGate::new(0.8, false).with_permit(p).unwrap();
+    let gate = WorkloadGate::exempt(0.8, false, "test").with_permit(p).unwrap();
     let secret = with(cog_ctx(), "secrets", json!(true));
     assert!(gate.check("a", "workload.place", &secret).is_deny());
     let pinned = with(secret, "node_tier", json!("pinned"));
@@ -205,7 +211,7 @@ fn secrets_require_pinned_node_even_when_permitted() {
 #[test]
 fn invalid_context_is_denied_and_chained() {
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_permit(permissive())
         .unwrap();
@@ -232,7 +238,7 @@ fn revoked_package_signer_or_artifact_is_denied_and_chained() {
     let dir = tempfile::tempdir().unwrap();
     let list = Arc::new(RevocationList::new(dir.path().join("revoked_hosts.json")));
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_revocations(list.clone())
         .with_permit(cog_place_permit())
@@ -266,7 +272,7 @@ fn unreadable_revocation_list_fails_closed() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join(crate::revocation::SUBJECTS_FILE_NAME), "[{").unwrap();
     let list = Arc::new(RevocationList::load(dir.path().join("revoked_hosts.json")));
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_revocations(list)
         .with_permit(cog_place_permit())
         .unwrap();
@@ -298,13 +304,13 @@ fn default_rules_distribute_to_peers_per_adr_092() {
         g = g.add_rule(r);
     }
     assert!(g.check("a", "workload.install", &json!({})).is_deny());
-    let wg = WorkloadGate::with_rules(0.8, false, rules);
+    let wg = WorkloadGate::with_rules(0.8, false, rules, unused_list());
     assert!(wg.check("a", "workload.install", &cog_ctx()).is_deny());
 }
 
 #[test]
 fn gate_fails_closed_without_default_deny_rule() {
-    let gate = WorkloadGate::with_rules(0.8, false, Vec::new());
+    let gate = WorkloadGate::with_rules(0.8, false, Vec::new(), unused_list());
     assert!(gate.check("a", "workload.place", &cog_ctx()).is_deny());
     let gate = gate.with_permit(cog_place_permit()).unwrap();
     assert!(gate.check("a", "workload.place", &cog_ctx()).is_permit());
@@ -321,9 +327,9 @@ fn permit_rules_are_validated() {
         WorkloadPermitRule::new("r", ["workload.teleport"], ["cog"]),
     ];
     for rule in bad {
-        assert!(WorkloadGate::new(0.8, false).with_permit(rule.clone()).is_err(), "{rule:?}");
+        assert!(WorkloadGate::exempt(0.8, false, "test").with_permit(rule.clone()).is_err(), "{rule:?}");
     }
-    let dup = WorkloadGate::new(0.8, false)
+    let dup = WorkloadGate::exempt(0.8, false, "test")
         .with_permit(cog_place_permit())
         .unwrap()
         .with_permit(cog_place_permit());
@@ -334,7 +340,7 @@ fn permit_rules_are_validated() {
 fn scripted_permit_and_deny_events_survive_chain_save_and_load() {
     let dir = tempfile::tempdir().unwrap();
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_permit(cog_place_permit())
         .unwrap();
@@ -369,7 +375,7 @@ mod project_permits {
     fn gate_for(project: Option<&str>) -> WorkloadGate {
         let mut permit = cog_place_permit();
         permit.projects = vec![P1.into()];
-        let g = WorkloadGate::new(0.8, false).with_permit(permit).unwrap();
+        let g = WorkloadGate::exempt(0.8, false, "test").with_permit(permit).unwrap();
         match project {
             Some(p) => g.with_attestation(ProjectAttestation::from_verified(p, AttestSource::BoundKernel)),
             None => g,
@@ -411,7 +417,7 @@ fn stop_permit() -> WorkloadPermitRule {
 #[test]
 fn teardown_waives_a_node_tier_denial_and_chains_the_waiver() {
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_permit(stop_permit())
         .unwrap();
@@ -431,7 +437,7 @@ fn teardown_waives_a_revocation_but_never_a_default_deny() {
     list.revoke_subject(RevocationKind::Package, "cog.fall-detect", "bad")
         .unwrap();
     let cm = chain();
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_permit(stop_permit())
         .unwrap()
@@ -451,13 +457,13 @@ fn teardown_waives_a_revocation_but_never_a_default_deny() {
     assert_eq!(p["teardown_revocation_waived"]["id"], "cog.fall-detect");
     assert_eq!(p["teardown_node_tier_waived"], true);
     // No permit for the action at all: a default deny stays a deny.
-    let bare = WorkloadGate::new(0.8, false);
+    let bare = WorkloadGate::exempt(0.8, false, "test");
     assert!(
         bare.check_teardown("a", "workload.stop", &demoted)
             .is_deny()
     );
     // A permit for another kind of workload does not cover this one either.
-    let other = WorkloadGate::new(0.8, false)
+    let other = WorkloadGate::exempt(0.8, false, "test")
         .with_permit(WorkloadPermitRule::new(
             "other",
             ["workload.stop"],
@@ -483,7 +489,7 @@ fn check_teardown_refuses_any_action_that_is_not_a_teardown() {
     // Through the trait method: denied in release builds; in debug builds
     // the debug_assert fires first.
     let r = std::panic::catch_unwind(|| {
-        let g = WorkloadGate::new(0.8, false)
+        let g = WorkloadGate::exempt(0.8, false, "test")
             .with_permit(WorkloadPermitRule::new("all", ["workload.*"], ["cog"]))
             .unwrap();
         g.check_teardown("a", "workload.start", &cog_ctx())
@@ -497,7 +503,7 @@ fn check_teardown_refuses_any_action_that_is_not_a_teardown() {
 // ── card 08f1bcff: revocation cannot be bypassed and is always chained ──
 
 fn place_gate(list: &Arc<RevocationList>, cm: &Arc<ChainManager>) -> WorkloadGate {
-    WorkloadGate::new(0.8, false)
+    WorkloadGate::exempt(0.8, false, "test")
         .with_chain(cm.clone())
         .with_revocations(list.clone())
         .with_permit(WorkloadPermitRule::new(
@@ -639,4 +645,60 @@ fn unrevoke_is_chained() {
     // The chain constants and the list's audit kinds are one vocabulary.
     assert_eq!(crate::revocation::AUDIT_REVOKE_KIND, crate::chain::EVENT_KIND_WORKLOAD_REVOKE);
     assert_eq!(crate::revocation::AUDIT_UNREVOKE_KIND, crate::chain::EVENT_KIND_WORKLOAD_UNREVOKE);
+}
+
+// ── review round: generation, hex ids, unsigned permits need a principal ──
+
+#[test]
+fn the_list_generation_moves_on_every_change_and_only_then() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = RevocationList::new(dir.path().join("revoked_hosts.json"));
+    let g0 = list.generation();
+    assert!(list.revoke_subject(RevocationKind::Package, "cog.a", "r").unwrap());
+    let g1 = list.generation();
+    assert!(g1 > g0);
+    assert!(!list.revoke_subject(RevocationKind::Package, "cog.a", "r").unwrap());
+    assert_eq!(list.generation(), g1, "a repeat changes nothing");
+    assert!(list.unrevoke_subject(RevocationKind::Package, "cog.a").unwrap());
+    assert!(list.generation() > g1);
+}
+
+#[test]
+fn a_hex_shaped_package_id_is_case_insensitive_like_the_other_hex_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = RevocationList::new(dir.path().join("revoked_hosts.json"));
+    let upper = "AB".repeat(32);
+    list.revoke_subject(RevocationKind::Package, &upper, "r").unwrap();
+    assert!(list.is_subject_revoked(RevocationKind::Package, &upper.to_lowercase()));
+    assert!(list.is_subject_revoked(RevocationKind::Package, &upper));
+    assert_eq!(list.list_subjects(None)[0].id, upper.to_lowercase());
+    // Names that are not hex are untouched (case still matters there).
+    list.revoke_subject(RevocationKind::Package, "Cog.A", "r").unwrap();
+    assert!(!list.is_subject_revoked(RevocationKind::Package, "cog.a"));
+}
+
+#[test]
+fn a_permit_that_accepts_unsigned_packages_must_name_its_principals() {
+    let mut p = WorkloadPermitRule::new("catalog", ["workload.install"], ["cog"]);
+    p.min_package_trust = PackageTrust::Unsigned;
+    assert!(p.validate().unwrap_err().contains("principals"));
+    assert!(WorkloadGate::exempt(0.8, false, "test").with_permit(p.clone()).is_err());
+    p.principals = vec![CATALOG_PRINCIPAL.into()];
+    assert!(p.validate().is_ok());
+    // The catalog principal's permit does not admit another principal.
+    let mut ctx = cog_ctx();
+    ctx["workload"]["package_trust"] = json!("unsigned");
+    let gate = WorkloadGate::exempt(2.0, false, "test").with_permit(p).unwrap();
+    assert!(gate.check(CATALOG_PRINCIPAL, "workload.install", &ctx).is_permit());
+    assert!(gate.check("kernel", "workload.install", &ctx).is_deny());
+    // A signed floor needs no principal.
+    assert!(WorkloadPermitRule::new("x", ["workload.place"], ["cog"]).validate().is_ok());
+}
+
+#[test]
+fn a_gate_is_built_with_its_list_or_says_why_not() {
+    let list = unused_list();
+    assert!(WorkloadGate::new(0.8, false, list.clone()).exempt_reason().is_none());
+    assert!(WorkloadGate::with_rules(0.8, false, Vec::new(), list).exempt_reason().is_none());
+    assert_eq!(WorkloadGate::exempt(0.8, false, "why").exempt_reason(), Some("why"));
 }

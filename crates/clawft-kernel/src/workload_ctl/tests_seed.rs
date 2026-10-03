@@ -90,7 +90,7 @@ async fn store_pin_goes_to_the_seed_adapter_on_its_operator_assigned_id() {
     let mut permit = WorkloadPermitRule::new("seed", ["workload.*"], ["cog"]);
     permit.min_package_trust = PackageTrust::OperatorAttested;
     permit.max_network = NetworkPolicy::Egress;
-    let gate = WorkloadGate::new(0.95, false)
+    let gate = WorkloadGate::exempt(0.95, false, "test")
         .with_chain(seed_chain.clone())
         .with_permit(permit)
         .unwrap();
@@ -108,7 +108,7 @@ async fn store_pin_goes_to_the_seed_adapter_on_its_operator_assigned_id() {
     let mut place = WorkloadPermitRule::new("seed-place", ["workload.place"], ["cog"]);
     place.min_package_trust = PackageTrust::OperatorAttested;
     place.max_network = NetworkPolicy::Egress;
-    let ctl_gate = WorkloadGate::new(0.95, false)
+    let ctl_gate = WorkloadGate::exempt(0.95, false, "test")
         .with_chain(chain.clone())
         .with_permit(place)
         .unwrap();
@@ -193,7 +193,7 @@ fn plane_host_placeholder() -> Arc<WorkloadHost> {
     Arc::new(
         WorkloadHost::new(
             Arc::new(rt),
-            Arc::new(WorkloadGate::new(0.8, false)),
+            Arc::new(WorkloadGate::exempt(0.8, false, "test")),
             "x",
             NodeTrustTier::Paired,
         )
@@ -239,7 +239,7 @@ pub(super) fn seed_plane_at(
         WorkloadHost::new(
             Arc::new(rt),
             Arc::new(
-                WorkloadGate::new(0.95, false)
+                WorkloadGate::exempt(0.95, false, "test")
                     .with_chain(seed_chain.clone())
                     .with_permit(permit.clone())
                     .unwrap(),
@@ -253,7 +253,7 @@ pub(super) fn seed_plane_at(
     let plane = PlacementControlPlane::new(
         ed25519_dalek::SigningKey::from_bytes(&[10; 32]),
         Arc::new(
-            WorkloadGate::new(0.95, false)
+            WorkloadGate::exempt(0.95, false, "test")
                 .with_chain(chain.clone())
                 .with_permit(permit)
                 .unwrap(),

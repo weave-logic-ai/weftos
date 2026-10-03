@@ -42,6 +42,8 @@ pub struct RevocationList {
     /// Where every subject revocation and un-revocation is recorded (the
     /// kernel chain, set at boot). Held here so no caller can skip it.
     audit: std::sync::OnceLock<AuditSink>,
+    /// Bumped on every subject change (see `generation`).
+    generation: std::sync::atomic::AtomicU64,
 }
 
 struct RevocationInner {
@@ -60,6 +62,7 @@ impl RevocationList {
                 path,
             }),
             audit: std::sync::OnceLock::new(),
+            generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -95,6 +98,7 @@ impl RevocationList {
                 path,
             }),
             audit: std::sync::OnceLock::new(),
+            generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 

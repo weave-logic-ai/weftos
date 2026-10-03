@@ -165,7 +165,12 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   `WorkloadHostService::enforce_revocations` on that node: each hosted
   instance whose package id, signer key or artifact hashes are now revoked is
   stopped and unloaded, its ingest token is dropped, and the controller's
-  record of it is forgotten. The teardown is not gated: the applied
+  record of it is forgotten. The daemon also runs it once at start-up and
+  every 60 s, so a teardown that failed is retried. A `place` that a revocation
+  races (it lands after the gate looked, before the instance is listed) is
+  caught and torn down, and a start refused because of a revocation is rolled
+  back by the revocation itself. The sweep locks the instance map only to pick
+  targets. The teardown is not gated: the applied
   revocation is the authority, so it needs no stop or unload permit. Every
   step is chained (`workload.stop`, `workload.unload` with
   `forced_by_revocation` naming the subject; a step that fails is chained as
@@ -180,9 +185,13 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   start and for install and migrate; a request that names no package, signer
   key or artifact hash is refused rather than trusted on its `package_trust`
   claim. Stopping or unloading is never blocked by a revocation (a revoked
-  package must stay stoppable). The daemon builds every `WorkloadGate` with
-  the kernel's list, and `crates/clawft-weave/tests/revocation_population.rs`
-  fails a build that adds one without it.
+  package must stay stoppable). The list is a required argument of
+  `WorkloadGate::new` / `with_rules`; the one way round it is
+  `WorkloadGate::exempt(.., why)`, and
+  `crates/clawft-weave/tests/revocation_population.rs` fails a build that
+  uses it outside its short allowlist (the project supervisor). `workload.revoke`
+  is served before the placement guards and works on the kernel's list alone
+  when the plane cannot be built or governance has changed.
 - Not covered: instances on a Cognitum Seed (the device's own store; a
   revoked store cog is refused at the next place or start, not stopped), and
   a remote `workload-host` that missed the notice (it stops its own instances

@@ -121,7 +121,7 @@ pub fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
     let mut permit = WorkloadPermitRule::new("test-cog", ["workload.*"], ["cog"]);
     permit.max_network = NetworkPolicy::Egress;
     Arc::new(
-        WorkloadGate::new(0.95, false)
+        WorkloadGate::exempt(0.95, false, "test")
             .with_permit(permit)
             .unwrap()
             .with_chain(chain.clone()),

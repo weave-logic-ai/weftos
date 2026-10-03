@@ -264,7 +264,7 @@ pub fn revoke_stops_the_child_even_when_the_gated_stop_fails() {
     fx.behavior("serve");
     rt().block_on(async {
         let mut deps = fx.deps();
-        let gate = WorkloadGate::new(0.95, false).with_permit(project_supervisor_permit()).unwrap();
+        let gate = WorkloadGate::exempt(0.95, false, "test").with_permit(project_supervisor_permit()).unwrap();
         deps.gate = Some(std::sync::Arc::new(DenyStop(gate)));
         let sup = clawft_weave::project_supervisor::Supervisor::new(fx.cfg(), deps);
         let r = sup.ensure_running(&fx.id).await.unwrap();

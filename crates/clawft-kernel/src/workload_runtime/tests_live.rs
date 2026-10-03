@@ -126,7 +126,7 @@ fn host_for(
     permit: WorkloadPermitRule,
 ) -> (WorkloadHost, Arc<ChainManager>) {
     let chain = Arc::new(ChainManager::new(0, 1000));
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(chain.clone())
         .with_permit(permit)
         .unwrap();
