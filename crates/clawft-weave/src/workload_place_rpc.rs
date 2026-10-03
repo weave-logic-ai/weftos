@@ -240,6 +240,28 @@ pub(crate) fn licence_links(
 /// The node's licence exchange, started once over `policy` (the boot-owned
 /// one) and `links`; later calls return the first. Hands it to the steward
 /// relay as its flood.
+/// Serializes [`ensure_licence`]: check, wire and set as one step, so two
+/// concurrent callers cannot each start an exchange (and install its sinks).
+static LICENCE_START: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// `cell`'s value, made by `make` at most once even under concurrent callers
+/// (`lock` held from the check to the set). `None` when `make` declines.
+fn once_guarded<T: Clone>(
+    cell: &OnceLock<T>,
+    lock: &std::sync::Mutex<()>,
+    make: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    if let Some(x) = cell.get() {
+        return Some(x.clone());
+    }
+    let _g = lock.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(x) = cell.get() {
+        return Some(x.clone());
+    }
+    let x = make()?;
+    Some(cell.get_or_init(|| x).clone())
+}
+
 pub(crate) fn ensure_licence(
     dir: &Path,
     policy: Option<&Arc<clawft_kernel::licence::MeshCheckoutPolicy>>,
@@ -248,16 +270,46 @@ pub(crate) fn ensure_licence(
     links: Option<Arc<dyn clawft_kernel::licence::LicenceLinks>>,
     posture: clawft_kernel::licence::PostureFn,
 ) -> Option<Arc<clawft_kernel::licence::LicenceExchange>> {
-    let x = match (LICENCE_EXCHANGE.get(), policy) {
-        (Some(x), _) => x.clone(),
-        (None, Some(p)) => {
-            let x = wire_licence(dir, p, anchors, chain, links, posture)?;
-            LICENCE_EXCHANGE.get_or_init(|| x).clone()
-        }
-        (None, None) => return None,
-    };
+    let x = once_guarded(&LICENCE_EXCHANGE, &LICENCE_START, || {
+        wire_licence(dir, policy?, anchors, chain, links, posture)
+    })?;
     crate::cog_swarm::set_grant_flood(x.clone());
     Some(x)
+}
+
+#[cfg(test)]
+mod ensure_once_tests {
+    use super::once_guarded;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, Mutex, OnceLock};
+
+    #[test]
+    fn concurrent_callers_make_exactly_one() {
+        let cell: Arc<OnceLock<Arc<usize>>> = Arc::default();
+        let lock = Arc::new(Mutex::new(()));
+        let made = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let (cell, lock, made, gate) = (cell.clone(), lock.clone(), made.clone(), gate.clone());
+                std::thread::spawn(move || {
+                    gate.wait();
+                    once_guarded(&cell, &lock, || {
+                        made.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        Some(Arc::new(i))
+                    })
+                    .unwrap()
+                })
+            })
+            .collect();
+        let got: Vec<Arc<usize>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(made.load(Ordering::SeqCst), 1, "one exchange built (and so one set of sinks installed)");
+        assert!(got.iter().all(|x| Arc::ptr_eq(x, &got[0])), "every caller gets that one");
+        // A declined make leaves the cell empty for a later caller.
+        let empty: OnceLock<Arc<usize>> = OnceLock::new();
+        assert!(once_guarded(&empty, &lock, || None).is_none() && empty.get().is_none());
+    }
 }
 
 /// Start the licence exchange (ADR-106 phase 1b) over the boot-owned store

@@ -192,6 +192,15 @@ impl LicenceExchange {
         }
     }
 
+    /// Forget the requests in flight and ask every connected peer afresh: a
+    /// node that just (re)gained the licence role, whose earlier requests
+    /// the service refused, catches up at once.
+    pub async fn resync_all(&self) {
+        self.pending.clear();
+        self.retries.clear();
+        self.sync_all().await;
+    }
+
     /// [`Self::sync_peer`] with every connected peer.
     pub async fn sync_all(&self) {
         for peer in self.runtime.peer_ids() {

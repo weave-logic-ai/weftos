@@ -56,7 +56,17 @@ async fn boot_before_link_then_owner_flips_and_a_service_restart_are_followed() 
     let runtime = tmp.path().join("runtime");
     let rec = svc.record();
     let identity = DaemonIdentity::for_service(rec.node_id.clone(), rec.machine_pubkey).unwrap();
-    let kcfg = KernelConfig { chain: Some(ChainConfig::isolated_in(&tmp.path().join("chain"))), ..KernelConfig::default() };
+    // A mesh id, so the exchange is live (it is inert without one).
+    let mesh = clawft_types::config::MeshConfig {
+        genesis_hash: Some("47".repeat(32)),
+        mesh_nonce: Some("ab".repeat(32)),
+        ..Default::default()
+    };
+    let kcfg = KernelConfig {
+        chain: Some(ChainConfig::isolated_in(&tmp.path().join("chain"))),
+        mesh: Some(mesh),
+        ..KernelConfig::default()
+    };
     let kernel = Kernel::boot_in_service_mode(Config::default(), kcfg, Arc::new(NativePlatform::new()), rec.node_id.clone())
         .await
         .expect("kernel boots in service mode");
@@ -78,15 +88,39 @@ async fn boot_before_link_then_owner_flips_and_a_service_restart_are_followed() 
     .await;
     assert!(!bind_error(&kernel).await.contains("reserved licence topics"), "a holder does not refuse for that");
 
+    // A licensed peer on the service; count the sync requests it is sent.
+    let peer = clawft_kernel::node_id_from_pubkey(&[0x72; 32]);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    let tally = clawft_kernel::mesh_runtime::RouteTally::default();
+    assert!(svc.running().runtime().register_authenticated_as(peer.clone(), tx, true, clawft_kernel::mesh_admit::PeerClass::Node, &tally));
+    let syncs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let n = syncs.clone();
+    tokio::spawn(async move {
+        while let Some(b) = rx.recv().await {
+            if let Ok(env) = clawft_kernel::mesh_ipc::MeshIpcEnvelope::from_bytes(&b)
+                && matches!(&env.message.target, clawft_kernel::ipc::MessageTarget::Topic(t) if t == "mesh.cog.sync")
+            {
+                n.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    });
+    let links = cog_swarm::licence_links();
+    let _ = links.refresh().await;
+    wait_until("the new peer is synced once", || syncs.load(Ordering::SeqCst) >= 1).await;
+
     // The owner moves to another uid: the path idles.
     svc.admin(Message::PolicySet { admission: None, cluster_owner_uid: Some(9002) }).await;
     until_state(HolderState::NotHolder).await;
     assert!(bind_error(&kernel).await.contains("reserved licence topics"));
     let st = licence_rpc::dispatch("workload.node.binding", json!({}), kernel.clone()).await.result.unwrap();
     assert_eq!((st["reserved_holder"].clone(), st["installed"].clone()), (json!(false), json!(true)));
-    // ...and back.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let before = syncs.load(Ordering::SeqCst);
+    // ...and back: coming back into the role catches up with every peer at
+    // once (the peer's view did not change, so no join would trigger it).
     svc.admin(Message::PolicySet { admission: None, cluster_owner_uid: Some(OTHER_UID) }).await;
     until_state(HolderState::Holder).await;
+    wait_until("a catch-up sync on regaining the role", || syncs.load(Ordering::SeqCst) > before).await;
 
     // The service goes away: unknown, with its own reason; back on reconnect.
     svc.next_uid.store(OTHER_UID, Ordering::SeqCst);

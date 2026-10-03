@@ -106,7 +106,7 @@ pub async fn start(
     crate::workload_place_rpc::init_with_mesh_id(s.key.clone(), runtime_dir.to_path_buf(), s.mesh_node_id.clone());
     if !identity.is_service() {
         crate::licence_boot::set_holder_state(HolderState::NotApplicable);
-        install_licence(kernel, runtime_dir, &s, false).await;
+        install_licence(kernel, runtime_dir, &s, false, false).await;
         return;
     }
     crate::licence_boot::set_holder_state(HolderState::Unknown);
@@ -154,7 +154,9 @@ async fn apply_holder(
         }
     }
     if now == HolderState::Holder {
-        install_licence(kernel, dir, s, true).await;
+        // Every entry into the role catches up, not only the first start:
+        // what arrived while another daemon held it never reached this one.
+        install_licence(kernel, dir, s, true, before != HolderState::Holder).await;
     }
 }
 
@@ -165,6 +167,7 @@ async fn install_licence(
     runtime_dir: &Path,
     s: &PlacementSigner,
     service: bool,
+    catch_up: bool,
 ) {
     // ADR-106: the mesh id from the configured nonce, the checkout policy and
     // the steward binder. Built at boot (not lazily) so a changed nonce
@@ -211,8 +214,8 @@ async fn install_licence(
     match started {
         // Started late (the holder answer came after the link's peers were
         // seen): ask every peer now instead of waiting for joins.
-        Some(x) if !was_running && service => {
-            tokio::spawn(async move { x.sync_all().await });
+        Some(x) if service && (catch_up || !was_running) => {
+            tokio::spawn(async move { x.resync_all().await });
         }
         Some(_) => {}
         None if service => {
