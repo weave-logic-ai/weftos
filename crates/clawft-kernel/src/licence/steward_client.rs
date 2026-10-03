@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use ed25519_dalek::SigningKey;
 
 use super::client::{
-    CheckoutWire, ClockMs, LicenceClient, LicenceClientError, LicenceResponse, LicenceTransport,
+    CheckoutWire, ClockMs, GrantsPage, LicenceClient, LicenceClientError, LicenceResponse, LicenceTransport,
     SignedLicenceClient,
 };
 use super::request::LicenceRequest;
@@ -85,5 +85,13 @@ impl LicenceClient for StewardLicenceClient {
 
     async fn grants_since(&self, since: u64) -> Result<Vec<SignedGrant>, LicenceClientError> {
         self.signed()?.grants_since(since).await
+    }
+
+    async fn grants_page(&self, since: u64) -> Result<GrantsPage, LicenceClientError> {
+        self.signed()?.grants_page(since).await
+    }
+
+    async fn renew(&self) -> Result<Vec<SignedGrant>, LicenceClientError> {
+        self.signed()?.renew().await
     }
 }

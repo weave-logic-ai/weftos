@@ -27,16 +27,21 @@ use crate::mesh_runtime::MeshRuntime;
 use crate::revocation::{RevocationKind, RevocationList};
 use crate::workload_runtime::seed_tls::SeedTls;
 
-const BIN: &[u8] = b"\x7fELF fall-detect for aarch64";
+pub(super) const BIN: &[u8] = b"\x7fELF fall-detect for aarch64";
 
-struct Lic;
+/// The declared licence; the test can withdraw coverage.
+#[derive(Clone, Default)]
+pub(super) struct Lic(pub Arc<std::sync::atomic::AtomicBool>);
 impl LicenceProvider for Lic {
     fn entitlement(&self, _: &str, _: &str, _: u64) -> Result<Entitlement, LicenceCheckError> {
+        if self.0.load(Ordering::SeqCst) {
+            return Err(LicenceCheckError::Unlicensed);
+        }
         Ok(Entitlement { ref_sha256: sha256_hex(b"licence"), expires: None })
     }
 }
 
-struct Reg(Arc<AtomicU64>);
+pub(super) struct Reg(pub Arc<AtomicU64>);
 impl CogFetcher for Reg {
     fn resolve(&self, cog: &str, _: &str) -> Result<CogEntry, FetchError> {
         if cog != "fall-detect" {
@@ -56,7 +61,7 @@ impl CogFetcher for Reg {
     }
 }
 
-struct PermitAll;
+pub(super) struct PermitAll;
 impl GateBackend for PermitAll {
     fn check(&self, _: &str, _: &str, _: &serde_json::Value) -> GateDecision {
         GateDecision::Permit { token: None }
@@ -69,10 +74,15 @@ fn now_secs() -> u64 {
 
 /// A mesh node whose stores run on the real clock.
 fn node(id: &str) -> TNode {
+    node_clocked(id, system_clock())
+}
+
+/// A mesh node whose stores run on `clock`.
+pub(super) fn node_clocked(id: &str, clock: Clock) -> TNode {
     let dir = tempfile::tempdir().unwrap();
     let local = LocalMeshId::new(mesh());
     let sink = Arc::new(RecordingSink::default());
-    let store = Arc::new(CheckoutGrantStore::open(dir.path(), anchors(), local.clone(), system_clock()).unwrap());
+    let store = Arc::new(CheckoutGrantStore::open(dir.path(), anchors(), local.clone(), clock).unwrap());
     store.set_sink(sink.clone());
     let approvals = Arc::new(ApprovalStore::open(dir.path(), anchors(), local.clone()).unwrap());
     let fx = Fx { dir, clock: Arc::new(AtomicU64::new(0)), local, sink, store, approvals };
@@ -92,25 +102,36 @@ fn node(id: &str) -> TNode {
 
 /// The Seed: key, operator-signed binding naming the steward, a loopback listener.
 fn seed(fetches: Arc<AtomicU64>) -> (tempfile::TempDir, SignedBinding, weft_licence::http::Server) {
+    seed_with(fetches, Arc::new(now_secs), 72 * 3600, Lic::default())
+}
+
+/// [`seed`] on `clock`, with a grant TTL and a licence the test controls.
+pub(super) fn seed_with(
+    fetches: Arc<AtomicU64>,
+    clock: Clock,
+    ttl: u64,
+    lic: Lic,
+) -> (tempfile::TempDir, SignedBinding, weft_licence::http::Server) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = Config {
         state_dir: dir.path().join("state"),
         device_id: "seed-test".into(),
         operator_pubkeys: vec![pk_hex(&op())],
         listen: vec!["127.0.0.1:0".parse().unwrap()],
+        grant_ttl_secs: ttl,
         ..Config::default()
     };
     let init = weft_licence::keys::init(&cfg.state_dir).unwrap();
     let mut rec = binding_rec(1, BindState::Bound, &grant_key(), &mesh());
     rec.grant_pubkey = init.grant_pubkey.clone();
-    rec.bound_at = now_secs();
+    rec.bound_at = clock();
     let signed = sign_binding(&rec, &op()).unwrap();
     let ops = OperatorKeys::load(&cfg.state_dir, &cfg.operator_pubkeys).unwrap();
     weft_licence::bind::apply(&cfg.state_dir, "seed-test", &ops, &signed, None).unwrap();
     let svc = Service::open(
         cfg,
-        Arc::new(now_secs),
-        Box::new(Lic),
+        clock,
+        Box::new(lic),
         Box::new(Reg(fetches)),
         Box::new(StubDeviceSigner),
     )
@@ -119,7 +140,7 @@ fn seed(fetches: Arc<AtomicU64>) -> (tempfile::TempDir, SignedBinding, weft_lice
     (dir, signed, server)
 }
 
-fn wire() -> CheckoutWire {
+pub(super) fn wire() -> CheckoutWire {
     CheckoutWire { request_id: "r1".into(), cog_id: "fall-detect".into(), version: "latest".into(), arch: "aarch64".into() }
 }
 
@@ -219,7 +240,7 @@ async fn a_weft_licence_refusal_and_a_foreign_steward_key_come_back_as_codes() {
     server.stop();
 }
 
-fn client_transport(addr: std::net::SocketAddr) -> Arc<dyn LicenceTransport> {
+pub(super) fn client_transport(addr: std::net::SocketAddr) -> Arc<dyn LicenceTransport> {
     Arc::new(
         HttpLicenceTransport::new(LicenceLinkConfig {
             url: format!("http://{addr}"),

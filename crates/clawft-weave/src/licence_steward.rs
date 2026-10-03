@@ -25,6 +25,11 @@
 //! or a steward change at runtime needs no restart; while the binding does
 //! not name this node the relay refuses with `not_steward` and sends nothing.
 //! A node without the file answers `no_steward`.
+//!
+//! The same client drives the renewal pull ([`clawft_kernel::licence::Renewer`]):
+//! `POST /licence/v1/renew` every 12 h plus jitter, then the
+//! `GET /licence/v1/grants` catch-up; renewed grants and withdrawals are
+//! installed and flooded, withdrawals first. An unreachable Seed backs off.
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -132,7 +137,9 @@ pub struct WireArgs<'a> {
     pub mesh: &'a Arc<CogMesh>,
 }
 
-fn build(a: &WireArgs<'_>, link: LicenceLinkConfig) -> Result<(Arc<CheckoutRelay>, &'static str), String> {
+type Built = (Arc<CheckoutRelay>, Arc<dyn clawft_kernel::licence::LicenceClient>, &'static str);
+
+fn build(a: &WireArgs<'_>, link: LicenceLinkConfig) -> Result<Built, String> {
     let gate = a.gate.clone().ok_or("no governance gate on this kernel: the relay asks it for cog.checkout")?;
     let transport = HttpLicenceTransport::new(link).map_err(|e| e.to_string())?;
     let security = match transport.link_security() {
@@ -140,16 +147,35 @@ fn build(a: &WireArgs<'_>, link: LicenceLinkConfig) -> Result<(Arc<CheckoutRelay
         _ => "lab_opt_in",
     };
     let transport: Arc<dyn LicenceTransport> = Arc::new(transport);
-    let client = StewardLicenceClient::new(a.store.clone(), a.key.clone(), a.node_id.clone(), transport, system_clock_ms());
+    let client: Arc<dyn clawft_kernel::licence::LicenceClient> =
+        StewardLicenceClient::new(a.store.clone(), a.key.clone(), a.node_id.clone(), transport, system_clock_ms());
     let relay = CheckoutRelay::new(
         a.store.clone(),
         a.exchange.clone(),
-        client,
+        client.clone(),
         gate,
         crate::cog_swarm::grant_flood(),
         Some(a.chain.clone()),
     );
-    Ok((Arc::new(relay), security))
+    Ok((Arc::new(relay), client, security))
+}
+
+/// Start the renewal pull (every 12 h plus jitter, first pass 5 min after
+/// start): renewed grants and withdrawals are installed and flooded. It
+/// skips while the binding does not name this node.
+fn spawn_renewal(a: &WireArgs<'_>, client: Arc<dyn clawft_kernel::licence::LicenceClient>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let r = clawft_kernel::licence::Renewer::new(
+        a.store.clone(),
+        a.exchange.clone(),
+        client,
+        crate::cog_swarm::grant_flood(),
+        Some(a.chain.clone()),
+        clawft_kernel::licence::RenewalConfig::default(),
+    );
+    r.spawn();
 }
 
 /// Build the relay from `licence-link.json` and install it in the cog mesh.
@@ -159,8 +185,9 @@ pub fn wire(a: WireArgs<'_>) -> RelayState {
     let st = match load_link(a.dir) {
         Ok(None) => RelayState { link_configured: false, relay_installed: false, link_security: None, error: None },
         Ok(Some(link)) => match build(&a, link) {
-            Ok((relay, security)) => {
+            Ok((relay, client, security)) => {
                 a.mesh.set_relay(Some(relay));
+                spawn_renewal(&a, client);
                 tracing::info!(security, "steward checkout relay installed (relays while the binding names this node)");
                 RelayState { link_configured: true, relay_installed: true, link_security: Some(security), error: None }
             }

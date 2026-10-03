@@ -38,6 +38,7 @@ mod mesh_config;
 mod persist;
 mod policy;
 mod relay;
+mod renewal;
 mod request;
 mod run_gate;
 mod store;
@@ -78,6 +79,8 @@ mod tests_run_gate;
 mod tests_http;
 #[cfg(all(test, feature = "workload-runtime", unix))]
 mod tests_http_e2e;
+#[cfg(all(test, feature = "workload-runtime", unix))]
+mod tests_renewal;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -97,7 +100,7 @@ pub use binding::{
 };
 pub use chain_sink::{ChainLicenceSink, LICENCE_EVENT_PREFIX};
 pub use client::{
-    ARTIFACT_PATH, CHECKOUT_PATH, CheckoutWire, ClockMs, system_clock_ms, GRANTS_PATH, LicenceClient, LicenceClientError,
+    ARTIFACT_PATH, CHECKOUT_PATH, CheckoutWire, ClockMs, system_clock_ms, GRANTS_PATH, GrantsPage, RENEW_PATH, LicenceClient, LicenceClientError,
     LicenceResponse, LicenceTransport, SignedLicenceClient,
 };
 pub use exchange::{
@@ -111,6 +114,9 @@ pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
 #[cfg(all(feature = "workload-runtime", unix))]
 pub use http_transport::{
     DEFAULT_MAX_ARTIFACT_BYTES, HttpLicenceTransport, LicenceLinkConfig, TransportLimits,
+};
+pub use renewal::{
+    EVENT_KIND_CHECKOUT_LAPSED, EVENT_KIND_CHECKOUT_RENEWED, RenewalConfig, RenewalReport, Renewer,
 };
 pub use run_gate::{CognitumRunGate, RunRefusal, RunVerdict, StoreRunGate, check_run};
 pub use steward_client::{SharedTransport, StewardLicenceClient};

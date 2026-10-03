@@ -205,9 +205,18 @@ reachable, the relay) and `weaver doctor` (`licence.no_steward`,
 `licence.approvals_orphaned`). The operator flow (checkout, approve, the run
 gate) is in [cog-sources.md](cog-sources.md), "In a mesh with a bound Seed".
 
-Not built yet: the steward's 12-hourly renewal pull (`POST /licence/v1/renew`)
-and `weaver cog checkout release | renew`. Until then a grant lapses at its
-TTL (72 h by default) unless it is checked out again.
+The steward also pulls renewals: `POST /licence/v1/renew` every 12 h plus up
+to 30 min of jitter (the first pass 5 min after the daemon starts), then pages
+`GET /licence/v1/grants?since=<ctr>` to catch up on anything issued meanwhile.
+New grants are installed and flooded to the mesh; withdrawals first, as soon
+as a response holds one. Responses are bounded by the same caps as above, so a
+renew answer over 256 KiB (roughly 200 active checkouts) fails the pass. A
+pass the Seed does not answer backs off from 1 min, doubling, to 1 h. Each
+installed renewal is chained as `cog.checkout.renewed`, each withdrawal as
+`cog.checkout.lapsed`. Every active checkout is renewed: releasing unused
+ones automatically is open question W3.
+
+Not built yet: `weaver cog checkout release | renew`.
 
 ## Protocol
 
