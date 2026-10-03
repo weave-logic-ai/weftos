@@ -172,13 +172,45 @@ pub fn reserved_holder() -> Option<bool> {
     }
 }
 
-/// Why the licence RPCs refuse on this daemon right now, if they do.
-pub fn holder_refusal() -> Option<&'static str> {
+/// Why the licence RPCs refuse on this daemon right now, if they do: the
+/// reason, the holder (uid and user, as the mesh service names it) and how
+/// to run the command there.
+pub fn holder_refusal() -> Option<String> {
     match holder_state() {
-        HolderState::NotHolder => Some(NOT_HOLDER),
-        HolderState::Unknown => Some(HOLDER_UNKNOWN),
+        HolderState::NotHolder => Some(not_holder_message(holder_uid())),
+        HolderState::Unknown => Some(format!(
+            "{HOLDER_UNKNOWN}; check the link with `weaver mesh status` and retry"
+        )),
         _ => None,
     }
+}
+
+/// The uid the mesh service names as the licence holder (service mode).
+pub fn holder_uid() -> Option<u32> {
+    crate::cog_swarm::licence_links().holder_uid()
+}
+
+/// The user name of `uid` on this machine, if it has one.
+pub fn user_name(uid: u32) -> Option<String> {
+    nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid)).ok().flatten().map(|u| u.name)
+}
+
+/// The refusal a non-holder daemon gives for a licence verb: where the verbs
+/// run and how to run them there. A token on this daemon is no authority on
+/// the holder's, so nothing is forwarded (ADR-106, phase 3 notes).
+pub fn not_holder_message(uid: Option<u32>) -> String {
+    let (who, as_user) = match uid {
+        Some(u) => match user_name(u) {
+            Some(n) => (format!("uid {u}, user {n}"), n),
+            None => (format!("uid {u}"), format!("'#{u}'")),
+        },
+        None => ("not named by the mesh service; `weaver mesh status` as an admin shows cluster_owner_uid".into(),
+                 "<cluster-owner>".into()),
+    };
+    format!(
+        "{NOT_HOLDER}. The licence holder is the cluster owner's daemon ({who}). \
+         Run the command as that user, against their daemon: `sudo -u {as_user} weaver ...`"
+    )
 }
 
 /// The state name for status output.

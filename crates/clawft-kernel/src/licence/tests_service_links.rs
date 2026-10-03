@@ -87,6 +87,7 @@ fn snode(bus: &Arc<Bus>, id: &str, connected: &[&str], licensed: &[&str], with_e
         connected: connected.iter().map(|s| s.to_string()).collect(),
         licensed: licensed.iter().map(|s| s.to_string()).collect(),
         reserved_holder: None,
+        reserved_holder_uid: None,
     })));
     let links = ServiceLicenceLinks::new(Arc::new(BusSender { me: id.into(), bus: bus.clone() }), dir.clone());
     bus.links.insert(id.into(), links.clone());
@@ -292,7 +293,7 @@ impl PeerDirectory for FlakyDir {
         if self.0.load(Ordering::SeqCst) {
             return Err("the mesh service link is reconnecting".into());
         }
-        Ok(PeerSnapshot { connected: vec!["node-b".into()], licensed: vec!["node-b".into()], reserved_holder: Some(true) })
+        Ok(PeerSnapshot { connected: vec!["node-b".into()], licensed: vec!["node-b".into()], reserved_holder: Some(true), reserved_holder_uid: Some(501) })
     }
 }
 
@@ -308,6 +309,7 @@ async fn a_failed_refresh_clears_the_licensed_view() {
     assert!(!links.peer_licensed("node-b") && links.peer_ids().is_empty(), "nobody is licensed while the link is down");
     assert_eq!(links.counters.refresh_failed.load(Ordering::Relaxed), 1);
     assert_eq!(links.counters.refreshed.load(Ordering::Relaxed), 1);
+    assert_eq!(links.holder_uid(), Some(501), "the holder's uid from the last good view");
 }
 
 fn quiet_exchange(fx: &Fx, links: &Arc<ServiceLicenceLinks>) -> Arc<LicenceExchange> {

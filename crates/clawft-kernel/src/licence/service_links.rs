@@ -69,6 +69,9 @@ pub struct PeerSnapshot {
     /// Whether the asking daemon holds the service's reserved licence topics
     /// (`None`: the service did not say).
     pub reserved_holder: Option<bool>,
+    /// The uid that holds the reserved licence topics on this machine, when
+    /// the service names one (where a non-holder sends its operator).
+    pub reserved_holder_uid: Option<u32>,
 }
 
 /// Who the machine mesh service says is connected.
@@ -113,6 +116,7 @@ pub struct ServiceLicenceLinks {
     per_peer: DashMap<String, Arc<tokio::sync::Semaphore>>,
     per_peer_cap: usize,
     holder: tokio::sync::watch::Sender<Option<bool>>,
+    holder_uid: RwLock<Option<u32>>,
     /// Counters.
     pub counters: ServiceLinksCounters,
 }
@@ -140,6 +144,7 @@ impl ServiceLicenceLinks {
             per_peer: DashMap::new(),
             per_peer_cap: per_peer.max(1),
             holder: tokio::sync::watch::channel(None).0,
+            holder_uid: RwLock::new(None),
             counters: ServiceLinksCounters::default(),
         })
     }
@@ -149,6 +154,11 @@ impl ServiceLicenceLinks {
     /// service did not say).
     pub fn holder(&self) -> Option<bool> {
         *self.holder.borrow()
+    }
+
+    /// The uid the service named as the licence holder at the last refresh.
+    pub fn holder_uid(&self) -> Option<u32> {
+        *self.holder_uid.read().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Changes of [`Self::holder`].
@@ -192,6 +202,7 @@ impl ServiceLicenceLinks {
         };
         self.counters.refreshed.fetch_add(1, Ordering::Relaxed);
         self.set_holder(snap.reserved_holder);
+        *self.holder_uid.write().unwrap_or_else(|p| p.into_inner()) = snap.reserved_holder_uid;
         let licensed: HashSet<String> = snap.licensed.into_iter().collect();
         let joined: Vec<String> = {
             let mut v = self.view.write().unwrap_or_else(|p| p.into_inner());

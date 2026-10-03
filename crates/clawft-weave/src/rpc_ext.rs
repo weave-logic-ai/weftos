@@ -680,12 +680,14 @@ pub(crate) fn builtin_route_names() -> Vec<(&'static str, Capability)> {
 #[cfg(not(test))]
 const GATES: &[GateFn] = &[
     crate::scope_gate::voice_gate,
+    crate::licence_role_gate::licence_role_gate,
     crate::scope_gate::scope_gate,
 ];
 #[cfg(test)]
 const GATES: &[GateFn] = &[
     test_deny_gate,
     crate::scope_gate::voice_gate,
+    crate::licence_role_gate::licence_role_gate,
     crate::scope_gate::scope_gate,
 ];
 
