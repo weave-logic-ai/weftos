@@ -22,6 +22,7 @@ use std::path::Path;
 use crate::mesh_artifact::{ArtifactExchange, ExchangeError};
 use crate::mesh_artifact_transfer::{FetchError, PeerSet};
 use crate::mesh_artifact_wire::{ArtifactId, ArtifactKey};
+use crate::mesh_swarm_state::GrantOrigin;
 use crate::workload_kind::KindRegistry;
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 use crate::workload_pkg::manifest::{FileRef, MANIFEST_FILE, MAX_MANIFEST_BYTES};
@@ -75,18 +76,15 @@ pub(crate) fn signer_keys(verified: &VerifiedPackage, anchors: &TrustAnchors) ->
         .collect()
 }
 
-/// May this package be handed to other nodes? Fails closed: only when the
-/// signer said so in the signed manifest (`redistributable = true`, absent
-/// means false), and never when it carries Cognitum provenance (a
-/// release-record attestation, or a `cognitum` release URL) even if the flag
-/// is set. Cognitum cogs are licence-gated, and nothing here checks a licence
-/// or that a peer belongs to the same operator. An operator re-pack of such a
-/// binary that drops the attestation is still not shared unless its signer
-/// explicitly opts in.
-pub(crate) fn redistributable(verified: &VerifiedPackage) -> bool {
-    if !verified.body.redistributable {
-        return false;
-    }
+/// Licence standing of a package, from its signed manifest. Fails closed:
+/// `OptIn` only when the signer wrote `redistributable = true`, and never
+/// when the package carries Cognitum provenance (a release-record
+/// attestation, or a `cognitum` release URL), even if the flag is set.
+/// Cognitum cogs are licence-gated, and nothing here checks a licence or that
+/// a peer belongs to the same operator. An operator re-pack of such a binary
+/// that drops the attestation is `NotFlagged`, so it is still not shared
+/// unless its signer explicitly opts in.
+pub(crate) fn grant_origin(verified: &VerifiedPackage) -> GrantOrigin {
     let cognitum_record = verified
         .body
         .attestations
@@ -98,7 +96,16 @@ pub(crate) fn redistributable(verified: &VerifiedPackage) -> bool {
         .release_url
         .as_deref()
         .is_some_and(|u| u.to_ascii_lowercase().contains("cognitum"));
-    !(cognitum_record || cognitum_url)
+    if cognitum_record || cognitum_url {
+        GrantOrigin::Cognitum {
+            cog_id: verified.body.id.clone(),
+            version: verified.body.version.clone(),
+        }
+    } else if verified.body.redistributable {
+        GrantOrigin::OptIn
+    } else {
+        GrantOrigin::NotFlagged
+    }
 }
 
 pub(crate) fn pinned(file: &FileRef) -> Result<([u8; 32], u64), VerifyError> {
@@ -270,11 +277,11 @@ impl ArtifactExchange {
         anchors: &TrustAnchors,
     ) -> ExchangedPackage {
         let signers = signer_keys(&verified, anchors);
-        let open = redistributable(&verified);
-        self.grant_with(manifest_hash, &verified.package_id, signers.clone(), open);
+        let origin = grant_origin(&verified);
+        self.grant_with(manifest_hash, &verified.package_id, signers.clone(), origin.clone());
         for file in verified.body.files() {
             if let Ok((hash, _)) = pinned(file) {
-                self.grant_with(hash, &verified.package_id, signers.clone(), open);
+                self.grant_with(hash, &verified.package_id, signers.clone(), origin.clone());
             }
         }
         ExchangedPackage {

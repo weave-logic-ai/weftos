@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 #[cfg(feature = "exochain")]
 use std::sync::Arc;
@@ -137,22 +137,50 @@ impl ArtifactStore {
     /// verified on every `load`. Indexed entries get type `Generic`.
     pub fn open_file(base_path: PathBuf) -> Result<Self, KernelError> {
         let store = Self::new_file(base_path.clone());
-        let io = |e: std::io::Error| KernelError::Service(format!("artifact index: {e}"));
         let Ok(shards) = std::fs::read_dir(&base_path) else {
             return Ok(store);
         };
+        // An unreadable shard or entry is skipped with a warning: a store that
+        // cannot index one directory is still a store, and one bad entry must
+        // not take the caller (the placement plane) down. The skipped blobs are
+        // simply not indexed, so nothing treats them as present or ours.
         for shard in shards {
-            let shard = shard.map_err(io)?;
+            let shard = match shard {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(error = %e, "artifact index: skipping an unreadable directory entry");
+                    continue;
+                }
+            };
             let prefix = shard.file_name().to_string_lossy().into_owned();
-            if prefix.len() != 2 || !shard.file_type().map_err(io)?.is_dir() {
+            if prefix.len() != 2 || !shard.file_type().is_ok_and(|t| t.is_dir()) {
                 continue;
             }
-            for entry in std::fs::read_dir(shard.path()).map_err(io)? {
-                let entry = entry.map_err(io)?;
+            let entries = match std::fs::read_dir(shard.path()) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(shard = %prefix, error = %e, "artifact index: skipping an unreadable shard");
+                    continue;
+                }
+            };
+            for entry in entries {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        warn!(shard = %prefix, error = %e, "artifact index: skipping an unreadable entry");
+                        continue;
+                    }
+                };
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let hex = name.len() == 64
                     && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-                let meta = entry.metadata().map_err(io)?;
+                let meta = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        warn!(entry = %name, error = %e, "artifact index: skipping an entry with no metadata");
+                        continue;
+                    }
+                };
                 if !hex || !name.starts_with(&prefix) || !meta.is_file() {
                     continue;
                 }
@@ -371,6 +399,27 @@ impl SystemService for ArtifactStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn open_file_skips_an_unreadable_shard_instead_of_failing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let writer = ArtifactStore::new_file(dir.path().to_path_buf());
+        let kept = writer.store(b"readable blob", ArtifactType::Generic).unwrap();
+        let hidden = writer.store(b"blob in a locked shard", ArtifactType::Generic).unwrap();
+        let locked = dir.path().join(&hidden[..2]);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root ignores permissions: nothing to prove then.
+        let readable = std::fs::read_dir(&locked).is_ok();
+        let opened = ArtifactStore::open_file(dir.path().to_path_buf());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let store = opened.expect("an unreadable shard is skipped, not fatal");
+        if !readable && kept[..2] != hidden[..2] {
+            assert!(store.contains(&kept), "the readable shard is still indexed");
+            assert!(!store.contains(&hidden), "the locked one is not");
+        }
+    }
 
     #[test]
     fn store_and_load_roundtrip() {

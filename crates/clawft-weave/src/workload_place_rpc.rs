@@ -185,7 +185,13 @@ async fn build(
     // takes ownership of, or evicts, bytes it did not create.
     let store = ArtifactStore::open_file(dir.join("workload-artifacts"))
         .map_err(|e| format!("workload artifact store: {e}"))?;
-    let mut ex = ArtifactExchange::new(&id, Arc::new(store), ExchangeConfig::default())
+    // The licence boundary is explicit: what this node may hand to peers is
+    // decided by the signed manifests (`redistributable = true`), nothing else.
+    let cfg = ExchangeConfig {
+        redistribution: Arc::new(clawft_kernel::mesh_swarm_state::ManifestPolicy),
+        ..ExchangeConfig::default()
+    };
+    let mut ex = ArtifactExchange::new(&id, Arc::new(store), cfg)
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);

@@ -105,11 +105,21 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   are banned and the fetch continues with the other candidates (three
   attempts). Candidates rank by trust tier first; a `net.lan` id is
   self-asserted and only orders peers of the same tier.
-- **One policy point.** Seeding, advertising and serving all ask
-  `RedistributionPolicy::allows` (via `servable_grant`); the default is
-  `ManifestPolicy`, and `ArtifactExchange::set_redistribution_policy` swaps it,
-  so a licence authority's grant (for example a Seed-signed, mesh-scoped one)
-  can plug in without touching those call sites.
+- **One policy point, fixed at construction.** Seeding, advertising and
+  serving all ask `RedistributionPolicy::allows(hash, grants, audience)`, where
+  the audience is `Serve(peer)` (the requesting peer: node id and whether
+  admission verified it), `Advertise` or `Seed`. The policy is an
+  `ExchangeConfig::redistribution` field (default `ManifestPolicy`); there is
+  no setter, and the daemon sets `ManifestPolicy` explicitly. Each grant
+  records an origin (`Cognitum { cog_id, version }`, `OptIn`, `NotFlagged`).
+  `ManifestPolicy` allows a hash only when every grant is `OptIn`, for every
+  audience. Whatever a policy says, content that is not `OptIn` is never put
+  in broadcast facts (`held_capabilities`): it can be found only with
+  `who_has`, where the serving side sees who asks. `serve` and `serve_frame`
+  take a claimed id (an unverified peer); `serve_as` and `serve_frame_as`
+  take a `ServePeer` whose verified flag the caller got from admission. A
+  licence-proxy policy (for example a Seed-signed, mesh-scoped grant) plugs in
+  there.
 - **Eviction cannot break a running package.** `swarm_fetch_package` pins the
   manifest and every file before fetching them, and leaves them pinned until
   `ArtifactCache::unpin_package`. Bytes being downloaded count against the

@@ -257,6 +257,9 @@ pub struct ExchangeConfig {
     /// Largest total size accepted in a peer's descriptor (an exact size
     /// from a signed manifest, when the caller has one, is checked as well).
     pub max_artifact_bytes: u64,
+    /// Who may be handed what this node holds. Fixed for the exchange's
+    /// lifetime; the default is [`crate::mesh_swarm_state::ManifestPolicy`].
+    pub redistribution: std::sync::Arc<dyn crate::mesh_swarm_state::RedistributionPolicy>,
 }
 
 impl Default for ExchangeConfig {
@@ -275,6 +278,7 @@ impl Default for ExchangeConfig {
             ban_after_corrupt: 1,
             max_piece_size: DEFAULT_MAX_PIECE_SIZE,
             max_artifact_bytes: DEFAULT_MAX_ARTIFACT_BYTES,
+            redistribution: std::sync::Arc::new(crate::mesh_swarm_state::ManifestPolicy),
         }
     }
 }

@@ -39,7 +39,7 @@ use crate::artifact_store::{ArtifactStore, ArtifactType};
 use crate::chain::ChainManager;
 pub use crate::mesh_artifact_types::{ExchangeConfig, ExchangeError};
 use crate::mesh_artifact_wire::{ArtifactDescriptor, ArtifactId, ArtifactKey, Bitfield};
-use crate::mesh_swarm_state::{GrantInfo, SwarmState};
+use crate::mesh_swarm_state::{Audience, GrantInfo, GrantOrigin, SwarmState};
 use crate::workload_pkg::codec::hex_encode;
 
 /// Most partially downloaded artifacts held at once.
@@ -338,19 +338,19 @@ impl ArtifactExchange {
     /// Allow serving `content_hash` under a verified package.
     #[cfg(test)]
     pub(crate) fn grant(&self, content_hash: [u8; 32], package_id: &str) {
-        self.grant_with(content_hash, package_id, Vec::new(), true);
+        self.grant_with(content_hash, package_id, Vec::new(), GrantOrigin::OptIn);
     }
 
     /// [`Self::grant`], recording the hex public keys of the package's
-    /// signers (a signer revocation names the key) and whether the package
-    /// may be redistributed. Grants are kept per package: a second package
+    /// signers (a signer revocation names the key) and the package's licence
+    /// standing. Grants are kept per package: a second package
     /// that lists the same content does not replace the first.
     pub(crate) fn grant_with(
         &self,
         content_hash: [u8; 32],
         package_id: &str,
         signers: Vec<String>,
-        redistributable: bool,
+        origin: GrantOrigin,
     ) {
         if self.is_revoked_subject(package_id, &signers, &content_hash) {
             return; // a revoked package, signer or hash is never allowed to seed
@@ -358,7 +358,7 @@ impl ArtifactExchange {
         let info = GrantInfo {
             package_id: package_id.to_string(),
             signers,
-            redistributable,
+            origin,
         };
         {
             let mut gs = self.grants.entry(content_hash).or_default();
@@ -370,14 +370,20 @@ impl ArtifactExchange {
         self.on_granted(&content_hash);
     }
 
-    /// Governance: served only when `d` is verified on this node (its
-    /// pieces assemble to its `content_hash`), a signed manifest that
-    /// verified here lists that content hash, that package may be
-    /// redistributed, and neither the package, its signers nor the content
-    /// hash has been revoked.
+    /// Governance: may `d` be listed in broadcast facts and seeded? It must
+    /// be verified on this node (its pieces assemble to its `content_hash`),
+    /// a signed manifest that verified here must list it, the redistribution
+    /// policy must allow it for [`Audience::Advertise`], and neither the
+    /// package, its signers nor the content hash may be revoked. Serving a
+    /// particular peer is [`Self::is_servable_to`].
     pub fn is_servable(&self, d: &ArtifactDescriptor) -> bool {
+        self.is_servable_to(d, &Audience::Advertise)
+    }
+
+    /// [`Self::is_servable`] for a specific audience.
+    pub fn is_servable_to(&self, d: &ArtifactDescriptor, audience: &Audience<'_>) -> bool {
         self.descriptors.get(&d.id()).is_some_and(|v| *v == *d)
-            && self.servable_grant(&d.content_hash).is_some()
+            && self.servable_grant(&d.content_hash, audience).is_some()
             && !self.is_revoked(&d.content_hash)
     }
 

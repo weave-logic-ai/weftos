@@ -63,6 +63,8 @@ struct Spec {
     corrupt_first: bool,
     /// Drop the connection after this many `piece` frames (blocks).
     die_after_blocks: Option<u32>,
+    /// The dialing peer is verified by admission (default: only claimed).
+    verified: bool,
 }
 
 /// Serving-side stream wrapper: paces, corrupts or kills `piece` frames.
@@ -179,7 +181,12 @@ impl PeerDialer for Net {
                 blocks: 0,
                 corrupted: false,
             };
-            let _ = ex.serve(&mut s, &me).await;
+            let who = if s.spec.verified {
+                crate::mesh_swarm_state::ServePeer::verified(me)
+            } else {
+                crate::mesh_swarm_state::ServePeer::unverified(me)
+            };
+            let _ = ex.serve_as(&mut s, &who).await;
         });
         self.tasks.lock().unwrap().push(task);
         Ok(Box::new(client))
@@ -1073,26 +1080,115 @@ fn a_blob_left_on_disk_by_an_earlier_run_is_never_evicted_after_a_restart() {
     assert!(!ex2.store().contains(&hex_encode(&d2.content_hash)));
 }
 
-#[tokio::test(start_paused = true)]
-async fn the_redistribution_policy_is_one_pluggable_point() {
-    struct AllowAll;
-    impl crate::mesh_swarm_state::RedistributionPolicy for AllowAll {
-        fn allows(&self, _: &[u8; 32], g: &[crate::mesh_swarm_state::GrantInfo]) -> bool {
-            !g.is_empty()
-        }
+/// Allows serving verified peers only; never advertising; seeding yes.
+#[derive(Debug)]
+struct VerifiedServeOnly;
+impl crate::mesh_swarm_state::RedistributionPolicy for VerifiedServeOnly {
+    fn allows(
+        &self,
+        _: &[u8; 32],
+        g: &[crate::mesh_swarm_state::GrantInfo],
+        a: &crate::mesh_swarm_state::Audience<'_>,
+    ) -> bool {
+        use crate::mesh_swarm_state::Audience::*;
+        !g.is_empty()
+            && match a {
+                Serve(p) => p.verified,
+                Advertise => false,
+                Seed => true,
+            }
     }
+}
+
+#[derive(Debug)]
+struct AllowEverything;
+impl crate::mesh_swarm_state::RedistributionPolicy for AllowEverything {
+    fn allows(&self, _: &[u8; 32], g: &[crate::mesh_swarm_state::GrantInfo], _: &crate::mesh_swarm_state::Audience<'_>) -> bool {
+        !g.is_empty()
+    }
+}
+
+fn gated_package(tmp: &std::path::Path) -> (PathBuf, TrustAnchors) {
+    let k = key(1);
+    (pack(tmp, 2 * 1024 * 1024, &k, "ddddddd", false, false), anchors_for(&k))
+}
+
+#[test]
+fn the_default_policy_decides_each_audience_the_same_way() {
+    use crate::mesh_swarm_state::{Audience, GrantInfo, GrantOrigin, ManifestPolicy, RedistributionPolicy, ServePeer};
+    let g = |o: GrantOrigin| GrantInfo { package_id: "p".into(), signers: vec![], origin: o };
+    let cog = GrantOrigin::Cognitum { cog_id: "c".into(), version: "1".into() };
+    let peer = ServePeer::verified("n");
+    let unverified = ServePeer::unverified("n");
+    let auds = [Audience::Serve(&peer), Audience::Serve(&unverified), Audience::Advertise, Audience::Seed];
+    for a in &auds {
+        assert!(ManifestPolicy.allows(&[0; 32], &[g(GrantOrigin::OptIn)], a), "{a:?}");
+        assert!(ManifestPolicy.allows(&[0; 32], &[g(GrantOrigin::OptIn), g(GrantOrigin::OptIn)], a));
+        // Any non-OptIn grant vetoes the hash, whatever else lists it.
+        assert!(!ManifestPolicy.allows(&[0; 32], &[g(GrantOrigin::OptIn), g(GrantOrigin::NotFlagged)], a));
+        assert!(!ManifestPolicy.allows(&[0; 32], &[g(GrantOrigin::OptIn), g(cog.clone())], a));
+        assert!(!ManifestPolicy.allows(&[0; 32], &[g(cog.clone())], a));
+        assert!(!ManifestPolicy.allows(&[0; 32], &[g(GrantOrigin::NotFlagged)], a));
+        assert!(!ManifestPolicy.allows(&[0; 32], &[], a));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_cognitum_origin_is_recorded_on_the_grant() {
     let tmp = tempfile::tempdir().unwrap();
     let k = key(1);
-    let dir = pack(tmp.path(), 2 * 1024 * 1024, &k, "ddddddd", false, false);
+    let dir = pack(tmp.path(), 1024 * 1024, &k, "aaaaaaa", true, true);
     let holder = swarm_node("holder", cfg());
     let pkg = holder.ex.seed_package_dir(&dir, &anchors_for(&k)).unwrap();
-    // Default policy: not signed redistributable, so nothing is shared.
+    let g = holder.ex.grants.get(&binary_hash(&pkg)).unwrap().clone();
+    assert_eq!(
+        g[0].origin,
+        crate::mesh_swarm_state::GrantOrigin::Cognitum { cog_id: "swarm-probe".into(), version: "0.1.0".into() },
+        "the flag does not override Cognitum provenance"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_policy_can_serve_verified_peers_only_and_it_sees_who_asks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, anchors) = gated_package(tmp.path());
+    let holder = swarm_node("holder", ExchangeConfig { redistribution: Arc::new(VerifiedServeOnly), ..cfg() });
+    let pkg = holder.ex.seed_package_dir(&dir, &anchors).unwrap();
+    let bin = ArtifactKey::Content(binary_hash(&pkg));
+
+    // Seed: allowed, so the seed event is chained.
+    assert_eq!(events(&holder.chain, EVENT_KIND_ARTIFACT_SEED).len(), 3);
+    // Advertise: never, so nothing is in the broadcast facts or the servable list.
     assert!(holder.ex.servable_artifacts().is_empty());
     assert!(holder.ex.held_capabilities(&Default::default()).is_empty());
-    // A different policy changes seeding, advertising and serving together.
-    assert!(holder.ex.set_redistribution_policy(Arc::new(AllowAll)));
-    assert!(!holder.ex.set_redistribution_policy(Arc::new(AllowAll)), "set once");
+
+    // Serve: only to a verified peer. who_has (the discovery path) sees the same.
+    let verified = Arc::new(Net::new("v").with(&holder, Spec { verified: true, ..Default::default() }));
+    let claimed = Arc::new(Net::new("c").with(&holder, Spec::default()));
+    let peers = [PeerCandidate::new("holder")];
+    let asker = swarm_node("asker", cfg());
+    assert!(asker.ex.who_has(claimed.clone(), &peers, bin).await.is_empty(), "unverified peer sees nothing");
+    assert_eq!(asker.ex.who_has(verified.clone(), &peers, bin).await.len(), 1);
+    let leech = swarm_node("leech", cfg());
+    assert!(leech.ex.swarm_fetch(claimed, peers.to_vec(), bin, &opts()).await.is_err());
+    leech.ex.swarm_fetch(verified, peers.to_vec(), bin, &opts()).await.expect("a verified peer is served");
+}
+
+#[tokio::test(start_paused = true)]
+async fn content_that_is_not_opt_in_never_reaches_broadcast_facts_whatever_the_policy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, anchors) = gated_package(tmp.path());
+    let holder = swarm_node("holder", ExchangeConfig { redistribution: Arc::new(AllowEverything), ..cfg() });
+    holder.ex.seed_package_dir(&dir, &anchors).unwrap();
+    // The policy lets this node seed and serve it ...
     assert_eq!(holder.ex.servable_artifacts().len(), 3);
-    assert!(!holder.ex.held_capabilities(&Default::default()).is_empty());
-    let _ = pkg;
+    // ... but it is never listed for every peer to see.
+    assert!(holder.ex.held_capabilities(&Default::default()).is_empty());
+    // An opt-in package, same policy, is listed.
+    let tmp2 = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let open = pack(tmp2.path(), 1024 * 1024, &k, "eeeeeee", false, true);
+    let other = swarm_node("other", ExchangeConfig { redistribution: Arc::new(AllowEverything), ..cfg() });
+    other.ex.seed_package_dir(&open, &anchors).unwrap();
+    assert!(!other.ex.held_capabilities(&Default::default()).is_empty());
 }

@@ -90,3 +90,10 @@ Cost: package signing, the ingest bridge, container adapters, and Seed integrati
 3. **v1 cog scope**: the 93 cogs that run clean in the conformance sweep. Rationale: they are demonstrated working. `anomaly-detect` is the first cog on nodes we control (native or container path), since the Seed registry lacks it; `fall-detect` or `baby-cry` are the first via a Seed.
 4. **Source of truth**: our fork, ahead of upstream until our PRs merge (section 6).
 5. **Still open**: where ingested vectors live and which node owns the store the ingest bridge forwards to (needs a decision at card 10); whether a live ESP32 feed or a replayed feed is used for the real-hardware acceptance run (the Pi 5 and Seed results above used a synthetic feed).
+
+## Amendment (2026-10-02): `redistributable` in the signed cog manifest
+
+The cog manifest body has an optional field `redistributable` (default false, omitted from the signed statement when false, so existing manifests and package ids are unchanged). A cog package is seeded, advertised and served over the swarm (ADR-099 section 6) only when its signer wrote `redistributable = true` and it has no Cognitum provenance (a `cognitum.*` attestation or a `cognitum` release URL), which stays licence-gated whatever the flag says. `weaver workload pack --redistributable` sets it. Our own weftos cogs need the flag to be shared.
+
+**Compatibility.** `CogPackageBody` rejects unknown fields, so a verifier built before this change (v0.8.1 nodes, the cog repository, Seed tooling) rejects a manifest signed with `redistributable = true`. In a mixed-version mesh, upgrade every verifier before packing with the flag. Manifests without it verify everywhere as before.
+

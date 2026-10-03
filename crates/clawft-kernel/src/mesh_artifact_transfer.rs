@@ -32,6 +32,7 @@ pub use crate::mesh_artifact_peers::{
     FetchError, FetchOutcome, PeerLink, PeerSet, PieceScheduler, SequentialScheduler, ServeStats,
 };
 use crate::mesh_artifact_wire::{ArtifactDescriptor, ArtifactKey, ArtifactMsg, Bitfield};
+use crate::mesh_swarm_state::{Audience, ServePeer};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PeerError {
@@ -88,11 +89,26 @@ impl ArtifactExchange {
     /// artifacts ([`Self::is_servable`]) are sent. An oversize or
     /// malformed frame ends the session with an error, and so does a peer
     /// that sends nothing for `serve_idle_timeout`.
+    ///
+    /// `peer` is only a claimed id (the peer is [`ServePeer::unverified`]):
+    /// with a policy that serves verified peers only, nothing is served. Use
+    /// [`Self::serve_as`] when admission authenticated the peer.
     pub async fn serve(
         &self,
         stream: &mut dyn MeshStream,
         peer: &str,
     ) -> Result<ServeStats, ExchangeError> {
+        self.serve_as(stream, &ServePeer::unverified(peer)).await
+    }
+
+    /// [`Self::serve`] for a peer whose identity the caller has (or has not)
+    /// verified: the redistribution policy sees `peer` for every request.
+    pub async fn serve_as(
+        &self,
+        stream: &mut dyn MeshStream,
+        who: &ServePeer,
+    ) -> Result<ServeStats, ExchangeError> {
+        let peer = who.node_id.as_str();
         let mut stats = ServeStats::default();
         if self.is_banned(peer) {
             let _ = stream.close().await;
@@ -118,7 +134,7 @@ impl ArtifactExchange {
                     return Err(e.into());
                 }
             };
-            if let Err(e) = self.serve_one(stream, peer, msg, &mut stats).await {
+            if let Err(e) = self.serve_one(stream, who, msg, &mut stats).await {
                 let _ = stream.close().await;
                 return Err(match e {
                     PeerError::Local(l) => l,
@@ -139,12 +155,25 @@ impl ArtifactExchange {
         raw: &[u8],
         stats: &mut ServeStats,
     ) -> Result<(), ExchangeError> {
+        self.serve_frame_as(stream, &ServePeer::unverified(peer), raw, stats)
+            .await
+    }
+
+    /// [`Self::serve_frame`] with the peer's verified-ness stated.
+    pub async fn serve_frame_as(
+        &self,
+        stream: &mut dyn MeshStream,
+        who: &ServePeer,
+        raw: &[u8],
+        stats: &mut ServeStats,
+    ) -> Result<(), ExchangeError> {
+        let peer = who.node_id.as_str();
         if self.is_banned(peer) {
             let _ = stream.close().await;
             return Err(ExchangeError::Banned(peer.to_string()));
         }
         let msg = ArtifactMsg::from_wire(raw)?;
-        self.serve_one(stream, peer, msg, stats)
+        self.serve_one(stream, who, msg, stats)
             .await
             .map_err(|e| match e {
                 PeerError::Local(l) => l,
@@ -155,12 +184,13 @@ impl ArtifactExchange {
     async fn serve_one(
         &self,
         stream: &mut dyn MeshStream,
-        peer: &str,
+        who: &ServePeer,
         msg: ArtifactMsg,
         stats: &mut ServeStats,
     ) -> Result<(), PeerError> {
+        let peer = who.node_id.as_str();
         match msg {
-            ArtifactMsg::MetaRequest { key } => match self.servable(&key) {
+            ArtifactMsg::MetaRequest { key } => match self.servable(&key, who) {
                 Some(d) => {
                     let id = d.id();
                     let have = self.have(&id).unwrap_or_else(|| Bitfield::new(0));
@@ -178,7 +208,7 @@ impl ArtifactExchange {
             }
             ArtifactMsg::Request { id, pieces } => {
                 let key = ArtifactKey::Root(id);
-                let Some(d) = self.servable(&key) else {
+                let Some(d) = self.servable(&key, who) else {
                     let reason = "not available or not servable".to_string();
                     return send(stream, &ArtifactMsg::Reject { key, reason }).await;
                 };
@@ -218,8 +248,9 @@ impl ArtifactExchange {
         }
     }
 
-    fn servable(&self, key: &ArtifactKey) -> Option<ArtifactDescriptor> {
-        self.resolve(key).filter(|d| self.is_servable(d))
+    fn servable(&self, key: &ArtifactKey, who: &ServePeer) -> Option<ArtifactDescriptor> {
+        self.resolve(key)
+            .filter(|d| self.is_servable_to(d, &Audience::Serve(who)))
     }
 
     /// Fetch `key` from `peers` with the v1 [`SequentialScheduler`].

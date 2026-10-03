@@ -26,7 +26,7 @@ use crate::chain::{
 use crate::mesh_artifact::ArtifactExchange;
 use crate::mesh_artifact_types::{ArtifactDescriptor, ArtifactId};
 use crate::mesh_swarm_picker::LinkStats;
-use crate::mesh_swarm_state::GrantInfo;
+use crate::mesh_swarm_state::{Audience, GrantInfo};
 use crate::revocation::{RevocationList, RevokedSubject};
 use crate::workload_pkg::codec::hex_encode;
 
@@ -91,26 +91,16 @@ impl ArtifactExchange {
         }
     }
 
-    /// Replace the redistribution policy (first call wins; the default is
-    /// [`crate::mesh_swarm_state::ManifestPolicy`]). Seeding, advertising and
-    /// serving all follow it, so a policy that consults something else (for
-    /// example a grant signed by the mesh's licence authority) plugs in here.
-    pub fn set_redistribution_policy(&self, p: Arc<dyn crate::mesh_swarm_state::RedistributionPolicy>) -> bool {
-        self.swarm.policy.set(p).is_ok()
-    }
-
-    fn redistribution_policy(&self) -> &dyn crate::mesh_swarm_state::RedistributionPolicy {
-        self.swarm
-            .policy
-            .get()
-            .map_or(&crate::mesh_swarm_state::ManifestPolicy as &dyn crate::mesh_swarm_state::RedistributionPolicy, |p| p.as_ref())
-    }
-
-    /// The first grant that currently allows seeding `content_hash`: not
-    /// revoked, and its package may be redistributed.
-    pub(crate) fn servable_grant(&self, content_hash: &[u8; 32]) -> Option<GrantInfo> {
+    /// The first grant that currently allows `audience` to have
+    /// `content_hash`: the redistribution policy allows it and the grant is
+    /// not revoked.
+    pub(crate) fn servable_grant(
+        &self,
+        content_hash: &[u8; 32],
+        audience: &Audience<'_>,
+    ) -> Option<GrantInfo> {
         let gs = self.grants.get(content_hash)?;
-        if !self.redistribution_policy().allows(content_hash, &gs) {
+        if !self.swarm.policy.allows(content_hash, &gs, audience) {
             return None;
         }
         gs.iter()
@@ -301,7 +291,7 @@ impl ArtifactExchange {
         let Some(id) = self.by_content.get(content_hash).map(|i| *i) else {
             return;
         };
-        let Some(g) = self.servable_grant(content_hash) else {
+        let Some(g) = self.servable_grant(content_hash, &Audience::Seed) else {
             return;
         };
         if self.is_revoked(content_hash) || self.swarm.seeded.insert(*content_hash, ()).is_some() {
@@ -417,7 +407,17 @@ impl ArtifactExchange {
     /// `model.present` with the shard list. Held artifacts are `probed`: this
     /// node verified them itself.
     pub fn held_capabilities(&self, model_shards: &HashSet<[u8; 32]>) -> Vec<Capability> {
-        let mut held = self.servable_artifacts();
+        // Broadcast facts reach every peer, so only content every package opted
+        // in for is listed, whatever the policy would allow a particular peer.
+        let mut held: Vec<ArtifactDescriptor> = self
+            .servable_artifacts()
+            .into_iter()
+            .filter(|d| {
+                self.grants
+                    .get(&d.content_hash)
+                    .is_some_and(|gs| gs.iter().all(GrantInfo::is_opt_in))
+            })
+            .collect();
         held.sort_by_key(|d| d.content_hash);
         held.truncate(MAX_ADVERTISED_ARTIFACTS);
         let mut caps = Vec::new();

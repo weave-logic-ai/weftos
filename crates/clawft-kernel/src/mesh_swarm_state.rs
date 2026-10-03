@@ -13,6 +13,23 @@ use crate::mesh_swarm_picker::LinkStats;
 use crate::mesh_swarm_rate::Bandwidth;
 use crate::revocation::RevocationList;
 
+/// Where a package's licence stands, from its signed manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrantOrigin {
+    /// Cognitum provenance (a `cognitum.*` attestation or a `cognitum`
+    /// release URL): licence-gated, whatever else the manifest says.
+    Cognitum {
+        /// Cog id from the manifest.
+        cog_id: String,
+        /// Cog version from the manifest.
+        version: String,
+    },
+    /// The signer wrote `redistributable = true`.
+    OptIn,
+    /// The signer did not opt in (the field is absent or false).
+    NotFlagged,
+}
+
 /// What allows one content hash to be seeded: the verified package that
 /// lists it and that package's signers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,34 +38,87 @@ pub struct GrantInfo {
     pub package_id: String,
     /// Lower-case hex public keys of the manifest's accepted signers.
     pub signers: Vec<String>,
-    /// False for a package that must not be handed to other nodes (Cognitum
-    /// provenance; no licence check exists here): it is never seeded,
-    /// advertised or served, though this node may hold and run it.
-    pub redistributable: bool,
+    /// Licence standing of the package. Anything but `OptIn` must not be
+    /// handed to other nodes by default (see [`ManifestPolicy`]).
+    pub origin: GrantOrigin,
 }
 
-/// Decides whether the grants for a content hash allow handing it to other
-/// nodes. The one policy point: seeding (`artifact.seed`), advertisement
-/// (`store.artifact.*`, `model.present`) and serving all go through
-/// [`crate::mesh_artifact::ArtifactExchange::servable_grant`], which asks this.
+impl GrantInfo {
+    /// True when the signer opted in to redistribution.
+    pub fn is_opt_in(&self) -> bool {
+        self.origin == GrantOrigin::OptIn
+    }
+}
+
+/// An authenticated (or not) peer asking to be served.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServePeer {
+    /// The peer's node id.
+    pub node_id: String,
+    /// True only when the id was verified by admission (a signed hello bound
+    /// to the connection); false for a claimed id.
+    pub verified: bool,
+}
+
+impl ServePeer {
+    /// A peer whose id is only claimed (the default for [`crate::mesh_artifact::ArtifactExchange::serve`]).
+    pub fn unverified(node_id: impl Into<String>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            verified: false,
+        }
+    }
+
+    /// A peer whose id admission verified.
+    pub fn verified(node_id: impl Into<String>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            verified: true,
+        }
+    }
+}
+
+/// Who a redistribution decision is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Audience<'a> {
+    /// Serving pieces (or a descriptor) to this requesting peer.
+    Serve(&'a ServePeer),
+    /// Listing the content in facts broadcast to every peer.
+    Advertise,
+    /// Starting to seed it (`artifact.seed`).
+    Seed,
+}
+
+/// Decides whether the grants for a content hash allow handing it to an
+/// audience. The one policy point: seeding, advertisement and serving all go
+/// through [`crate::mesh_artifact::ArtifactExchange`]'s grant check, which
+/// asks this. It is fixed when the exchange is built
+/// ([`crate::mesh_artifact_types::ExchangeConfig::redistribution`]); there is
+/// no way to swap it afterwards.
+///
+/// Whatever the policy says, content that is not `OptIn` is never listed in
+/// broadcast facts: it can be discovered only by asking a peer
+/// ([`crate::mesh_artifact::ArtifactExchange::who_has`]), where the serving
+/// side sees who is asking.
 ///
 /// `grants` is every grant held for the hash, revoked or not (a revoked one
 /// still counts toward a veto until the sweep removes it).
-pub trait RedistributionPolicy: Send + Sync + 'static {
-    /// May `content_hash` be handed to others, given its `grants`? Fail
+pub trait RedistributionPolicy: std::fmt::Debug + Send + Sync + 'static {
+    /// May `content_hash` be handed to `audience`, given its `grants`? Fail
     /// closed: an empty list is "no".
-    fn allows(&self, content_hash: &[u8; 32], grants: &[GrantInfo]) -> bool;
+    fn allows(&self, content_hash: &[u8; 32], grants: &[GrantInfo], audience: &Audience<'_>)
+    -> bool;
 }
 
 /// The default: every package that lists the hash must have been signed
-/// `redistributable = true` (and have no Cognitum provenance); one that was
-/// not vetoes the hash for all of them.
+/// `redistributable = true` and have no Cognitum provenance (`OptIn`); any
+/// other grant vetoes the hash for every package, for every audience.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ManifestPolicy;
 
 impl RedistributionPolicy for ManifestPolicy {
-    fn allows(&self, _content_hash: &[u8; 32], grants: &[GrantInfo]) -> bool {
-        !grants.is_empty() && grants.iter().all(|g| g.redistributable)
+    fn allows(&self, _: &[u8; 32], grants: &[GrantInfo], _: &Audience<'_>) -> bool {
+        !grants.is_empty() && grants.iter().all(GrantInfo::is_opt_in)
     }
 }
 
@@ -61,8 +131,8 @@ pub(crate) struct SwarmState {
     /// Corrupt pieces seen per peer.
     pub(crate) corrupt: DashMap<String, u32>,
     pub(crate) revocations: OnceLock<Arc<RevocationList>>,
-    /// Redistribution policy (default [`ManifestPolicy`]); set once.
-    pub(crate) policy: OnceLock<Arc<dyn RedistributionPolicy>>,
+    /// Redistribution policy, fixed at construction.
+    pub(crate) policy: Arc<dyn RedistributionPolicy>,
     /// Blobs this exchange created in the store (the only ones it may evict).
     pub(crate) owned: DashMap<[u8; 32], ()>,
     /// Content hashes already chained as `artifact.seed`.
@@ -78,7 +148,7 @@ impl SwarmState {
             bans: DashMap::new(),
             corrupt: DashMap::new(),
             revocations: OnceLock::new(),
-            policy: OnceLock::new(),
+            policy: cfg.redistribution.clone(),
             seeded: DashMap::new(),
             owned: DashMap::new(),
             cache: Mutex::new(Weak::new()),

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Added — cog manifest `redistributable` flag (ADR-100 amendment, ADR-099 section 6)
+
+- The signed cog manifest has an optional `redistributable` field (default
+  false; `weaver workload pack --redistributable`). Packages are seeded,
+  advertised and served over the artifact swarm only when it is true and the
+  package has no Cognitum provenance. Our own cogs need it to be shared.
+- **Upgrade order:** `CogPackageBody` rejects unknown fields, so verifiers
+  built before this change (v0.8.1 nodes, cog-repo, Seed tooling) reject a
+  manifest signed with `redistributable = true`. Upgrade every verifier in a
+  mixed-version mesh before packing with the flag. Manifests without it are
+  unchanged.
+
 ### Changed — mesh connection limits and seed dials (ADR-103 A10)
 
 - **Behaviour change:** the per-IP connection cap (default 64) and the
