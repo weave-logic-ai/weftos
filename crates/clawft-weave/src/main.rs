@@ -57,6 +57,9 @@ enum Commands {
     /// Governed workloads placed across the mesh (ADR-099).
     Workload(commands::workload_cmd::WorkloadArgs),
 
+    /// Project cog sources (WeftOS, Cognitum, private), licences, search, install (ADR-105).
+    Cog(commands::cog_cmd::CogArgs),
+
     /// Machine mesh service: serve it, inspect it, administer bindings and peers (ADR-103).
     #[cfg(all(unix, feature = "mesh"))]
     Mesh(commands::mesh_cmd::MeshArgs),
@@ -168,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Agent(args) => commands::agent_cmd::run(args).await?,
         Commands::App(args) => commands::app_cmd::run(args).await?,
         Commands::Workload(args) => commands::workload_cmd::run(args).await?,
+        Commands::Cog(args) => commands::cog_cmd::run(args).await?,
         Commands::Cluster(args) => commands::cluster_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,

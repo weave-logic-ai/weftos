@@ -12,11 +12,12 @@
 //! over SSH into `/var/lib/cognitum/apps/<id>/`.
 
 use ed25519_dalek::pkcs8::DecodePrivateKey;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-use weftos_cog_repo::{sha256_hex, verify_artifact, weavelogic_key, Artifact, CogEntry, Registry, SCHEMA};
+mod private;
+use weftos_cog_repo::{sha256_hex, verify_artifact, weavelogic_key, Artifact, CogEntry, Registry, VerifyError, SCHEMA};
 
 type R<T> = Result<T, String>;
 
@@ -34,6 +35,16 @@ fn usage() -> ! {
          \t\tFetches registry.json and verifies sha256 + Ed25519 for every artifact against the pinned key.\n\
          install <repo-url|repo-dir> <cog-id> --seed <user@host> [--arch arm|arm64] [--apps-dir <path>]\n\
          \t\tVerifies the chosen cog, then sideloads the binary + manifest to the Seed (default arch arm).\n\n\
+         Private repositories (ADR-105): a project's own signed COG-008 repo, signed with a key it holds.\n\
+         init    <repo-dir> --name <repo-name>\n\
+         keygen  --out <key.pem> [--repo <repo-dir>]\n\
+         \t\tWrites an Ed25519 key (PKCS#8 PEM, mode 0600, never overwrites) and prints the public key. Never commit it.\n\
+         add     <repo-dir> --binary <file> [--id <id>] [--arch arm|arm64] [--cog-toml <cog.toml>] [--manifest <manifest.json>]\n\
+         \t\t[--name N] [--version V] [--category C] [--description D] [--hardware a,b]   stage a cog into <repo-dir>/dist/\n\
+         sign    <repo-dir> --key <key.pem>      sign dist/ into <repo-dir>/repo/registry.json (key must match repo.toml)\n\
+         verify  <repo-dir>                      verify <repo-dir>/repo against the key in repo.toml\n\
+         publish <repo-dir> --to <dir>           verify, then copy repo/ to <dir> (host that directory yourself)\n\
+         Both `verify` and `install` also take --pin <pubkey-hex> (repeatable) to check a repo against your own key.\n\n\
          The pinned WeaveLogic release key is compiled in; there is no way to disable verification."
     );
     std::process::exit(2);
@@ -45,6 +56,10 @@ fn main() {
         Some("sign") => cmd_sign(&args[2..]),
         Some("verify") => cmd_verify(&args[2..]),
         Some("install") => cmd_install(&args[2..]),
+        Some("init") => private::cmd_init(&args[2..]),
+        Some("keygen") => private::cmd_keygen(&args[2..]),
+        Some("add") => private::cmd_add(&args[2..]),
+        Some("publish") => private::cmd_publish(&args[2..]),
         _ => usage(),
     };
     if let Err(e) = res {
@@ -92,6 +107,10 @@ fn meta_from_manifest(manifest: &serde_json::Value, id: &str) -> CogEntry {
 }
 
 fn cmd_sign(args: &[String]) -> R<()> {
+    // `sign <repo-dir> --key k.pem`: a private repository (ADR-105), guarded by its repo.toml key.
+    if let Some(dir) = args.first().filter(|a| !a.starts_with("--")) {
+        return private::cmd_sign(dir, &args[1..]);
+    }
     let from = arg(args, "--from").ok_or("sign needs --from <dist-dir>")?;
     let out = arg(args, "--out").ok_or("sign needs --out <repo-dir>")?;
     let repo_name = arg(args, "--repo-name").unwrap_or("weavelogic");
@@ -101,8 +120,13 @@ fn cmd_sign(args: &[String]) -> R<()> {
     if key.verifying_key().to_bytes() != weavelogic_key().to_bytes() {
         return Err("the signing key does not match the pinned WeaveLogic public key; installs would reject it".into());
     }
+    sign_tree(from, Path::new(out), repo_name, &key)
+}
 
-    let out = PathBuf::from(out);
+/// Signs every cog under `<from>/<id>/` into the repo at `out` and writes `registry.json`.
+/// The caller has already checked the key against whatever it must match.
+fn sign_tree(from: &str, out: &Path, repo_name: &str, key: &SigningKey) -> R<()> {
+    let out = out.to_path_buf();
     let mut cogs: Vec<CogEntry> = Vec::new();
 
     let mut ids: Vec<String> = std::fs::read_dir(from)
@@ -204,16 +228,55 @@ fn load_registry(base: &str) -> R<Registry> {
 
 // ---- verify ---------------------------------------------------------------
 
+/// Keys a repo is checked against: every `--pin <hex>`, or the pinned WeaveLogic key when none.
+fn pins(args: &[String]) -> R<Vec<VerifyingKey>> {
+    let mut keys = explicit_pins(args)?;
+    if keys.is_empty() {
+        keys.push(weavelogic_key());
+    }
+    Ok(keys)
+}
+
+/// Only the keys given with `--pin` (empty when there are none).
+fn explicit_pins(args: &[String]) -> R<Vec<VerifyingKey>> {
+    let mut keys = Vec::new();
+    for (i, a) in args.iter().enumerate() {
+        if a == "--pin" {
+            let hex_key = args.get(i + 1).ok_or("--pin needs a public key (64 hex chars)")?;
+            keys.push(private::parse_pubkey(hex_key)?);
+        }
+    }
+    Ok(keys)
+}
+
+/// Verifies against each key; size and sha256 failures do not depend on the key, so only a
+/// rejected signature moves on to the next one.
+fn verify_any(bytes: &[u8], art: &Artifact, keys: &[VerifyingKey]) -> Result<(), VerifyError> {
+    let mut last = VerifyError::SignatureRejected;
+    for k in keys {
+        match verify_artifact(bytes, art, k) {
+            Ok(()) => return Ok(()),
+            Err(VerifyError::SignatureRejected) => last = VerifyError::SignatureRejected,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
 fn cmd_verify(args: &[String]) -> R<()> {
     let base = args.first().ok_or("verify needs <repo-url|repo-dir>")?;
+    if Path::new(base).join("repo.toml").is_file() {
+        // An explicit --pin wins over the repo's own declared key (and fails on a mismatch).
+        return private::cmd_verify(base, &explicit_pins(args)?);
+    }
     let reg = load_registry(base)?;
-    let key = weavelogic_key();
+    let key = pins(args)?;
     eprintln!("repo '{}' schema {} — {} cog(s)", reg.repo, reg.schema, reg.cogs.len());
     let mut bad = 0u32;
     let mut ok = 0u32;
     for cog in &reg.cogs {
         for (arch, art) in &cog.artifacts {
-            match fetch(base, &art.path).and_then(|b| verify_artifact(&b, art, &key).map_err(|e| e.to_string())) {
+            match fetch(base, &art.path).and_then(|b| verify_any(&b, art, &key).map_err(|e| e.to_string())) {
                 Ok(()) => {
                     ok += 1;
                     println!("  OK    {} [{arch}] v{}  {}", cog.id, cog.version, &art.sha256[..16]);
@@ -247,9 +310,9 @@ fn cmd_install(args: &[String]) -> R<()> {
 
     // VERIFY before anything touches the Seed. Signed-only, always.
     let bytes = fetch(base, &art.path)?;
-    verify_artifact(&bytes, art, &weavelogic_key()).map_err(|e| format!("refusing to install {cog_id}: {e}"))?;
+    verify_any(&bytes, art, &pins(args)?).map_err(|e| format!("refusing to install {cog_id}: {e}"))?;
     let manifest = fetch(base, &art.manifest_path)?;
-    eprintln!("verified {cog_id} [{arch}] v{} ({} bytes) — signed by the WeaveLogic release key", cog.version, bytes.len());
+    eprintln!("verified {cog_id} [{arch}] v{} ({} bytes) — signed by a pinned key", cog.version, bytes.len());
 
     // Stage locally, then sideload over ssh/scp into apps/<id>/.
     let staging = std::env::temp_dir().join(format!("weft-cog-install-{cog_id}"));

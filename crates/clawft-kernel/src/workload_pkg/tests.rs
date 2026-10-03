@@ -374,6 +374,7 @@ fn b64url(bytes: &[u8]) -> String {
 /// A release record for `binary`, signed like upstream with `k`.
 fn cognitum_record(k: &SigningKey, binary: &[u8]) -> Value {
     let mut rec = json!({"cogId":"anomaly-detect","version":"1.2.0",
+        "sourceCommit":"8970f99aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "artifactRef":{"kind":"edge-binary","binaryDigest":format!("sha256:{}", hex_encode(&Sha256::digest(binary))),
             "binaryName":"cog-anomaly-detect-arm64","targetHardware":["v0-appliance"]},
         "provenance":{"signatureAlgorithm":"ed25519","signingKeyId":"cogs-release-test"}});
@@ -396,6 +397,14 @@ fn cognitum_anchors(k: &SigningKey) -> TrustAnchors {
     TrustAnchors::from_trust_file(&file).unwrap()
 }
 
+/// Verifier on, with the fixture's `cog.toml` pinned for record-only trust.
+fn record_only_policy() -> VerifyPolicy {
+    VerifyPolicy {
+        accept_cognitum_release: true,
+        record_cog_toml_pins: vec![blake3::hash(COG_TOML.as_bytes()).to_hex().to_string()],
+    }
+}
+
 #[test]
 fn cognitum_record_counts_as_signature_only_when_enabled() {
     let ck = key(42);
@@ -408,9 +417,7 @@ fn cognitum_record_counts_as_signature_only_when_enabled() {
         verify(&fx.pkg, &anchors).unwrap_err(),
         VerifyError::MissingSignature
     );
-    let on = VerifyPolicy {
-        accept_cognitum_release: true,
-    };
+    let on = record_only_policy();
     let v = verify_dir(&fx.pkg, &anchors, &on).unwrap();
     assert_eq!(v.signers[0].origin, KeyOrigin::CognitumRelease);
 }
@@ -418,9 +425,7 @@ fn cognitum_record_counts_as_signature_only_when_enabled() {
 #[test]
 fn cognitum_record_rejected_when_unbound_forged_or_unpinned() {
     let ck = key(42);
-    let on = VerifyPolicy {
-        accept_cognitum_release: true,
-    };
+    let on = record_only_policy();
 
     // Record binds aarch64 only; the unbound armv7 binary must not ride along.
     let partial = fixture(Some(&cognitum_record(
@@ -454,4 +459,173 @@ fn cognitum_record_rejected_when_unbound_forged_or_unpinned() {
             .code(),
         "cognitum-record-rejected"
     );
+}
+
+// ── package trust findings (card 78167c90) ───────────────────────────────
+
+#[test]
+fn weftos_signer_provisioning_flow_pins_a_generated_key() {
+    // Whatever is compiled into WEFTOS_PINNED_SIGNERS must parse as a valid,
+    // unique key set (vacuous while the set is empty).
+    let defaults = TrustAnchors::weftos_default().expect("compiled signer set parses");
+    assert_eq!(defaults.signers.len(), trust::WEFTOS_PINNED_SIGNERS.len());
+
+    // The documented flow: generate a seed (`weaver workload keygen` writes 64
+    // hex chars), derive the public key and key id, pin them, sign, verify.
+    let seed_hex = hex_encode(&[0x5au8; 32]);
+    let sk = signing_key_from_hex(&format!("{seed_hex}\n")).unwrap();
+    let pk = sk.verifying_key().to_bytes();
+    let (key_id, pk_hex) = (key_id_for(&pk), hex_encode(&pk));
+    let mut pinned = TrustAnchors::default();
+    pinned
+        .push_signer(&key_id, &pk_hex, KeyOrigin::Weftos)
+        .unwrap();
+    let fx = fixture(None);
+    sign_pkg(&fx.pkg, &sk);
+    let v = verify(&fx.pkg, &pinned).unwrap();
+    assert_eq!(v.signers[0].origin, KeyOrigin::Weftos);
+    assert_eq!(v.signers[0].key_id, key_id);
+    // A key pinned under another id is refused: the id is part of the pin.
+    let mut wrong = TrustAnchors::default();
+    wrong.push_signer("weftos-release-1", &pk_hex, KeyOrigin::Weftos).unwrap();
+    assert!(matches!(
+        verify(&fx.pkg, &wrong),
+        Err(VerifyError::BadSignature { .. })
+    ));
+}
+
+#[test]
+fn record_only_trust_needs_cog_toml_pin_and_matching_source_commit() {
+    let ck = key(42);
+    let bin = b"\x7fELF aarch64 anomaly-detect";
+    let anchors = cognitum_anchors(&ck);
+
+    // No cog.toml pin: a record cannot vouch for cog.toml.
+    let fx = fixture_arches(Some(&cognitum_record(&ck, bin)), &["aarch64"]);
+    let no_pin = VerifyPolicy {
+        accept_cognitum_release: true,
+        ..Default::default()
+    };
+    let err = verify_dir(&fx.pkg, &anchors, &no_pin).unwrap_err();
+    assert_eq!(err.code(), "cognitum-record-rejected");
+    assert!(err.to_string().contains("cog.toml"), "{err}");
+
+    // A pin for a different cog.toml does not help.
+    let other_pin = VerifyPolicy {
+        accept_cognitum_release: true,
+        record_cog_toml_pins: vec!["0".repeat(64)],
+    };
+    let err = verify_dir(&fx.pkg, &anchors, &other_pin).unwrap_err();
+    assert!(err.to_string().contains("cog.toml"), "{err}");
+
+    // Pinned, source commit matches: accepted.
+    assert!(verify_dir(&fx.pkg, &anchors, &record_only_policy()).is_ok());
+
+    // Record built from a different source commit than the package claims.
+    let mut other_src = cognitum_record(&ck, bin);
+    other_src["sourceCommit"] = json!("1234567bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    // re-sign the edited record
+    let st = canonical_statement(&other_src).unwrap();
+    other_src["provenance"]["detachedSignature"]["payloadDigest"] =
+        json!(format!("sha256:{}", hex_encode(&Sha256::digest(&st))));
+    other_src["provenance"]["detachedSignature"]["signature"] =
+        json!(b64url(&ck.sign(&st).to_bytes()));
+    let fx2 = fixture_arches(Some(&other_src), &["aarch64"]);
+    let err = verify_dir(&fx2.pkg, &anchors, &record_only_policy()).unwrap_err();
+    assert!(err.to_string().contains("sourceCommit"), "{err}");
+
+    // A record commit shorter than 7 hex chars is a prefix of anything: refused.
+    let resign = |mut rec: Value| {
+        let st = canonical_statement(&rec).unwrap();
+        rec["provenance"]["detachedSignature"]["payloadDigest"] = json!(format!("sha256:{}", hex_encode(&Sha256::digest(&st))));
+        rec["provenance"]["detachedSignature"]["signature"] = json!(b64url(&ck.sign(&st).to_bytes()));
+        rec
+    };
+    let mut short = cognitum_record(&ck, bin);
+    short["sourceCommit"] = json!("8970f9");
+    let fx3 = fixture_arches(Some(&resign(short)), &["aarch64"]);
+    assert!(verify_dir(&fx3.pkg, &anchors, &record_only_policy()).is_err());
+    // Case does not matter for commits or for the cog.toml pin.
+    let mut upper = cognitum_record(&ck, bin);
+    upper["sourceCommit"] = json!("8970F99AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let fx4 = fixture_arches(Some(&resign(upper)), &["aarch64"]);
+    let mut pol = record_only_policy();
+    pol.record_cog_toml_pins = pol.record_cog_toml_pins.iter().map(|p| p.to_ascii_uppercase()).collect();
+    assert!(verify_dir(&fx4.pkg, &anchors, &pol).is_ok());
+}
+
+#[test]
+fn attached_record_is_checked_even_on_an_operator_signed_package() {
+    let ck = key(42);
+    let op = key(1);
+    let on = VerifyPolicy {
+        accept_cognitum_release: true,
+        ..Default::default()
+    };
+    let mut anchors = cognitum_anchors(&ck);
+    let pk = op.verifying_key().to_bytes();
+    anchors
+        .push_signer(&key_id_for(&pk), &hex_encode(&pk), KeyOrigin::Operator)
+        .unwrap();
+
+    // A record for some other binary is attached next to a valid operator
+    // signature: the verifier is on, so the mismatch must be rejected.
+    let fx = fixture_arches(Some(&cognitum_record(&ck, b"some other binary")), &["aarch64"]);
+    sign_pkg(&fx.pkg, &op);
+    let err = verify_dir(&fx.pkg, &anchors, &on).unwrap_err();
+    assert_eq!(err.code(), "cognitum-record-rejected", "{err}");
+    // With the verifier off the attachment is inert, as documented.
+    assert!(verify_dir(&fx.pkg, &anchors, &VerifyPolicy::default()).is_ok());
+
+    // A good record on an operator-signed package passes without a cog.toml
+    // pin: the operator signature already covers cog.toml.
+    let good = fixture_arches(
+        Some(&cognitum_record(&ck, b"\x7fELF aarch64 anomaly-detect")),
+        &["aarch64"],
+    );
+    sign_pkg(&good.pkg, &op);
+    let v = verify_dir(&good.pkg, &anchors, &on).unwrap();
+    assert_eq!(v.signers[0].origin, KeyOrigin::Operator);
+}
+
+#[test]
+fn one_bad_hex_signature_entry_does_not_fail_the_whole_verify() {
+    let k = key(1);
+    let fx = fixture(None);
+    sign_pkg(&fx.pkg, &k);
+    // Add three malformed entries around the good one: a bad public key, a bad
+    // signature on an unpinned key, and a bad signature hex under the pinned key.
+    let pk_hex = hex_encode(&k.verifying_key().to_bytes());
+    edit_manifest(&fx.pkg, |v| {
+        let sigs = v["signatures"].as_array_mut().unwrap();
+        sigs.insert(
+            0,
+            json!({"algorithm":"ed25519","key_id":"junk-pk","public_key":"zz-not-hex","signature":"00"}),
+        );
+        sigs.push(json!({"algorithm":"ed25519","key_id":"junk-sig","public_key":hex_encode(&key(9).verifying_key().to_bytes()),"signature":"nothex"}));
+        sigs.push(json!({"algorithm":"ed25519","key_id":key_id_for(&k.verifying_key().to_bytes()),"public_key":pk_hex,"signature":"short"}));
+    });
+    let v = verify(&fx.pkg, &anchors_for(&[&k])).expect("good signature still counts");
+    assert_eq!(v.signers.len(), 1);
+
+    // Garbage alone authenticates nothing.
+    let bare = fixture(None);
+    edit_manifest(&bare.pkg, |v| {
+        v["signatures"] = json!([{"algorithm":"ed25519","key_id":"junk","public_key":"zz","signature":"zz"}]);
+    });
+    assert!(matches!(
+        verify(&bare.pkg, &anchors_for(&[&k])),
+        Err(VerifyError::UntrustedSigner { .. })
+    ));
+
+    // A well-formed signature from a pinned key that does not verify is still fatal.
+    let forged = fixture(None);
+    sign_pkg(&forged.pkg, &k);
+    edit_manifest(&forged.pkg, |v| {
+        v["signatures"][0]["signature"] = json!("ab".repeat(64));
+    });
+    assert!(matches!(
+        verify(&forged.pkg, &anchors_for(&[&k])),
+        Err(VerifyError::BadSignature { .. })
+    ));
 }

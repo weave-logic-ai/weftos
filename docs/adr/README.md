@@ -94,6 +94,7 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-099](adr-099-governed-workload-placement.md) | Governed workload placement across the mesh (open capability vocabulary, accelerators, runtime adapters) | Accepted | Architecture / Mesh | Cogs + local inference; docs/research/mesh-placement |
 | [ADR-100](adr-100-cog-workload-kind.md) | The cog workload kind (package, host contract, ingest bridge, Seed strategy) | Accepted | Architecture / Integration | Cognitum cogs; ADR-099. Cog-project decisions (COG-NNN) live in the private cogs repo |
 | [ADR-101](adr-101-inference-workload-kind.md) | Inference workload kind; migrate local model hosting onto placement | Accepted | Architecture / Integration | ~/llm serving; ADR-060 / ADR-099 |
+| [ADR-105](adr-105-cog-sources.md) | Cog sources: per-project multi-repo cog catalog (WeftOS, Cognitum with licence, private signed repo), namespaced resolution, package trust fixes | Accepted | Architecture / Integration | `docs/cogs/cog-sources.md`; ADR-099 / ADR-100 / COG-008 |
 
 
 ## Categories

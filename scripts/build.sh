@@ -32,6 +32,7 @@ BENCH_CRATE=""
 BENCH_NAME=""
 CLEAN_STALE_DAYS=""
 TEST_PACKAGES=()
+TEST_FILTER=""
 # WEFT-460: optional gate step — cargo-dist host-triple rehearsal
 WITH_RELEASE_DRY_RUN=false
 # agents-catalog: verify agents/catalog.json is up to date instead of writing it
@@ -644,6 +645,12 @@ isolate_test_runtime() {
 workspace_test() {
     isolate_test_runtime
     local extra=()
+    local filter=() cfilter=()
+    # `--filter <substr>` narrows to tests whose name contains <substr>.
+    if [ -n "${TEST_FILTER:-}" ]; then
+        filter=("$TEST_FILTER")
+        cfilter=(-- "$TEST_FILTER")
+    fi
     [ "$NO_FAIL_FAST" = true ] && extra+=(--no-fail-fast)
     # Honor `--features <f>` so feature-gated adapters (matrix, email, …)
     # are compiled and tested (WEFT-159).
@@ -661,10 +668,10 @@ workspace_test() {
     # ${arr[@]+…} guard: macOS bash 3.2 + `set -u` errors on expanding an
     # empty array without it.
     if command -v cargo-nextest >/dev/null 2>&1; then
-        cargo nextest run "${scope[@]}" ${extra[@]+"${extra[@]}"} \
-            && cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}
+        cargo nextest run "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
+            && { [ ${#filter[@]} -gt 0 ] || cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}; }
     else
-        cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"}
+        cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
     fi
 }
 
@@ -2069,7 +2076,9 @@ ${BOLD}Commands:${NC}
   releases-mdx    Regenerate docs/src/content/docs/weftos/vision/releases.mdx
                   from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
-  test [pkg…]     Run cargo test --workspace (or scoped: test clawft-channels …)
+  test [pkg…] [--filter <substr>]
+                  Run cargo test --workspace (or scoped: test clawft-channels …);
+                  --filter keeps only tests whose name contains <substr>
   test-pi [crate…] [--filter <test>] [--live-native] [--cogs] [--full]
                   Run ARM tests on the real Raspberry Pi 5: cross-build aarch64
                   test binaries in an arm64 Debian container (image
@@ -2312,6 +2321,10 @@ parse_args() {
         case "$1" in
             --features)
                 FEATURES="${2:?'--features requires a value'}"
+                shift 2
+                ;;
+            --filter)
+                TEST_FILTER="${2:?'--filter requires a value'}"
                 shift 2
                 ;;
             --profile)

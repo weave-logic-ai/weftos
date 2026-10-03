@@ -6,7 +6,7 @@
 - **Date**: 2026-09-28
 - **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
 - **Depends-On**: ADR-099 (governed workload placement)
-- **Relates-To**: ADR-025, ADR-092, ADR-101, `docs/research/mesh-placement/README.md`
+- **Relates-To**: ADR-025, ADR-092, ADR-101, ADR-105 (cog sources, per-project catalog and licences), `docs/research/mesh-placement/README.md`
 
 ## Context
 
