@@ -45,6 +45,30 @@ async fn pass(r: &Rig, k: u64) -> Vec<super::host_supervise::Supervised> {
     r.node.svc.supervise(T0 + k * STEP).await
 }
 
+/// Wait (bounded) until the instance's process is no longer running, so a
+/// poll of a payload that exits at once samples the exit, however slowly the
+/// process was spawned.
+async fn wait_exited(r: &Rig) {
+    let (host, handle) = {
+        let map = r.node.svc.instances.lock().await;
+        let p = map.get(&r.iid).expect("instance is held");
+        (r.node.svc.routes[&p.route].clone(), p.handle.clone())
+    };
+    for _ in 0..1_000 {
+        if host.status(&handle).await.state != crate::workload_runtime::InstanceState::Running {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the payload did not exit within 10 s");
+}
+
+/// [`pass`] for a payload that exits by itself: waits for the exit first.
+async fn pass_exited(r: &Rig, k: u64) -> Vec<super::host_supervise::Supervised> {
+    wait_exited(r).await;
+    r.node.svc.supervise(T0 + k * STEP).await
+}
+
 fn life_events(r: &Rig) -> Vec<serde_json::Value> {
     events(&r.node.chain, EVENT_KIND_WORKLOAD_LIFECYCLE)
         .into_iter()
@@ -68,7 +92,7 @@ async fn a_crashing_instance_is_restarted_a_bounded_number_of_times_then_fails()
     let r = rig("#!/bin/sh\nexit 3\n", RunMode::Listener).await;
     let mut seen = Vec::new();
     for k in 0..30 {
-        seen.extend(pass(&r, k).await);
+        seen.extend(pass_exited(&r, k).await);
         if r.node.svc.lifecycle_of(&r.iid).await == Some(LifecycleState::Failed) {
             break;
         }
@@ -98,7 +122,7 @@ async fn a_crashing_instance_is_restarted_a_bounded_number_of_times_then_fails()
     );
 
     // Held for the operator: no further restarts, and the controller sees why.
-    assert!(pass(&r, 99).await.is_empty());
+    assert!(pass_exited(&r, 99).await.is_empty());
     let rows = r.plane.call(&r.node.id, method::STATUS, None, serde_json::json!({})).await.unwrap();
     assert_eq!(rows[0]["lifecycle"], "failed");
     assert_eq!(rows[0]["restarts"], 3);
@@ -124,11 +148,11 @@ async fn an_instance_the_operator_stopped_is_never_restarted() {
 async fn a_one_shot_run_that_ends_cleanly_is_finished_not_restarted() {
     let r = rig("#!/bin/sh\nexit 0\n", RunMode::Once).await;
     let starts = events(&r.node.chain, EVENT_KIND_WORKLOAD_START).len();
-    let seen = pass(&r, 0).await;
+    let seen = pass_exited(&r, 0).await;
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert_eq!(seen[0].to, LifecycleState::Finished);
     for k in 1..6 {
-        assert!(pass(&r, k).await.is_empty());
+        assert!(pass_exited(&r, k).await.is_empty());
     }
     assert_eq!(r.node.svc.lifecycle_of(&r.iid).await, Some(LifecycleState::Finished));
     assert_eq!(
@@ -240,7 +264,7 @@ async fn without_a_lease_a_silent_controller_changes_nothing() {
 async fn an_operator_start_gives_a_failed_instance_a_fresh_restart_budget() {
     let r = rig("#!/bin/sh\nexit 3\n", RunMode::Listener).await;
     for k in 0..30 {
-        pass(&r, k).await;
+        pass_exited(&r, k).await;
         if r.node.svc.lifecycle_of(&r.iid).await == Some(LifecycleState::Failed) {
             break;
         }
