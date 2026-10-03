@@ -56,6 +56,7 @@ use clawft_kernel::workload_ctl::listen_tcp;
 use clawft_kernel::workload_pkg::codec::hex_decode_exact;
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
+use crate::scope_gate::ProjectBasis;
 
 /// Config file under the runtime dir.
 pub const INGEST_FILE: &str = "cog-ingest.json";
@@ -335,21 +336,27 @@ impl ProjectDirectory for IdentityDirectory {
 
 /// Refuse a project the identity records do not know or have revoked.
 /// `dir` is `None` where there are no records (a project daemon): the
-/// host's own policy decides there.
-pub fn check_project_registered(dir: Option<&dyn ProjectDirectory>, project_id: &str) -> Result<(), String> {
+/// host's own policy decides there, and the project is only
+/// [`ProjectBasis::Claimed`] (logged as `claimed`, the way the scope gate
+/// labels a claim it could not verify). A project the records vouch for is
+/// [`ProjectBasis::Verified`].
+pub fn check_project_registered(dir: Option<&dyn ProjectDirectory>, project_id: &str) -> Result<ProjectBasis, String> {
     if !valid_project_id(project_id) {
         return Err(format!("project {project_id:?} is not a valid project id"));
     }
-    match dir {
-        Some(d) if d.bound_node(project_id).is_none() => Err(format!(
-            "project {project_id} is not registered, or its key is revoked"
-        )),
-        _ => Ok(()),
-    }
+    let basis = match dir {
+        Some(d) if d.bound_node(project_id).is_none() => {
+            return Err(format!("project {project_id} is not registered, or its key is revoked"));
+        }
+        Some(_) => ProjectBasis::Verified,
+        None => ProjectBasis::Claimed,
+    };
+    tracing::debug!(project = project_id, project_basis = basis.label(), "cog ingest project check");
+    Ok(basis)
 }
 
 /// [`check_project_registered`] against this daemon's identity records.
-pub fn check_project(project_id: &str) -> Result<(), String> {
+pub fn check_project(project_id: &str) -> Result<ProjectBasis, String> {
     let dir = IdentityDirectory;
     check_project_registered(
         IdentityDirectory::available().then_some(&dir as &dyn ProjectDirectory),

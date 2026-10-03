@@ -151,8 +151,10 @@ fn the_place_rpc_refuses_an_unregistered_revoked_or_malformed_project() {
     let e = check_project_registered(Some(&Fake(None)), PROJECT).unwrap_err();
     assert!(e.contains("not registered, or its key is revoked"), "{e}");
     assert!(check_project_registered(Some(&Fake(Some("node"))), "nope").is_err());
-    // No identity records here (a project daemon): the host's policy decides.
-    assert!(check_project_registered(None, PROJECT).is_ok());
+    // No identity records here (a project daemon): the host's policy decides,
+    // and the project is only claimed, never verified.
+    assert_eq!(check_project_registered(None, PROJECT), Ok(ProjectBasis::Claimed));
+    assert_eq!(check_project_registered(Some(&Fake(Some("node"))), PROJECT), Ok(ProjectBasis::Verified));
 }
 
 /// B owns only what `store_owner` lists, whatever B's own local routes say.
