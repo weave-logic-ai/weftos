@@ -289,9 +289,7 @@ impl MeshDialer for FakeMesh {
         let gate = self.gate.clone();
         tokio::spawn(async move {
             let up = Upstream::new(small_limits()).unwrap();
-            let t = table.clone();
-            let f = move |role: &str, peer: &str| t.local_for_peer(role, peer);
-            let _ = serve_infer(&mut server, &peer, &f, &up, &gate, audit.as_deref()).await;
+            let _ = serve_infer(&mut server, &peer, table.as_ref(), &up, &gate, audit.as_deref()).await;
         });
         Ok(Box::new(client))
     }

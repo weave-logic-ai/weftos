@@ -401,6 +401,16 @@ impl PlacementTable {
             .flatten()
     }
 
+    /// Whether `peer` is on any role's serve allowlist.
+    pub fn peer_listed_any(&self, peer: &str) -> bool {
+        self.inner
+            .read()
+            .unwrap()
+            .serve_allow
+            .values()
+            .any(|s| s.contains(peer))
+    }
+
     /// Base URL for in-process consumers (`PlacementResolver`): the
     /// instance itself when it is local, this node's loopback proxy when it
     /// is remote (the proxy speaks the mesh). `None` falls back.

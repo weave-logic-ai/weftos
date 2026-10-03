@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::mesh_policy::{mesh_path_allowed, pin_body};
-use super::table::MeshLocal;
+use super::table::{MeshLocal, PlacementTable};
 use super::types::qualifies;
 use super::types::{MeshDialer, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink};
 use super::upstream::Upstream;
@@ -215,6 +215,14 @@ impl ServeGate {
     }
 }
 
+#[cfg(test)]
+impl ServeGate {
+    /// Take and immediately release a slot: whether one was free.
+    pub(super) fn acquire_for_test_and_release(&self, peer: &str) -> bool {
+        self.acquire(peer).is_some()
+    }
+}
+
 impl Default for ServeGate {
     fn default() -> Self {
         Self::new(2, 8)
@@ -236,15 +244,45 @@ fn peer_reason(e: &ProxyError) -> &'static str {
     }
 }
 
-/// Serve one forwarded request from `peer` on `stream`. `local_for_mesh`
-/// maps `(role, peer node id)` to the loopback instance this node exposes
-/// to that peer for the role (or `None`: not exposed, or the peer is not on
-/// the role's serve allowlist). The request is held to the mesh path allowlist and its
-/// body is pinned to that instance's model.
+/// What the serving side consults about a peer. The standing checks that
+/// need no frame (`peer_listed`) run before a slot is taken or a byte is read.
+pub trait ServePolicy: Send + Sync {
+    /// The loopback instance this node exposes to `peer` for `role`, or
+    /// `None` (not exposed, or `peer` is not on the role's serve allowlist).
+    fn instance_for(&self, role: &str, peer: &str) -> Option<MeshLocal>;
+    /// Whether `peer` is on any role's serve allowlist.
+    fn peer_listed(&self, peer: &str) -> bool;
+}
+
+impl ServePolicy for PlacementTable {
+    fn instance_for(&self, role: &str, peer: &str) -> Option<MeshLocal> {
+        self.local_for_peer(role, peer)
+    }
+    fn peer_listed(&self, peer: &str) -> bool {
+        self.peer_listed_any(peer)
+    }
+}
+
+/// A bare closure is a policy that lists every peer (unit tests).
+impl<F: Fn(&str, &str) -> Option<MeshLocal> + Send + Sync> ServePolicy for F {
+    fn instance_for(&self, role: &str, peer: &str) -> Option<MeshLocal> {
+        self(role, peer)
+    }
+    fn peer_listed(&self, _: &str) -> bool {
+        true
+    }
+}
+
+/// Serve one forwarded request from `peer` on `stream`. The peer's grant
+/// must qualify and the peer must be on a serve allowlist before a slot is
+/// taken or a frame read; then the first frame must arrive within the head
+/// timeout. The request is held to the mesh path allowlist, resolved to the
+/// instance the policy exposes to this peer for the role, and its body is
+/// pinned to that instance's model.
 pub async fn serve_infer(
     stream: &mut dyn MeshStream,
     peer: &InferPeer,
-    local_for_peer: &(dyn Fn(&str, &str) -> Option<MeshLocal> + Sync),
+    policy: &dyn ServePolicy,
     upstream: &Upstream,
     gate: &ServeGate,
     audit: Option<&dyn ProxyAudit>,
@@ -261,24 +299,38 @@ pub async fn serve_infer(
     };
     let mut sink = FrameSink { stream };
 
-    // Take the slots before reading anything: a peer that is over its
-    // limit must not be able to make this node buffer a frame per stream.
+    // Standing first: a peer that does not qualify holds no slot and costs
+    // no read.
+    let standing = if !peer.grant.as_ref().is_some_and(qualifies) {
+        Some(ProxyError::Refused("peer is not an enforced-admission full node".into()))
+    } else if !policy.peer_listed(&peer.node_id) {
+        Some(ProxyError::Refused("peer is on no serve allowlist".into()))
+    } else {
+        None
+    };
+    if let Some(e) = standing {
+        let why = refuse(&e);
+        let _ = sink.send(Resp::Error(why.clone())).await;
+        return Ok(Served::Failed(why));
+    }
+    // Then the slots, before reading anything: a peer over its limit must
+    // not make this node buffer a frame per stream.
     let Some(_permits) = gate.acquire(&peer.node_id) else {
         let e = ProxyError::Refused("too many concurrent requests".into());
         let why = refuse(&e);
         let _ = sink.send(Resp::Error(why.clone())).await;
         return Ok(Served::Failed(why));
     };
-    let frame = match recv_timeout(sink.stream, &limits).await {
-        Ok(f) => f,
-        Err(e) => return Ok(Served::Failed(refuse(&e))),
+    // The first frame gets the short head timeout, not the stall timeout.
+    let first = tokio::time::timeout(limits.head_timeout, read_frame(sink.stream)).await;
+    let frame = match first {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => return Ok(Served::Failed(refuse(&e))),
+        Err(_) => {
+            return Ok(Served::Failed(refuse(&ProxyError::Timeout("first frame".into()))));
+        }
     };
     let outcome: Result<(), ProxyError> = async {
-        if !peer.grant.as_ref().is_some_and(qualifies) {
-            return Err(ProxyError::Refused(
-                "peer is not an enforced-admission full node".into(),
-            ));
-        }
         if frame.frame_type != FrameType::InferRequest {
             return Err(ProxyError::BadRequest("expected an infer request".into()));
         }
@@ -286,7 +338,7 @@ pub async fn serve_infer(
         if !mesh_path_allowed(&req.path) {
             return Err(ProxyError::Forbidden("path is not served to peers".into()));
         }
-        let local = local_for_peer(&req.role, &peer.node_id).ok_or_else(|| {
+        let local = policy.instance_for(&req.role, &peer.node_id).ok_or_else(|| {
             ProxyError::NoInstance(format!("{} (not served to this peer here)", req.role))
         })?;
         req.body = pin_body(&req.path, &req.body, &local)?;

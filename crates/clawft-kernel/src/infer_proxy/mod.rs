@@ -43,7 +43,7 @@ mod tests_proxy;
 #[cfg(feature = "exochain")]
 pub use types::ChainAudit;
 pub use listener::{InferProxy, OccupiedPolicy, ProxyStats, Started};
-pub use mesh_forward::{InferPeer, ServeGate, Served, forward_remote, serve_infer};
+pub use mesh_forward::{InferPeer, ServeGate, ServePolicy, Served, forward_remote, serve_infer};
 pub use table::{MeshLocal, PlacementTable, SERVICE_PREFIX, SyncOutcome};
 pub use types::{
     MeshDialer, Method, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink, Target,

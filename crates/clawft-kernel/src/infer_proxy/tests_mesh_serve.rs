@@ -150,9 +150,8 @@ async fn the_serving_side_requires_an_enforced_node_grant_and_an_allowlist() {
         let (mut client, mut server) = connected_pair().await.unwrap();
         let u = Upstream::new(small_limits()).unwrap();
         let tt = t.clone();
-        let f = move |r: &str, p: &str| tt.local_for_peer(r, p);
         let peer = InferPeer { node_id: id.into(), grant };
-        let h = tokio::spawn(async move { serve_infer(&mut server, &peer, &f, &u, &ServeGate::default(), None).await.unwrap() });
+        let h = tokio::spawn(async move { serve_infer(&mut server, &peer, tt.as_ref(), &u, &ServeGate::default(), None).await.unwrap() });
         let req = ProxyRequest {
             role: "hermes".into(), method: Method::Get, path: "/v1/models".into(),
             content_type: None, accept: None, authorization: None, body: vec![],
@@ -331,4 +330,47 @@ async fn a_local_server_answering_1xx_is_a_502() {
     let r = raw(p.addr(), &get(p.addr(), "/v1/models")).await;
     assert_eq!(status(&r), 502, "{r}");
     assert!(!r.contains("forged"));
+}
+
+#[tokio::test]
+async fn a_peer_that_does_not_qualify_holds_no_slot_and_costs_no_read() {
+    use crate::mesh_admit::{Grant, PeerClass};
+    let t = Arc::new(PlacementTable::new("node-b", None, None));
+    t.allow_mesh_peer("hermes", "listed", true);
+    let gate = ServeGate::new(1, 1);
+    let u = Upstream::new(small_limits()).unwrap();
+    let peers = [
+        InferPeer { node_id: "listed".into(), grant: Some(Grant { class: PeerClass::Leaf, ..enforced_node() }) },
+        InferPeer { node_id: "listed".into(), grant: None },
+        InferPeer { node_id: "stranger".into(), grant: Some(enforced_node()) },
+    ];
+    for peer in peers {
+        let (mut client, mut server) = connected_pair().await.unwrap();
+        // Nothing is sent: a qualifying peer would wait for a frame holding
+        // the only slot; a refused one must answer at once.
+        let r = tokio::time::timeout(
+            Duration::from_millis(300),
+            serve_infer(&mut server, &peer, t.as_ref(), &u, &gate, None),
+        )
+        .await
+        .expect("a non-qualifying peer must not be waited on")
+        .unwrap();
+        assert!(matches!(r, Served::Failed(ref m) if m == "refused"), "{r:?}");
+        let reply = read_frame(&mut client).await.unwrap();
+        assert!(matches!(wire::decode_resp(&reply.payload).unwrap(), Resp::Error(_)));
+        assert!(gate.acquire_for_test_and_release("listed"), "a slot was held");
+    }
+}
+
+#[tokio::test]
+async fn the_first_frame_has_the_short_head_timeout() {
+    let t = Arc::new(PlacementTable::new("node-b", None, None));
+    t.allow_mesh_peer("hermes", "p", true);
+    let limits = ProxyLimits { head_timeout: Duration::from_millis(150), stall_timeout: Duration::from_secs(30), ..small_limits() };
+    let u = Upstream::new(limits).unwrap();
+    let (_client, mut server) = connected_pair().await.unwrap();
+    let t0 = std::time::Instant::now();
+    let r = serve_infer(&mut server, &trusted_peer("p"), t.as_ref(), &u, &ServeGate::default(), None).await.unwrap();
+    assert!(matches!(r, Served::Failed(_)));
+    assert!(t0.elapsed() < Duration::from_secs(5), "waited {:?}", t0.elapsed());
 }
