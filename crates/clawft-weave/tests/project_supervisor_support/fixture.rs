@@ -19,9 +19,24 @@ use ed25519_dalek::SigningKey;
 
 /// Activity the test controls.
 #[derive(Default)]
-pub struct FakeActivity(pub Mutex<Option<Activity>>, pub std::sync::atomic::AtomicBool);
+pub struct FakeActivity(
+    pub Mutex<Option<Activity>>,
+    pub std::sync::atomic::AtomicBool,
+    pub std::sync::atomic::AtomicBool,
+    pub std::sync::atomic::AtomicBool,
+);
 
 impl FakeActivity {
+    /// Make every child look lost while its last beat said it was busy.
+    pub fn set_lost_busy(&self, lost: bool) {
+        self.2.store(lost, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make every child look adopted and never re-registered.
+    pub fn set_unregistered(&self, unregistered: bool) {
+        self.3.store(unregistered, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Make the registry "lose" (or find again) every child's heartbeat.
     pub fn set_lost(&self, lost: bool) {
         self.1.store(lost, std::sync::atomic::Ordering::SeqCst);
@@ -35,6 +50,14 @@ impl ActivitySource for FakeActivity {
 
     fn lost_heartbeat(&self, _project_id: &str) -> bool {
         self.1.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn lost_heartbeat_busy(&self, _project_id: &str) -> bool {
+        self.2.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn unregistered_adopted(&self, _project_id: &str) -> bool {
+        self.3.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

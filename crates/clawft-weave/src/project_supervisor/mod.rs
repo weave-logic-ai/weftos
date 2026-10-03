@@ -64,6 +64,9 @@ struct SlotState {
     /// When the liveness pass first saw this `running` child's session
     /// expired (and it has not registered again since).
     expired_since: Option<Instant>,
+    /// When the liveness pass first saw this `running` adopted child still
+    /// without a registered session (see `Status::unregistered_secs`).
+    unregistered_since: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -698,9 +701,15 @@ impl Supervisor {
     /// Status of one project.
     pub async fn status(&self, id: &str) -> Status {
         let slot = self.slot(id);
-        let (state_, restarts, exit, failed) = {
+        let (state_, restarts, exit, failed, unregistered_secs) = {
             let st = slot.st();
-            (st.state, st.restarts, st.last_exit, st.failed.clone())
+            (
+                st.state,
+                st.restarts,
+                st.last_exit,
+                st.failed.clone(),
+                st.unregistered_since.map(|t| Instant::now().saturating_duration_since(t).as_secs()),
+            )
         };
         let file = state::read(&self.run_dir(id)).unwrap_or_default();
         let pid = self.probe_running(id).await;
@@ -716,6 +725,7 @@ impl Supervisor {
             kernel_sha: file.kernel_sha,
             kernel_version: file.kernel_version,
             stale_build,
+            unregistered_secs,
         }
     }
 

@@ -73,6 +73,8 @@ fn tests() -> Vec<(&'static str, TestFn)> {
         ("ensure_running_during_an_automatic_restart_waits_for_the_socket", followup_tests::ensure_running_during_an_automatic_restart_waits_for_the_socket),
         ("a_child_still_booting_at_adoption_is_adopted_or_found_by_the_stop_cascade", followup_tests::a_child_still_booting_at_adoption_is_adopted_or_found_by_the_stop_cascade),
         ("a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_budget_is_spent", followup_tests::a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_budget_is_spent),
+        ("a_child_wedged_while_busy_is_restarted_after_the_ceiling", followup_tests::a_child_wedged_while_busy_is_restarted_after_the_ceiling),
+        ("an_adopted_child_that_never_registers_is_reported_in_status", followup_tests::an_adopted_child_that_never_registers_is_reported_in_status),
         ("a_revoked_project_without_a_marker_is_refused_before_spawning", followup_tests::a_revoked_project_without_a_marker_is_refused_before_spawning),
         ("an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed", followup_tests::an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed),
         ("an_adopted_but_refused_leftover_is_reported_as_unmanaged", followup_tests::an_adopted_but_refused_leftover_is_reported_as_unmanaged),

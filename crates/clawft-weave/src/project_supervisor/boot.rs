@@ -176,7 +176,10 @@ impl Supervisor {
     /// `lost_heartbeat_grace` is wedged or cut off. It is treated as a crash:
     /// stopped (pid re-verified before any signal) and restarted inside its
     /// restart budget, or marked `failed` when the budget is spent. Returns
-    /// the ids acted on.
+    /// the ids acted on. A child whose last beat said it was busy gets
+    /// `lost_heartbeat_busy_ceiling` instead of the grace, so a child wedged
+    /// while busy is still restarted. An adopted child that has not
+    /// registered is only reported (`Status::unregistered_secs`).
     pub async fn liveness_pass(self: &Arc<Self>, now: Instant) -> Vec<String> {
         let running: Vec<String> = self
             .status_all()
@@ -190,13 +193,24 @@ impl Supervisor {
             let slot = self.slot(&id);
             let due = {
                 let lost = self.deps.activity.lost_heartbeat(&id);
+                let lost_busy = !lost && self.deps.activity.lost_heartbeat_busy(&id);
+                let unregistered = self.deps.activity.unregistered_adopted(&id);
                 let mut st = slot.st();
-                if !lost {
+                // An adopted child that never re-registers is never restarted
+                // (its tombstone is not a lost heartbeat): surface it instead.
+                if unregistered {
+                    st.unregistered_since.get_or_insert(now);
+                } else {
+                    st.unregistered_since = None;
+                }
+                if !lost && !lost_busy {
                     st.expired_since = None;
                     false
                 } else {
+                    // A busy last beat earns the long ceiling, not immunity.
+                    let need = if lost { self.cfg.lost_heartbeat_grace } else { self.cfg.lost_heartbeat_busy_ceiling };
                     let since = *st.expired_since.get_or_insert(now);
-                    now.saturating_duration_since(since) >= self.cfg.lost_heartbeat_grace
+                    now.saturating_duration_since(since) >= need
                 }
             };
             // One restart per pass: if the registry itself stalled, every
@@ -213,7 +227,9 @@ impl Supervisor {
         let _g = slot.gate.lock().await;
         // Re-check under the gate: a stop, restart or re-registration may
         // have happened while this pass waited for it.
-        if slot.st().state != ChildState::Running || !self.deps.activity.lost_heartbeat(id) {
+        if slot.st().state != ChildState::Running
+            || !(self.deps.activity.lost_heartbeat(id) || self.deps.activity.lost_heartbeat_busy(id))
+        {
             return false;
         }
         let (decision, old_pid) = {

@@ -39,6 +39,23 @@ pub trait ActivitySource: Send + Sync {
     fn lost_heartbeat(&self, _project_id: &str) -> bool {
         false
     }
+
+    /// True when `project_id`'s session expired like [`lost_heartbeat`]
+    /// (Self::lost_heartbeat) but its last beat said the child was busy, so
+    /// it is spared until a much longer ceiling
+    /// (`lost_heartbeat_busy_ceiling`): a child wedged while busy must
+    /// not be kept for ever.
+    fn lost_heartbeat_busy(&self, _project_id: &str) -> bool {
+        false
+    }
+
+    /// True when `project_id` was adopted after a daemon restart and has not
+    /// registered since (only the expired tombstone adoption filed exists).
+    /// Such a child is never restarted for a lost heartbeat, so its silence
+    /// is reported through `status` instead.
+    fn unregistered_adopted(&self, _project_id: &str) -> bool {
+        false
+    }
 }
 
 /// Activity from the mesh-local registry: what each child last said in its
@@ -75,6 +92,23 @@ impl ActivitySource for RegistryActivity {
                 && s.activity.busy.agents == 0
                 && s.activity.busy.workloads == 0
                 && s.activity.busy.streams == 0
+        })
+    }
+
+    fn lost_heartbeat_busy(&self, project_id: &str) -> bool {
+        use crate::mesh_local_registry::{SessionState, registry};
+        registry().sessions().into_iter().any(|(s, state)| {
+            s.facts.project_id == project_id
+                && state == SessionState::Expired
+                && !s.adopted
+                && (s.activity.busy.agents > 0 || s.activity.busy.workloads > 0 || s.activity.busy.streams > 0)
+        })
+    }
+
+    fn unregistered_adopted(&self, project_id: &str) -> bool {
+        use crate::mesh_local_registry::{SessionState, registry};
+        registry().sessions().into_iter().any(|(s, state)| {
+            s.facts.project_id == project_id && state == SessionState::Expired && s.adopted
         })
     }
 }
@@ -165,7 +199,12 @@ mod tests {
         };
         reg.heartbeat_at(&s.session, act, long_ago + std::time::Duration::from_secs(1)).unwrap();
         assert!(!src.lost_heartbeat(busy));
+        assert!(src.lost_heartbeat_busy(busy), "the busy child is on the long ceiling instead");
+        assert!(!src.lost_heartbeat_busy(lost) && !src.lost_heartbeat_busy(adopted));
         assert!(!src.lost_heartbeat("01J00000000000000000000NON"));
+        // The adoption tombstone is the "never re-registered" signal.
+        assert!(src.unregistered_adopted(adopted));
+        assert!(!src.unregistered_adopted(lost) && !src.unregistered_adopted(busy));
         for id in [adopted, lost, busy] {
             reg.evict(id);
         }
