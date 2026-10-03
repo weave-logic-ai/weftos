@@ -66,6 +66,9 @@ pub mod mesh_local_sink;
 /// Boot glue: mesh mode and node identity before the kernel, the link after it.
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_boot;
+/// Cog mesh wiring: artifact tunnel and checkout handler over stamped deliveries (ADR-106 1c).
+#[cfg(all(unix, feature = "mesh", feature = "ecc", feature = "exochain"))]
+pub mod cog_swarm;
 /// `verdict.request` answered by the governance gate (P3-U).
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_local_verdict;

@@ -31,7 +31,7 @@ fn all_messages() -> Vec<Message> {
         Message::Unsubscribe { prefix: "p".into() },
         Message::Ack {},
         Message::Send { dest: "weft://local/_/_".into(), message: json!({"k": [1, 2]}), request_id: Some("r".into()) },
-        Message::Deliver(Deliver { source_node: "n".into(), source_cert: Some(cert()), scope: Scope { user_id: "u".into(), project_id: None }, envelope_id: "e".into(), message: json!(null) }),
+        Message::Deliver(Deliver { source_node: "n".into(), source_cert: Some(cert()), scope: Scope { user_id: "u".into(), project_id: None }, envelope_id: "e".into(), message: json!(null), origin: None }),
         Message::VerdictRequest(VerdictRequest { subject: VerdictSubject::PeerAdmit, peer: PeerInfo { node_id: "n".into(), pubkey: "k".into(), platform: "p".into(), capabilities: vec![], genesis_hash: "g".into(), chain_seq: 3 }, topic: None }),
         Message::VerdictReply { allow: true, ttl_s: 300, reason: "r".into(), rule_hash: "h".into() },
         Message::JournalHead {},
@@ -275,4 +275,59 @@ fn reply_class_and_service_id_namespace() {
 fn node_id_golden_vector() {
     let pk: [u8; 32] = std::array::from_fn(|i| i as u8);
     assert_eq!(clawft_mesh_local::node_id_from_pubkey(&pk), "630dcd2966c4336691125448bbb25b4f");
+}
+
+#[test]
+fn the_origin_versions_are_pinned() {
+    // Bumping either is a wire change that needs an ADR-103 amendment.
+    assert_eq!(PROTO_MIN, 1);
+    assert_eq!(PROTO_ORIGIN, 2);
+    assert_eq!(PROTO_MAX, 2);
+}
+
+#[test]
+fn deliver_origin_wire_forms_round_trip_and_unknowns_fail_closed() {
+    let admitted = DeliverOrigin::AdmittedPeer { node_id: "n".into(), class: OriginClass::Node };
+    assert_eq!(
+        serde_json::to_value(&admitted).unwrap(),
+        json!({"kind": "admitted_peer", "node_id": "n", "class": "node"})
+    );
+    for o in [
+        admitted,
+        DeliverOrigin::AdmittedPeer { node_id: "n".into(), class: OriginClass::Leaf },
+        DeliverOrigin::LocalTenant,
+        DeliverOrigin::Unadmitted,
+    ] {
+        let back: DeliverOrigin = serde_json::from_value(serde_json::to_value(&o).unwrap()).unwrap();
+        assert_eq!(back, o);
+    }
+    // A kind this build does not know is unadmitted; a class it does not know is `other`.
+    let k: DeliverOrigin = serde_json::from_value(json!({"kind": "from_the_future", "x": 1})).unwrap();
+    assert_eq!(k, DeliverOrigin::Unadmitted);
+    let c: DeliverOrigin =
+        serde_json::from_value(json!({"kind": "admitted_peer", "node_id": "n", "class": "gateway"})).unwrap();
+    assert_eq!(c, DeliverOrigin::AdmittedPeer { node_id: "n".into(), class: OriginClass::Other });
+    // And inside a deliver frame: absent means no stamp.
+    let d: Deliver = serde_json::from_value(json!({
+        "source_node": "s", "scope": {"user_id": "u"}, "envelope_id": "e", "message": null
+    }))
+    .unwrap();
+    assert_eq!(d.origin, None);
+    assert_eq!(d.effective_origin(2), DeliverOrigin::Unadmitted);
+    let mut stamped = d.clone();
+    stamped.origin = Some(DeliverOrigin::LocalTenant);
+    assert_eq!(stamped.effective_origin(2), DeliverOrigin::LocalTenant);
+    assert_eq!(stamped.effective_origin(1), DeliverOrigin::Unadmitted, "ignored below the version");
+}
+
+#[test]
+fn reserved_topics_overlap_checks() {
+    for t in ["mesh.cog.checkout", "mesh.artifact.tunnel", "mesh.licence.x"] {
+        assert!(is_reserved_topic(t), "{t}");
+    }
+    assert!(!is_reserved_topic("mesh.other") && !is_reserved_topic("chat"));
+    for p in ["mesh.", "mesh", "m", "mesh.cog.", "mesh.artifact.x"] {
+        assert!(overlaps_reserved(p), "{p}");
+    }
+    assert!(!overlaps_reserved("user/abc/") && !overlaps_reserved("mesh.other."));
 }

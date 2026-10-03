@@ -14,7 +14,30 @@ use crate::peer::Principal;
 /// Oldest protocol version this build speaks.
 pub const PROTO_MIN: u32 = 1;
 /// Newest protocol version this build speaks.
-pub const PROTO_MAX: u32 = 1;
+pub const PROTO_MAX: u32 = 2;
+
+/// First protocol version whose `deliver` carries the service-stamped
+/// [`DeliverOrigin`] (ADR-103 amendment, ADR-106 section 5.3). On a lower
+/// negotiated version the field does not exist and every delivery is
+/// [`DeliverOrigin::Unadmitted`].
+pub const PROTO_ORIGIN: u32 = 2;
+
+/// Topic prefixes reserved for the cluster-owner (steward) daemon. The service
+/// lets only that registration send them and routes them only to it; no other
+/// tenant may send them or claim a prefix that overlaps them. `AdmittedPeer`
+/// vouches for a machine, so without this any tenant on a member could speak
+/// for it (ADR-106 5.3).
+pub const RESERVED_TOPIC_PREFIXES: [&str; 3] = ["mesh.cog.", "mesh.artifact.", "mesh.licence."];
+
+/// True when `topic` is under a reserved prefix.
+pub fn is_reserved_topic(topic: &str) -> bool {
+    RESERVED_TOPIC_PREFIXES.iter().any(|p| topic.starts_with(p))
+}
+
+/// True when claiming `prefix` could capture (or be captured by) a reserved topic.
+pub fn overlaps_reserved(prefix: &str) -> bool {
+    RESERVED_TOPIC_PREFIXES.iter().any(|r| prefix.starts_with(r) || r.starts_with(prefix))
+}
 
 /// Domain separator of the service's hello proof.
 pub const HELLO_DOMAIN: &[u8] = b"weftos/mesh-local/hello/v1\0";
@@ -218,6 +241,35 @@ pub struct Scope {
     pub project_id: Option<String>,
 }
 
+/// Class the mesh admitted a peer as (mirrors the kernel's `PeerClass`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OriginClass {
+    /// Verified full node.
+    Node,
+    /// Verified leaf device.
+    Leaf,
+    /// Anything else, including a class this build does not know.
+    #[serde(other)]
+    Other,
+}
+
+/// Where a delivery came from, stamped by the machine mesh service and by no
+/// one else. A tenant can never supply it: the service writes it on every
+/// `deliver` it sends and ignores any such field on what tenants send.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeliverOrigin {
+    /// A remote peer whose id admission verified, with the class it got.
+    AdmittedPeer { node_id: String, class: OriginClass },
+    /// Another tenant on this machine, through the service.
+    LocalTenant,
+    /// A peer admission did not verify (legacy, leaf-claimed, `observe`), a
+    /// kind this build does not know, or no stamp at all.
+    #[serde(other)]
+    Unadmitted,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Deliver {
     pub source_node: String,
@@ -226,6 +278,24 @@ pub struct Deliver {
     pub scope: Scope,
     pub envelope_id: String,
     pub message: Value,
+    /// Service-stamped origin; absent on protocol versions below
+    /// [`PROTO_ORIGIN`] and from an older service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<DeliverOrigin>,
+}
+
+impl Deliver {
+    /// The origin to act on, given the negotiated protocol version. The stamp
+    /// is honoured only from [`PROTO_ORIGIN`] up; below it, or when absent,
+    /// the delivery is [`DeliverOrigin::Unadmitted`]. The caller must also
+    /// have passed the client's service peer check (a connected
+    /// `MeshLocalClient` has); a field arriving any other way is not a stamp.
+    pub fn effective_origin(&self, negotiated: u32) -> DeliverOrigin {
+        if negotiated < PROTO_ORIGIN {
+            return DeliverOrigin::Unadmitted;
+        }
+        self.origin.clone().unwrap_or(DeliverOrigin::Unadmitted)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

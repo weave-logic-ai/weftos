@@ -238,19 +238,23 @@ async fn build(
     // The policy is installed unconditionally and reads the binding live, so
     // a binding that arrives later needs no restart; with none (or no mesh id
     // yet) it is exactly `ManifestPolicy`.
+    let policy = clawft_kernel::licence::MeshCheckoutPolicy::open(
+        dir,
+        anchors.clone(),
+        revocations.clone(),
+        clawft_kernel::licence::LocalMeshId::unset(),
+    );
     let cfg = ExchangeConfig {
-        redistribution: clawft_kernel::licence::MeshCheckoutPolicy::open(
-            dir,
-            anchors.clone(),
-            revocations.clone(),
-            clawft_kernel::licence::LocalMeshId::unset(),
-        ),
+        redistribution: policy.clone(),
         ..ExchangeConfig::default()
     };
     let mut ex = ArtifactExchange::new(&id, Arc::new(store), cfg)
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
+    // The swarm transport: artifact sessions and checkout over the machine
+    // mesh's stamped deliveries (ADR-106 5.4). Late-bound behind the link.
+    crate::cog_swarm::install(&ex, policy.store());
     // The revoker exists before the first notice can arrive: a notice that
     // beats the rest of this build is enforced by the sweep at its end.
     let revoker = revoker_for(revocations.clone());

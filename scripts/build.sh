@@ -44,6 +44,8 @@ COGS_ARGS=()
 LAUNCHER_LINUX=false
 # test-pi: everything after the subcommand is passed through to scripts/pi/pi_lane.py
 PI_ARGS=()
+# licence-cross: which targets to build (default: armv7 and aarch64)
+LICENCE_TARGETS=()
 
 # ── Reporting helpers ────────────────────────────────────────────────
 pass()  { printf "  ${GREEN}PASS${NC}  %s\n" "$*"; }
@@ -1044,6 +1046,45 @@ cmd_check_mesh_no_owned_state() {
     timer_end
 }
 
+# ADR-106 phase 1c: the daemon trusts the service-stamped `deliver` origin only
+# because its client passed the real peer-credential check. The client's
+# `testing` feature injects a fake server credential, so no non-test build of
+# the daemon may enable it (dev-dependencies are not part of `-e normal`).
+cmd_check_daemon_no_mesh_testing() {
+    header "Asserting the daemon's dependency graph does not enable clawft-mesh-local's testing feature"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   cargo tree -p clawft-weave -e normal,features -i clawft-mesh-local\n"
+        timer_end
+        return 0
+    fi
+    # Default features, every feature, and none: a shipped feature set must not enable it.
+    local flags tree rc hits
+    for flags in "" "--all-features" "--no-default-features"; do
+        rc=0
+        # shellcheck disable=SC2086
+        tree="$(cargo tree -p clawft-weave $flags -e normal,features -i clawft-mesh-local 2>&1)" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            fail "cargo tree ${flags:-(default features)} failed for clawft-weave"
+            printf '%s\n' "$tree" | tail -20
+            return 1
+        fi
+        # The inverted tree must still reach the crate, or the check proves nothing.
+        case "$tree" in *"clawft-mesh-local v"*) ;; *)
+            fail "clawft-mesh-local is not in clawft-weave's dependency graph (${flags:-default}); update cmd_check_daemon_no_mesh_testing"
+            return 1 ;;
+        esac
+        hits="$(printf '%s\n' "$tree" | grep -E 'clawft-mesh-local feature "testing"' || true)"
+        if [ -n "$hits" ]; then
+            fail "the daemon's dependency graph (${flags:-default features}) enables clawft-mesh-local's testing feature (it fakes the service peer check):"
+            printf '%s\n' "$tree" | sed 's/^/        /'
+            return 1
+        fi
+    done
+    pass "clawft-mesh-local's testing feature is not enabled in the daemon's dependency graph"
+    timer_end
+}
+
 cmd_check() {
     # `check <pkg>…` scopes to the named packages (fast loop for new crates);
     # the kernel wasm gates below only run for the whole-workspace check.
@@ -1583,6 +1624,111 @@ cmd_cogs_launcher() {
     return $rc
 }
 
+# ── weft-licence cross-build (ADR-106 phase 2) ────────────────────────
+# Cross-builds the Seed-side `weft-licence` binary (with the https registry
+# reader) for armv7-unknown-linux-gnueabihf (the Seed userland is armhf) and
+# aarch64-unknown-linux-gnu inside the WeaveLogic cogs cross image
+# (weavelogic-cogs-cross:1.97.1, built by cogs/scripts/cross-build.sh from
+# scripts/cross/Dockerfile in the private cogs repo, so the toolchain is the
+# one the cogs themselves use). Offline: crates come from the host's cargo
+# cache (mounted read-only; sources are unpacked inside the container, so the
+# host registry is never written), nothing is downloaded. Skips with a message when docker or the
+# image is missing. Output: target/licence-cross/<triple>/release/weft-licence
+# (stripped copy beside it as weft-licence.stripped) and a size report.
+cmd_licence_cross() {
+    header "weft-licence cross-build (Seed: armv7 + aarch64)"
+    local image="${LICENCE_CROSS_IMAGE:-weavelogic-cogs-cross:1.97.1}"
+    local out="$ROOT/target/licence-cross"
+    local targets=("${LICENCE_TARGETS[@]+"${LICENCE_TARGETS[@]}"}")
+    [ ${#targets[@]} -gt 0 ] || targets=(armv7-unknown-linux-gnueabihf aarch64-unknown-linux-gnu)
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   docker run %s cargo build --locked --offline --release -p weft-licence --features net --target %s\n" "$image" "${targets[*]}"
+        return 0
+    fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker image inspect "$image" >/dev/null 2>&1; then
+        skip "cross toolchain not available (need docker and image $image; build it with the cogs repo scripts/cross-build.sh)"
+        return 0
+    fi
+    [ -d "$HOME/.cargo/registry/cache" ] || { fail "no host cargo registry at ~/.cargo/registry (offline build needs it)"; return 1; }
+    # Make sure every crate is in the host cache first. This is offline: it
+    # fails (and says what is missing) instead of downloading.
+    local ft
+    for ft in "${targets[@]}"; do
+        cargo fetch --locked --offline --target "$ft" >/dev/null 2>&1 \
+            || { fail "host cargo cache is missing crates for $ft; run 'cargo fetch --locked --target $ft' once with network, then retry"; return 1; }
+    done
+    timer_start
+    local rc=0 t strip_bin
+    mkdir -p "$out/cargo-src"
+    for t in "${targets[@]}"; do
+        case "$t" in
+            armv7-unknown-linux-gnueabihf) strip_bin=arm-linux-gnueabihf-strip ;;
+            aarch64-unknown-linux-gnu)     strip_bin=aarch64-linux-gnu-strip ;;
+            *) fail "unknown target $t"; return 1 ;;
+        esac
+        info "building weft-licence for $t"
+        docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$ROOT":/src:ro -v "$out":/target \
+            -v "$HOME/.cargo/registry/cache":/cargo-home/registry/cache:ro \
+            -v "$HOME/.cargo/registry/index":/cargo-home/registry/index:ro \
+            -v "$out/cargo-src":/cargo-home/registry/src \
+            -w /src -e HOME=/tmp -e CARGO_HOME=/cargo-home \
+            -e CARGO_TARGET_DIR=/target -e RUSTUP_TOOLCHAIN=1.97.1 -e CARGO_NET_OFFLINE=true \
+            -e CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+            -e CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+            "$image" bash -euo pipefail -c '
+                cargo build --locked --offline --release -p weft-licence --features net --target '"$t"'
+                cp /target/'"$t"'/release/weft-licence /target/'"$t"'/release/weft-licence.stripped
+                '"$strip_bin"' /target/'"$t"'/release/weft-licence.stripped
+            ' || { fail "cross-build failed for $t"; rc=1; continue; }
+        local raw="$out/$t/release/weft-licence" st="$out/$t/release/weft-licence.stripped"
+        pass "$t: $(wc -c < "$raw" | tr -d ' ') bytes, stripped $(wc -c < "$st" | tr -d ' ') bytes ($st)"
+    done
+    timer_end
+    return $rc
+}
+
+# weft-licence uid isolation check (ADR-106 phase 2 acceptance): on Linux, a
+# different user (standing in for a cog's uid) cannot read or list the grant
+# key written by `weft-licence init` under the service user. Runs the aarch64
+# binary from `licence-cross` in the cogs cross image, as real users.
+cmd_licence_uid_check() {
+    header "weft-licence key isolation between users (Linux container)"
+    local image="${LICENCE_CROSS_IMAGE:-weavelogic-cogs-cross:1.97.1}"
+    local bin="$ROOT/target/licence-cross/aarch64-unknown-linux-gnu/release/weft-licence"
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   docker run %s (init as weft-licence, read as another user)\n" "$image"
+        return 0
+    fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker image inspect "$image" >/dev/null 2>&1; then
+        skip "docker or image $image not available"
+        return 0
+    fi
+    [ -x "$bin" ] || { fail "no aarch64 binary; run: scripts/build.sh licence-cross aarch64"; return 1; }
+    # The aarch64 binary needs an arm64 container: native on an arm64 host,
+    # otherwise only with qemu/binfmt. Skip cleanly when neither is there.
+    case "$(uname -m)" in
+        arm64|aarch64) ;;
+        *) if ! docker run --rm --platform linux/arm64 "$image" true >/dev/null 2>&1; then
+               skip "this host is not arm64 and has no qemu for linux/arm64 containers"
+               return 0
+           fi ;;
+    esac
+    docker run --rm --platform linux/arm64 -v "$bin":/usr/local/bin/weft-licence:ro "$image" bash -euo pipefail -c '
+        useradd --system --no-create-home weft-licence
+        useradd --no-create-home cog1
+        install -d -m 0700 -o weft-licence -g weft-licence /var/lib/weft-licence
+        su -s /bin/bash weft-licence -c "weft-licence --state-dir /var/lib/weft-licence init" | sed "s/^/  svc: /"
+        stat -c "  key mode %a owner %U" /var/lib/weft-licence/grant.key
+        stat -c "  dir mode %a owner %U" /var/lib/weft-licence
+        if su -s /bin/bash cog1 -c "cat /var/lib/weft-licence/grant.key" 2>/dev/null; then echo "  FAIL: another user read the key"; exit 1; fi
+        if su -s /bin/bash cog1 -c "ls /var/lib/weft-licence" 2>/dev/null; then echo "  FAIL: another user listed the state dir"; exit 1; fi
+        echo "  another user can neither read nor list: ok"
+        if su -s /bin/bash weft-licence -c "weft-licence --state-dir /var/lib/weft-licence init" 2>&1; then echo "  FAIL: init overwrote"; exit 1; fi
+        echo "  second init refused: ok"
+    '
+}
+
 # ── Real Pi 5 test lane (mesh-placement-fu-pi-test-lane) ────────────
 # Cross-builds aarch64 test binaries in an arm64 Debian container, runs them
 # on the Pi named by WEFTOS_PI_HOST (skips when unset) with an isolated HOME
@@ -1867,9 +2013,9 @@ cmd_gate() {
     if [ "${GATE_RELEASE_DRY_RUN:-}" = "1" ] || [ "${GATE_RELEASE_DRY_RUN:-}" = "true" ]; then
         WITH_RELEASE_DRY_RUN=true
     fi
-    local total=20
+    local total=21
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        total=21
+        total=22
     fi
     header "Phase Gate — ${total} checks"
     local passed=0 failed=0 skipped=0
@@ -2055,12 +2201,16 @@ cmd_gate() {
     run_gate_check 20 "mesh service owns no state (check-mesh-no-owned-state)" \
         cmd_check_mesh_no_owned_state
 
-    # 21. WEFT-460 — optional cargo-dist host-triple release rehearsal.
+    # 21. ADR-106 1c: the daemon is never built with the mesh-local test seam.
+    run_gate_check 21 "daemon does not enable clawft-mesh-local testing (check-daemon-no-mesh-testing)" \
+        cmd_check_daemon_no_mesh_testing
+
+    # 22. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
     #   scripts/build.sh gate --with-release-dry-run
     #   GATE_RELEASE_DRY_RUN=1 scripts/build.sh gate
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 21 "$total" "release-dry-run (cargo-dist host triple)"
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 22 "$total" "release-dry-run (cargo-dist host triple)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   scripts/build.sh release-dry-run\n"
@@ -2164,6 +2314,7 @@ ${BOLD}Commands:${NC}
                   -p clawft-mesh-service, scripts/dev/mesh-p3-e2e.sh, the
                   no-owned-state gate and check-mesh-only. Current user, tempdirs only
   check-tests     Compile (not run) the tests of the named packages: check-tests <pkg>…
+  check-daemon-no-mesh-testing  Fail if the daemon's dependency graph enables clawft-mesh-local's testing feature
   check-mesh-no-owned-state
                   Fail if `cargo tree -p clawft-mesh-service -e normal,features` contains
                   exo-resource-tree, rvf-runtime, cognitum-gate-tilezero, clawft-weave or
@@ -2208,6 +2359,16 @@ ${BOLD}Commands:${NC}
                   that cogs-conformance --launcher uses to run cogs through
                   the WorkloadRuntime adapters; --linux-arm64 builds it in an
                   arm64 Rust container (COG_LAUNCHER_BUILDER, default rust:1-bookworm).
+  licence-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
+                  Cross-build weft-licence (ADR-106 phase 2, the Seed licence
+                  proxy) with the https registry reader in the cogs cross image
+                  (LICENCE_CROSS_IMAGE, default weavelogic-cogs-cross:1.97.1),
+                  offline from the host cargo registry. Skips when docker or the
+                  image is missing. Output under target/licence-cross/.
+  licence-uid-check
+                  Linux check that another user cannot read or list the
+                  weft-licence grant key (runs the licence-cross aarch64
+                  binary as real users in the cogs cross image).
   gate            Run full phase gate (19 checks, includes cargo audit +
                   npm audit critical/high / WEFT-598 +
                   kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56 +
@@ -2302,6 +2463,19 @@ parse_args() {
     # --help) through to scripts/pi/pi_lane.py.
     if [ "$COMMAND" = "test-pi" ]; then
         PI_ARGS=("$@")
+        return 0
+    fi
+
+    if [ "$COMMAND" = "licence-cross" ]; then
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                armv7|armv7-unknown-linux-gnueabihf) LICENCE_TARGETS+=(armv7-unknown-linux-gnueabihf) ;;
+                aarch64|aarch64-unknown-linux-gnu) LICENCE_TARGETS+=(aarch64-unknown-linux-gnu) ;;
+                --dry-run) DRY_RUN=true ;;
+                *) echo "licence-cross: unknown option $1" >&2; exit 1 ;;
+            esac
+            shift
+        done
         return 0
     fi
 
@@ -2470,6 +2644,7 @@ main() {
         test-mesh-service) cmd_test_mesh_service ;;
         check-tests)  cmd_check_tests ;;
         check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
+        check-daemon-no-mesh-testing) cmd_check_daemon_no_mesh_testing ;;
         clippy)       cmd_clippy ;;
         audit)        cmd_audit ;;
         npm-audit)    cmd_npm_audit ;;
@@ -2478,6 +2653,8 @@ main() {
         agents-leak-check)  cmd_agents_leak_check ;;
         cogs-conformance)   cmd_cogs_conformance ;;
         cogs-launcher)      cmd_cogs_launcher ;;
+        licence-cross)      cmd_licence_cross ;;
+        licence-uid-check)  cmd_licence_uid_check ;;
         test-pi)            cmd_test_pi ;;
         n6-leaf)            cmd_n6_leaf ;;
         gate)         cmd_gate ;;
