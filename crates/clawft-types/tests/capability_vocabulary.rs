@@ -39,8 +39,12 @@ fn load() -> Vocabulary {
 fn committed_vocabulary_matches_its_governance_pin() {
     let v = load();
     let p = pin();
-    assert_eq!(VocabularyPin::of(&v), p);
-    // The committed pin is exactly what the governor issues.
+    // The baseline pin carries the genesis marker; the content it names is
+    // the committed vocabulary.
+    let mut expected = VocabularyPin::of(&v);
+    expected.event_hash = Some("genesis".into());
+    assert_eq!(expected, p);
+    // The committed pin is exactly what its serializer writes.
     assert_eq!(read("config/capabilities.pin.toml"), p.to_toml_string());
 }
 

@@ -215,6 +215,56 @@ fn pin_file_round_trips_and_is_validated() {
 }
 
 #[test]
+fn signed_pin_round_trips_and_statement_covers_every_field() {
+    let mut pin = VocabularyPin::of(&vocab());
+    pin.key_id = Some("ed25519:0123456789abcdef".into());
+    pin.event_seq = Some(12);
+    pin.event_hash = Some("ab".repeat(32));
+    pin.signature = Some("cd".repeat(64));
+    let text = pin.to_toml_string();
+    assert_eq!(VocabularyPin::from_toml_str(&text).unwrap(), pin);
+
+    // Changing any bound field changes the signed statement.
+    let base = pin.signed_statement();
+    let mut v = pin.clone();
+    v.version += 1;
+    let mut d = pin.clone();
+    d.digest = "00".repeat(32);
+    let mut k = pin.clone();
+    k.key_id = Some("other".into());
+    let mut s = pin.clone();
+    s.event_seq = Some(13);
+    let mut e = pin.clone();
+    e.event_hash = Some("ef".repeat(32));
+    for changed in [v, d, k, s, e] {
+        assert_ne!(changed.signed_statement(), base);
+    }
+    // The signature itself is not part of what it signs.
+    let mut resigned = pin.clone();
+    resigned.signature = Some("11".repeat(64));
+    assert_eq!(resigned.signed_statement(), base);
+
+    // Malformed signature fields are refused at parse time.
+    for bad in [
+        format!("signature = \"{}\"\n", "AB".repeat(64)),
+        "signature = \"abcd\"\n".to_string(),
+        "event_hash = \"nope\"\n".to_string(),
+        "key_id = \"\"\n".to_string(),
+    ] {
+        let text = format!("version = 1\ndigest = \"{}\"\n{bad}", pin.digest);
+        assert!(VocabularyPin::from_toml_str(&text).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn perf_requirement_helpers_validate_their_predicates() {
+    assert!(perf::require_cog_cycle_within("fall-detect", 2000.0).is_ok());
+    assert!(perf::require_infer_tok_s_at_least("m", 10.0).is_ok());
+    assert!(perf::require_cog_cycle_within("fall-detect", f64::NAN).is_err());
+    assert!(perf::require_infer_tok_s_at_least("m", f64::INFINITY).is_err());
+}
+
+#[test]
 fn governed_change_must_bump_version() {
     let cur = vocab();
     let same_version =
