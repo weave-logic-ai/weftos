@@ -25,6 +25,7 @@ mod approval;
 mod approval_store;
 mod binding;
 mod floor;
+mod floor_preview;
 mod gate;
 mod grant;
 mod mesh_config;
@@ -63,6 +64,7 @@ pub use binding::{
     sign_binding, verify_binding_member,
 };
 pub use floor::FloorState;
+pub use floor_preview::{FloorPreview, RevivedGrant};
 pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
 pub use grant::{
     CheckoutGrant, GrantArtifact, LicenceRef, SignedGrant, sign_grant, verify_grant,

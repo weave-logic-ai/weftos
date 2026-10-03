@@ -96,7 +96,7 @@ impl std::fmt::Debug for CheckoutGrantStore {
     }
 }
 
-fn grant_valid(g: &CheckoutGrant, eff_now: u64) -> bool {
+pub(super) fn grant_valid(g: &CheckoutGrant, eff_now: u64) -> bool {
     !g.is_withdrawal()
         && eff_now < g.expires_at
         && eff_now < g.licence.expires

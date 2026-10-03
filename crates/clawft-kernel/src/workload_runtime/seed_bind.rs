@@ -206,8 +206,6 @@ pub struct SeedBinder {
     seen: Mutex<HashSet<[u8; 32]>>,
     /// Device id to (bound_at, node id).
     bound: Mutex<BTreeMap<String, (u64, String)>>,
-    /// Device id to the mesh id (hex) it is bound to under a v2 record.
-    meshes: Mutex<BTreeMap<String, String>>,
     state_file: Option<std::path::PathBuf>,
 }
 
@@ -217,10 +215,6 @@ struct BindState {
     version: u32,
     /// Device id to its latest accepted `bound_at` and node id.
     bound: BTreeMap<String, BoundEntry>,
-    /// Device id to the mesh id it is bound to (v2 records; absent in files
-    /// written before phase 1d).
-    #[serde(default)]
-    meshes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -233,7 +227,6 @@ struct BoundEntry {
 fn write_state(
     path: &std::path::Path,
     bound: &BTreeMap<String, (u64, String)>,
-    meshes: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -251,7 +244,6 @@ fn write_state(
                 )
             })
             .collect(),
-        meshes: meshes.clone(),
     };
     let bytes = serde_json::to_vec_pretty(&st).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
@@ -276,7 +268,6 @@ impl SeedBinder {
             max_age_secs: DEFAULT_MAX_BIND_AGE_SECS,
             seen: Mutex::new(HashSet::new()),
             bound: Mutex::new(BTreeMap::new()),
-            meshes: Mutex::new(BTreeMap::new()),
             state_file: None,
         }
     }
@@ -304,9 +295,6 @@ impl SeedBinder {
                 for (d, e) in st.bound {
                     b.insert(d, (e.bound_at, e.node_id));
                 }
-            }
-            if let Ok(mut m) = self.meshes.lock() {
-                *m = st.meshes;
             }
         }
         self.state_file = Some(path);
@@ -465,8 +453,7 @@ impl SeedBinder {
             (record.bound_at, record.node_id.clone()),
         );
         if let Some(path) = &self.state_file {
-            let meshes = self.meshes.lock().map_err(|_| bad("binder poisoned"))?;
-            write_state(path, &next, &meshes).map_err(BindError::State)?;
+            write_state(path, &next).map_err(BindError::State)?;
         }
         *bound = next;
         seen.insert(digest);
@@ -485,7 +472,7 @@ impl SeedBinder {
 }
 
 mod v2;
-pub use v2::{StewardBind, grant_fingerprint};
+pub use v2::{StewardBind, UnbindOutcome, grant_fingerprint};
 
 impl SeedApiRuntime {
     /// This adapter's operator-assigned node id.

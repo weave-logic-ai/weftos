@@ -68,6 +68,14 @@ struct BindParams {
     grant_fingerprint: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResetParams {
+    /// Without it the call only previews.
+    #[serde(default)]
+    confirm: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UnbindParams {
@@ -90,16 +98,13 @@ pub async fn route(ctx: &Ctx<'_>, method: &str, params: Value) -> Response {
             Ok(p) => bind(ctx, p).await,
             Err(e) => Response::error(e),
         },
+        "workload.node.reset-floor" => match parse::<ResetParams>(method, params) {
+            Ok(p) => reset_floor(ctx, p.confirm),
+            Err(e) => Response::error(e),
+        },
         "workload.node.unbind" => match parse::<UnbindParams>(method, params) {
             Ok(p) => unbind(ctx, &p.signed),
             Err(e) => Response::error(e),
-        },
-        // Admin: forget the clock high-water mark of the bound grant key and
-        // restart it from now (the only way to undo a forward clock jump).
-        // The store chains `floor_reset` through the licence event sink.
-        "workload.node.reset-floor" => match ctx.rt.policy.store().reset_floor() {
-            Ok(()) => Response::success(json!({ "floor_reset": true })),
-            Err(e) => Response::error(e.to_string()),
         },
         other => Response::error(format!("{other} is not a licence method")),
     }
@@ -168,8 +173,41 @@ fn unbind(ctx: &Ctx<'_>, signed: &SignedBinding) -> Response {
         Err(why) => return Response::error(format!("bind state unreadable: {why}")),
     };
     match binder.unbind_v2(signed, ctx.rt.policy.store()) {
-        Ok(rec) => Response::success(json!({ "unbound": rec })),
+        Ok(out) => {
+            let mut v = json!({ "unbound": out.record, "save_pending": out.save_pending });
+            if out.save_pending {
+                v["warning"] = json!(
+                    "the unbind is in effect but could not be saved to disk yet; it is retried every minute"
+                );
+            }
+            Response::success(v)
+        }
         Err(e) => Response::error(format!("{e} [{}]", e.code())),
+    }
+}
+
+/// Admin `reset-floor`: forget the clock high-water mark of the bound grant
+/// key and restart it from now (the only way to undo a forward clock jump).
+/// Without `confirm` it returns the preview (the floor, the floor after, the
+/// grants it would revive) and changes nothing. With it, the request is
+/// chained with that preview, then the store resets and chains `floor_reset`.
+fn reset_floor(ctx: &Ctx<'_>, confirm: bool) -> Response {
+    let store = ctx.rt.policy.store();
+    let preview = match store.floor_preview() {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    if !confirm {
+        return Response::success(json!({ "applied": false, "preview": preview }));
+    }
+    ctx.rt.chain.append(
+        licence_boot::LICENCE_CHAIN_SOURCE,
+        "floor_reset_requested",
+        Some(json!({ "preview": &preview })),
+    );
+    match store.reset_floor() {
+        Ok(()) => Response::success(json!({ "applied": true, "preview": preview })),
+        Err(e) => err(e),
     }
 }
 

@@ -92,7 +92,7 @@ pub use logical::{
 pub use native::{NativeConfig, NativeRuntime};
 pub use seed::{SeedApiRuntime, SeedConfig, SeedPin};
 pub use seed_bind::{
-    BindError, BindRecord, Binding, SeedBinder, SignedBind, StewardBind, attest_seed_facts,
+    BindError, BindRecord, Binding, SeedBinder, SignedBind, StewardBind, UnbindOutcome, attest_seed_facts,
     grant_fingerprint, seed_node_id, sign_bind,
 };
 pub use seed_creds::FileCredentials;

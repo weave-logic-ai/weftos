@@ -297,7 +297,7 @@ async fn a_wrong_fingerprint_or_bad_params_bind_nothing() {
 }
 
 #[tokio::test]
-async fn reset_floor_is_chained_and_needs_a_binding_in_effect() {
+async fn reset_floor_previews_without_confirm_and_chains_with_it() {
     let dir = tempfile::tempdir().unwrap();
     let chain = Arc::new(ChainManager::new(0, 1000));
     let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
@@ -305,7 +305,82 @@ async fn reset_floor_is_chained_and_needs_a_binding_in_effect() {
     assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await.ok);
     let r = call(&rt, posture(), "workload.node.reset-floor", json!({})).await;
     assert!(r.ok, "{:?}", r.error);
-    assert!(chain_kinds(&chain).contains(&"floor_reset".to_owned()));
+    let v = r.result.unwrap();
+    assert_eq!(v["applied"], false);
+    assert!(v["preview"]["revived"].is_array());
+    assert!(!chain_kinds(&chain).contains(&"floor_reset".to_owned()), "a preview changes nothing");
+    let r = call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true})).await;
+    assert_eq!(r.result.unwrap()["applied"], true);
+    let kinds = chain_kinds(&chain);
+    assert!(kinds.contains(&"floor_reset_requested".to_owned()) && kinds.contains(&"floor_reset".to_owned()), "{kinds:?}");
+}
+
+#[tokio::test]
+async fn unbind_works_under_any_posture_and_a_rogue_signer_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
+    assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await.ok);
+    let u = record(&mesh_of(NONCE_A), 2, BindState::Unbound);
+    let rogue = sign_binding(&u, &sk(44)).unwrap();
+    let e = call(&rt, posture(), "workload.node.unbind", json!({"signed": rogue})).await;
+    assert!(err_of(&e).contains("untrusted_operator"), "{e:?}");
+    assert!(rt.store().active_binding().is_some());
+    // Non-enforce, open membership, no verdict source: turning the licence off still works.
+    let lax = AdmissionPosture { enforce: false, verdict_source_bound: false, open_membership: true };
+    let r = call(&rt, lax, "workload.node.unbind", json!({"signed": signed(&u)})).await;
+    assert!(r.ok, "{:?}", r.error);
+    assert_eq!(r.result.unwrap()["save_pending"], false);
+    assert!(rt.store().active_binding().is_none());
+}
+
+#[tokio::test]
+async fn a_corrupt_replay_file_refuses_bind_and_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join(clawft_kernel::workload_runtime::seed_bind::BIND_STATE_FILE);
+    std::fs::write(&f, b"{ not json").unwrap();
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
+    let e = call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await;
+    assert!(err_of(&e).contains("bind state unreadable"), "{e:?}");
+    assert_eq!(std::fs::read(&f).unwrap(), b"{ not json", "never overwritten");
+    assert!(rt.store().held_binding().is_none());
+}
+
+#[tokio::test]
+async fn a_poisoned_store_is_a_flag_not_an_error_string_and_a_bad_nonce_with_a_binding_is_chained() {
+    let dir = tempfile::tempdir().unwrap();
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
+    assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await.ok);
+    let bad = boot(dir.path(), &chain, &mesh_cfg(Some("zz")));
+    assert!(chain_kinds(&chain).contains(&"mesh_config_error".to_owned()));
+    assert_eq!(licence_boot::status(&bad)["config_error"].as_str().is_some(), true);
+
+    let dir2 = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir2.path().join("licence")).unwrap();
+    std::fs::write(dir2.path().join("licence/checkout_grants.json"), b"garbage").unwrap();
+    let p = boot(dir2.path(), &chain, &mesh_cfg(Some(NONCE_A)));
+    let st = licence_boot::status(&p);
+    assert_eq!(st["poisoned"], true);
+    assert!(!st.to_string().contains(dir2.path().to_str().unwrap()), "no path in the status");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tick_runs_repeatedly_and_survives_a_panic() {
+    let n = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let n2 = n.clone();
+    let h = licence_boot::spawn_tick(
+        Duration::from_millis(10),
+        Arc::new(move || {
+            if n2.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                panic!("first tick panics");
+            }
+        }),
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    h.abort();
+    assert!(n.load(std::sync::atomic::Ordering::SeqCst) >= 3, "kept ticking after the panic");
 }
 
 #[test]

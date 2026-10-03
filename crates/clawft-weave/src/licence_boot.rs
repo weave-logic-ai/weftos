@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock};
 
 use clawft_kernel::chain::ChainManager;
 use clawft_kernel::licence::{
-    AdmissionPosture, LicenceEvent, LicenceEventSink, LocalMeshId, MeshCheckoutPolicy,
+    AdmissionPosture, CheckoutGrantStore, LicenceEvent, LicenceEventSink, LocalMeshId, MeshCheckoutPolicy,
     mesh_id_from_config,
 };
 use clawft_kernel::revocation::RevocationList;
@@ -26,7 +26,17 @@ use serde_json::{Value, json};
 /// Chain source of licence events.
 pub const LICENCE_CHAIN_SOURCE: &str = "licence";
 
+/// How often the boot-owned store is ticked (clock high-water mark persisted,
+/// an unsaved unbind retried).
+pub const TICK_PERIOD: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// What the licence RPCs and the policy share, built once at daemon boot.
+///
+/// This is the owner of the node's [`CheckoutGrantStore`] and
+/// [`MeshCheckoutPolicy`]: anything that needs them (the artifact exchange,
+/// the swarm floods, the tick) takes them from here via [`store`] / [`policy`]
+/// (or [`LicenceRuntime::store`] / [`LicenceRuntime::policy`]) rather than
+/// opening a second store over the same files.
 pub struct LicenceRuntime {
     /// The live local mesh id (unset without a nonce).
     pub local: LocalMeshId,
@@ -37,6 +47,8 @@ pub struct LicenceRuntime {
     pub binder: Result<SeedBinder, String>,
     /// The runtime dir (`workload-seeds.json`, the bind state file).
     pub dir: PathBuf,
+    /// The kernel chain (licence events and admin actions are chained here).
+    pub chain: Arc<ChainManager>,
     /// `kernel.mesh.genesis_hash` was set.
     pub genesis_pinned: bool,
     /// `kernel.mesh.mesh_nonce` was set.
@@ -50,6 +62,45 @@ pub struct LicenceRuntime {
 }
 
 static RUNTIME: OnceLock<Arc<LicenceRuntime>> = OnceLock::new();
+
+impl LicenceRuntime {
+    /// The boot-owned grant store (holds the live local mesh id).
+    pub fn store(&self) -> &Arc<CheckoutGrantStore> {
+        self.policy.store()
+    }
+
+    /// The boot-owned redistribution policy, for the artifact exchange.
+    pub fn policy(&self) -> &Arc<MeshCheckoutPolicy> {
+        &self.policy
+    }
+}
+
+/// The daemon's grant store (`None` before boot or without placement).
+pub fn store() -> Option<Arc<CheckoutGrantStore>> {
+    RUNTIME.get().map(|r| r.store().clone())
+}
+
+/// The daemon's checkout policy (`None` before boot or without placement).
+pub fn policy() -> Option<Arc<MeshCheckoutPolicy>> {
+    RUNTIME.get().map(|r| r.policy().clone())
+}
+
+/// Run `f` every `period` on a blocking thread. A panic in `f` is logged and
+/// the loop goes on; the first run is one `period` from now.
+pub fn spawn_tick(period: std::time::Duration, f: Arc<dyn Fn() + Send + Sync>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut iv = tokio::time::interval(period);
+        iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        iv.tick().await; // the first tick is immediate
+        loop {
+            iv.tick().await;
+            let f = f.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || f()).await {
+                tracing::warn!(error = %e, "licence tick failed; will retry");
+            }
+        }
+    })
+}
 
 /// The daemon's licence runtime (`None` before boot or without placement).
 pub fn runtime() -> Option<Arc<LicenceRuntime>> {
@@ -114,7 +165,13 @@ pub fn build(a: InitArgs<'_>) -> LicenceRuntime {
     let policy = MeshCheckoutPolicy::open(a.dir, a.anchors, a.revocations, local.clone());
     policy.store().set_sink(Arc::new(ChainEvents(a.chain.clone())));
     let _ = policy.store().binding_status(); // chains binding_orphaned now
-    let binder = SeedBinder::new(Vec::new(), a.chain)
+    if let Some(why) = &config_error
+        && policy.store().held_binding().is_some()
+    {
+        // A binding is held but the mesh id cannot be derived: say so on the chain.
+        a.chain.append(LICENCE_CHAIN_SOURCE, "mesh_config_error", Some(json!({ "reason": why })));
+    }
+    let binder = SeedBinder::new(Vec::new(), a.chain.clone())
         .with_state_file(a.dir.join(BIND_STATE_FILE))
         .map_err(|e| e.to_string());
     if let Err(why) = &binder {
@@ -125,6 +182,7 @@ pub fn build(a: InitArgs<'_>) -> LicenceRuntime {
         policy,
         binder,
         dir: a.dir.to_owned(),
+        chain: a.chain,
         genesis_pinned: genesis.is_some(),
         nonce_set: nonce.is_some(),
         config_error,
@@ -136,7 +194,11 @@ pub fn build(a: InitArgs<'_>) -> LicenceRuntime {
 /// Install the daemon's runtime (first call wins).
 pub fn install(rt: LicenceRuntime) -> Arc<LicenceRuntime> {
     let rt = Arc::new(rt);
-    let _ = RUNTIME.set(rt.clone());
+    if RUNTIME.set(rt.clone()).is_ok() && tokio::runtime::Handle::try_current().is_ok() {
+        // This module owns the store, so it owns the tick.
+        let store = rt.store().clone();
+        spawn_tick(TICK_PERIOD, Arc::new(move || store.tick()));
+    }
     RUNTIME.get().cloned().unwrap_or(rt)
 }
 
@@ -175,7 +237,8 @@ pub fn status(rt: &LicenceRuntime) -> Value {
         "genesis_pinned": rt.genesis_pinned,
         "nonce_set": rt.nonce_set,
         "config_error": rt.config_error,
-        "poisoned": store.poisoned(),
+        // A fixed flag, not the error text (it can contain a path).
+        "poisoned": store.poisoned().is_some(),
         "binding": binding,
         "next_seq": held.as_ref().map_or(1, |h| h.seq + 1),
         "steward": { "node_id": rt.steward_node_id, "pubkey": rt.steward_pubkey },

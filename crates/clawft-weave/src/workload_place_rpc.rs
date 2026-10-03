@@ -196,8 +196,8 @@ async fn build(
     let cfg = ExchangeConfig {
         // The daemon built the policy at boot (`licence_boot`), with the mesh
         // id from the configured nonce and the store the bind RPC writes to.
-        redistribution: match crate::licence_boot::runtime() {
-            Some(l) => l.policy.clone(),
+        redistribution: match crate::licence_boot::policy() {
+            Some(p) => p,
             None => clawft_kernel::licence::MeshCheckoutPolicy::open(
                 dir,
                 anchors.clone(),

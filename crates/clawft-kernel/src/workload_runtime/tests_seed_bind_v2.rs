@@ -97,6 +97,32 @@ async fn rig_with(lab_link: bool) -> Rig {
     Rig { _server: server, _dir: dir, rt, store, local, chain, binder, state_file, operator }
 }
 
+async fn seed_rt(device: &str, key: &SigningKey) -> (MockServer, SeedApiRuntime) {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/identity"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"device_id": device, "public_key": pk(key)})),
+        )
+        .mount(&server)
+        .await;
+    let node = format!("adapter-{device}");
+    let rt = SeedApiRuntime::new(
+        SeedConfig {
+            node_id: node.clone(),
+            pins: vec![SeedPin::new("fall-detect", "1.0.0")],
+            concurrency_cap: SEED_CONCURRENCY_CAP,
+        },
+        Arc::new(
+            HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap().allow_unpinned_lab_link(),
+        ),
+        Arc::new(MemoryCredentials::with(&node, "seed-token-v2-0123456789abcdef")),
+    )
+    .unwrap();
+    (server, rt)
+}
+
 async fn rig() -> Rig {
     rig_with(true).await
 }
@@ -169,7 +195,6 @@ async fn a_confirmed_record_that_matches_the_seed_binds_and_is_chained() {
     assert_eq!(ev.len(), 1);
     assert_eq!(ev[0]["mesh_id"], mesh_a().to_hex().as_str());
     assert_eq!(ev[0]["grant_fingerprint"], r.fp().as_str());
-    assert_eq!(r.binder.bound_mesh(DEVICE), Some(mesh_a().to_hex()));
 }
 
 #[tokio::test]
@@ -180,7 +205,6 @@ async fn the_replay_state_is_persisted_and_survives_a_restart() {
     // A new binder over the same state file refuses the same record, and an
     // older one, even against a fresh store.
     let again = SeedBinder::new(vec![], r.chain.clone()).with_state_file(&r.state_file).unwrap();
-    assert_eq!(again.bound_mesh(DEVICE), Some(mesh_a().to_hex()), "mesh is restored");
     let steward_pk = pk(&sk(21));
     let fresh_dir = tempfile::tempdir().unwrap();
     let mut anchors = TrustAnchors::default();
@@ -217,7 +241,6 @@ async fn a_wrong_fingerprint_is_refused_and_nothing_is_stored() {
     assert_eq!(e, BindError::Licence(LicenceError::CheckFailed("fingerprint_mismatch".into())));
     assert_eq!(r.refusals(), ["fingerprint_mismatch"]);
     assert!(r.store.held_binding().is_none());
-    assert!(r.binder.bound_mesh(DEVICE).is_none());
     assert!(!r.state_file.exists(), "no replay state was spent");
 }
 
@@ -317,17 +340,16 @@ async fn a_second_mesh_is_refused_until_the_seed_is_unbound() {
         BindError::SeedBoundElsewhere { device_id: DEVICE.into() }
     );
     assert_eq!(r.refusals(), ["seed_bound_elsewhere"]);
-    assert_eq!(r.binder.bound_mesh(DEVICE), Some(mesh_a().to_hex()), "unchanged");
+    assert_eq!(r.store.held_binding().unwrap().mesh_id, mesh_a().to_hex(), "unchanged");
 
     // Unbind (an operator-signed record, no Seed needed), then bind again.
     let unbind = r.sign(&r.record(&mesh_b(), 2, BindState::Unbound, NOW + 2));
     r.binder.unbind_v2(&unbind, &r.store).unwrap();
-    assert_eq!(r.binder.bound_mesh(DEVICE), None);
     assert_eq!(r.events(EVENT_KIND_WORKLOAD_NODE_UNBIND).len(), 1);
     assert!(r.store.active_binding().is_none(), "unbound: grants stop at once");
     let again = r.sign(&r.record(&mesh_b(), 3, BindState::Bound, NOW + 3));
     r.bind(&again, &r.fp(), NOW + 3).await.unwrap();
-    assert_eq!(r.binder.bound_mesh(DEVICE), Some(mesh_b().to_hex()));
+    assert_eq!(r.store.active_binding().unwrap().mesh_id, mesh_b().to_hex());
 }
 
 #[tokio::test]
@@ -353,4 +375,67 @@ async fn unbind_needs_a_held_binding_the_same_device_and_a_higher_seq() {
         BindError::Licence(LicenceError::CheckFailed("not_an_unbind".into()))
     );
     assert!(r.store.active_binding().is_some(), "refused unbinds changed nothing");
+}
+
+#[tokio::test]
+async fn bind_x_then_y_then_a_nonce_change_then_x_is_not_locked_out() {
+    let r = rig().await;
+    let (_srv, rt_y) = seed_rt("seed-dev-2", &sk(30)).await;
+    r.bind(&r.sign(&r.record(&mesh_a(), 1, BindState::Bound, NOW + 1)), &r.fp(), NOW + 1).await.unwrap();
+    // Y replaces X as the mesh's Seed (one Seed per mesh, rebind with a higher seq).
+    let mut y = r.record(&mesh_a(), 2, BindState::Bound, NOW + 2);
+    y.device_id = "seed-dev-2".into();
+    y.device_pubkey = pk(&sk(30));
+    let steward_pk = pk(&sk(21));
+    r.binder
+        .bind_v2(&StewardBind {
+            signed: &r.sign(&y),
+            rt: &rt_y,
+            store: &r.store,
+            posture: posture(),
+            confirmed_fingerprint: &r.fp(),
+            steward_node_id: "node-steward",
+            steward_pubkey: &steward_pk,
+            now: NOW + 2,
+        })
+        .await
+        .unwrap();
+    // The nonce changes, then X is bound again: X is no longer held, so it is
+    // not "bound elsewhere" (a copy of the old mesh kept in the binder would
+    // have refused it for good).
+    r.local.set(Some(mesh_b()));
+    let x = r.sign(&r.record(&mesh_b(), 3, BindState::Bound, NOW + 3));
+    r.bind(&x, &r.fp(), NOW + 3).await.unwrap();
+    assert_eq!(r.store.active_binding().unwrap().device_id, DEVICE);
+}
+
+#[tokio::test]
+async fn an_unbind_signed_by_a_non_anchor_key_is_refused() {
+    let r = rig().await;
+    r.bind(&r.sign(&r.record(&mesh_a(), 1, BindState::Bound, NOW)), &r.fp(), NOW).await.unwrap();
+    let rogue = sign_binding(&r.record(&mesh_a(), 2, BindState::Unbound, NOW), &sk(44)).unwrap();
+    assert_eq!(
+        r.binder.unbind_v2(&rogue, &r.store).unwrap_err(),
+        BindError::Licence(LicenceError::UntrustedKey)
+    );
+    assert!(r.store.active_binding().is_some(), "still bound");
+    assert!(r.events(EVENT_KIND_WORKLOAD_NODE_UNBIND).is_empty());
+    assert_eq!(r.refusals(), ["untrusted_operator"]);
+}
+
+#[tokio::test]
+async fn an_unbind_whose_save_fails_is_applied_chained_and_flagged_pending() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = rig().await;
+    r.bind(&r.sign(&r.record(&mesh_a(), 1, BindState::Bound, NOW)), &r.fp(), NOW).await.unwrap();
+    let dir = r._dir.path().join("licence");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let out = r.binder.unbind_v2(&r.sign(&r.record(&mesh_a(), 2, BindState::Unbound, NOW)), &r.store);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let out = out.unwrap();
+    assert!(out.save_pending);
+    assert!(r.store.active_binding().is_none(), "applied in memory: grants stop");
+    let ev = r.events(EVENT_KIND_WORKLOAD_NODE_UNBIND);
+    assert_eq!(ev.len(), 1);
+    assert_eq!(ev[0]["save_pending"], true);
 }

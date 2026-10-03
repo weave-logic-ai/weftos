@@ -81,11 +81,6 @@ fn lic(e: LicenceError) -> BindError {
 }
 
 impl SeedBinder {
-    /// The mesh id (hex) a v2 record bound `device_id` to, while bound.
-    pub fn bound_mesh(&self, device_id: &str) -> Option<String> {
-        self.meshes.lock().ok()?.get(device_id).cloned()
-    }
-
     /// Steward-profile bind of a v2 record. See the module docs.
     pub async fn bind_v2(&self, b: &StewardBind<'_>) -> Result<BindingRecord, BindError> {
         match self.verify_v2(b).await {
@@ -119,7 +114,18 @@ impl SeedBinder {
             .require_pinned(b.rt.node_id())
             .map_err(BindError::UnpinnedTransport)?;
         let rec = b.store.verify_member(b.signed).map_err(lic)?;
-        let held = b.store.held_binding().map(|h| h.seq);
+        // seed_bound_elsewhere comes from the store, the one source of truth:
+        // the same device held Bound for another mesh id. (A copy kept here
+        // could drift and lock a Seed out for good.)
+        let held_rec = b.store.held_binding();
+        if let Some(h) = &held_rec
+            && h.device_id == rec.device_id
+            && h.state == LicState::Bound
+            && h.mesh_id != rec.mesh_id
+        {
+            return Err(BindError::SeedBoundElsewhere { device_id: rec.device_id });
+        }
+        let held = held_rec.map(|h| h.seq);
         let mut check = self.steward_check(b, held);
         check.check(&rec).map_err(lic)?;
         // The Seed is asked last, so an untrusted record costs it nothing.
@@ -137,15 +143,11 @@ impl SeedBinder {
         .into();
         let mut seen = self.seen.lock().map_err(|_| poisoned())?;
         let mut bound = self.bound.lock().map_err(|_| poisoned())?;
-        let mut meshes = self.meshes.lock().map_err(|_| poisoned())?;
         if seen.contains(&digest) {
             return Err(BindError::Replayed);
         }
         if bound.get(&rec.device_id).is_some_and(|(at, _)| rec.bound_at <= *at) {
             return Err(BindError::Replayed);
-        }
-        if meshes.get(&rec.device_id).is_some_and(|m| *m != rec.mesh_id) {
-            return Err(BindError::SeedBoundElsewhere { device_id: rec.device_id });
         }
         if !bound.contains_key(&rec.device_id) && bound.len() >= MAX_BOUND_DEVICES {
             return Err(BindError::State("too many bound devices".into()));
@@ -153,17 +155,14 @@ impl SeedBinder {
         let node_id = b.rt.node_id().to_owned();
         let mut next = bound.clone();
         next.insert(rec.device_id.clone(), (rec.bound_at, node_id));
-        let mut next_meshes = meshes.clone();
-        next_meshes.insert(rec.device_id.clone(), rec.mesh_id.clone());
         // Saved before it is accepted: if the replay memory cannot be
         // persisted, nothing is bound.
         if let Some(path) = &self.state_file {
-            write_state(path, &next, &next_meshes).map_err(BindError::State)?;
+            write_state(path, &next).map_err(BindError::State)?;
         }
         *bound = next;
-        *meshes = next_meshes;
         seen.insert(digest);
-        drop((seen, bound, meshes));
+        drop((seen, bound));
         match b.store.accept_binding(b.signed, b.posture, &check).map_err(lic)? {
             Outcome::Applied => {}
             Outcome::Duplicate | Outcome::Ignored => return Err(BindError::Replayed),
@@ -186,13 +185,15 @@ impl SeedBinder {
     }
 
     /// Withdraw the binding with an operator-signed `unbound` record. Needs
-    /// no Seed (it may be gone). Any operator-Admin node may do it; the steward
-    /// state forgets the device's mesh so the Seed can be bound again.
+    /// no Seed (it may be gone). Any operator-Admin node may do it. If the
+    /// store could not save it, the unbind is still applied in memory (it only
+    /// restricts), the event is chained, and the outcome says the save is
+    /// pending (the store's tick retries it).
     pub fn unbind_v2(
         &self,
         signed: &SignedBinding,
         store: &CheckoutGrantStore,
-    ) -> Result<BindingRecord, BindError> {
+    ) -> Result<UnbindOutcome, BindError> {
         match self.unbind_inner(signed, store) {
             Ok(r) => Ok(r),
             Err(e) => {
@@ -206,7 +207,7 @@ impl SeedBinder {
         &self,
         signed: &SignedBinding,
         store: &CheckoutGrantStore,
-    ) -> Result<BindingRecord, BindError> {
+    ) -> Result<UnbindOutcome, BindError> {
         let rec = store.verify_member(signed).map_err(lic)?;
         if rec.state != LicState::Unbound {
             return Err(lic(LicenceError::CheckFailed("not_an_unbind".into())));
@@ -224,28 +225,34 @@ impl SeedBinder {
             verdict_source_bound: true,
             open_membership: false,
         };
-        store.accept_binding(signed, off, &NoExtraChecks).map_err(lic)?;
-        let bound = self.bound.lock().map_err(|_| BindError::Malformed("binder poisoned".into()))?;
-        let mut meshes =
-            self.meshes.lock().map_err(|_| BindError::Malformed("binder poisoned".into()))?;
-        let mut next = meshes.clone();
-        next.remove(&rec.device_id);
-        if let Some(path) = &self.state_file {
-            write_state(path, &bound, &next).map_err(BindError::State)?;
-        }
-        *meshes = next;
+        let save_pending = match store.accept_binding(signed, off, &NoExtraChecks) {
+            Ok(_) => false,
+            // The store applied the restriction in memory; only the disk write failed.
+            Err(LicenceError::Persist(_)) => true,
+            Err(e) => return Err(lic(e)),
+        };
         self.chain.append(
             BIND_CHAIN_SOURCE,
             EVENT_KIND_WORKLOAD_NODE_UNBIND,
             Some(json!({
                 "v": 2, "device_id": rec.device_id, "mesh_id": rec.mesh_id, "seq": rec.seq,
+                "save_pending": save_pending,
                 "operator_key": signed.public_key,
                 "record_hash": crate::workload_pkg::codec::hex_encode(&Sha256::digest(
                     signed.payload.as_bytes())),
             })),
         );
-        Ok(rec)
+        Ok(UnbindOutcome { record: rec, save_pending })
     }
+}
+
+/// What an unbind did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnbindOutcome {
+    /// The accepted `unbound` record.
+    pub record: BindingRecord,
+    /// The unbind is in effect but could not be saved yet.
+    pub save_pending: bool,
 }
 
 /// The fingerprint of a grant key in hex form, for display and the CLI's

@@ -27,8 +27,14 @@ pub enum NodeCmd {
     Bind(BindArgs),
     /// Withdraw the Seed binding (operator-signed; needs no Seed).
     Unbind(UnbindArgs),
-    /// Forget the grant clock high-water mark and restart it from now (undoes a forward clock jump).
-    ResetFloor,
+    /// Forget the grant clock high-water mark and restart it from now (undoes
+    /// a forward clock jump). Shows the floor and the grants it would revive;
+    /// changes nothing without `--confirm`.
+    ResetFloor {
+        /// Apply the reset (chained).
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Mesh id and the held binding.
     Status {
         /// Print raw JSON.
@@ -142,9 +148,14 @@ pub async fn run(cmd: NodeCmd, client: &mut DaemonClient) -> anyhow::Result<()> 
                 print!("{}", render_status(&st));
             }
         }
-        NodeCmd::ResetFloor => {
-            call(client, "workload.node.reset-floor", json!({})).await?;
-            println!("clock floor reset (chained as floor_reset)");
+        NodeCmd::ResetFloor { confirm } => {
+            let r = call(client, "workload.node.reset-floor", json!({ "confirm": confirm })).await?;
+            print!("{}", render_floor_preview(&r["preview"]));
+            if r["applied"].as_bool() == Some(true) {
+                println!("floor reset (chained as floor_reset_requested and floor_reset)");
+            } else {
+                println!("nothing changed; run again with --confirm to apply");
+            }
         }
         NodeCmd::Bind(a) => {
             let key = load_key(&a.operator_key).map_err(anyhow::Error::msg)?;
@@ -179,6 +190,29 @@ pub async fn run(cmd: NodeCmd, client: &mut DaemonClient) -> anyhow::Result<()> 
         }
     }
     Ok(())
+}
+
+/// The floor now, after a reset, and the grants a reset would revive.
+pub fn render_floor_preview(p: &Value) -> String {
+    let mut out = format!(
+        "now          {}\nfloor now    {}\nfloor after  {}\n",
+        p["now"], p["floor"], p["floor_after"]
+    );
+    match p["revived"].as_array().filter(|a| !a.is_empty()) {
+        None => out.push_str("revives      no grant\n"),
+        Some(list) => {
+            out.push_str("revives      these grants (expired only by the floor):\n");
+            for g in list {
+                out.push_str(&format!(
+                    "  {} {} (expires_at {})\n",
+                    g["cog_id"].as_str().unwrap_or("?"),
+                    g["version"].as_str().unwrap_or("?"),
+                    g["expires_at"]
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// Plain-text `status`.
@@ -241,6 +275,16 @@ mod tests {
         assert_eq!(r.device_id, "seed-1");
         assert!(unbind_record(&json!({"binding": null}), 1).is_err());
         assert!(unbind_record(&json!({"mesh_id": null, "next_seq": 1, "binding": {"record": held}}), 1).is_err());
+    }
+
+    #[test]
+    fn the_floor_preview_names_the_grants_it_would_revive() {
+        let p = json!({"now": 10, "floor": 99, "floor_after": 10,
+            "revived": [{"cog_id": "fall-detect", "version": "1.0.0", "expires_at": 50}]});
+        let t = render_floor_preview(&p);
+        assert!(t.contains("fall-detect 1.0.0") && t.contains("floor after  10"), "{t}");
+        assert!(render_floor_preview(&json!({"now": 1, "floor": 1, "floor_after": 1, "revived": []}))
+            .contains("revives      no grant"));
     }
 
     #[test]

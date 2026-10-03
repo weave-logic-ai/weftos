@@ -20,10 +20,10 @@ pub fn findings(status: &Value) -> Vec<Finding> {
     let mut out = Vec::new();
     let binding = status.get("binding").filter(|b| !b.is_null());
     let mesh_id = status.get("mesh_id").and_then(Value::as_str);
-    if let Some(why) = status.get("poisoned").and_then(Value::as_str) {
+    if status.get("poisoned").and_then(Value::as_bool) == Some(true) {
         out.push(
-            f("store", Severity::Fail, format!("the licence store could not be read, so checkout is off: {why}"))
-                .remedy("inspect <runtime>/licence/ (the file is left untouched); restore it or move it aside"),
+            f("store", Severity::Fail, "the licence store could not be read, so checkout is off")
+                .remedy("inspect <runtime>/licence/ (the file is left untouched; the daemon log names the reason); restore it or move it aside"),
         );
     }
     if let Some(why) = status.get("config_error").and_then(Value::as_str) {
@@ -137,7 +137,7 @@ mod tests {
         assert_eq!(ids(&out), [("licence.binding".into(), Severity::Ok)]);
         let st = json!({"config_error": "kernel.mesh.mesh_nonce must be 64 hex characters", "binding": null});
         assert_eq!(ids(&findings(&st)), [("licence.mesh_nonce".into(), Severity::Fail)]);
-        let st = json!({"poisoned": "bad file", "mesh_id": null, "binding": null});
+        let st = json!({"poisoned": true, "mesh_id": null, "binding": null});
         assert_eq!(findings(&st)[0].id, "licence.store");
     }
 }
