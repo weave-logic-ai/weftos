@@ -214,7 +214,6 @@ fn wire_licence(
     let sink: Arc<dyn l::LicenceEventSink> = Arc::new(l::ChainLicenceSink::new(chain.clone()));
     let store = policy.store().clone();
     store.set_sink(sink.clone());
-    spawn_licence_tick(store.clone(), LICENCE_TICK);
     let Some(runtime) = mesh else { return };
     let anchors = Arc::new(anchors.clone());
     let approvals = Arc::new(l::ApprovalStore::open_or_poisoned(
@@ -290,6 +289,8 @@ async fn build(
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
+    // 1d's licence_boot will own this tick; drop this line then.
+    spawn_licence_tick(policy.store().clone(), LICENCE_TICK);
     wire_licence(dir, &policy, &anchors, &chain, mesh.clone(), posture);
     wire_revocations(&ex, revocations, &anchors, mesh);
     let serving = load_host_config(dir)?;
