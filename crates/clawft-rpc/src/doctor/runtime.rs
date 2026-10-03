@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use super::chain_locks;
 use super::daemon::{pid_liveness, Liveness, ProcTable};
 use super::env::DoctorEnv;
 use super::{Component, Finding, Severity};
@@ -197,6 +198,10 @@ fn state_files(env: &DoctorEnv, procs: &ProcTable, dir: &Path) -> (Vec<Finding>,
         } else {
             format!("no user chain at {} yet (created on first boot, or `weaver migrate user-chain`)", chain.display())
         }));
+        if let Some((f, d)) = chain_locks::chain_lock(procs, &chain) {
+            data.insert("user_chain_lock".into(), d);
+            out.push(f);
+        }
     }
 
     if dir == env.home.join(".clawft") {
@@ -204,11 +209,22 @@ fn state_files(env: &DoctorEnv, procs: &ProcTable, dir: &Path) -> (Vec<Finding>,
         let has = chain.exists() || chain.with_extension("rvf").exists();
         let marker = legacy_migration_marker(dir);
         let adopted = chain.with_extension("lock").exists();
-        data.insert("legacy_chain".into(), json!({
+        let mut legacy = json!({
             "present": has,
             "migrated_marker": marker.is_some(),
             "adopted_by_lock_aware_kernel": adopted,
-        }));
+        });
+        if let Some((f, d)) = chain_locks::chain_lock(procs, &chain) {
+            legacy["chain_lock"] = d;
+            out.push(f);
+        }
+        if has {
+            let locks: Vec<PathBuf> = env.runtime_dir_candidates().iter().map(|d| d.join(LOCK_FILE_NAME)).collect();
+            let (f, d) = chain_locks::legacy_adoption(procs, &chain, adopted, &locks);
+            legacy["evidence"] = d;
+            out.extend(f);
+        }
+        data.insert("legacy_chain".into(), legacy);
         if let Some((m, dest)) = &marker {
             out.push(
                 Finding::new(c, format!("migrated:{}", dir.display()), Severity::Ok, format!(

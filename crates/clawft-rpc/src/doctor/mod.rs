@@ -19,6 +19,7 @@
 //! All path resolution goes through [`env::DoctorEnv::detect`], the single
 //! place to switch over to a new runtime-paths API.
 
+pub mod chain_locks;
 pub mod channel;
 pub mod children;
 pub mod daemon;
