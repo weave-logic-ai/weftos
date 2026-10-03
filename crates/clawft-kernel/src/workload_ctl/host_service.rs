@@ -144,8 +144,6 @@ pub struct WorkloadHostService {
     pub(super) node_id: String,
     key: SigningKey,
     anchors: TrustAnchors,
-    /// Kinds this node accepts for a fetched package (builtin by default).
-    kinds: crate::workload_kind::KindRegistry,
     controllers: Box<dyn ControllerPolicy>,
     nonces: NonceGuard,
     pub(super) routes: BTreeMap<String, Arc<WorkloadHost>>,
@@ -167,7 +165,8 @@ pub struct WorkloadHostService {
     /// The node's subject revocation list, for the placement race check and
     /// the forced unload (the gate holds its own handle to the same list).
     pub(super) revocations: std::sync::OnceLock<Arc<crate::revocation::RevocationList>>,
-    /// Kinds, for their health definition (see `host_supervise`).
+    /// Kinds this node accepts for a fetched package and their health
+    /// definitions (see `host_supervise`); builtin by default.
     pub(super) kinds: crate::workload_kind::KindRegistry,
     /// Bounds on supervisor restarts.
     pub(super) restart: super::lifecycle::RestartPolicy,
@@ -214,7 +213,6 @@ impl WorkloadHostService {
             node_id: node_id_from_pubkey(&key.verifying_key().to_bytes()),
             key,
             anchors,
-            kinds: crate::workload_kind::KindRegistry::builtin(),
             controllers: Box::new(Vec::<[u8; 32]>::new()),
             nonces: NonceGuard::new(),
             routes: BTreeMap::new(),
