@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::plane::{PlacementControlPlane, PlacementRecord, PlaneError, TargetInfo};
+use super::plane_lifecycle::ControllerLife;
 use super::plane_seed::SeedEntry;
 
 const STATE_VERSION: u32 = 1;
@@ -32,6 +33,9 @@ struct PlaneState {
     /// Handles of instances placed on Seeds (older files have none).
     #[serde(default)]
     seed_instances: Vec<SeedEntry>,
+    /// Lifecycle, stored order and policy per instance (older files have none).
+    #[serde(default)]
+    lives: Vec<(String, ControllerLife)>,
 }
 
 fn read_state(path: &Path) -> Result<Option<PlaneState>, PlaneError> {
@@ -97,6 +101,11 @@ impl PlacementControlPlane {
                     m.insert(e.handle.instance_id.clone(), e);
                 }
             }
+            if let Ok(mut l) = self.lives.lock() {
+                for (id, life) in st.lives {
+                    l.insert(id, life);
+                }
+            }
             if let Ok(mut u) = self.unsettled.lock() {
                 for r in st.unsettled {
                     u.insert(r.decision_id.clone(), r);
@@ -124,6 +133,11 @@ impl PlacementControlPlane {
                 .lock()
                 .map(|m| m.values().cloned().collect())
                 .unwrap_or_default(),
+            lives: self
+                .lives
+                .lock()
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default(),
         };
         let res = serde_json::to_vec_pretty(&st)
             .map_err(std::io::Error::other)
@@ -144,6 +158,11 @@ impl PlacementControlPlane {
         if let Ok(mut h) = self.seed_handles.lock() {
             for i in ids {
                 h.remove(i);
+            }
+        }
+        if let Ok(mut l) = self.lives.lock() {
+            for i in ids {
+                l.remove(i);
             }
         }
         if n > 0 {

@@ -31,6 +31,7 @@ use crate::workload_pkg::codec::hex_encode;
 use crate::workload_runtime::VerifiedWorkload;
 
 use super::facts::governance_tier;
+use super::lifecycle::LifecyclePolicy;
 use super::host_service::{CtlConfig, InstanceBody, PlaceBody};
 use super::msg::method;
 use super::plane::{
@@ -177,8 +178,28 @@ impl PlacementControlPlane {
         )
     }
 
-    /// Decide (and unless `dry_run`, dispatch) one placement.
+    /// Decide (and unless `dry_run`, dispatch) one placement, with the
+    /// default lifecycle policy (see [`Self::place_with`]).
     pub async fn place(&self, order: &PlaceOrder) -> Result<PlaceReport, PlaneError> {
+        self.place_with(order, LifecyclePolicy::default()).await
+    }
+
+    /// [`Self::place`], recording what the lifecycle needs to reschedule the
+    /// instance if its node is lost: the order, and `policy` (whether it may
+    /// move at all).
+    pub async fn place_with(
+        &self,
+        order: &PlaceOrder,
+        policy: LifecyclePolicy,
+    ) -> Result<PlaceReport, PlaneError> {
+        let report = self.place_unregistered(order).await?;
+        if let Some(rec) = &report.placed {
+            self.register_life(rec, order, policy);
+        }
+        Ok(report)
+    }
+
+    pub(super) async fn place_unregistered(&self, order: &PlaceOrder) -> Result<PlaceReport, PlaneError> {
         order.check()?;
         let (w, spec, manifest_hash) = match self.prepare(order) {
             Ok(p) => p,
@@ -474,6 +495,7 @@ impl PlacementControlPlane {
             p.remove(instance_id);
         }
         if m == method::UNLOAD {
+            self.drop_life(instance_id);
             self.persist();
         }
         Ok(out)

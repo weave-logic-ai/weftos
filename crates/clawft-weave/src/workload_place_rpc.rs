@@ -24,8 +24,8 @@ use clawft_kernel::chain::ChainManager;
 use clawft_kernel::mesh_artifact::{ArtifactExchange, ExchangeConfig};
 use clawft_kernel::workload_ctl::msg::method;
 use clawft_kernel::workload_ctl::{
-    CtlConfig, FactsSource, MeshConnector, PlaceOrder, PlacementControlPlane, StorePinOrder,
-    WorkloadHostService,
+    CtlConfig, FactsSource, LifecyclePolicy, MeshConnector, PlaceOrder, PlacementControlPlane,
+    StorePinOrder, WorkloadHostService,
 };
 use clawft_kernel::workload_governance::WorkloadGate;
 use clawft_kernel::workload_runtime::RunMode;
@@ -91,6 +91,10 @@ static INGEST: OnceLock<crate::cog_ingest_serve::IngestRuntime> = OnceLock::new(
 /// Where it is served, once serving started.
 static SERVED: OnceLock<SocketAddr> = OnceLock::new();
 const LOCAL_ADDR: &str = "mem://local";
+/// How often this node's `workload-host` polls instance health.
+const SUPERVISE_TICK: std::time::Duration = std::time::Duration::from_secs(5);
+/// How often the controller checks for lost nodes.
+const LIFECYCLE_TICK: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Record the daemon key and runtime dir (call once at daemon boot).
 pub fn init(key: SigningKey, runtime_dir: PathBuf) {
@@ -160,6 +164,7 @@ fn wire_revocations(
     list: Arc<clawft_kernel::revocation::RevocationList>,
     anchors: &clawft_kernel::workload_pkg::TrustAnchors,
     mesh: Option<Arc<clawft_kernel::mesh_runtime::MeshRuntime>>,
+    dir: &Path,
 ) -> Option<Arc<clawft_kernel::mesh_swarm_revoke::RevocationExchange>> {
     let notices = match mesh {
         Some(rt) => {
@@ -170,6 +175,13 @@ fn wire_revocations(
                 rt,
             );
             x.set_on_applied(Arc::new(|_| enforce_in_background()));
+            // Notices already verified are kept and replayed to any peer that
+            // joins or recovers, so a node that was down when one was issued
+            // still receives it (and unloads what it runs from it).
+            let restored = x.with_log_file(dir.join("revocation-notices.json"));
+            if restored > 0 {
+                tracing::info!(restored, "revocation notices restored for replay");
+            }
             Some(x)
         }
         None => {
@@ -255,7 +267,7 @@ async fn build(
     // beats the rest of this build is enforced by the sweep at its end.
     let revoker = revoker_for(revocations.clone());
     revoker.set_exchange(ex.clone());
-    let notices = wire_revocations(&ex, revocations.clone(), &anchors, mesh);
+    let notices = wire_revocations(&ex, revocations.clone(), &anchors, mesh, dir);
     let serving = load_host_config(dir)?;
     let container = load_container(dir, &dir.join("workload-containers"))?;
     // `describe` always answers with the facts the daemon re-probes.
@@ -346,6 +358,12 @@ async fn build(
         tracing::warn!(n = swept.len(), "instances stopped by a revocation at startup");
     }
     revoker.spawn_tick(crate::workload_revoke_rpc::ENFORCE_TICK);
+    // Health heartbeat and bounded restarts on this node, and the controller's
+    // node-loss detection and rescheduling.
+    if let Some(h) = HOST.get() {
+        h.spawn_supervisor(SUPERVISE_TICK);
+    }
+    plane.spawn_lifecycle(LIFECYCLE_TICK);
     Ok(plane)
 }
 
@@ -380,6 +398,11 @@ struct PlaceParams {
     /// again by the target host unless this controller may place for it.
     #[serde(default)]
     project: Option<String>,
+    /// `false`: never reschedule this instance onto another node when its
+    /// node is lost (an alert is chained instead). Default `true`; a `pin`
+    /// also holds it in place.
+    #[serde(default)]
+    migratable: Option<bool>,
 }
 
 /// `workload.place {store_pin: ...}`: an operator-pinned store cog on a
@@ -493,6 +516,10 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
             }
             "workload.place" | "workload.explain" => {
                 let p: PlaceParams = serde_json::from_value(params).map_err(|e| format!("invalid {m} params: {e}"))?;
+                let policy = LifecyclePolicy {
+                    migratable: p.migratable.unwrap_or(true),
+                    ..LifecyclePolicy::default()
+                };
                 let (o, peers) = order(p, m == "workload.explain")?;
                 // A caller cannot assign trust: a peer named in a request
                 // is `discovered` unless the operator already knows it
@@ -502,7 +529,7 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
                     plane.add_target(&addr, TrustTier::Discovered).await.map_err(|e| format!("peer {addr}: {e}"))?;
                 }
                 plane.refresh().await;
-                let r = plane.place(&o).await.map_err(|e| e.to_string())?;
+                let r = plane.place_with(&o, policy).await.map_err(|e| e.to_string())?;
                 serde_json::to_value(r).map_err(|e| e.to_string())
             }
             "workload.status" if params.get("instance_id").is_none() => {
@@ -510,7 +537,8 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
                 let mut rows = Vec::new();
                 for rec in plane.placements() {
                     let st = plane.instance(method::STATUS, &rec.instance_id).await;
-                    rows.push(json!({ "placement": rec, "status": st.map_err(|e| e.to_string()) }));
+                    rows.push(json!({ "placement": rec, "status": st.map_err(|e| e.to_string()),
+                                      "lifecycle": plane.lifecycle_of(&rec.instance_id) }));
                 }
                 let host = HOST.get().map(|h| h.advertisement());
                 Ok(json!({ "controller": plane.node_id(), "targets": plane.targets(), "instances": rows,
@@ -684,7 +712,7 @@ mod revocation_wiring_tests {
             .push_signer("op", &clawft_kernel::workload_pkg::codec::hex_encode(&pk), KeyOrigin::Operator)
             .unwrap();
         let rt = Arc::new(MeshRuntime::new("n".into()));
-        wire_revocations(&ex, list.clone(), &anchors, Some(rt.clone()));
+        wire_revocations(&ex, list.clone(), &anchors, Some(rt.clone()), tmp.path());
         // The exchange already has a list: a second one is refused.
         assert!(!ex.set_revocations(list.clone()));
 

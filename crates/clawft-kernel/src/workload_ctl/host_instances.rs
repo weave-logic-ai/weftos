@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use super::lifecycle::LifecycleState;
 use super::host_service::{InstanceBody, WorkloadHostService, refuse, runtime_refusal};
 use super::msg::{CtlRequest, Refusal, RefusalCode, method};
 
@@ -64,7 +65,8 @@ impl WorkloadHostService {
                 all.push(json!({
                     "instance_id": id, "workload": p.name, "variant": p.variant,
                     "decision_id": p.decision_id, "status": host.status(&p.handle).await,
-                    "ingest": p.ingest_state,
+                    "ingest": p.ingest_state, "lifecycle": p.life.state,
+                    "restarts": p.life.restarts.len(),
                 }));
             }
             return Ok(Value::Array(all));
@@ -80,7 +82,13 @@ impl WorkloadHostService {
                         refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"))
                     })?;
                 }
-                host.start(&p.handle).await.map(|_| json!({"started": iid}))
+                let r = host.start(&p.handle).await.map(|_| json!({"started": iid}));
+                if r.is_ok() {
+                    p.desired_running = true;
+                    p.life.misses = 0;
+                    super::host_supervise::enter(&mut p.life, LifecycleState::Running);
+                }
+                r
             }
             method::STOP => {
                 // The token goes first: a stopping cog must not keep a
@@ -89,8 +97,10 @@ impl WorkloadHostService {
                     hk.deactivate(l);
                 }
                 let grace = Duration::from_millis(b.grace_ms.unwrap_or(2_000).min(60_000));
+                p.desired_running = false;
                 host.stop(&p.handle, grace).await.map(|ev| {
                     let audit = ev.audit();
+                    super::host_supervise::enter(&mut p.life, LifecycleState::Stopped);
                     p.last = Some(ev);
                     json!({ "stopped": iid, "evidence": audit })
                 })
@@ -108,7 +118,7 @@ impl WorkloadHostService {
             }
             method::STATUS => {
                 Ok(json!({ "instance_id": iid, "status": host.status(&p.handle).await,
-                           "ingest": p.ingest_state }))
+                           "ingest": p.ingest_state, "lifecycle": p.life.state }))
             }
             _ => Ok(match &p.last {
                 Some(ev) => json!({

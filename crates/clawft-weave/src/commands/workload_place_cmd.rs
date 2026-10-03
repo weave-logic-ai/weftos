@@ -115,6 +115,10 @@ pub struct PlaceArgs {
     /// Allow an emulated route (operator opt-in; recorded as emulated).
     #[arg(long)]
     pub allow_emulated: bool,
+    /// Never reschedule this instance onto another node when its node is
+    /// lost (an alert is chained instead). `--pin` has the same effect.
+    #[arg(long)]
+    pub no_migrate: bool,
     /// Run mode: once, interval, listener.
     #[arg(long, default_value = "interval")]
     pub mode: String,
@@ -167,6 +171,9 @@ pub fn request(cmd: &WorkloadPlaceCmd, cwd: &Path) -> Result<(&'static str, Valu
                 "allow_emulated": a.allow_emulated, "mode": a.mode, "interval": a.interval,
                 "csi_port": a.csi_port, "start": !a.no_start,
             });
+            if a.no_migrate {
+                p["migratable"] = json!(false);
+            }
             if let Some(pin) = &a.pin {
                 p["pin"] = json!(pin);
             }
@@ -361,6 +368,7 @@ mod tests {
             prefer: vec![],
             avoid: vec![],
             allow_emulated: false,
+            no_migrate: false,
             mode: "interval".into(),
             interval: 1,
             csi_port: 5006,

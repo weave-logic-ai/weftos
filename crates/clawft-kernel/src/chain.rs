@@ -574,6 +574,8 @@ pub const EVENT_KIND_WORKLOAD_REFUSE: &str = "workload.refuse";
 pub const EVENT_KIND_WORKLOAD_REVOKE: &str = "workload.revoke";
 /// A revocation lifted again (`unrevoke`), chained like the revocation.
 pub const EVENT_KIND_WORKLOAD_UNREVOKE: &str = "workload.unrevoke";
+/// An instance changed lifecycle state (health, restart, loss, reschedule).
+pub const EVENT_KIND_WORKLOAD_LIFECYCLE: &str = "workload.lifecycle";
 /// Fleet identity bound to a mesh node.
 pub const EVENT_KIND_WORKLOAD_NODE_BIND: &str = "workload.node.bind";
 

@@ -43,6 +43,19 @@ impl WorkloadKind for ProjectKind {
         KIND_PROJECT
     }
 
+    fn health(&self) -> super::HealthSpec {
+        // A child kernel answers its handshake quickly; two misses are enough.
+        super::HealthSpec {
+            interval_ms: 5_000,
+            miss_limit: 2,
+        }
+    }
+
+    /// A project kernel is bound to its user daemon's host: never moved.
+    fn migratable(&self) -> bool {
+        false
+    }
+
     fn validate(&self, _envelope: &ManifestEnvelope) -> Result<(), ManifestError> {
         Err(ManifestError::Invalid(
             "project workloads have no signed package; the user daemon supervisor starts them".into(),

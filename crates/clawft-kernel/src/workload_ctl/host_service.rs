@@ -114,6 +114,14 @@ pub(super) struct Placed {
     pub(super) ingest: Option<IngestLease>,
     /// `enabled`, `disabled` (bridge down, no token issued) or `none`.
     pub(super) ingest_state: &'static str,
+    /// State machine, health misses and restart history (see `host_supervise`).
+    pub(super) life: super::lifecycle::InstanceLife,
+    /// It runs until stopped (listener or interval mode), so an exit is a
+    /// failure, not the end of a one-shot run.
+    pub(super) continuous: bool,
+    /// The operator wants it running: set by `start`, cleared by `stop`.
+    /// A supervisor restarts only what is meant to run.
+    pub(super) desired_running: bool,
 }
 
 /// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
@@ -121,7 +129,7 @@ pub type FactsSource = Arc<dyn Fn() -> Option<SignedNodeFacts> + Send + Sync>;
 
 /// A node's `workload-host`.
 pub struct WorkloadHostService {
-    node_id: String,
+    pub(super) node_id: String,
     key: SigningKey,
     anchors: TrustAnchors,
     controllers: Box<dyn ControllerPolicy>,
@@ -145,6 +153,10 @@ pub struct WorkloadHostService {
     /// The node's subject revocation list, for the placement race check and
     /// the forced unload (the gate holds its own handle to the same list).
     pub(super) revocations: std::sync::OnceLock<Arc<crate::revocation::RevocationList>>,
+    /// Kinds, for their health definition (see `host_supervise`).
+    pub(super) kinds: crate::workload_kind::KindRegistry,
+    /// Bounds on supervisor restarts.
+    pub(super) restart: super::lifecycle::RestartPolicy,
 }
 
 fn now_ms() -> u64 {
@@ -193,6 +205,8 @@ impl WorkloadHostService {
             verify_budget: RefusalBudget::default(),
             ingest: None,
             revocations: std::sync::OnceLock::new(),
+            kinds: crate::workload_kind::KindRegistry::builtin(),
+            restart: super::lifecycle::RestartPolicy::default(),
         }
     }
 
@@ -300,7 +314,7 @@ impl WorkloadHostService {
         }
     }
 
-    fn record(&self, kind: &str, payload: Value) {
+    pub(super) fn record(&self, kind: &str, payload: Value) {
         if let Some(cm) = &self.chain {
             cm.append(HOST_CHAIN_SOURCE, kind, Some(payload));
         }
@@ -539,6 +553,15 @@ impl WorkloadHostService {
             }
             None => None,
         };
+        let continuous = !matches!(b.config.mode, crate::workload_runtime::RunMode::Once);
+        let will_start = req.method == method::PLACE && b.start;
+        let mut life = super::lifecycle::InstanceLife::new(
+            super::lifecycle::LifecycleState::Loaded,
+            now_ms(),
+        );
+        if will_start {
+            let _ = life.transition(super::lifecycle::LifecycleState::Running, now_ms());
+        }
         self.instances.lock().await.insert(
             iid.clone(),
             Placed {
@@ -550,6 +573,9 @@ impl WorkloadHostService {
                 last: None,
                 ingest: lease,
                 ingest_state,
+                life,
+                continuous,
+                desired_running: will_start,
             },
         );
         if let (Some(list), Some(g0)) = (self.revocations.get(), list_at_start)

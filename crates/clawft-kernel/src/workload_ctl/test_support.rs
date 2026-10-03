@@ -308,3 +308,68 @@ pub fn events(chain: &ChainManager, kind: &str) -> Vec<(String, Value)> {
         .map(|e| (e.source, e.payload.unwrap_or(Value::Null)))
         .collect()
 }
+
+/// A connector whose nodes can be killed and revived: a dead address
+/// refuses every connection, as a powered-off node does.
+pub struct Killable {
+    inner: super::transport::MeshConnector,
+    dead: std::sync::RwLock<std::collections::HashSet<String>>,
+}
+
+impl Killable {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: super::transport::MeshConnector::new(false),
+            dead: Default::default(),
+        })
+    }
+
+    /// Serve `svc` in process at `mem://<name>`.
+    pub fn serve(&self, name: &str, svc: Arc<WorkloadHostService>) -> String {
+        self.inner.register_local(name, svc)
+    }
+
+    pub fn kill(&self, addr: &str) {
+        self.dead.write().unwrap().insert(addr.to_string());
+    }
+
+    pub fn revive(&self, addr: &str) {
+        self.dead.write().unwrap().remove(addr);
+    }
+}
+
+#[async_trait::async_trait]
+impl CtlConnector for Killable {
+    async fn connect(
+        &self,
+        addr: &str,
+    ) -> Result<Box<dyn crate::mesh::MeshStream>, crate::mesh::MeshError> {
+        if self.dead.read().unwrap().contains(addr) {
+            return Err(crate::mesh::MeshError::PeerNotConnected(addr.to_string()));
+        }
+        self.inner.connect(addr).await
+    }
+}
+
+/// A placement order for `pkg` in `mode`, preferring `prefer` when given.
+pub fn mode_order(
+    pkg: &Path,
+    mode: crate::workload_runtime::RunMode,
+    prefer: Option<&str>,
+) -> super::plane_place::PlaceOrder {
+    super::plane_place::PlaceOrder {
+        package_dir: pkg.to_path_buf(),
+        config: super::host_service::CtlConfig {
+            mode,
+            args: vec![],
+            csi_port: 15040,
+        },
+        pin: None,
+        prefer: prefer.map(|p| vec![p.to_string()]).unwrap_or_default(),
+        avoid: vec![],
+        allow_emulated: false,
+        start: true,
+        dry_run: false,
+        project_id: None,
+    }
+}

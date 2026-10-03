@@ -25,9 +25,12 @@ pub mod facts;
 mod host_instances;
 pub mod host_revoke;
 pub mod host_service;
+pub mod host_supervise;
+pub mod lifecycle;
 pub mod msg;
 pub mod plane;
 pub mod plane_peers;
+pub mod plane_lifecycle;
 pub mod plane_place;
 mod plane_prepare;
 mod plane_reconcile;
@@ -48,6 +51,14 @@ mod tests_ingest;
 #[cfg(test)]
 mod tests_kind;
 #[cfg(test)]
+mod tests_life;
+#[cfg(test)]
+mod tests_life_node;
+#[cfg(test)]
+mod tests_life_plane;
+#[cfg(test)]
+mod tests_life_revoke;
+#[cfg(test)]
 mod tests_link;
 #[cfg(test)]
 mod tests_peers;
@@ -67,6 +78,10 @@ mod tests_two_node;
 pub use cog_kind::cog_workload_spec;
 pub use facts::{LiveNodeFacts, engine_tier, governance_tier, liveness_of, placement_view};
 pub use host_revoke::ForcedTeardown;
+pub use host_supervise::Supervised;
+pub use lifecycle::{
+    InstanceLife, LifecyclePolicy, LifecycleState, RestartDecision, RestartPolicy, can_transition,
+};
 pub use host_service::{CtlConfig, FactsSource, HOST_CHAIN_SOURCE, WorkloadHostService};
 pub use msg::{
     CtlRequest, CtlResponse, NonceGuard, Refusal, RefusalCode, SignedCtl, WORKLOAD_HOST_SERVICE,
