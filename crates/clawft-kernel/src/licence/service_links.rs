@@ -47,6 +47,10 @@ pub const LICENCE_TOPICS: [&str; 3] = [COG_BINDING_TOPIC, COG_GRANT_TOPIC, COG_S
 /// How often the daemon asks the service who is connected.
 pub const PEER_REFRESH: Duration = Duration::from_secs(10);
 
+/// Reply sends in flight at once; past it a reply is dropped and counted
+/// (the peer's next sync asks again).
+pub const MAX_REPLY_SENDS: usize = 64;
+
 /// True when `msg` is on one of [`LICENCE_TOPICS`].
 pub fn is_licence_topic(msg: &KernelMessage) -> bool {
     matches!(&msg.target, MessageTarget::Topic(t) if LICENCE_TOPICS.contains(&t.as_str()))
@@ -77,8 +81,12 @@ pub struct ServiceLinksCounters {
     pub refused_unverified: AtomicU64,
     /// Licence deliveries with no sink installed (no exchange over this path).
     pub unhandled: AtomicU64,
-    /// Peer view refreshes that failed.
+    /// Peer view refreshes that failed (the view is cleared).
     pub refresh_failed: AtomicU64,
+    /// Peer view refreshes that succeeded.
+    pub refreshed: AtomicU64,
+    /// Replies dropped because [`MAX_REPLY_SENDS`] were in flight.
+    pub replies_dropped: AtomicU64,
 }
 
 #[derive(Default)]
@@ -94,6 +102,7 @@ pub struct ServiceLicenceLinks {
     sinks: DashMap<String, Arc<dyn PeerControlSink>>,
     view: RwLock<View>,
     events: MeshPeerEventBus,
+    replies: Arc<tokio::sync::Semaphore>,
     /// Counters.
     pub counters: ServiceLinksCounters,
 }
@@ -107,6 +116,7 @@ impl ServiceLicenceLinks {
             sinks: DashMap::new(),
             view: RwLock::new(View::default()),
             events: MeshPeerEventBus::new(),
+            replies: Arc::new(tokio::sync::Semaphore::new(MAX_REPLY_SENDS)),
             counters: ServiceLinksCounters::default(),
         })
     }
@@ -117,10 +127,14 @@ impl ServiceLicenceLinks {
         let snap = match self.directory.peers().await {
             Ok(s) => s,
             Err(e) => {
+                // Link down or the service gone: nobody is known to be
+                // licensed until the next good view (no floods meanwhile).
+                *self.view.write().unwrap_or_else(|p| p.into_inner()) = View::default();
                 self.counters.refresh_failed.fetch_add(1, Ordering::Relaxed);
                 return Err(e);
             }
         };
+        self.counters.refreshed.fetch_add(1, Ordering::Relaxed);
         let licensed: HashSet<String> = snap.licensed.into_iter().collect();
         let joined: Vec<String> = {
             let mut v = self.view.write().unwrap_or_else(|p| p.into_inner());
@@ -186,11 +200,21 @@ impl ServiceLicenceLinks {
             });
         }
         self.counters.delivered.fetch_add(1, Ordering::Relaxed);
+        // Replies go out on their own tasks: this runs on the link's one
+        // delivery worker, and a slow peer must not hold up the others.
         for reply in sink.on_peer_control(from, conn_of(&from.peer_id), payload) {
+            let Ok(permit) = self.replies.clone().try_acquire_owned() else {
+                self.counters.replies_dropped.fetch_add(1, Ordering::Relaxed);
+                continue;
+            };
             let m = KernelMessage::new(0, MessageTarget::Topic(topic.clone()), MessagePayload::Json(reply));
-            if let Err(e) = self.sender.send_to_node(&from.peer_id, m).await {
-                tracing::debug!(peer = %from.peer_id, %topic, error = %e, "licence reply failed");
-            }
+            let (sender, peer, topic) = (self.sender.clone(), from.peer_id.clone(), topic.clone());
+            tokio::spawn(async move {
+                if let Err(e) = sender.send_to_node(&peer, m).await {
+                    tracing::debug!(%peer, %topic, error = %e, "licence reply failed");
+                }
+                drop(permit);
+            });
         }
         true
     }

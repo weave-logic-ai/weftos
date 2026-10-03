@@ -101,6 +101,15 @@ pub fn snapshot_of(v: &serde_json::Value) -> PeerSnapshot {
     PeerSnapshot { connected: ids("connected"), licensed: ids("licensed") }
 }
 
+/// True when this daemon's registration holds the service's reserved topics
+/// (the cluster owner's daemon): only it runs the licence path. A service
+/// that does not say (older than ADR-106 phase 3) forwards no licence
+/// records either, so its answer counts as no.
+pub async fn reserved_holder() -> Result<bool, String> {
+    let v = link().forwarder()?.peers().await?;
+    Ok(v.get("reserved_holder").and_then(serde_json::Value::as_bool).unwrap_or(false))
+}
+
 /// The node's licence links over the service link (service mode).
 pub fn licence_links() -> Arc<ServiceLicenceLinks> {
     LICENCE

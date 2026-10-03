@@ -184,7 +184,7 @@ fn wire(a: &Node, b: &Node) {
 fn leaf(n: &Node) -> Arc<AtomicUsize> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
     let tally = RouteTally::default();
-    assert!(n.svc.running().runtime().register_authenticated_as("leaf-l".into(), tx, true, PeerClass::Leaf, &tally));
+    assert!(n.svc.running().runtime().register_authenticated_as(leaf_id(), tx, true, PeerClass::Leaf, &tally));
     let got = Arc::new(AtomicUsize::new(0));
     let g = got.clone();
     tokio::spawn(async move {
@@ -197,6 +197,10 @@ fn leaf(n: &Node) -> Arc<AtomicUsize> {
         }
     });
     got
+}
+
+fn leaf_id() -> String {
+    clawft_kernel::node_id_from_pubkey(&[0x71; 32])
 }
 
 fn is_cog(m: &clawft_kernel::ipc::KernelMessage) -> bool {
@@ -224,8 +228,8 @@ async fn a_binding_and_a_grant_flood_reach_a_second_service_mode_node_and_no_lea
     a.links.refresh().await.unwrap();
     b.links.refresh().await.unwrap();
     assert!(a.links.peer_licensed(&b.svc.node_id()));
-    assert!(!a.links.peer_licensed("leaf-l"), "connected but not a licensed node");
-    assert!(a.links.peer_ids().contains(&"leaf-l".to_string()));
+    assert!(!a.links.peer_licensed(&leaf_id()), "connected but not a licensed node");
+    assert!(a.links.peer_ids().contains(&leaf_id()));
 
     assert_eq!(a.ex.issue_binding(binding(&a.svc.node_id())).await, Ok(Receipt::New));
     wait_until("B holds the binding", || bound(&b)).await;
@@ -239,6 +243,16 @@ async fn a_binding_and_a_grant_flood_reach_a_second_service_mode_node_and_no_lea
     assert!(b.links.counters.delivered.load(Ordering::SeqCst) >= 3);
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert_eq!(leaf_got.load(Ordering::SeqCst), 0, "an admitted leaf gets no licence record");
+    // Even if the daemon asked, A's service would not send a licence record to the leaf.
+    let to_leaf = clawft_kernel::ipc::KernelMessage::new(
+        0,
+        MessageTarget::Topic(COG_BINDING_TOPIC.into()),
+        clawft_kernel::ipc::MessagePayload::Json(serde_json::to_value(binding("x")).unwrap()),
+    );
+    assert!(a.links.route_to_remote(&leaf_id(), to_leaf).await.is_err(), "refused at the service");
+    assert_eq!(a.svc.running().state.router.counters.licence_out_refused.load(Ordering::SeqCst), 1);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(leaf_got.load(Ordering::SeqCst), 0);
     let leaked: Vec<_> = tenant.received().into_iter().filter(|g| is_cog(&g.msg)).collect();
     assert!(leaked.is_empty(), "a non-owner tenant gets nothing: {leaked:?}");
     assert!(

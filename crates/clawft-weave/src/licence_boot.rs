@@ -117,6 +117,23 @@ pub fn spawn_store_tick(store: Arc<CheckoutGrantStore>, period: std::time::Durat
 }
 
 static NOT_INSTALLED: OnceLock<String> = OnceLock::new();
+static RESERVED: OnceLock<Option<bool>> = OnceLock::new();
+
+/// Why a service-mode daemon that is not the reserved-topic holder runs no
+/// licence path.
+pub const NOT_HOLDER: &str = "this daemon does not hold the mesh service's reserved licence topics \
+     (it is not the cluster owner's daemon); the Seed licence runtime, exchange and binder run only there";
+
+/// Record whether this daemon holds the service's reserved topics: `None` in
+/// collapsed mode (not applicable), `Some(false)` for another tenant's daemon.
+pub fn set_reserved_holder(v: Option<bool>) {
+    let _ = RESERVED.set(v);
+}
+
+/// See [`set_reserved_holder`] (`None` also before boot).
+pub fn reserved_holder() -> Option<bool> {
+    RESERVED.get().copied().flatten()
+}
 
 /// Why the licence runtime was not installed although `kernel.mesh.mesh_nonce`
 /// is configured (`None`: it was installed, or no nonce is configured).
@@ -252,5 +269,6 @@ pub fn status(rt: &LicenceRuntime) -> Value {
         "binding": binding,
         "next_seq": held.as_ref().map_or(1, |h| h.seq + 1),
         "steward": { "node_id": rt.steward_node_id, "pubkey": rt.steward_pubkey },
+        "reserved_holder": reserved_holder(),
     })
 }

@@ -58,6 +58,8 @@ pub struct RouterCounters {
     pub licence_forwarded: AtomicU64,
     /// Licence control records from anything but a licensed peer (dropped).
     pub licence_unlicensed: AtomicU64,
+    /// Licence control sends to a peer that is not a licensed node (refused).
+    pub licence_out_refused: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,6 +152,12 @@ impl TenantRouter {
         } else {
             "none"
         }
+    }
+
+    /// True when `reg` is the registration that holds the reserved topics
+    /// (the daemon that runs the licence path, ADR-106).
+    pub fn holds_reserved(&self, reg: &Arc<Registration>) -> bool {
+        self.reserved_holder().is_some_and(|h| Arc::ptr_eq(&h, reg))
     }
 
     /// The registration of [`Self::reserved_holder_uid`], if it is registered.
@@ -312,6 +320,14 @@ impl TenantRouter {
             return self.deliver_local(from, dest_scope, msg);
         }
         let rt = self.runtime().ok_or_else(|| SendError::Failed("mesh runtime is not running".into()))?;
+        // Licence floods and sync go only to licensed nodes (admission
+        // verified, class `node`), whatever the daemon asked (ADR-106).
+        if topic_of(&msg).is_some_and(|t| crate::licence_forward::FORWARDED_TOPICS.contains(&t))
+            && !rt.peer_licensed(&node)
+        {
+            self.counters.licence_out_refused.fetch_add(1, Ordering::Relaxed);
+            return Err(SendError::Forbidden(format!("{node} is not a licensed node for licence records")));
+        }
         let mut env = MeshIpcEnvelope::new(self.node_id.clone(), node.clone(), msg);
         env.dest_scope = dest_scope;
         env.src_scope = Some(WireScope { user_id: from.user_id.clone(), project_id: None });

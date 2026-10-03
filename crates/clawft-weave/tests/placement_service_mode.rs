@@ -1,7 +1,12 @@
 //! ADR-106 phase 3: placement in service mode. The daemon's node key belongs
 //! to the machine mesh service, so placement signs with the daemon-local
-//! control key (`placement_boot`). A kernel booted in service mode, the
-//! daemon's boot step, the operator's policy files in a temp runtime dir and
+//! control key (`placement_boot`). A real mesh service with this daemon
+//! linked as the cluster owner through the daemon's own `cog_swarm` wiring
+//! (`wrap`, `set_forwarder`), a kernel booted in service mode under the
+//! service's node id, the daemon's boot step (`placement_boot::start`: the
+//! reserved-holder check, the licence runtime and the eager licence exchange
+//! over the service links, whose peer view refresh starts with the link), the
+//! operator's policy files in a temp runtime dir and
 //! a board serving `workload-host` over Noise TCP to that control key: a
 //! `workload.place` through `dispatch` runs the cog on the board, and the
 //! licence runtime names the machine as steward with the control key as its
@@ -10,6 +15,8 @@
 //! One process per test file, so the module-wide placement state is this
 //! test's alone.
 #![cfg(all(unix, feature = "placement"))]
+
+mod mesh_e2e;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -31,7 +38,10 @@ use clawft_platform::NativePlatform;
 use clawft_types::config::{ChainConfig, Config, KernelConfig};
 use clawft_types::placement::{AttrValue, Capability, CapabilityId, NodeFacts, Provenance};
 use clawft_weave::node_identity::DaemonIdentity;
-use clawft_weave::{licence_boot, placement_boot, workload_place_rpc};
+use clawft_types::config::MeshServicePolicy;
+use clawft_weave::{cog_swarm, licence_boot, placement_boot, workload_place_rpc};
+use mesh_e2e::*;
+use std::sync::atomic::Ordering;
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
@@ -120,9 +130,18 @@ async fn placement_runs_in_service_mode_signed_by_the_control_key() {
     let tmp = tempfile::tempdir().unwrap();
     let runtime = tmp.path().join("runtime");
     std::fs::create_dir_all(&runtime).unwrap();
-    // The machine key is the service's; the daemon only knows its public half.
-    let machine = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
-    let machine_id = clawft_kernel::node_id_from_pubkey(&machine);
+    // A real service; this daemon links as its cluster owner with the
+    // daemon's own cog mesh wiring. The machine key is the service's.
+    let svc = Svc::with_config(Default::default(), |c| c.cluster_owner_uid = Some(OTHER_UID)).await;
+    svc.next_uid.store(OTHER_UID, Ordering::SeqCst);
+    let cfg = svc.mesh_cfg(MeshServicePolicy::Required);
+    let wrap: Box<dyn FnOnce(Arc<Inbox>) -> Arc<dyn clawft_kernel::mesh_delivery::LocalDelivery>> =
+        Box::new(cog_swarm::wrap_inbox);
+    let owner = link_via(&cfg, other_endpoint(&svc, key(2), vec![]), fast(), Some(wrap)).await;
+    svc.next_uid.store(REAL, Ordering::SeqCst);
+    cog_swarm::set_forwarder(owner.handle.as_ref().unwrap().forwarder.clone());
+    let rec = svc.record();
+    let (machine, machine_id) = (rec.machine_pubkey, rec.node_id.clone());
     let identity = DaemonIdentity::for_service(machine_id.clone(), machine).unwrap();
     let kcfg = KernelConfig { chain: Some(ChainConfig::isolated_in(&tmp.path().join("chain"))), ..KernelConfig::default() };
     let kernel = Kernel::boot_in_service_mode(Config::default(), kcfg, Arc::new(NativePlatform::new()), machine_id.clone())
@@ -155,6 +174,13 @@ async fn placement_runs_in_service_mode_signed_by_the_control_key() {
     );
 
     placement_boot::start(&kernel, &identity, &runtime).await;
+
+    // The boot step: this daemon holds the reserved topics, the exchange is
+    // up from boot over the service links, and their peer view is refreshed.
+    assert_eq!(licence_boot::reserved_holder(), Some(true));
+    assert!(workload_place_rpc::licence_exchange().is_some(), "the exchange starts at boot, before any placement");
+    let links = cog_swarm::service_licence_links().expect("service links once the forwarder is set");
+    wait_until("the peer view is refreshed", || links.counters.refreshed.load(Ordering::SeqCst) >= 1).await;
 
     // The licence runtime: the machine is the steward, the control key signs.
     let lic = licence_boot::runtime().expect("licence runtime installed in service mode");

@@ -120,4 +120,31 @@ mod tests {
         assert!(owner_rx.try_recv().is_err() && other_rx.try_recv().is_err());
         assert_eq!(router.counters.licence_unlicensed.load(Ordering::Relaxed), 2);
     }
+
+    #[tokio::test]
+    async fn only_the_owner_holds_the_topics_and_sends_go_only_to_licensed_nodes() {
+        use clawft_mesh_local::{Node, WeftAddr};
+        let registry = Arc::new(Registry::new());
+        let policy = PolicyCell::new(Some(501), MeshAdmissionMode::Enforce);
+        let router = TenantRouter::new(registry.clone(), policy, "node-local".into());
+        let (owner, _orx) = tenant(&registry, 501);
+        let (other, _xrx) = tenant(&registry, 502);
+        assert!(router.holds_reserved(&owner) && !router.holds_reserved(&other));
+        let rt = Arc::new(MeshRuntime::new("node-local".into()));
+        let (node_p, leaf_l) = (node_id_from_pubkey(&[0x70; 32]), node_id_from_pubkey(&[0x71; 32]));
+        router.set_runtime(&rt);
+        let tally = clawft_kernel::mesh_runtime::RouteTally::default();
+        let (ntx, mut nrx) = mpsc::channel(8);
+        let (ltx, mut lrx) = mpsc::channel(8);
+        assert!(rt.register_authenticated_as(node_p.clone(), ntx, true, PeerClass::Node, &tally));
+        assert!(rt.register_authenticated_as(leaf_l.clone(), ltx, true, PeerClass::Leaf, &tally));
+        let msg = || KernelMessage::new(0, MessageTarget::Topic(COG_BINDING_TOPIC.into()), MessagePayload::Json(serde_json::json!({})));
+        let to = |n: &str| WeftAddr::new(Node::Id(n.into()), None, None, "").unwrap();
+        assert!(router.route_outbound(&owner, &to(&leaf_l), msg()).await.is_err(), "a leaf is refused");
+        assert_eq!(router.counters.licence_out_refused.load(Ordering::Relaxed), 1);
+        assert!(lrx.try_recv().is_err());
+        router.route_outbound(&owner, &to(&node_p), msg()).await.unwrap();
+        assert!(nrx.try_recv().is_ok(), "a licensed node gets it");
+        assert!(router.route_outbound(&other, &to(&node_p), msg()).await.is_err(), "a non-owner may not send it");
+    }
 }

@@ -244,6 +244,16 @@ pub async fn dispatch(
     kernel: Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Response {
     let Some(rt) = licence_boot::runtime() else {
+        if licence_boot::reserved_holder() == Some(false) {
+            // Service mode, another tenant's daemon: the licence path is the
+            // cluster owner's daemon's. Status says so; everything else refuses.
+            if method == "workload.node.binding" {
+                return Response::success(
+                    json!({ "installed": false, "reserved_holder": false, "reason": licence_boot::NOT_HOLDER }),
+                );
+            }
+            return Response::error(licence_boot::NOT_HOLDER);
+        }
         if method == "workload.node.binding"
             && let Some(why) = licence_boot::not_installed()
         {

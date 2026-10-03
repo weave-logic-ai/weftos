@@ -225,6 +225,17 @@ pub fn render_floor_preview(p: &Value) -> String {
 /// Plain-text `status`.
 pub fn render_status(st: &Value) -> String {
     let mut out = String::new();
+    if st["installed"].as_bool() == Some(false) {
+        out.push_str(&format!("licence   not running here: {}\n", st["reason"].as_str().unwrap_or("?")));
+    }
+    match st["reserved_holder"].as_bool() {
+        Some(true) => out.push_str("reserved  this daemon holds the service's licence topics\n"),
+        Some(false) => out.push_str("reserved  NOT the holder (another tenant's daemon; the owner's runs the licence path)\n"),
+        None => {}
+    }
+    if let Some(k) = st["steward"]["pubkey"].as_str() {
+        out.push_str(&format!("steward   key {k} (the binding's steward_pubkey)\n"));
+    }
     let id = st["mesh_id"].as_str();
     out.push_str(&format!("mesh id   {}\n", id.unwrap_or("none (no kernel.mesh.mesh_nonce)")));
     match st.get("binding").filter(|b| !b.is_null()) {

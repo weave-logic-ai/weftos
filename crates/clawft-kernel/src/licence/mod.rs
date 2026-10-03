@@ -103,7 +103,7 @@ pub use floor_preview::{FloorPreview, RevivedGrant};
 pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
 pub use links::LicenceLinks;
 pub use service_links::{
-    LICENCE_TOPICS, PEER_REFRESH, PeerDirectory, PeerSnapshot, ServiceLicenceLinks, ServiceLinksCounters,
+    LICENCE_TOPICS, MAX_REPLY_SENDS, PEER_REFRESH, PeerDirectory, PeerSnapshot, ServiceLicenceLinks, ServiceLinksCounters,
     is_licence_topic,
 };
 pub use weft_licence_wire::{

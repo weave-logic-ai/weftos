@@ -233,3 +233,78 @@ async fn the_same_record_on_both_paths_is_applied_once() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(bus.sent_on("node-b", "node-c", COG_BINDING_TOPIC), 1, "forwarded once");
 }
+
+/// Sends to `slow` take `delay`; everything else is instant. Counts sends.
+struct SlowSender {
+    delay: std::time::Duration,
+    sent: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl PeerSender for SlowSender {
+    async fn send_to_node(&self, to: &str, _: KernelMessage) -> KernelResult<()> {
+        if to == "slow" {
+            tokio::time::sleep(self.delay).await;
+        }
+        self.sent.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_slow_peer_does_not_stall_other_deliveries() {
+    let fx = Fx::new();
+    let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let links = ServiceLicenceLinks::new(
+        Arc::new(SlowSender { delay: std::time::Duration::from_secs(5), sent: sent.clone() }),
+        Arc::new(Dir::default()),
+    );
+    let _ex = LicenceExchange::start(LicenceExchangeParts {
+        store: fx.store.clone(),
+        approvals: fx.approvals.clone(),
+        anchors: anchors(),
+        runtime: links.clone(),
+        posture: Arc::new(posture),
+        admission: Arc::new(CtxAdmission),
+        sink: fx.sink.clone(),
+        config: LicenceExchangeConfig { sync_on_connect: false, ..Default::default() },
+    });
+    // A sync request from the slow peer: the reply to it takes 5 s to send.
+    let req = serde_json::to_value(SyncMsg::Request { grant_after: None, approval_after: None }).unwrap();
+    let t = std::time::Instant::now();
+    assert!(links.deliver(&ctx("slow", true, PeerClass::Node), json_msg(COG_SYNC_TOPIC, req)).await);
+    // The next delivery, from another peer, is handled at once.
+    let v = serde_json::to_value(binding(1, BindState::Bound)).unwrap();
+    assert!(links.deliver(&ctx("fast", true, PeerClass::Node), json_msg(COG_BINDING_TOPIC, v)).await);
+    assert!(t.elapsed() < std::time::Duration::from_secs(1), "the worker waited on a reply: {:?}", t.elapsed());
+    assert!(fx.store.active_binding().is_some());
+    assert_eq!(sent.load(Ordering::SeqCst), 0, "the slow reply is still in flight on its own task");
+}
+
+/// Answers until `down` is set, then fails as a dropped link does.
+#[derive(Default)]
+struct FlakyDir(std::sync::atomic::AtomicBool);
+
+#[async_trait]
+impl PeerDirectory for FlakyDir {
+    async fn peers(&self) -> Result<PeerSnapshot, String> {
+        if self.0.load(Ordering::SeqCst) {
+            return Err("the mesh service link is reconnecting".into());
+        }
+        Ok(PeerSnapshot { connected: vec!["node-b".into()], licensed: vec!["node-b".into()] })
+    }
+}
+
+#[tokio::test]
+async fn a_failed_refresh_clears_the_licensed_view() {
+    let bus = Arc::new(Bus::default());
+    let dir = Arc::new(FlakyDir::default());
+    let links = ServiceLicenceLinks::new(Arc::new(BusSender { me: "node-d".into(), bus }), dir.clone());
+    links.refresh().await.unwrap();
+    assert!(links.peer_licensed("node-b"));
+    dir.0.store(true, Ordering::SeqCst);
+    assert!(links.refresh().await.is_err());
+    assert!(!links.peer_licensed("node-b") && links.peer_ids().is_empty(), "nobody is licensed while the link is down");
+    assert_eq!(links.counters.refresh_failed.load(Ordering::Relaxed), 1);
+    assert_eq!(links.counters.refreshed.load(Ordering::Relaxed), 1);
+}

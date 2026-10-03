@@ -16,9 +16,16 @@
 //!   the machine's: a binding names it as `steward_node_id`, and peers
 //!   address this node's swarm by it.
 //!
+//! In service mode the placement controller's id (what `workload.status`
+//! shows as `controller`, and what targets see) is the control key's id, not
+//! the machine's node id.
+//!
 //! [`start`] then installs placement, the licence runtime and the licence
 //! exchange (over the kernel's mesh when it has one, over the service links
-//! otherwise), which before phase 3 never ran in service mode.
+//! otherwise), which before phase 3 never ran in service mode. In service
+//! mode only the daemon that holds the service's reserved topics (the cluster
+//! owner's) runs the licence path; another tenant's daemon places but runs no
+//! licence runtime, exchange or binder.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -27,6 +34,7 @@ use clawft_kernel::boot::Kernel;
 use clawft_platform::NativePlatform;
 use ed25519_dalek::SigningKey;
 use tokio::sync::RwLock;
+use serde_json::json;
 use tracing::warn;
 
 use crate::node_identity::{DaemonIdentity, IdentityError};
@@ -87,6 +95,12 @@ pub async fn start(
         tracing::info!(controller = %s.pubkey_hex(), "service mode: placement and the licence steward sign with the control key");
     }
     crate::workload_place_rpc::init_with_mesh_id(s.key.clone(), runtime_dir.to_path_buf(), s.mesh_node_id.clone());
+    let holder = if identity.is_service() { Some(service_holder().await) } else { None };
+    crate::licence_boot::set_reserved_holder(holder);
+    if holder == Some(false) {
+        warn!("{}", crate::licence_boot::NOT_HOLDER);
+        return;
+    }
     // ADR-106: the mesh id from the configured nonce, the checkout policy and
     // the steward binder. Built here (not lazily) so a changed nonce chains
     // `binding_orphaned` at boot.
@@ -110,13 +124,11 @@ pub async fn start(
     }));
     // The exchange from boot, not from the first placement call: a member
     // that never places still takes and passes on bindings and grants.
+    check_steward_key(&rt, &s);
     let posture = crate::licence_boot::posture(k.kernel_config().mesh.as_ref(), k.governance_gate().is_some());
     let links = crate::workload_place_rpc::licence_links(k.a2a_router().mesh_runtime().cloned());
     drop(k);
-    if links.is_none() {
-        tracing::debug!("no mesh for the licence exchange yet");
-    }
-    crate::workload_place_rpc::ensure_licence(
+    let started = crate::workload_place_rpc::ensure_licence(
         runtime_dir,
         Some(rt.policy()),
         &anchors,
@@ -124,6 +136,49 @@ pub async fn start(
         links,
         Arc::new(move || posture),
     );
+    if started.is_none() {
+        if identity.is_service() {
+            warn!("service mode: the licence exchange did not start (no mesh service link); no bindings or grants reach this node");
+        } else {
+            tracing::debug!("no kernel mesh: the licence exchange is not started");
+        }
+    }
+}
+
+/// Ask the service whether this daemon holds the reserved topics, a few
+/// times while the link settles. Fails closed (not the holder).
+async fn service_holder() -> bool {
+    let mut last = String::new();
+    for _ in 0..5 {
+        match crate::cog_swarm::reserved_holder().await {
+            Ok(v) => return v,
+            Err(e) => last = e,
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    warn!(error = %last, "could not ask the mesh service who holds the licence topics; the licence path stays off");
+    false
+}
+
+/// A held binding that names this node as steward under another key: the
+/// control key was replaced (or this is another daemon's binding). The Seed
+/// refuses every request until the operator rebinds with the current key.
+fn check_steward_key(rt: &crate::licence_boot::LicenceRuntime, s: &PlacementSigner) {
+    let Some(h) = rt.store().held_binding() else { return };
+    let ours = s.pubkey_hex();
+    if h.state == clawft_kernel::licence::BindState::Bound
+        && h.steward_node_id == s.mesh_node_id
+        && h.steward_pubkey != ours
+    {
+        tracing::error!(held = %h.steward_pubkey, signer = %ours,
+            "the Seed binding names this node as steward with a DIFFERENT key: steward requests will be refused; \
+             rebind (`weaver workload node bind`) with the current key");
+        rt.chain.append(
+            crate::licence_boot::LICENCE_CHAIN_SOURCE,
+            &crate::licence_boot::licence_kind("steward_key_mismatch"),
+            Some(json!({ "held": h.steward_pubkey, "signer": ours, "seq": h.seq })),
+        );
+    }
 }
 
 #[cfg(test)]
