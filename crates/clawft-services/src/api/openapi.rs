@@ -87,6 +87,10 @@ mod tests {
             if path.extension().is_none_or(|e| e != "rs") {
                 continue;
             }
+            // `/playground` serves an HTML page, not an API operation.
+            if path.file_name().is_some_and(|n| n == "playground.rs") {
+                continue;
+            }
             let text = std::fs::read_to_string(&path).unwrap();
             let code = text.split("#[cfg(test)]").next().unwrap();
             for m in route.captures_iter(code) {

@@ -20,6 +20,7 @@ pub mod openapi;
 pub mod memory_api;
 pub mod middleware;
 pub mod monitoring;
+pub mod playground;
 pub mod skills;
 pub mod voice_api;
 pub mod voice_status;
@@ -393,6 +394,8 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
     // Serve built UI as SPA fallback when a static directory is provided.
     if let Some(dir) = static_dir {
         use tower_http::services::ServeDir;
+        // ADR-102 D2: the playground page; public HTML, token-gated data calls.
+        router = router.merge(playground::playground_routes(dir));
         router = router.fallback_service(ServeDir::new(dir).append_index_html_on_directories(true));
     }
 
