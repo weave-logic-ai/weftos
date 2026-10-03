@@ -1,4 +1,4 @@
-//! `weaver workload place | explain | status | stop | logs | unload`
+//! `weaver workload place | explain | status | stop | logs | unload | revoke`
 //! (ADR-099 sections 3 and 7, card mesh-placement-12).
 //!
 //! Each verb calls the daemon's placement control plane (the
@@ -52,6 +52,10 @@ pub enum WorkloadPlaceCmd {
         /// Instance id.
         instance_id: String,
     },
+    /// Revoke a package, signer key or artifact hash: this node stops and
+    /// unloads what it runs from it, drops its bytes, and (with a pinned
+    /// operator key) tells every peer to do the same. Admin only.
+    Revoke(RevokeArgs),
     /// Unload a placed instance, or with `--catalog` a catalogued workload by name.
     Unload {
         /// Instance id (or catalog name with `--catalog`).
@@ -60,6 +64,33 @@ pub enum WorkloadPlaceCmd {
         #[arg(long)]
         catalog: bool,
     },
+}
+
+/// What `weaver workload revoke` revokes: exactly one of the three.
+#[derive(Args, Debug, Clone)]
+#[command(group(
+    clap::ArgGroup::new("subject")
+        .required(true)
+        .multiple(false)
+        .args(["package", "signer", "hash"])
+))]
+pub struct RevokeArgs {
+    /// Package id (the signed statement's BLAKE3, shown by `weaver cog
+    /// verify`, or a catalog name for `workload install`).
+    #[arg(long)]
+    pub package: Option<String>,
+    /// Signer public key (64 hex): revokes every package that key signed.
+    #[arg(long)]
+    pub signer: Option<String>,
+    /// Artifact BLAKE3 hash (64 hex): a manifest or payload file.
+    #[arg(long)]
+    pub hash: Option<String>,
+    /// Why (kept in the chain and the revocation list).
+    #[arg(long)]
+    pub reason: Option<String>,
+    /// Print raw JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Options shared by `place` and `explain`.
@@ -159,6 +190,15 @@ pub fn request(cmd: &WorkloadPlaceCmd, cwd: &Path) -> Result<(&'static str, Valu
             }
             ("workload.place", json!({ "store_pin": pin }))
         }
+        WorkloadPlaceCmd::Revoke(a) => {
+            let mut p = json!({});
+            for (k, v) in [("package", &a.package), ("signer", &a.signer), ("hash", &a.hash), ("reason", &a.reason)] {
+                if let Some(v) = v {
+                    p[k] = json!(v);
+                }
+            }
+            ("workload.revoke", p)
+        }
         WorkloadPlaceCmd::Status { instance_id, .. } => (
             "workload.status",
             instance_id
@@ -231,6 +271,34 @@ pub fn summary(r: &Value, explain: bool) -> String {
     out
 }
 
+/// Human summary of a `workload.revoke` result.
+pub fn revoke_summary(r: &Value) -> String {
+    let mut out = format!(
+        "{} {} {}{}\n",
+        if r["newly_revoked"] == true { "revoked" } else { "already revoked:" },
+        r["revoked"]["kind"].as_str().unwrap_or("?"),
+        r["revoked"]["id"].as_str().unwrap_or("?"),
+        if r["persisted"] == false {
+            format!(" (NOT saved to disk: {})", r["persist_error"].as_str().unwrap_or("?"))
+        } else {
+            String::new()
+        },
+    );
+    for f in r["forced"].as_array().into_iter().flatten() {
+        out.push_str(&format!(
+            "  {} {} ({})\n",
+            if f["unloaded"] == true { "stopped and unloaded" } else { "COULD NOT unload" },
+            f["instance_id"].as_str().unwrap_or("?"),
+            f["error"].as_str().unwrap_or(f["workload"].as_str().unwrap_or("?")),
+        ));
+    }
+    out.push_str(&format!(
+        "artifacts swept: {}\nnotice: {}\n",
+        r["artifacts_swept"], r["notice"].as_str().unwrap_or("?")
+    ));
+    out
+}
+
 /// Placements table for `weaver workload list` / `status`.
 pub fn render_placements(status: &Value) -> String {
     let rows = status["instances"].as_array().cloned().unwrap_or_default();
@@ -266,6 +334,7 @@ pub fn render(cmd: &WorkloadPlaceCmd, result: &Value) -> String {
             instance_id: None,
             json: false,
         } => render_placements(result),
+        WorkloadPlaceCmd::Revoke(a) if !a.json => revoke_summary(result),
         WorkloadPlaceCmd::Logs { .. } => format!(
             "{}{}",
             result["stdout"]
@@ -316,6 +385,73 @@ mod tests {
         assert_eq!(sent, cwd.join("pkg").canonicalize().unwrap());
         let err = request(&WorkloadPlaceCmd::Place(args("./missing")), &cwd).unwrap_err();
         assert!(err.contains("missing"), "{err}");
+    }
+
+    #[derive(clap::Parser, Debug)]
+    struct Cli {
+        #[command(subcommand)]
+        cmd: WorkloadPlaceCmd,
+    }
+
+    fn parse(argv: &[&str]) -> Result<WorkloadPlaceCmd, clap::Error> {
+        use clap::Parser;
+        Cli::try_parse_from(std::iter::once("weaver").chain(argv.iter().copied())).map(|c| c.cmd)
+    }
+
+    #[test]
+    fn revoke_names_exactly_one_subject_and_sends_it_as_workload_revoke() {
+        let key = "ab".repeat(32);
+        for (flag, val, field) in [
+            ("--package", "cog.x", "package"),
+            ("--signer", key.as_str(), "signer"),
+            ("--hash", key.as_str(), "hash"),
+        ] {
+            let cmd = parse(&["revoke", flag, val, "--reason", "leaked"]).unwrap();
+            let (m, p) = req(&cmd);
+            assert_eq!(m, "workload.revoke");
+            assert_eq!(p, json!({ field: val, "reason": "leaked" }));
+        }
+        let (_, p) = req(&parse(&["revoke", "--package", "cog.x"]).unwrap());
+        assert_eq!(p, json!({ "package": "cog.x" }), "no reason sent unless given");
+        // None, or more than one: refused before anything is sent.
+        assert!(parse(&["revoke"]).is_err());
+        assert!(parse(&["revoke", "--package", "a", "--signer", &key]).is_err());
+        assert!(parse(&["revoke", "--hash", &key, "--package", "a"]).is_err());
+    }
+
+    #[test]
+    fn revoke_summary_says_what_was_stopped_and_what_was_not_reached() {
+        let r = json!({
+            "revoked": { "kind": "signer_key", "id": "ab", "reason": "leaked" },
+            "newly_revoked": true, "persisted": true, "artifacts_swept": 3,
+            "forced": [
+                { "instance_id": "i-1", "workload": "w", "unloaded": true },
+                { "instance_id": "i-2", "workload": "w", "unloaded": false, "error": "adapter busy" },
+            ],
+            "notice": "not issued: this node's key is not a pinned operator key",
+        });
+        let out = summary_for_revoke(&r);
+        assert!(out.contains("revoked signer_key ab"), "{out}");
+        assert!(out.contains("stopped and unloaded i-1"), "{out}");
+        assert!(out.contains("COULD NOT unload i-2 (adapter busy)"), "{out}");
+        assert!(out.contains("artifacts swept: 3"), "{out}");
+        assert!(out.contains("not issued"), "{out}");
+        let unsaved = json!({ "revoked": {"kind": "package", "id": "p"}, "newly_revoked": true,
+            "persisted": false, "persist_error": "disk full", "forced": [], "artifacts_swept": 0, "notice": "x" });
+        assert!(summary_for_revoke(&unsaved).contains("NOT saved to disk: disk full"));
+    }
+
+    fn summary_for_revoke(r: &Value) -> String {
+        render(
+            &WorkloadPlaceCmd::Revoke(RevokeArgs {
+                package: Some("x".into()),
+                signer: None,
+                hash: None,
+                reason: None,
+                json: false,
+            }),
+            r,
+        )
     }
 
     #[test]

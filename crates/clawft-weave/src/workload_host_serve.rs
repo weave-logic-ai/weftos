@@ -134,6 +134,9 @@ pub struct HostParts<'a> {
     /// Cog ingest bridge wiring (`cog-ingest.json`); none places cogs
     /// without ingest.
     pub ingest: Option<clawft_kernel::cog_ingest::IngestHooks>,
+    /// The node's revocation list: a `place` that races a revocation is
+    /// caught and a revoked start is rolled back by the revocation.
+    pub revocations: Arc<clawft_kernel::revocation::RevocationList>,
 }
 
 /// This node's `workload-host`: the native adapter (and the container
@@ -168,6 +171,7 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
         .with_controllers(controllers)
         .with_chain(p.chain.clone())
         .with_facts_source(p.facts);
+    svc.set_revocations(p.revocations);
     if let Some(h) = p.ingest {
         svc = svc.with_ingest(h);
     }

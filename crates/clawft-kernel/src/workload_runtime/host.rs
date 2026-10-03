@@ -88,30 +88,16 @@ impl WorkloadHost {
     /// here for that instance's ingest bridge (ADR-100 section 4).
     fn context(&self, w: &VerifiedWorkload, kind: &str, emulated: bool) -> Value {
         let network: NetworkPolicy = self.runtime.network_exposure();
-        let (trust, package_id, keys, hashes, cost) = match &w.source {
+        let (package_id, keys, hashes) = w.revocation_refs();
+        let (trust, cost) = match &w.source {
             WorkloadSource::SignedPackage(p) => (
                 "pinned_signer",
-                p.package_id.clone(),
-                p.signer_keys.clone(),
-                p.artifact_hashes.clone(),
                 (f64::from(p.spec.resources.cpu_pct) / 400.0).clamp(0.0, 1.0),
             ),
-            WorkloadSource::StorePin { .. } => (
-                "operator_attested",
-                format!("store.{}.{}", w.id, w.version),
-                Vec::new(),
-                Vec::new(),
-                0.25,
-            ),
+            WorkloadSource::StorePin { .. } => ("operator_attested", 0.25),
             // `PackageTrust::ProjectCert`: matched only by a permit that
             // names it (the supervisor's, see `project_supervisor_permit`).
-            WorkloadSource::Project(p) => (
-                "project_cert",
-                format!("project.{}.{}", p.project_id, p.cert_serial),
-                Vec::new(),
-                Vec::new(),
-                0.25,
-            ),
+            WorkloadSource::Project(_) => ("project_cert", 0.25),
         };
         json!({ "workload": {
             "kind": kind,
@@ -457,6 +443,46 @@ impl WorkloadHost {
         }
         self.outcome(chain::EVENT_KIND_WORKLOAD_UNLOAD, payload, &r);
         r
+    }
+
+    /// The workload a loaded instance came from, if this host loaded or
+    /// adopted it.
+    pub async fn workload_for(&self, h: &InstanceHandle) -> Option<VerifiedWorkload> {
+        self.loaded
+            .lock()
+            .await
+            .get(&h.instance_id)
+            .map(|(w, _)| w.clone())
+    }
+
+    /// Stop and unload an instance because its package, signer or artifact
+    /// was revoked. Not gated: the applied revocation is the authority
+    /// (`why` names it in both records), so enforcement cannot depend on an
+    /// operator having written a stop or unload permit. The unload is
+    /// attempted even when the stop fails (the instance may already have
+    /// exited). Each step is chained like the gated one, with
+    /// `forced_by_revocation` set.
+    pub async fn revoke_teardown(
+        &self,
+        h: &InstanceHandle,
+        grace: Duration,
+        why: Value,
+    ) -> Result<(), RuntimeError> {
+        let (w, _emu) = self.workload_of(h).await?;
+        let mut payload = self.base(&w, Some(&h.instance_id));
+        payload["forced_by_revocation"] = why;
+        let stopped = self.runtime.stop(h, grace).await;
+        let mut stop_payload = payload.clone();
+        if let Ok(ev) = &stopped {
+            stop_payload["evidence"] = ev.audit();
+        }
+        self.outcome(chain::EVENT_KIND_WORKLOAD_STOP, stop_payload, &stopped);
+        let unloaded = self.runtime.unload(h.clone()).await;
+        if unloaded.is_ok() {
+            self.loaded.lock().await.remove(&h.instance_id);
+        }
+        self.outcome(chain::EVENT_KIND_WORKLOAD_UNLOAD, payload, &unloaded);
+        unloaded
     }
 
     /// Status (not gated: read-only).

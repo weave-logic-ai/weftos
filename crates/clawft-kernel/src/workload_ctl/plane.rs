@@ -145,6 +145,32 @@ pub struct PlacementRecord {
     /// store (ADR-100, Decision 5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// Package id the instance was placed from (what a revocation names).
+    /// Absent on records written before revocation tracking: the manifest
+    /// hash stands in for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_id: Option<String>,
+    /// Hex keys of the package's signers, for revocation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signer_keys: Vec<String>,
+    /// BLAKE3 hex hashes of the package's artifacts, for revocation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_hashes: Vec<String>,
+}
+
+impl PlacementRecord {
+    /// What the revocation list is checked against for this placement:
+    /// the recorded refs, or for an older record the manifest hash.
+    pub(super) fn revocation_refs(&self) -> (Option<String>, Vec<String>, Vec<String>) {
+        let mut hashes = self.artifact_hashes.clone();
+        if self.package_id.is_none() && self.signer_keys.is_empty() && hashes.is_empty() {
+            let h = self.manifest_hash.to_ascii_lowercase();
+            if h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()) {
+                hashes.push(h);
+            }
+        }
+        (self.package_id.clone(), self.signer_keys.clone(), hashes)
+    }
 }
 
 /// One signed round trip.

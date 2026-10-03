@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use clawft_kernel::Kernel;
 use clawft_kernel::chain::ChainManager;
+use clawft_kernel::revocation::RevocationKind;
 use clawft_kernel::node_facts_advert::sign_node_facts;
 use clawft_kernel::workload_ctl::{WorkloadHostService, listen_tcp, serve_listener};
 use clawft_kernel::workload_ctl::OperatorPeer;
@@ -239,6 +240,36 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
     write(&runtime, PEERS_FILE, &paired);
     init(node_key.clone(), runtime.clone());
 
+    // Incident: the permits file is broken, so the placement plane cannot be
+    // built. Revoking a leaked key must still work, against the kernel's
+    // list alone, and be chained. (The plane is built, and the file fixed,
+    // below.)
+    let good_permits = std::fs::read(runtime.join(PERMITS_FILE)).unwrap();
+    std::fs::write(runtime.join(PERMITS_FILE), "{broken").unwrap();
+    let early = call(&kernel, "workload.revoke", json!({ "package": "cog.early-probe" }))
+        .await
+        .unwrap();
+    assert_eq!(early["newly_revoked"], true, "{early}");
+    assert!(
+        call(&kernel, "workload.status", json!({})).await.unwrap_err().contains("placement unavailable"),
+        "the plane really could not be built"
+    );
+    assert!(kernel.read().await.revocation_list().is_subject_revoked(RevocationKind::Package, "cog.early-probe"));
+    std::fs::write(runtime.join(PERMITS_FILE), good_permits).unwrap();
+
+    // After a governance push the plane refuses until restart; the verb does not.
+    let stale = Some("an-older-hash".to_string());
+    let r = dispatch_checked("workload.status", json!({}), kernel.clone(), Some(&stale)).await;
+    assert!(!r.ok && r.error.unwrap().contains("governance changed"));
+    let r = dispatch_checked(
+        "workload.revoke",
+        json!({ "package": "cog.after-push" }),
+        kernel.clone(),
+        Some(&stale),
+    )
+    .await;
+    assert!(r.ok, "{:?}", r.error);
+
     let pkg = package(&tmp.path().join("pkgsrc"), &signer);
     let params = json!({ "package_dir": pkg, "mode": "listener", "csi_port": 15027 });
 
@@ -256,6 +287,15 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
     assert_eq!(tier_of(&st, &pi), "paired");
     assert_eq!(tier_of(&st, &me), "pinned");
     assert_eq!(st["workload_host"]["metadata"]["routes"], "native");
+
+    // The in-process host the daemon builds holds the kernel's own list.
+    assert!(
+        HOST.get().unwrap().revocations().is_some_and(|l| Arc::ptr_eq(
+            l,
+            kernel.try_read().unwrap().revocation_list()
+        )),
+        "build() gives the workload-host the kernel's revocation list"
+    );
 
     // Trust is bound to the key: the peer listed for another key loses
     // its tier, and the listed key is not learned (nobody holds it here).
@@ -304,7 +344,7 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
 
     // Listed as paired again: place runs the cog on the board.
     write(&runtime, PEERS_FILE, &paired);
-    let v = call(&kernel, "workload.place", params).await.unwrap();
+    let v = call(&kernel, "workload.place", params.clone()).await.unwrap();
     assert_eq!(v["placed"]["node_id"], pi.as_str(), "{}", v["explain"]);
     let iid = v["placed"]["instance_id"].as_str().unwrap().to_string();
     let st = call(&kernel, "workload.status", json!({ "instance_id": iid }))
@@ -319,6 +359,44 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
             .any(|e| e.kind == "workload.place"),
         "placed on the board's own chain"
     );
+
+    // `weaver workload revoke --signer`: nothing of it runs on THIS node (the
+    // instance is on the board) so nothing local is torn down, and with no
+    // mesh no notice goes out (the answer says so). The daemon's placement
+    // gate and exchange have the kernel's revocation list, so the package is
+    // now refused;
+    // the revocation is chained by the list at boot; and the instance on the
+    // board can still be taken down by hand.
+    let signer_hex = hex_encode(&signer.verifying_key().to_bytes());
+    let r = call(
+        &kernel,
+        "workload.revoke",
+        json!({ "signer": signer_hex, "reason": "leaked" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["newly_revoked"], true, "{r}");
+    assert_eq!(r["forced"], json!([]), "{r}");
+    assert!(r["notice"].as_str().unwrap().contains("no mesh"), "{r}");
+    // Refused at verify/seed time (the exchange has the same list), before
+    // any node is asked.
+    let e = call(&kernel, "workload.explain", params).await.unwrap_err();
+    assert!(e.contains("is revoked"), "{e}");
+    assert!(
+        kernel
+            .read()
+            .await
+            .chain_manager()
+            .unwrap()
+            .tail(10_000)
+            .iter()
+            .any(|e| e.kind == "workload.revoke"
+                && e.payload.as_ref().is_some_and(|p| p["revoked_by"] == "operator")),
+        "the revocation is on the chain"
+    );
+    // Admin only, one subject at a time.
+    assert!(call(&kernel, "workload.revoke", json!({})).await.is_err());
+
     call(&kernel, "workload.stop", json!({ "instance_id": iid }))
         .await
         .unwrap();

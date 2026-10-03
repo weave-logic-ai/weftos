@@ -40,7 +40,7 @@ fn host(t: HttpSeedTransport) -> Arc<WorkloadHost> {
     .unwrap();
     Arc::new(WorkloadHost::new(
         Arc::new(rt),
-        Arc::new(WorkloadGate::new(0.95, false)),
+        Arc::new(WorkloadGate::exempt(0.95, false, "test")),
         "operator",
         NodeTrustTier::Paired,
     ))
@@ -50,7 +50,7 @@ fn plane() -> PlacementControlPlane {
     let chain = Arc::new(ChainManager::new(0, 1000));
     PlacementControlPlane::new(
         ed25519_dalek::SigningKey::from_bytes(&[70; 32]),
-        Arc::new(WorkloadGate::new(0.95, false)),
+        Arc::new(WorkloadGate::exempt(0.95, false, "test")),
         chain.clone(),
         exchange("ctl", &chain),
         anchors(),

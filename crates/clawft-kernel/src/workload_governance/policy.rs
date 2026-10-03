@@ -170,6 +170,13 @@ pub struct WorkloadPermitRule {
     pub principals: Vec<String>,
 }
 
+/// The principal the daemon's catalog verbs (`workload install` / `unload`)
+/// decide as. The catalog verifies nothing, so those requests are `unsigned`;
+/// a permit that accepts unsigned packages has to be limited to this
+/// principal (`validate` refuses one that names none), so it cannot also
+/// admit an unsigned placement.
+pub const CATALOG_PRINCIPAL: &str = "catalog";
+
 /// The internal principal the user-daemon project supervisor acts as. Never
 /// accepted from a request: the supervisor builds its own gate and host with
 /// this id, so an operator-facing placement path (whose gate has no such
@@ -237,6 +244,13 @@ impl WorkloadPermitRule {
         }
         if self.kinds.iter().any(|k| k.is_empty()) || self.accelerators.iter().any(|a| a.is_empty()) {
             return Err(format!("permit rule '{}': empty kind or accelerator selector", self.id));
+        }
+        if self.min_package_trust == PackageTrust::Unsigned && self.principals.is_empty() {
+            return Err(format!(
+                "permit rule '{}' accepts unsigned packages, so it must name the principals it \
+                 applies to (e.g. [\"{CATALOG_PRINCIPAL}\"] for the catalog verbs)",
+                self.id
+            ));
         }
         if self.principals.iter().any(|p| p.is_empty()) {
             return Err(format!("permit rule '{}': empty principal selector", self.id));

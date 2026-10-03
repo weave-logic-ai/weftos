@@ -194,6 +194,12 @@ pub mod workload_place_rpc;
 /// Operator policy files for placement (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_place_policy;
+/// The daemon's gate for `workload.*` actions: default deny plus permits.
+#[cfg(all(feature = "placement", unix))]
+pub mod workload_gate;
+/// `workload.revoke`: operator revocation with forced unload.
+#[cfg(all(feature = "placement", unix))]
+pub mod workload_revoke_rpc;
 /// This node's cog ingest bridge and store owner (mesh-placement-10).
 #[cfg(all(feature = "placement", unix))]
 pub mod cog_ingest_serve;

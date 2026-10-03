@@ -114,9 +114,10 @@ impl ArtifactExchange {
     /// Safe to call repeatedly.
     ///
     /// Revocation evicts **even pinned** cache entries (the bytes are removed
-    /// and serving is blocked). It does not stop a workload that is already
-    /// running from them: that instance continues until it restarts, and
-    /// placement does not yet react to `artifact.revoke`.
+    /// and serving is blocked). This sweep does not touch a workload that is
+    /// already running from them; stopping those is the host's job
+    /// (`WorkloadHostService::enforce_revocations`), which the daemon runs
+    /// after every applied revocation.
     ///
     /// Revocation is monotonic mesh-wide: entries are only ever added, by an
     /// operator command or a signed notice, and a notice is re-flooded to

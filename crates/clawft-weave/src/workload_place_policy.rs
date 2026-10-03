@@ -1,10 +1,16 @@
 //! Operator policy files for the daemon's placement control plane and
 //! `workload-host` (ADR-099 sections 3, 4 and 7; card mesh-placement-12).
 //! Every file lives in the daemon's runtime directory, is size-capped and
-//! validated here, at the boundary:
+//! validated here, at the boundary, and is refused unless it is owned by the
+//! daemon's user (or root) and not group- or world-writable:
 //!
 //! - `workload-permits.json`: `[WorkloadPermitRule, ...]`; missing means no
-//!   permits (default deny);
+//!   permits (default deny). The catalog verbs (`workload install` /
+//!   `unload`) decide as the principal `catalog` on `unsigned` packages, so a
+//!   permit for them reads `{"id": "catalog", "actions": ["workload.install",
+//!   "workload.unload"], "kinds": ["cog"], "min_package_trust": "unsigned",
+//!   "principals": ["catalog"]}`; a permit that accepts unsigned packages and
+//!   names no principals is refused when the file is read;
 //! - `workload-trust.json`: package signers; missing means the compiled-in
 //!   WeftOS signer set only;
 //! - `workload-peers.json`: `[{"addr": "host:port", "tier": "paired",
@@ -58,14 +64,41 @@ const MAX_POLICY_BYTES: u64 = 256 * 1024;
 const MAX_PEERS: usize = 256;
 const MAX_SEEDS: usize = 64;
 
-fn read_policy(path: &Path) -> Result<Option<String>, String> {
-    match std::fs::metadata(path) {
-        Err(_) => Ok(None),
-        Ok(m) if m.len() > MAX_POLICY_BYTES => Err(format!("{} is too large", path.display())),
-        Ok(_) => std::fs::read_to_string(path)
-            .map(Some)
-            .map_err(|e| e.to_string()),
+/// Refuse a policy file someone other than its owner (or root, or the
+/// daemon's user) could have rewritten: a group- or world-writable file, or
+/// one owned by another user. Permits and trust decide what runs, so the
+/// file is as sensitive as a key.
+fn check_policy_perms(path: &Path, m: &std::fs::Metadata) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    if m.mode() & 0o022 != 0 {
+        return Err(format!(
+            "{} is group- or world-writable (mode {:o}); chmod 600 it",
+            path.display(),
+            m.mode() & 0o7777
+        ));
     }
+    let me = nix::unistd::geteuid().as_raw();
+    if m.uid() != me && m.uid() != 0 {
+        return Err(format!(
+            "{} is owned by another user (uid {}); it must be owned by the daemon's user",
+            path.display(),
+            m.uid()
+        ));
+    }
+    Ok(())
+}
+
+fn read_policy(path: &Path) -> Result<Option<String>, String> {
+    let Ok(m) = std::fs::metadata(path) else {
+        return Ok(None);
+    };
+    check_policy_perms(path, &m)?;
+    if m.len() > MAX_POLICY_BYTES {
+        return Err(format!("{} is too large", path.display()));
+    }
+    std::fs::read_to_string(path)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 fn parse<T: serde::de::DeserializeOwned>(dir: &Path, file: &str) -> Result<Option<T>, String> {

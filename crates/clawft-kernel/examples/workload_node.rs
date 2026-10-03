@@ -98,7 +98,7 @@ fn gate(chain: &Arc<ChainManager>) -> R<Arc<WorkloadGate>> {
     let mut permit = WorkloadPermitRule::new("operator-cog", ["workload.*"], ["cog"]);
     permit.max_network = NetworkPolicy::Egress;
     Ok(Arc::new(
-        WorkloadGate::new(0.95, false)
+        WorkloadGate::exempt(0.95, false, "example")
             .with_permit(permit)?
             .with_chain(chain.clone()),
     ))

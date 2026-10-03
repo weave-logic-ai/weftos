@@ -572,6 +572,8 @@ pub const EVENT_KIND_WORKLOAD_MIGRATE: &str = "workload.migrate";
 pub const EVENT_KIND_WORKLOAD_REFUSE: &str = "workload.refuse";
 /// Package / signer key / artifact hash revocation.
 pub const EVENT_KIND_WORKLOAD_REVOKE: &str = "workload.revoke";
+/// A revocation lifted again (`unrevoke`), chained like the revocation.
+pub const EVENT_KIND_WORKLOAD_UNREVOKE: &str = "workload.unrevoke";
 /// Fleet identity bound to a mesh node.
 pub const EVENT_KIND_WORKLOAD_NODE_BIND: &str = "workload.node.bind";
 

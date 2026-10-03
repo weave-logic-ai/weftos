@@ -247,7 +247,7 @@ async fn run(o: Opts) -> Result<i32, String> {
     let chain = Arc::new(ChainManager::new(0, 10_000));
     let mut permit = WorkloadPermitRule::new("conformance", ["workload.*"], ["cog"]);
     permit.max_network = NetworkPolicy::Egress;
-    let gate = WorkloadGate::new(0.8, false)
+    let gate = WorkloadGate::exempt(0.8, false, "example")
         .with_chain(chain.clone())
         .with_permit(permit)
         .map_err(|e| e.to_string())?;

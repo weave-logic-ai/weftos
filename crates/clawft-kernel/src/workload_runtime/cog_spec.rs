@@ -322,6 +322,30 @@ impl VerifiedWorkload {
         })
     }
 
+    /// What the revocation list is checked against for this workload:
+    /// `(package id, signer keys, artifact hashes)`. Never all empty: a
+    /// store pin or project workload gets a synthetic package id, so a
+    /// request built from any workload names something.
+    pub fn revocation_refs(&self) -> (String, Vec<String>, Vec<String>) {
+        match &self.source {
+            WorkloadSource::SignedPackage(p) => (
+                p.package_id.clone(),
+                p.signer_keys.clone(),
+                p.artifact_hashes.clone(),
+            ),
+            WorkloadSource::StorePin { .. } => (
+                format!("store.{}.{}", self.id, self.version),
+                Vec::new(),
+                Vec::new(),
+            ),
+            WorkloadSource::Project(p) => (
+                format!("project.{}.{}", p.project_id, p.cert_serial),
+                Vec::new(),
+                Vec::new(),
+            ),
+        }
+    }
+
     /// The signed payload, or an admission refusal naming the adapter.
     pub fn signed(&self, runtime: &str) -> Result<&SignedPayload, RuntimeError> {
         match &self.source {

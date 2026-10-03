@@ -156,7 +156,7 @@ fn cfg() -> WorkloadConfig {
 
 fn host(rt: Arc<MockRuntime>, permits: &[WorkloadPermitRule]) -> (WorkloadHost, Arc<ChainManager>) {
     let chain = Arc::new(ChainManager::new(0, 1000));
-    let mut gate = WorkloadGate::new(0.8, false).with_chain(chain.clone());
+    let mut gate = WorkloadGate::exempt(0.8, false, "test").with_chain(chain.clone());
     for p in permits {
         gate = gate.with_permit(p.clone()).unwrap();
     }

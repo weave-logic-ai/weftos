@@ -61,6 +61,46 @@ Placement picks real ARM hardware over a Mac container over emulation, prefers t
 
 ## Revoke
 
-Revocation is by package id, signer key or artifact hash (`RevocationKind::{Package, SignerKey, ArtifactHash}`), persisted in `revoked_subjects.json` beside the host ban list and recorded as a `workload.revoke` chain event by `revoke_and_record`. A revoked package, or a package signed by a revoked key, is refused at verify and place time. `weaver cog install` and `weft-cog-repo verify` / `install` / `publish` also refuse a cog signed by a revoked signer key (the weftos release key or a private-repo key): `weaver` reads the kernel's list in the runtime dir and refuses outright if that file cannot be read; `weft-cog-repo` and the cog host's `/install` read `--revocations <file>` (CLI only), else `revoked_subjects.json` in the same runtime dir `weaver` resolves (`$WEFTOS_RUNTIME_DIR`, the project's `.weftos/runtime`, or `~/.clawft`), and fail if that dir cannot be located (no `$HOME`, no override) or the file is unreadable. Revoking a signer key is how you respond to a leaked package key; also remove its pin from `workload-trust.json` (or the compiled set in a release). For a private-repo key, revoking is on the consumer side: remove or replace the key in each project's source (`weaver cog source remove` then `add --key <new>`).
+```bash
+weaver workload revoke --package <id> [--reason "..."]
+weaver workload revoke --signer <64 hex key>
+weaver workload revoke --hash <64 hex blake3>
+```
 
-**Built:** signed mesh-wide revocation notices. The daemon runs `RevocationExchange`, so a notice signed by a pinned operator or WeftOS key spreads to every node, which stops serving the revoked artifacts and removes their bytes. **Not built:** an operator CLI verb or RPC to issue a notice (there is no revoke verb under the workload group; today a revocation is a kernel-side call), and forced unload of running instances. A running instance keeps going until you stop it with `weaver workload stop` / `unload` or it restarts.
+Revocation is by package id, signer key or artifact hash (`RevocationKind::{Package, SignerKey, ArtifactHash}`), persisted in `revoked_subjects.json` beside the host ban file. Name exactly one. The package id is the BLAKE3 of the package's signed statement (a placed instance's record carries it as `package_id`: `weaver workload status --json`); for a `workload install` catalog entry it is the catalog name. Admin only. One call:
+
+1. records the revocation, chained as `workload.revoke` (`revoked_by: operator`, with your reason); a failed write of `revoked_subjects.json` is reported (`persisted: false`) but the revocation still holds in memory and is still chained;
+2. drops this node's grants and cached bytes for it;
+3. stops and unloads every instance this node hosts from that package, signer or artifact, drops the controller's record of it, and chains each step (`workload.stop`, `workload.unload`, with `forced_by_revocation`). This does not need a stop permit in `workload-permits.json`;
+4. when this node's key is a pinned operator key in `workload-trust.json`, signs a notice and floods it to every connected peer, where steps 1 to 3 run on arrival (each peer chains `workload.revoke` as `revoked_by: mesh:<signer>`). Otherwise the verb prints `notice: not issued: ...` and the revocation holds on this node only.
+
+A revoked package, or one signed by a revoked key, is refused at verify, place, load and start. A request that names no package, signer or artifact is refused too, so a caller cannot omit them to avoid the check. Stopping or unloading a revoked instance is never blocked. To lift one, `unrevoke` is a kernel call that chains `workload.unrevoke`; it is undone on any node whose peers re-send the notice (see the revocation limits in `docs/research/mesh-placement/swarm-throughput.md`).
+
+`weaver cog install` and `weft-cog-repo verify` / `install` / `publish` also refuse a cog signed by a revoked signer key (the weftos release key or a private-repo key): `weaver` reads the kernel's list in the runtime dir and refuses outright if that file cannot be read; `weft-cog-repo` and the cog host's `/install` read `--revocations <file>` (CLI only), else `revoked_subjects.json` in the same runtime dir `weaver` resolves (`$WEFTOS_RUNTIME_DIR`, the project's `.weftos/runtime`, or `~/.clawft`), and fail if that dir cannot be located (no `$HOME`, no override) or the file is unreadable.
+
+Revoking a signer key is how you respond to a leaked package key; also remove its pin from `workload-trust.json` (or the compiled set in a release). For a private-repo key, revoking is on the consumer side: remove or replace the key in each project's source (`weaver cog source remove` then `add --key <new>`).
+
+**Limits:** instances on a Cognitum Seed are not stopped by a revocation (the Seed holds its own store; a revoked store cog is refused at the next place or start). A remote `workload-host` that is not connected when you revoke keeps its instances until it receives the notice or you stop them.
+
+The catalog verbs `weaver workload install` and `unload` are default-deny: they need an entry in `workload-permits.json`. They decide as the principal `catalog`, on packages that count as `unsigned` because the catalog only records a name, kind and manifest hash and verifies nothing. So the permit has to say both, and a permit that accepts unsigned packages without naming principals is refused when the file is read (the daemon then refuses every catalog verb until it is fixed):
+
+```json
+[{"id": "catalog", "actions": ["workload.install", "workload.unload"], "kinds": ["cog"],
+  "min_package_trust": "unsigned", "principals": ["catalog"]}]
+```
+
+Without a matching permit the verb is refused and the refusal is chained. Policy files in the runtime dir (`workload-permits.json`, `workload-trust.json`, peers, container, seeds) must be owned by the daemon's user (or root) and not group- or world-writable (`chmod 600`); the daemon refuses a file that is not.
+
+**Upgrading: three things now stop the placement plane from building.** When the daemon cannot read its policy files it refuses all placement (`place`, `explain`, `status`, `stop`, `logs`, `unload`) with "placement unavailable: ..." until you fix the file; `weaver workload revoke` still works throughout. The causes, and the fix for each:
+
+- a permit in `workload-permits.json` with `"min_package_trust": "unsigned"` and no `"principals"`: add `"principals": ["catalog"]` (the permit above), or raise the trust floor;
+- a policy file with mode 0664 or any group/world write bit: `chmod 600 <runtime dir>/workload-*.json`;
+- a policy file owned by another user: `chown <daemon user> <runtime dir>/workload-*.json`.
+
+The error names the file and the rule it broke. Fix it and the next call rebuilds the plane; no restart is needed.
+
+**Catalog revocation is by name only.** The catalog does not verify what it records, so `workload revoke --package <name>` is the only revocation that reaches a `workload install` entry (and a `blake3:` manifest hash revokes it as an artifact hash). Revoking the signer key of a package you installed elsewhere does not stop a catalog entry of the same name: revoke the name too.
+
+**Store (Seed) cogs** are revoked by the synthetic package id `store.<cog id>.<version>`, for example `weaver workload revoke --package store.fall-detect.1.0.0`. A package id that is 64 hex characters is matched case-insensitively.
+
+**Retries.** A forced unload that fails (an adapter busy) is retried every 60 seconds by the daemon, and once at start-up, so you do not have to revoke again.

@@ -12,7 +12,10 @@
 //! - **Applied.** A valid notice is recorded in the local
 //!   [`RevocationList`] and applied at once: grants dropped, bytes evicted,
 //!   `artifact.revoke` and `artifact.evict` chained
-//!   ([`ArtifactExchange::apply_revocations`]).
+//!   ([`ArtifactExchange::apply_revocations`]), the revocation itself chained
+//!   as `workload.revoke` (revoked by `mesh:<signer>`), and the
+//!   [`RevocationExchange::set_on_applied`] hook run so placement can stop
+//!   what is already running from it.
 //! - **Limited.** A signer key that is itself revoked can no longer issue
 //!   revocations and signatures are checked strictly. Cheap checks (size,
 //!   pinned key, revoked signer, already applied) come first and are free; a
@@ -166,7 +169,14 @@ pub struct RevocationExchange {
     buckets: dashmap::DashMap<u64, (f64, std::time::Instant)>,
     /// Notices already applied (hash of payload, key, signature), oldest first.
     seen: std::sync::Mutex<Seen>,
+    /// Run after a notice that was new here has been applied.
+    on_applied: std::sync::OnceLock<AppliedHook>,
 }
+
+/// Called with each notice that was new here, after it was recorded and the
+/// held artifacts were swept. Runs on the receiving task: it must not block
+/// (spawn what needs time).
+pub type AppliedHook = Arc<dyn Fn(&RevocationNotice) + Send + Sync>;
 
 /// Applied-notice keys: a set for lookup, a queue for oldest-first eviction.
 type Seen = (std::collections::HashSet<[u8; 32]>, std::collections::VecDeque<[u8; 32]>);
@@ -200,9 +210,17 @@ impl RevocationExchange {
             me: w.clone(),
             buckets: dashmap::DashMap::new(),
             seen: Default::default(),
+            on_applied: std::sync::OnceLock::new(),
         });
         runtime.set_control_sink(REVOKE_TOPIC, me.clone());
         me
+    }
+
+    /// Run `hook` after every notice that was new here is applied (first
+    /// call wins; returns whether this one did). Covers a notice from a peer
+    /// and the operator's own [`Self::issue`].
+    pub fn set_on_applied(&self, hook: AppliedHook) -> bool {
+        self.on_applied.set(hook).is_ok()
     }
 
     /// Spend one token from `conn`'s bucket.
@@ -279,10 +297,34 @@ impl RevocationExchange {
             return Err(NoticeError::RateLimited);
         }
         let n = verify_revocation(signed, &self.anchors)?;
-        let new = self
-            .list
-            .revoke_subject(n.kind, &n.id, &n.reason)
-            .map_err(|e| NoticeError::Malformed(e.to_string()))?;
+        let by = format!(
+            "mesh:{}",
+            crate::workload_pkg::codec::hex_encode(&pk[..4])
+        );
+        let chain = self.ex.chain.clone();
+        let sink = chain.as_ref().map(|cm| {
+            let cm = cm.clone();
+            move |k: &str, p: serde_json::Value| {
+                cm.append(crate::workload_governance::gate::CHAIN_SOURCE, k, Some(p));
+            }
+        });
+        let new = match self.list.revoke_audited(
+            n.kind,
+            &n.id,
+            &n.reason,
+            &by,
+            sink.as_ref().map(|f| f as &dyn Fn(&str, serde_json::Value)),
+        ) {
+            Ok(new) => new,
+            // The entry is held in memory (fail-closed) and was chained: it
+            // is in force, so apply and forward it; the disk write is the
+            // only thing that failed.
+            Err(crate::revocation::RevocationError::Persist(e)) => {
+                tracing::error!(error = %e, "revocation applied but not persisted");
+                true
+            }
+            Err(e) => return Err(NoticeError::Malformed(e.to_string())),
+        };
         {
             let mut g = self.seen.lock().unwrap_or_else(|p| p.into_inner());
             if g.0.insert(key) {
@@ -296,6 +338,9 @@ impl RevocationExchange {
         }
         if new {
             self.ex.apply_revocations();
+            if let Some(hook) = self.on_applied.get() {
+                hook(&n);
+            }
         }
         Ok(new)
     }

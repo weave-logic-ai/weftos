@@ -79,6 +79,9 @@ async fn served_daemon(controller: &SigningKey) -> Daemon {
     let signed = sign_node_facts(&facts, &key).unwrap();
     let source: FactsSource = Arc::new(move || Some(signed.clone()));
     let serving = cfg(vec![hex_encode(&controller.verifying_key().to_bytes())]);
+    let list = Arc::new(clawft_kernel::revocation::RevocationList::new(std::path::PathBuf::from(
+        "unused/revoked_hosts.json",
+    )));
     let svc = local_host(HostParts {
         key: &key,
         dir: tmp.path(),
@@ -89,9 +92,16 @@ async fn served_daemon(controller: &SigningKey) -> Daemon {
         facts: source,
         serving: Some(&serving),
         container: None,
+        revocations: list.clone(),
         ingest: None,
     })
     .unwrap();
+    // The daemon's host constructor wires the list into the service: without
+    // it the place-race check and the revoked-start rollback never run.
+    assert!(
+        svc.revocations().is_some_and(|l| Arc::ptr_eq(l, &list)),
+        "local_host must give the service the node's revocation list"
+    );
     let bound = serve(&serving, Arc::new(svc)).await.unwrap();
     Daemon {
         id,

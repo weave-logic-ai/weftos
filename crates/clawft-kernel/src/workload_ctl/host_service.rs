@@ -142,6 +142,9 @@ pub struct WorkloadHostService {
     verify_budget: RefusalBudget,
     /// Ingest bridge wiring: a token per placed cog, revoked on stop.
     pub(super) ingest: Option<IngestHooks>,
+    /// The node's subject revocation list, for the placement race check and
+    /// the forced unload (the gate holds its own handle to the same list).
+    pub(super) revocations: std::sync::OnceLock<Arc<crate::revocation::RevocationList>>,
 }
 
 fn now_ms() -> u64 {
@@ -189,7 +192,20 @@ impl WorkloadHostService {
             in_flight: Mutex::new(HashSet::new()),
             verify_budget: RefusalBudget::default(),
             ingest: None,
+            revocations: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The revocation list this node enforces (first call wins). With it a
+    /// `place` that races a revocation is caught and torn down, and
+    /// [`Self::enforce_revocations`] callers share one source of truth.
+    pub fn set_revocations(&self, list: Arc<crate::revocation::RevocationList>) -> bool {
+        self.revocations.set(list).is_ok()
+    }
+
+    /// The list set by [`Self::set_revocations`], if any.
+    pub fn revocations(&self) -> Option<&Arc<crate::revocation::RevocationList>> {
+        self.revocations.get()
     }
 
     /// Wire the ingest bridge: placed cogs get a per-instance token,
@@ -421,6 +437,10 @@ impl WorkloadHostService {
 
     async fn place(&self, req: &CtlRequest, fetch: Option<&mut PeerSet>) -> Result<Value, Refusal> {
         let _in_flight = InFlight::enter(&self.in_flight, req.decision_id.clone());
+        // A revocation that lands after the gate looked at the list but
+        // before the instance is listed would be swept past: remember where
+        // the list stood, and look again once the instance is listed.
+        let list_at_start = self.revocations.get().map(|l| l.generation());
         let b: PlaceBody = serde_json::from_value(req.body.clone())
             .map_err(|e| refuse(RefusalCode::InvalidRequest, format!("place body: {e}")))?;
         if !valid_token(&b.name, 64)
@@ -532,9 +552,30 @@ impl WorkloadHostService {
                 ingest_state,
             },
         );
+        if let (Some(list), Some(g0)) = (self.revocations.get(), list_at_start)
+            && list.generation() != g0
+        {
+            self.enforce_revocations(list).await;
+            if !self.instances.lock().await.contains_key(&iid) {
+                return Err(refuse(
+                    RefusalCode::Governance,
+                    format!("revoked while it was being placed: instance {iid} torn down"),
+                ));
+            }
+        }
         let started = req.method == method::PLACE && b.start;
         if started && let Err(e) = host.start(&h).await {
-            return Err(self.roll_back(&host, &h, &e).await);
+            // A start the gate refused because the package was revoked is
+            // taken down by the revocation itself: the gated unload would
+            // need an unload permit the operator may not have written.
+            let revoked = match (self.revocations.get(), host.workload_for(&h).await) {
+                (Some(l), Some(w)) => {
+                    let (p, k, a) = w.revocation_refs();
+                    l.first_revoked(Some(&p), &k, &a)
+                }
+                _ => None,
+            };
+            return Err(self.roll_back(&host, &h, &e, revoked).await);
         }
         let status = host.status(&h).await;
         self.record(
@@ -562,6 +603,7 @@ impl WorkloadHostService {
         host: &WorkloadHost,
         h: &InstanceHandle,
         e: &RuntimeError,
+        revoked: Option<crate::revocation::RevokedSubject>,
     ) -> Refusal {
         let mut r = runtime_refusal(e);
         let iid = h.instance_id.clone();
@@ -570,7 +612,14 @@ impl WorkloadHostService {
         {
             hk.deactivate(l);
         }
-        match host.unload(h.clone()).await {
+        let unloaded = match &revoked {
+            Some(subject) => {
+                host.revoke_teardown(h, std::time::Duration::from_secs(2), json!(subject))
+                    .await
+            }
+            None => host.unload(h.clone()).await,
+        };
+        match unloaded {
             Ok(()) => {
                 self.instances.lock().await.remove(&iid);
                 r.reason = format!("start failed: {}; loaded instance {iid} unloaded", r.reason);
