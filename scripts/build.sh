@@ -2028,12 +2028,19 @@ cmd_gate() {
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   %s\n" "$*"
             passed=$((passed + 1))
-        elif "$@" >/dev/null 2>&1; then
-            pass "$label"
-            passed=$((passed + 1))
         else
-            fail "$label"
-            failed=$((failed + 1))
+            local gate_log_dir="${GATE_LOG_DIR:-$ROOT/target/gate-logs}"
+            mkdir -p "$gate_log_dir"
+            local gate_log="$gate_log_dir/check-$(printf '%02d' "$num").log"
+            if "$@" >"$gate_log" 2>&1; then
+                pass "$label"
+                passed=$((passed + 1))
+            else
+                fail "$label"
+                failed=$((failed + 1))
+                printf "  ${YELLOW}LOG${NC}   %s (last 40 lines below)\n" "$gate_log"
+                tail -n 40 "$gate_log" | sed 's/^/        /'
+            fi
         fi
         timer_end
     }
