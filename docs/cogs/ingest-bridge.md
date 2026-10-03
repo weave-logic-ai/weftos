@@ -135,8 +135,14 @@ project-less store) before the ingest is acknowledged, one capped file per
 project (64 MiB, mode 0600). On the project's first use after a restart the
 index and its dedup state are rebuilt from the log; a torn tail left by a
 crash is dropped. A batch that would pass the cap is refused as store full and
-writes nothing. A log that cannot be read is moved aside as
-`<name>.vec.unreadable` and the store starts empty. The log only grows (no
+writes nothing; vectors skipped as duplicates do not count against the cap.
+The index is updated only after the batch is on disk. A crash mid-append
+leaves a torn tail that is dropped on open. A checksum failure mid-file drops
+the frame and everything after it, logs a warning with the byte count, and
+keeps the dropped bytes in `<name>.vec.corrupt.<unix ts>`. A file that is not a
+log at all (wrong magic or over the cap) is moved aside as
+`<name>.vec.unreadable.<ts>` and the store starts empty; a transient I/O error
+only refuses the call and is retried. The log directory is mode 0700. The log only grows (no
 compaction), so repeated upserts of one id use space until the cap. Wiring
 stores to a project kernel's own durable store is a follow-up.
 

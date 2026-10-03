@@ -136,9 +136,25 @@ fn an_unreadable_log_is_moved_aside_not_overwritten() {
     let d = dir_over(tmp.path());
     let s = d.store_for(Some(A)).unwrap();
     assert!(s.is_empty());
-    assert_eq!(std::fs::read(tmp.path().join(format!("{A}.vec.unreadable"))).unwrap(), b"not a vector log at all");
+    let aside = |tmp: &std::path::Path| -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(tmp)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().contains(".vec.unreadable."))
+            .collect()
+    };
+    let first = aside(tmp.path());
+    assert_eq!(first.len(), 1);
+    assert_eq!(std::fs::read(&first[0]).unwrap(), b"not a vector log at all");
     s.ingest(&from("i"), &vecs(0..1), true).unwrap();
     assert_eq!(dir_over(tmp.path()).store_for(Some(A)).unwrap().len(), 1);
+    // A second bad file does not overwrite the first piece of evidence.
+    drop(d);
+    std::fs::write(tmp.path().join(format!("{A}.vec")), b"garbage again").unwrap();
+    let d = dir_over(tmp.path());
+    assert!(d.store_for(Some(A)).unwrap().is_empty());
+    assert_eq!(aside(tmp.path()).len(), 2);
 }
 
 #[test]
@@ -148,4 +164,87 @@ fn a_memory_only_directory_still_forgets_on_restart() {
     let d2 = VectorDirectory::new([A.to_string()], false);
     assert!(d2.store_for(Some(A)).unwrap().is_empty());
     let _: Arc<dyn IngestStore> = d.store_for(Some(A)).unwrap();
+}
+
+#[test]
+fn mid_file_corruption_keeps_a_copy_of_the_dropped_tail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("p.vec");
+    {
+        let (mut log, _) = VectorLog::open(&path, 1 << 20).unwrap();
+        log.append(&[rec(1)]).unwrap();
+        log.append(&[rec(2)]).unwrap();
+        log.append(&[rec(3)]).unwrap();
+    }
+    let one_frame = super::store_log::frame_len(&[rec(1)]) as usize;
+    let mut bytes = std::fs::read(&path).unwrap();
+    // Flip a byte inside the second frame's checksum-covered payload.
+    bytes[8 + one_frame + 12] ^= 0xff;
+    let original_len = bytes.len();
+    std::fs::write(&path, &bytes).unwrap();
+    let (_, records) = VectorLog::open(&path, 1 << 20).unwrap();
+    assert_eq!(records, vec![rec(1)], "frames after the bad one are dropped from the index");
+    let copies: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains(".corrupt."))
+        .collect();
+    assert_eq!(copies.len(), 1);
+    // The copy holds the bad frame and the good frame after it.
+    assert_eq!(std::fs::read(copies[0].path()).unwrap().len(), original_len - 8 - one_frame);
+    assert_eq!(std::fs::metadata(&path).unwrap().len() as usize, 8 + one_frame);
+}
+
+#[test]
+fn dedup_hits_do_not_count_against_the_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let one = |n: usize| {
+        super::store_log::frame_len(&vec![
+            LogRecord { instance: "inst-1".into(), node: "node-a".into(), id: 0, values: [0.0; DIMS] };
+            n
+        ])
+    };
+    let cap = 8 + one(3);
+    let d = VectorDirectory::new([A.to_string()], false).with_persistence_capped(tmp.path().to_path_buf(), cap);
+    let s = d.store_for(Some(A)).unwrap();
+    s.ingest(&from("inst-1"), &vecs(0..3), true).unwrap();
+    // The log is exactly full. Re-posting the same vectors writes nothing, so it is not refused.
+    let again = s.ingest(&from("inst-1"), &vecs(0..3), true).unwrap();
+    assert_eq!((again.accepted, again.deduped), (0, 3));
+    assert!(matches!(s.ingest(&from("inst-1"), &vecs(3..4), true), Err(StoreError::Full(_))));
+}
+
+#[test]
+fn the_log_dir_is_private_and_concurrent_first_use_opens_one_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("cog-ingest-vectors");
+    let d = dir_over(&dir);
+    let stores: Vec<_> = (0..4)
+        .map(|_| {
+            let d = d.clone();
+            std::thread::spawn(move || d.store_for(Some(A)).unwrap())
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect();
+    for s in &stores[1..] {
+        assert!(Arc::ptr_eq(s, &stores[0]), "one store, one open log");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_first_use_replay_and_an_append_run_on_a_multi_thread_runtime() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = dir_over(tmp.path());
+    let s = d.store_for(Some(A)).unwrap();
+    s.ingest(&from("i"), &vecs(0..2), true).unwrap();
+    drop(s);
+    let d2 = dir_over(tmp.path());
+    assert_eq!(d2.store_for(Some(A)).unwrap().len(), 2);
 }

@@ -9,11 +9,13 @@
 //! `dedup: false` the id is upserted.
 
 use std::collections::HashMap;
+#[cfg(feature = "ecc")]
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use super::types::{DIMS, IngestVector};
 #[cfg(feature = "ecc")]
-use super::store_log::{LogRecord, VectorLog};
+use super::store_log::{LogRecord, OpenError, VectorLog, run_blocking};
 
 /// Result of one batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -258,19 +260,21 @@ impl VectorBackendStore {
         backend: Arc<dyn crate::vector_backend::VectorBackend>,
         path: &std::path::Path,
         max_log_bytes: u64,
-    ) -> Result<Self, StoreError> {
-        let (log, records) = VectorLog::open(path, max_log_bytes)
-            .map_err(|e| StoreError::Backend(format!("vector log {}: {e}", path.display())))?;
+    ) -> Result<Self, OpenError> {
+        let (log, records) = VectorLog::open(path, max_log_bytes)?;
         let store = Self::new(backend);
         {
             let mut g = store
                 .inner
                 .lock()
-                .map_err(|_| StoreError::Backend("store lock poisoned".into()))?;
+                .map_err(|_| OpenError::Io("store lock poisoned".into()))?;
             for r in records {
                 let from = Provenance { instance_id: r.instance, source_node: r.node };
                 let v = IngestVector { id: r.id, values: r.values };
-                store.apply(&mut g, &from, &v, false)?;
+                // The log is the truth: a record the index refuses is skipped, not fatal.
+                if let Err(e) = store.apply(&mut g, &from, &v, false) {
+                    tracing::warn!(error = %e, path = %path.display(), id = v.id, "skipping a logged vector the index refused");
+                }
             }
             g.log = Some(log);
         }
@@ -330,11 +334,32 @@ impl IngestStore for VectorBackendStore {
             .inner
             .lock()
             .map_err(|_| StoreError::Backend("store lock poisoned".into()))?;
-        let mut pending = Vec::new();
-        if let Some(log) = &g.log {
-            // Refuse a batch the log cannot hold before touching the index:
-            // memory never gets ahead of what a restart would restore.
-            let worst: Vec<LogRecord> = vectors
+        let inst = &from.instance_id;
+        // Plan first: decide what is accepted, with no change to the index.
+        // `seen_*` stand in for the vectors this batch has already accepted.
+        let mut seen_ids: HashSet<u64> = HashSet::new();
+        let mut seen_values: HashSet<[u8; 32]> = HashSet::new();
+        let mut accepted: Vec<&IngestVector> = Vec::new();
+        let mut deduped = 0;
+        for v in vectors {
+            let bid = backend_id(inst, v.id);
+            let vk = value_key(inst, &v.values);
+            let present = match g.names.get(&bid) {
+                Some((i, id)) if i == inst && *id == v.id => true,
+                Some(_) => return Err(StoreError::Backend("vector id hash collision".into())),
+                None => false,
+            } || seen_ids.contains(&bid);
+            if dedup && (present || g.values.has(&vk) || seen_values.contains(&vk)) {
+                deduped += 1;
+                continue;
+            }
+            seen_ids.insert(bid);
+            seen_values.insert(vk);
+            accepted.push(v);
+        }
+        // Log first, then the index: a restart never has less than was acknowledged.
+        if let Some(log) = g.log.as_mut() {
+            let records: Vec<LogRecord> = accepted
                 .iter()
                 .map(|v| LogRecord {
                     instance: from.instance_id.clone(),
@@ -343,47 +368,21 @@ impl IngestStore for VectorBackendStore {
                     values: v.values,
                 })
                 .collect();
-            if !worst.iter().all(LogRecord::is_encodable) {
+            if !records.iter().all(LogRecord::is_encodable) {
                 return Err(StoreError::Backend("instance or node id too long to persist".into()));
             }
-            if !log.has_room_for(&worst) {
+            // Only vectors that will be written count against the cap; dedup hits do not.
+            if !log.has_room_for(&records) {
                 return Err(StoreError::Full(self.backend.len()));
             }
-        }
-        let persist = g.log.is_some();
-        let (mut accepted, mut deduped) = (0, 0);
-        let mut failure = None;
-        for v in vectors {
-            match self.apply(&mut g, from, v, dedup) {
-                Ok(true) => {
-                    accepted += 1;
-                    if persist {
-                        pending.push(LogRecord {
-                            instance: from.instance_id.clone(),
-                            node: from.source_node.clone(),
-                            id: v.id,
-                            values: v.values,
-                        });
-                    }
-                }
-                Ok(false) => deduped += 1,
-                Err(e) => {
-                    failure = Some(e);
-                    break;
-                }
-            }
-        }
-        // Log what was applied even when the batch failed part way, so the
-        // log and the index agree.
-        if let Some(log) = g.log.as_mut() {
-            log.append(&pending)
+            run_blocking(|| log.append(&records))
                 .map_err(|e| StoreError::Backend(format!("vector log append: {e}")))?;
         }
-        if let Some(e) = failure {
-            return Err(e);
+        for v in &accepted {
+            self.apply(&mut g, from, v, false)?;
         }
         Ok(IngestOutcome {
-            accepted,
+            accepted: accepted.len(),
             deduped,
             total: self.backend.len(),
         })

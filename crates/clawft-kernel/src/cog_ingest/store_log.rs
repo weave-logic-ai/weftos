@@ -114,21 +114,37 @@ fn crc(payload: &[u8]) -> [u8; 4] {
     [h.as_bytes()[0], h.as_bytes()[1], h.as_bytes()[2], h.as_bytes()[3]]
 }
 
-/// Decode frames from `data` (after the magic). Returns the records and the
-/// byte offset (into `data`) of the end of the last good frame.
-fn decode_frames(data: &[u8]) -> (Vec<LogRecord>, usize) {
+/// What follows the last good frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tail {
+    /// Nothing: the file ends on a frame boundary.
+    Clean,
+    /// An incomplete frame at the end of the file: what a crash mid-append leaves.
+    Torn,
+    /// A complete frame that fails its checksum or does not parse. Anything
+    /// after it may still hold good data.
+    Corrupt,
+}
+
+/// Decode frames from `data` (after the magic). Returns the records, the
+/// byte offset (into `data`) of the end of the last good frame, and what
+/// follows it.
+fn decode_frames(data: &[u8]) -> (Vec<LogRecord>, usize, Tail) {
     let mut out = Vec::new();
     let mut good = 0usize;
     let mut cur = Cursor(data);
-    loop {
-        let Some(len) = cur.u32() else { break };
-        let Some(payload) = cur.take(len as usize) else { break };
-        let Some(sum) = cur.take(4) else { break };
+    let tail = loop {
+        if cur.0.is_empty() {
+            break Tail::Clean;
+        }
+        let Some(len) = cur.u32() else { break Tail::Torn };
+        let Some(payload) = cur.take(len as usize) else { break Tail::Torn };
+        let Some(sum) = cur.take(4) else { break Tail::Torn };
         if sum != crc(payload) {
-            break;
+            break Tail::Corrupt;
         }
         let mut p = Cursor(payload);
-        let Some(count) = p.u32() else { break };
+        let Some(count) = p.u32() else { break Tail::Corrupt };
         let mut batch = Vec::new();
         let mut ok = true;
         for _ in 0..count {
@@ -141,12 +157,53 @@ fn decode_frames(data: &[u8]) -> (Vec<LogRecord>, usize) {
             }
         }
         if !ok || !p.0.is_empty() {
-            break;
+            break Tail::Corrupt;
         }
         out.extend(batch);
         good = data.len() - cur.0.len();
+    };
+    (out, good, tail)
+}
+
+/// Why a log could not be opened.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OpenError {
+    /// The file is not a usable log (wrong magic, over the cap). Safe to move aside.
+    #[error("{0}")]
+    Corrupt(String),
+    /// A filesystem error that may be transient; the file is not implicated.
+    #[error("{0}")]
+    Io(String),
+}
+
+/// Run blocking file work without stalling an async worker: on a
+/// multi-threaded tokio runtime the worker is handed off (`block_in_place`),
+/// anywhere else the closure just runs.
+pub fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
     }
-    (out, good)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
+
+fn create_private_dir(dir: &Path) -> io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    b.create(dir)
 }
 
 /// An open, append-only vector log.
@@ -159,12 +216,17 @@ pub struct VectorLog {
 
 impl VectorLog {
     /// Open (creating if absent) the log at `path` and return every record it
-    /// holds. A torn or corrupt tail is dropped and the file truncated back to
-    /// the last good frame. A file with the wrong magic, or larger than
-    /// `cap`, is an error and is left untouched.
-    pub fn open(path: &Path, cap: u64) -> io::Result<(Self, Vec<LogRecord>)> {
+    /// holds. A torn tail (a crash mid-append) is dropped and the file
+    /// truncated back to the last good frame. A complete frame that fails its
+    /// checksum is corruption: a warning with the dropped byte count is logged,
+    /// the dropped tail is first copied to `<file>.corrupt.<unix ts>`, and the
+    /// file is truncated so appends resume on a frame boundary. A file with
+    /// the wrong magic, or larger than `cap`, is [`OpenError::Corrupt`] and is
+    /// left untouched.
+    pub fn open(path: &Path, cap: u64) -> Result<(Self, Vec<LogRecord>), OpenError> {
+        let io = |e: io::Error| OpenError::Io(format!("{}: {e}", path.display()));
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            create_private_dir(parent).map_err(io)?;
         }
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).create(true);
@@ -173,39 +235,59 @@ impl VectorLog {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let mut file = opts.open(path)?;
-        let len = file.metadata()?.len();
+        let mut file = opts.open(path).map_err(io)?;
+        let len = file.metadata().map_err(io)?.len();
         if len > cap {
-            return Err(io::Error::other(format!(
+            return Err(OpenError::Corrupt(format!(
                 "{} is {len} bytes, over the {cap} byte cap",
                 path.display()
             )));
         }
         let mut data = Vec::with_capacity(len as usize);
-        file.read_to_end(&mut data)?;
+        file.read_to_end(&mut data).map_err(io)?;
         let (records, size) = if data.is_empty() {
-            file.write_all(MAGIC)?;
-            file.sync_data()?;
+            file.write_all(MAGIC).map_err(io)?;
+            file.sync_data().map_err(io)?;
             (Vec::new(), MAGIC.len() as u64)
         } else if data.len() < MAGIC.len() || &data[..MAGIC.len()] != MAGIC {
-            return Err(io::Error::other(format!("{} is not a vector log", path.display())));
+            return Err(OpenError::Corrupt(format!("{} is not a vector log", path.display())));
         } else {
-            let (records, good) = decode_frames(&data[MAGIC.len()..]);
+            let body = &data[MAGIC.len()..];
+            let (records, good, tail) = decode_frames(body);
             let size = (MAGIC.len() + good) as u64;
-            if size < len {
-                // Drop the torn tail so the next append starts on a frame boundary.
-                file.set_len(size)?;
-                file.sync_data()?;
+            let dropped = body.len() - good;
+            match tail {
+                Tail::Clean => {}
+                Tail::Torn => {
+                    tracing::warn!(path = %path.display(), dropped, "vector log ends in a torn frame; dropping it");
+                }
+                Tail::Corrupt => {
+                    let aside = path.with_extension(format!(
+                        "{}.corrupt.{}",
+                        path.extension().and_then(|e| e.to_str()).unwrap_or("vec"),
+                        now_secs()
+                    ));
+                    tracing::warn!(
+                        path = %path.display(), dropped, kept = %aside.display(),
+                        "vector log has a corrupt frame; dropping it and everything after it (copy kept)"
+                    );
+                    // Keep the bytes before cutting them: they may hold good frames.
+                    std::fs::write(&aside, &body[good..]).map_err(io)?;
+                }
+            }
+            if tail != Tail::Clean {
+                file.set_len(size).map_err(io)?;
+                file.sync_data().map_err(io)?;
             }
             (records, size)
         };
-        file.seek(SeekFrom::Start(size))?;
+        file.seek(SeekFrom::Start(size)).map_err(io)?;
         Ok((Self { path: path.to_path_buf(), file, size, cap }, records))
     }
 
     /// Whether a batch of `records` fits under the cap.
     pub fn has_room_for(&self, records: &[LogRecord]) -> bool {
-        self.size + frame_len(records) <= self.cap
+        records.is_empty() || self.size + frame_len(records) <= self.cap
     }
 
     /// Append one batch as a single frame and sync it. Nothing is written

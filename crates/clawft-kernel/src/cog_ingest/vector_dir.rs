@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use super::store::{IngestStore, StoreDirectory, VectorBackendStore};
+use super::store_log::{OpenError, run_blocking};
 
 /// A node's stores for the projects it owns, each an HNSW index created on
 /// first use. Without [`with_persistence`](Self::with_persistence) the
@@ -18,9 +19,14 @@ use super::store::{IngestStore, StoreDirectory, VectorBackendStore};
 pub struct VectorDirectory {
     projects: HashSet<String>,
     fallback: bool,
-    stores: Arc<Mutex<HashMap<Option<String>, Arc<VectorBackendStore>>>>,
+    stores: Arc<Mutex<HashMap<Option<String>, Slot>>>,
     persist: Option<(std::path::PathBuf, u64)>,
 }
+
+/// One project's store, opened on first use. The slot has its own lock, so
+/// replaying a big log blocks only callers of that project, never the
+/// directory; a failed open leaves it empty and the next call retries.
+type Slot = Arc<Mutex<Option<Arc<VectorBackendStore>>>>;
 
 /// File of the controller-fallback store inside the persistence dir. Not a
 /// valid project id, so it cannot collide with a project's file.
@@ -78,11 +84,20 @@ impl VectorDirectory {
         let path = dir.join(&file);
         match VectorBackendStore::persistent(backend(), &path, *cap) {
             Ok(s) => Some(Arc::new(s)),
-            Err(e) => {
-                // Never overwrite what could not be read: keep it aside for the
-                // operator and start this project's store empty.
-                tracing::warn!(error = %e, path = %path.display(), "cog ingest vector log unusable; moving it aside");
-                let aside = dir.join(format!("{file}.unreadable"));
+            Err(OpenError::Io(e)) => {
+                // Possibly transient and the file is not implicated: refuse for now, retry next call.
+                tracing::warn!(error = %e, path = %path.display(), "cog ingest vector log could not be opened");
+                None
+            }
+            Err(OpenError::Corrupt(e)) => {
+                // Never overwrite what could not be read: keep it aside, under a name that
+                // cannot clobber earlier evidence, and start this project's store empty.
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default();
+                let aside = dir.join(format!("{file}.unreadable.{ts}"));
+                tracing::warn!(error = %e, path = %path.display(), aside = %aside.display(), "cog ingest vector log unusable; moving it aside");
                 std::fs::rename(&path, &aside).ok()?;
                 VectorBackendStore::persistent(backend(), &path, *cap).ok().map(Arc::new)
             }
@@ -97,13 +112,15 @@ impl StoreDirectory for VectorDirectory {
             None if !self.fallback => return None,
             _ => {}
         }
-        let mut g = self.stores.lock().ok()?;
-        let key = project_id.map(String::from);
-        if let Some(s) = g.get(&key) {
-            return Some(s.clone() as Arc<dyn IngestStore>);
+        let slot = {
+            let mut g = self.stores.lock().ok()?;
+            g.entry(project_id.map(String::from)).or_default().clone()
+        };
+        // The directory lock is released; only this project's slot is held while the log replays.
+        let mut cell = slot.lock().ok()?;
+        if cell.is_none() {
+            *cell = run_blocking(|| self.open_store(project_id));
         }
-        let s = self.open_store(project_id)?;
-        g.insert(key, s.clone());
-        Some(s as Arc<dyn IngestStore>)
+        cell.clone().map(|s| s as Arc<dyn IngestStore>)
     }
 }
