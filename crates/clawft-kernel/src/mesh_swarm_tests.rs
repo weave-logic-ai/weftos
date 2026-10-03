@@ -860,6 +860,37 @@ async fn an_oversize_descriptor_is_refused_before_any_piece_is_requested() {
     assert_eq!(leech.ex.store().count(), 0);
 }
 
+/// The sequential `fetch` (not only the swarm path) checks the descriptor
+/// against the node's caps before it requests a piece.
+#[tokio::test(start_paused = true)]
+async fn a_sequential_fetch_refuses_an_oversize_descriptor_before_any_piece() {
+    use crate::mesh_artifact_peers::{PeerLink, PeerSet};
+    let leech = swarm_node("leech", ExchangeConfig { max_artifact_bytes: 1 << 30, ..cfg() });
+    let requests = Arc::new(AtomicUsize::new(0));
+    let key = ArtifactKey::Content([5; 32]);
+    let huge_pieces = ArtifactDescriptor {
+        piece_size: MAX_PIECE_SIZE,
+        total_size: 2 * MAX_PIECE_SIZE,
+        content_hash: [5; 32],
+        pieces: vec![[1; 32]; 2],
+    };
+    let huge_total = ArtifactDescriptor {
+        piece_size: MIB,
+        total_size: 10 * 1024 * MIB,
+        content_hash: [5; 32],
+        pieces: vec![[2; 32]; 10 * 1024],
+    };
+    for (name, d) in [("piece-size", huge_pieces), ("total", huge_total)] {
+        let stream = scripted(d, None, requests.clone())();
+        let mut peers = PeerSet::single(PeerLink::new("evil", stream));
+        let err = leech.ex.fetch(&mut peers, key).await.unwrap_err();
+        assert!(err.to_string().contains("descriptor refused"), "{name}: {err}");
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 0, "no piece was requested");
+    assert_eq!(leech.ex.pending_bytes(), 0, "nothing was left pending");
+    assert_eq!(leech.ex.store().count(), 0);
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_descriptor_that_does_not_fit_the_manifest_size_is_refused_before_any_piece() {
     let fx = fixture(2 * 1024 * 1024);

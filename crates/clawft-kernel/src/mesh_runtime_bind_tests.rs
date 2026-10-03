@@ -80,12 +80,15 @@ async fn verified_peer_registers_under_admitted_id_and_delivery_sees_identity() 
 #[tokio::test]
 async fn unverified_connection_cannot_take_over_a_verified_route() {
     let (rt, _sink) = runtime(true);
+    let mut events = rt.subscribe_peer_events();
     let (good_tx, mut good_rx) = chan();
     rt.handle_incoming_peer(&text("n1", "t"), good_tx, Some(&verified("n1"))).await.unwrap();
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Joined { verified: true, .. })));
 
     let (bad_tx, mut bad_rx) = chan();
     let r = rt.handle_incoming_from(&text("n1", "t"), bad_tx).await;
     assert!(r.is_err());
+    assert!(events.try_recv().is_err(), "a refused claim is not a join, recovery or leave");
 
     let msg = KernelMessage::text(0, MessageTarget::Topic("back".into()), "hi");
     rt.send_to_peer("n1", MeshIpcEnvelope::new("local".into(), "n1".into(), msg)).await.unwrap();
@@ -233,4 +236,74 @@ async fn admitted_route_loses_its_subscriptions_on_close() {
     rt.handle_incoming_peer(&sub, tx.clone(), Some(&verified("n1"))).await.unwrap();
     assert_eq!(rt.disconnect_channel(&tx), 1);
     assert!(rt.peers_for_topic("push.n1").is_empty());
+}
+
+#[tokio::test]
+async fn join_and_recover_events_say_whether_the_id_was_verified() {
+    let (rt, _) = runtime(true);
+    // `verified` is only false under enforce (observe and off count everyone).
+    rt.set_enforcing(true);
+    let mut events = rt.subscribe_peer_events();
+    let (a, _ra) = chan();
+    rt.handle_incoming_peer(&text("v", "t"), a, Some(&verified("v"))).await.unwrap();
+    let (b, _rb) = chan();
+    rt.handle_incoming_from(&text("legacy", "t"), b).await.unwrap();
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Joined { node_id, verified: true, .. }) if node_id == "v"));
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Joined { node_id, verified: false, .. }) if node_id == "legacy"));
+    // A reconnect on a fresh channel keeps the flag of the new connection.
+    let (b2, _rb2) = chan();
+    rt.handle_incoming_from(&text("legacy", "t"), b2).await.unwrap();
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Recovered { verified: false, .. })));
+    let (a2, _ra2) = chan();
+    rt.handle_incoming_peer(&text("v", "t"), a2, Some(&verified("v"))).await.unwrap();
+    assert!(matches!(events.try_recv(), Ok(MeshPeerEvent::Recovered { verified: true, .. })));
+}
+
+#[tokio::test]
+async fn only_under_enforce_does_an_unadmitted_peer_stop_being_a_member() {
+    use crate::cluster::{ClusterConfig, ClusterMembership, NodeState};
+    let membership = Arc::new(
+        ClusterMembership::new(ClusterConfig::default())
+            .with_min_peer_interval(std::time::Duration::ZERO),
+    );
+    let (rt, _) = runtime(true);
+    membership.spawn_mesh_peer_listener(rt.subscribe_peer_events());
+    let state_of = |id: &str| {
+        let m = membership.clone();
+        let id = id.to_string();
+        async move {
+            for _ in 0..200 {
+                if let Some(p) = m.get_peer(&id) {
+                    return Some(p.state);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            None
+        }
+    };
+
+    // observe / off (the default): the same legacy join is a member, as before.
+    assert!(!rt.enforcing());
+    let (a, _ra) = chan();
+    rt.handle_incoming_from(&text("legacy-observe", "t"), a).await.unwrap();
+    assert_eq!(state_of("legacy-observe").await, Some(NodeState::Active));
+    assert!(membership.active_peers().contains(&"legacy-observe".to_string()));
+
+    // enforce: a connection admission did not verify is held Unverified and
+    // is not an active peer; an admitted one is Active.
+    rt.set_enforcing(true);
+    let (b, _rb) = chan();
+    rt.handle_incoming_from(&text("legacy-enforce", "t"), b).await.unwrap();
+    assert_eq!(state_of("legacy-enforce").await, Some(NodeState::Unverified));
+    let (c, _rc) = chan();
+    rt.handle_incoming_peer(&text("admitted", "t"), c, Some(&verified("admitted"))).await.unwrap();
+    assert_eq!(state_of("admitted").await, Some(NodeState::Active));
+    let active = membership.active_peers();
+    assert!(active.contains(&"admitted".to_string()) && !active.contains(&"legacy-enforce".to_string()));
+
+    // Back to observe: new joins count again.
+    rt.set_enforcing(false);
+    let (d, _rd) = chan();
+    rt.handle_incoming_from(&text("legacy-again", "t"), d).await.unwrap();
+    assert_eq!(state_of("legacy-again").await, Some(NodeState::Active));
 }

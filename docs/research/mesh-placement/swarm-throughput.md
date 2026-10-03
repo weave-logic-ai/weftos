@@ -91,7 +91,9 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   manifests to be seeded.** Hashes recorded in a cog-sources `provenance.json`
   with a Cognitum trust are not consulted yet, by the swarm or by
   `weaver workload pack`: follow-up.
-- **Sizes are checked before any piece is requested.** A descriptor with a
+- **Sizes are checked before any piece is requested**, on the sequential
+  `fetch` path as well as the swarm path (both go through `check_descriptor`;
+  each has a test with a scripted peer that counts `request` frames). A descriptor with a
   piece size over `max_piece_size` (default 16 MiB), a total over
   `max_artifact_bytes` (default 64 GiB), or one that differs from the exact
   size in the signed manifest is refused. At most one piece is buffered per
@@ -221,6 +223,11 @@ byte budget applies; `ArtifactCache::advertise` is one call once it does.
   Unknown ids are accepted and matched, so nothing depends on it, but the
   vocabulary file is governed and pinned, so the entries need to go in through
   that path.
-- Partial copies are not served, and there is no request window.
+- Partial copies are not served, and there is no request window. Serving
+  partial holdings is deliberately deferred, not forgotten: a partial copy's
+  descriptor is the peer's claim until the assembled content verifies, so
+  serving its pieces would pass an unverified liar's pieces to others and
+  bypass the manifest-based redistribution check. It needs a verified-piece
+  record per descriptor first (the card 693a2514 decision).
 - No licence field exists in the manifest on this branch; "Cognitum
   provenance" is the only signal for non-redistributable packages.

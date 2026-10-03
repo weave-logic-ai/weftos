@@ -10,7 +10,7 @@
 use clawft_types::placement::{AttrValue, Provenance};
 
 use super::host::ProbeHost;
-use super::probe::{Collected, bytes_attr, cap, parse_df, str_list};
+use super::probe::{Collected, bytes_attr, cap, note_external_withheld, parse_df, public_mount, str_list};
 
 const COREML: &str = "/System/Library/Frameworks/CoreML.framework";
 
@@ -109,11 +109,13 @@ fn storage(host: &dyn ProbeHost, c: &mut Collected) {
     if let Some((free, mount)) = host.run("df", &["-kP", "/"]).as_deref().and_then(parse_df)
         && let Some(s) = cap("store.tier.internal", Provenance::Probed)
     {
-        c.push(
-            s.with_attr("free", bytes_attr(free))
-                .with_attr("mount", mount.as_str()),
-        );
+        let mut s = s.with_attr("free", bytes_attr(free));
+        if let Some(m) = public_mount(&mount) {
+            s = s.with_attr("mount", m);
+        }
+        c.push(s);
     }
+    let mut external = 0;
     for vol in host.list_dir("/Volumes").unwrap_or_default() {
         let path = format!("/Volumes/{vol}");
         let Some((free, mount)) = host
@@ -127,14 +129,16 @@ fn storage(host: &dyn ProbeHost, c: &mut Collected) {
         if mount != path {
             continue;
         }
+        // The label is the user's own name for the drive: it stays local.
         if let Some(s) = cap("store.tier.external", Provenance::Probed) {
             c.push(
                 s.with_attr("mounted", true)
-                    .with_attr("free", bytes_attr(free))
-                    .with_attr("mount", mount.as_str()),
+                    .with_attr("free", bytes_attr(free)),
             );
+            external += 1;
         }
     }
+    note_external_withheld(c, external);
 }
 
 fn metal(host: &dyn ProbeHost, apple_silicon: bool, total: Option<u64>, c: &mut Collected) {

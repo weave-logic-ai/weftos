@@ -51,6 +51,12 @@ impl std::fmt::Display for NodePlatform {
     }
 }
 
+/// How long an `Unverified` mesh peer may go unheard before membership drops
+/// it (see [`ClusterMembership::expire_unverified`]).
+pub const UNVERIFIED_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+/// How often the mesh listeners look for expired `Unverified` peers.
+pub const UNVERIFIED_REAP_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Node health state.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +73,11 @@ pub enum NodeState {
     Leaving,
     /// Node has left the cluster.
     Left,
+    /// A connected mesh peer whose node id admission did not verify (every
+    /// peer under `off` / `observe`, and dialled seeds): its routes work, but
+    /// the id is only a claim, so it is not a member. Only a verified join
+    /// makes it `Active`; heartbeats and health events never do.
+    Unverified,
 }
 
 impl std::fmt::Display for NodeState {
@@ -78,6 +89,7 @@ impl std::fmt::Display for NodeState {
             NodeState::Unreachable => write!(f, "unreachable"),
             NodeState::Leaving => write!(f, "leaving"),
             NodeState::Left => write!(f, "left"),
+            NodeState::Unverified => write!(f, "unverified"),
         }
     }
 }
@@ -889,6 +901,21 @@ impl ClusterMembership {
             .collect()
     }
 
+    /// Drop `Unverified` peers not heard from for `max_age`. They are not
+    /// members, so nothing else ages them out (a peer that never sends a
+    /// `Left`, or whose route vanished without an event, would linger).
+    /// Returns how many were dropped.
+    pub fn expire_unverified(&self, max_age: std::time::Duration) -> usize {
+        let cutoff = Utc::now() - chrono::Duration::from_std(max_age).unwrap_or(chrono::Duration::MAX);
+        let stale: Vec<NodeId> = self
+            .peers
+            .iter()
+            .filter(|e| e.state == NodeState::Unverified && e.last_heartbeat < cutoff)
+            .map(|e| e.key().clone())
+            .collect();
+        stale.iter().filter(|id| self.remove_peer(id).is_ok()).count()
+    }
+
     /// Apply a live mesh peer event to membership **atomically** (WEFT-120).
     ///
     /// Mesh is the authority for connect/health; this path upserts peers
@@ -908,16 +935,19 @@ impl ClusterMembership {
                 node_id,
                 address,
                 platform,
-            } => self.mesh_upsert_active(node_id, address.as_deref(), platform.as_deref()),
-            MeshPeerEvent::Recovered { node_id, address } => {
-                self.mesh_upsert_active(node_id, address.as_deref(), None)
-            }
+                verified,
+            } => self.mesh_upsert(node_id, address.as_deref(), platform.as_deref(), *verified),
+            MeshPeerEvent::Recovered {
+                node_id,
+                address,
+                verified,
+            } => self.mesh_upsert(node_id, address.as_deref(), None, *verified),
             MeshPeerEvent::Alive { node_id } => {
                 if self.peers.contains_key(node_id) {
                     let _ = self.heartbeat(node_id);
                     if self
                         .get_peer(node_id)
-                        .map(|p| p.state != NodeState::Active)
+                        .map(|p| !matches!(p.state, NodeState::Active | NodeState::Unverified))
                         .unwrap_or(false)
                     {
                         let _ = self.update_state(node_id, NodeState::Active);
@@ -926,12 +956,15 @@ impl ClusterMembership {
                     // heartbeat already updated last_heartbeat in-place
                     Ok(true)
                 } else {
-                    // Alive without prior join — treat as soft join.
-                    self.mesh_upsert_active(node_id, None, None)
+                    // Alive without prior join — treat as soft join. Nothing
+                    // here says the id was verified.
+                    self.mesh_upsert(node_id, None, None, false)
                 }
             }
+            // An unverified peer's health is not tracked here: a Suspect state
+            // would be turned into Active by the next heartbeat.
             MeshPeerEvent::Suspect { node_id } => {
-                if self.peers.contains_key(node_id) {
+                if self.peers.get(node_id).is_some_and(|p| p.state != NodeState::Unverified) {
                     self.update_state(node_id, NodeState::Suspect)?;
                     Ok(true)
                 } else {
@@ -939,11 +972,18 @@ impl ClusterMembership {
                 }
             }
             MeshPeerEvent::Unreachable { node_id } => {
-                if self.peers.contains_key(node_id) {
-                    self.update_state(node_id, NodeState::Unreachable)?;
-                    Ok(true)
-                } else {
-                    Ok(false)
+                match self.peers.get(node_id).map(|p| p.state.clone()) {
+                    // Its route is gone and it was never a member: drop it,
+                    // or it would sit in the list until a TTL.
+                    Some(NodeState::Unverified) => {
+                        let _ = self.remove_peer(node_id);
+                        Ok(true)
+                    }
+                    Some(_) => {
+                        self.update_state(node_id, NodeState::Unreachable)?;
+                        Ok(true)
+                    }
+                    None => Ok(false),
                 }
             }
             MeshPeerEvent::Left { node_id } => {
@@ -960,17 +1000,29 @@ impl ClusterMembership {
     }
 
     /// Insert-or-activate a peer from mesh (bypasses rate limit).
+    ///
+    /// `verified`: admission verified the node id. A verified join makes the
+    /// peer `Active`. An unverified one adds a new peer as `Unverified`, and
+    /// on a peer already held only revives one that was down; it never
+    /// demotes an `Active` peer (an operator-added or earlier verified one).
     #[cfg(feature = "mesh")]
-    fn mesh_upsert_active(
+    fn mesh_upsert(
         &self,
         node_id: &str,
         address: Option<&str>,
         platform: Option<&str>,
+        verified: bool,
     ) -> Result<bool, ClusterError> {
         if let Some(mut entry) = self.peers.get_mut(node_id) {
             let mut changed = false;
-            if entry.state != NodeState::Active {
-                entry.state = NodeState::Active;
+            let to = match (verified, &entry.state) {
+                (true, s) if *s != NodeState::Active => Some(NodeState::Active),
+                (false, NodeState::Active | NodeState::Unverified) => None,
+                (false, _) => Some(NodeState::Unverified),
+                _ => None,
+            };
+            if let Some(to) = to {
+                entry.state = to;
                 changed = true;
             }
             entry.last_heartbeat = Utc::now();
@@ -1011,7 +1063,7 @@ impl ClusterMembership {
             id: node_id.to_owned(),
             name: node_id.to_owned(),
             platform,
-            state: NodeState::Active,
+            state: if verified { NodeState::Active } else { NodeState::Unverified },
             address: address.map(|s| s.to_owned()),
             first_seen: now,
             last_heartbeat: now,
@@ -1038,8 +1090,16 @@ impl ClusterMembership {
     ) {
         let membership = Arc::clone(self);
         tokio::spawn(async move {
+            let mut reap = tokio::time::interval(UNVERIFIED_REAP_EVERY);
             loop {
-                match rx.recv().await {
+                let received = tokio::select! {
+                    _ = reap.tick() => {
+                        membership.expire_unverified(UNVERIFIED_TTL);
+                        continue;
+                    }
+                    r = rx.recv() => r,
+                };
+                match received {
                     Ok(event) => {
                         if let Err(e) = membership.apply_mesh_peer_event(&event) {
                             debug!(
@@ -1422,10 +1482,19 @@ mod cluster_service {
             use crate::mesh_discovery::MeshPeerEvent;
             let changed = self.membership.apply_mesh_peer_event(event)?;
             match event {
+                // The ruvector manager only learns of nodes admission verified:
+                // an unverified claim is not a replication peer.
                 MeshPeerEvent::Joined {
-                    node_id, address, ..
+                    node_id,
+                    address,
+                    verified: true,
+                    ..
                 }
-                | MeshPeerEvent::Recovered { node_id, address } => {
+                | MeshPeerEvent::Recovered {
+                    node_id,
+                    address,
+                    verified: true,
+                } => {
                     let addr: std::net::SocketAddr = address
                         .as_deref()
                         .and_then(|s| s.parse().ok())
@@ -1444,7 +1513,10 @@ mod cluster_service {
                         );
                     }
                 }
-                MeshPeerEvent::Alive { .. } | MeshPeerEvent::Suspect { .. } => {}
+                MeshPeerEvent::Alive { .. }
+                | MeshPeerEvent::Suspect { .. }
+                | MeshPeerEvent::Joined { .. }
+                | MeshPeerEvent::Recovered { .. } => {}
             }
             Ok(changed)
         }
@@ -1469,8 +1541,16 @@ mod cluster_service {
             let svc = Arc::clone(self);
             tokio::spawn(async move {
                 info!("cluster service subscribed to mesh peer-event stream");
+                let mut reap = tokio::time::interval(super::UNVERIFIED_REAP_EVERY);
                 loop {
-                    match rx.recv().await {
+                    let received = tokio::select! {
+                        _ = reap.tick() => {
+                            svc.membership.expire_unverified(super::UNVERIFIED_TTL);
+                            continue;
+                        }
+                        r = rx.recv() => r,
+                    };
+                    match received {
                         Ok(event) => {
                             if let Err(e) = svc.apply_mesh_peer_event_async(&event).await {
                                 debug!(
@@ -2206,6 +2286,139 @@ mod tests {
         use super::*;
         use crate::mesh_discovery::MeshPeerEvent;
 
+        fn joined(id: &str, verified: bool) -> MeshPeerEvent {
+            MeshPeerEvent::Joined {
+                node_id: id.into(),
+                address: Some("10.0.0.6:9489".into()),
+                platform: None,
+                verified,
+            }
+        }
+
+        #[test]
+        fn an_unverified_join_is_held_unverified_not_active() {
+            let cluster = make_cluster(ClusterConfig::default());
+            assert!(cluster.apply_mesh_peer_event(&joined("claimed", false)).unwrap());
+            assert_eq!(cluster.get_peer("claimed").unwrap().state, NodeState::Unverified);
+            assert!(cluster.active_peers().is_empty(), "an unverified claim is not a member");
+            // Its route stays: it is listed, with its address.
+            assert_eq!(cluster.get_peer("claimed").unwrap().address.as_deref(), Some("10.0.0.6:9489"));
+            assert_eq!(cluster.count_by_state(&NodeState::Unverified), 1);
+        }
+
+        #[test]
+        fn heartbeats_and_health_events_never_promote_an_unverified_peer() {
+            let cluster = make_cluster(ClusterConfig::default());
+            cluster.apply_mesh_peer_event(&joined("claimed", false)).unwrap();
+            for ev in [
+                MeshPeerEvent::Alive { node_id: "claimed".into() },
+                MeshPeerEvent::Suspect { node_id: "claimed".into() },
+                MeshPeerEvent::Alive { node_id: "claimed".into() },
+                MeshPeerEvent::Recovered {
+                    node_id: "claimed".into(),
+                    address: None,
+                    verified: false,
+                },
+            ] {
+                cluster.apply_mesh_peer_event(&ev).unwrap();
+                assert_eq!(cluster.get_peer("claimed").unwrap().state, NodeState::Unverified, "{ev:?}");
+            }
+            // It still goes when its connection does.
+            cluster
+                .apply_mesh_peer_event(&MeshPeerEvent::Left { node_id: "claimed".into() })
+                .unwrap();
+            assert!(cluster.get_peer("claimed").is_none());
+        }
+
+        #[test]
+        fn only_a_verified_join_makes_an_unverified_peer_active() {
+            let cluster = make_cluster(ClusterConfig::default());
+            cluster.apply_mesh_peer_event(&joined("p", false)).unwrap();
+            cluster.apply_mesh_peer_event(&joined("p", true)).unwrap();
+            assert_eq!(cluster.get_peer("p").unwrap().state, NodeState::Active);
+            assert_eq!(cluster.active_peers(), vec!["p".to_string()]);
+        }
+
+        #[test]
+        fn an_unverified_event_does_not_demote_an_active_peer() {
+            // An operator-added (or earlier verified) peer keeps its state when
+            // a legacy connection for the same id comes and goes.
+            let cluster = make_cluster(ClusterConfig::default());
+            cluster.apply_mesh_peer_event(&joined("op", true)).unwrap();
+            cluster.apply_mesh_peer_event(&joined("op", false)).unwrap();
+            assert_eq!(cluster.get_peer("op").unwrap().state, NodeState::Active);
+            // A down peer that comes back unverified is not Active either.
+            cluster.update_state("op", NodeState::Unreachable).unwrap();
+            cluster.apply_mesh_peer_event(&joined("op", false)).unwrap();
+            assert_eq!(cluster.get_peer("op").unwrap().state, NodeState::Unverified);
+        }
+
+        #[test]
+        fn an_unreachable_unverified_peer_is_dropped_not_left_listed() {
+            let cluster = make_cluster(ClusterConfig::default());
+            cluster.apply_mesh_peer_event(&joined("claimed", false)).unwrap();
+            cluster
+                .apply_mesh_peer_event(&MeshPeerEvent::Unreachable { node_id: "claimed".into() })
+                .unwrap();
+            assert!(cluster.get_peer("claimed").is_none());
+            // A member that goes unreachable is still kept (as Unreachable).
+            cluster.apply_mesh_peer_event(&joined("member", true)).unwrap();
+            cluster
+                .apply_mesh_peer_event(&MeshPeerEvent::Unreachable { node_id: "member".into() })
+                .unwrap();
+            assert_eq!(cluster.get_peer("member").unwrap().state, NodeState::Unreachable);
+        }
+
+        #[test]
+        fn the_reaper_expires_only_stale_unverified_peers() {
+            let cluster = make_cluster(ClusterConfig::default());
+            cluster.apply_mesh_peer_event(&joined("old-claim", false)).unwrap();
+            cluster.apply_mesh_peer_event(&joined("fresh-claim", false)).unwrap();
+            cluster.apply_mesh_peer_event(&joined("old-member", true)).unwrap();
+            let long_ago = Utc::now() - chrono::Duration::hours(3);
+            for id in ["old-claim", "old-member"] {
+                cluster.peers.get_mut(id).unwrap().last_heartbeat = long_ago;
+            }
+            assert_eq!(cluster.expire_unverified(UNVERIFIED_TTL), 1);
+            assert!(cluster.get_peer("old-claim").is_none());
+            assert!(cluster.get_peer("fresh-claim").is_some(), "recently heard from");
+            assert!(cluster.get_peer("old-member").is_some(), "members are not the reaper's");
+        }
+
+        #[test]
+        fn an_older_event_without_the_flag_reads_as_unverified() {
+            let ev: MeshPeerEvent =
+                serde_json::from_str(r#"{"Joined":{"node_id":"n","address":null,"platform":null}}"#).unwrap();
+            assert!(matches!(ev, MeshPeerEvent::Joined { verified: false, .. }));
+        }
+
+        #[cfg(feature = "cluster")]
+        #[tokio::test]
+        async fn the_ruvector_manager_only_learns_of_verified_nodes() {
+            use crate::cluster::ClusterService;
+            use clawft_types::config::ClusterNetworkConfig;
+            use ruvector_cluster::StaticDiscovery;
+
+            let membership = Arc::new(make_cluster(ClusterConfig {
+                node_id: "local".into(),
+                ..Default::default()
+            }));
+            let svc = Arc::new(
+                ClusterService::new(
+                    ClusterNetworkConfig::default(),
+                    "local".into(),
+                    Box::new(StaticDiscovery::new(vec![])),
+                    Arc::clone(&membership),
+                )
+                .expect("cluster service"),
+            );
+            svc.apply_mesh_peer_event_async(&joined("claimed", false)).await.unwrap();
+            assert!(membership.get_peer("claimed").is_some());
+            assert!(!svc.list_nodes().iter().any(|n| n.node_id == "claimed"));
+            svc.apply_mesh_peer_event_async(&joined("real", true)).await.unwrap();
+            assert!(svc.list_nodes().iter().any(|n| n.node_id == "real"));
+        }
+
         #[test]
         fn mesh_join_adds_active_peer() {
             let cluster = make_cluster(ClusterConfig::default());
@@ -2214,6 +2427,7 @@ mod tests {
                     node_id: "peer-a".into(),
                     address: Some("10.0.0.5:9489".into()),
                     platform: Some("edge".into()),
+                    verified: true,
                 })
                 .unwrap();
             assert!(changed);
@@ -2232,6 +2446,7 @@ mod tests {
                     node_id: "peer-b".into(),
                     address: None,
                     platform: None,
+                    verified: true,
                 })
                 .unwrap();
             assert_eq!(cluster.len(), 1);
@@ -2254,6 +2469,7 @@ mod tests {
                     node_id: "peer-p".into(),
                     address: Some("10.1.0.1:9489".into()),
                     platform: None,
+                    verified: true,
                 })
                 .unwrap();
 
@@ -2272,6 +2488,7 @@ mod tests {
                 .apply_mesh_peer_event(&MeshPeerEvent::Recovered {
                     node_id: "peer-p".into(),
                     address: Some("10.1.0.1:9489".into()),
+                    verified: true,
                 })
                 .unwrap();
             let peer = cluster.get_peer("peer-p").unwrap();
@@ -2287,6 +2504,7 @@ mod tests {
                     node_id: "peer-s".into(),
                     address: None,
                     platform: None,
+                    verified: true,
                 })
                 .unwrap();
             cluster
@@ -2315,6 +2533,7 @@ mod tests {
                         node_id: "peer-i".into(),
                         address: Some("1.2.3.4:9".into()),
                         platform: None,
+                        verified: true,
                     })
                     .unwrap();
             }
@@ -2338,6 +2557,7 @@ mod tests {
                 node_id: "async-peer".into(),
                 address: Some("127.0.0.1:1".into()),
                 platform: None,
+                verified: true,
             });
             // Allow the spawned task to apply the event.
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -2375,6 +2595,7 @@ mod tests {
                 node_id: "remote-1".into(),
                 address: Some("127.0.0.1:9471".into()),
                 platform: None,
+                verified: true,
             })
             .await
             .unwrap();
@@ -2419,6 +2640,7 @@ mod tests {
                 node_id: "stream-peer".into(),
                 address: Some("10.0.0.9:9489".into()),
                 platform: None,
+                verified: true,
             });
             tokio::time::sleep(std::time::Duration::from_millis(80)).await;
             assert_eq!(
@@ -2439,6 +2661,7 @@ mod tests {
             bus.emit(MeshPeerEvent::Recovered {
                 node_id: "stream-peer".into(),
                 address: Some("10.0.0.9:9489".into()),
+                verified: true,
             });
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             assert_eq!(

@@ -131,10 +131,33 @@ fn docker(
         d = d.with_attr("version", v);
     }
     c.push(d);
+    // The CLI answers for whichever engine the daemon's own HOME and docker
+    // context select, which may not be the one an interactive shell uses.
+    let context = host
+        .run("docker", &["context", "show"])
+        .map(|s| public_context(s.trim()))
+        .unwrap_or_else(|| "unknown".into());
     c.note(
         "docker",
-        format!("docker info (variant {variant}); emulation from {source}"),
+        format!(
+            "docker info (variant {variant}); emulation from {source}; \
+             probed as the daemon's user with docker context {context}"
+        ),
     );
+}
+
+/// Docker context names that are the same on every install. A context a user
+/// named themselves (a host, a project, a person) is reported as `custom`.
+const KNOWN_CONTEXTS: &[&str] = &["default", "desktop-linux", "orbstack", "colima", "rancher-desktop"];
+
+fn public_context(name: &str) -> String {
+    if KNOWN_CONTEXTS.contains(&name) {
+        name.to_string()
+    } else if name.is_empty() {
+        "unknown".into()
+    } else {
+        "custom".into()
+    }
 }
 
 fn vm_emulation(host: &dyn ProbeHost, native: &str, cfg: &ProbeConfig) -> (Vec<String>, String) {

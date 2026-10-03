@@ -24,9 +24,30 @@ pub const MAX_CACHED_NODES: usize = 4096;
 /// Most mesh-derived `Discovered` entries held at once, whatever the total.
 pub const MAX_DISCOVERED: usize = 512;
 
+/// Test hook: pause an insert of `(node_id, seq)` after its staleness check
+/// has passed and before it writes, so a test can force the interleave.
+#[cfg(test)]
+pub(crate) mod pause {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    pub(crate) static TARGET: Mutex<Option<(String, u64)>> = Mutex::new(None);
+    pub(crate) static PAUSED: AtomicBool = AtomicBool::new(false);
+    pub(crate) static RELEASE: AtomicBool = AtomicBool::new(false);
+    pub(crate) fn here(node_id: &str, seq: u64) {
+        let hit = TARGET.lock().unwrap().as_ref().is_some_and(|(n, s)| n == node_id && *s == seq);
+        if hit {
+            PAUSED.store(true, Ordering::SeqCst);
+            while !RELEASE.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+}
+
 /// Where a node's tier came from. Only an operator-set tier is sticky: a
 /// mesh-derived tier follows the current connection (admission) every frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TierSource {
     /// Derived from how the node's connection was admitted.
     Mesh,
@@ -189,33 +210,8 @@ impl NodeFactsCache {
             delta_seq: 0,
             public_key,
         };
-        // Expired entries do not block a node that restarted its seq.
-        if let Some(held) = self.entries.get(&node_id).filter(|e| e.is_fresh(now)) {
-            if remote && held.tier_source == TierSource::Operator {
-                entry.trust_tier = held.trust_tier;
-                entry.tier_source = TierSource::Operator;
-            }
-            if held.signed.payload == entry.signed.payload {
-                drop(held);
-                if remote {
-                    // Same facts, but the connection's tier is current.
-                    if let Some(mut e) = self.entries.get_mut(&node_id)
-                        && e.tier_source == TierSource::Mesh
-                    {
-                        e.trust_tier = trust_tier;
-                        e.origin = origin;
-                    }
-                }
-                return Ok(InsertOutcome::Unchanged);
-            }
-            if entry.facts.seq <= held.facts.seq {
-                return Err(CacheError::Stale {
-                    node_id,
-                    got: entry.facts.seq,
-                    held: held.facts.seq,
-                });
-            }
-        }
+        // Capacity first, for a node not held yet (soft: a racing insert of
+        // another node may still land between this check and the write).
         if !self.entries.contains_key(&node_id) {
             // Unverified claims are capped as a class, so they cannot crowd
             // out the cache; the heaviest connection pays first.
@@ -234,10 +230,45 @@ impl NodeFactsCache {
                 }
             }
         }
-        Ok(match self.entries.insert(node_id, entry) {
-            Some(_) => InsertOutcome::Replaced,
-            None => InsertOutcome::Added,
-        })
+        // The held-versus-new decision and the write happen under the entry's
+        // lock, so two concurrent inserts for one node cannot both pass the
+        // staleness check and let the older `seq` land last.
+        use dashmap::mapref::entry::Entry;
+        match self.entries.entry(node_id.clone()) {
+            Entry::Vacant(v) => {
+                v.insert(entry);
+                Ok(InsertOutcome::Added)
+            }
+            Entry::Occupied(mut o) => {
+                // Expired entries do not block a node that restarted its seq.
+                if o.get().is_fresh(now) {
+                    let held = o.get_mut();
+                    if remote && held.tier_source == TierSource::Operator {
+                        entry.trust_tier = held.trust_tier;
+                        entry.tier_source = TierSource::Operator;
+                    }
+                    if held.signed.payload == entry.signed.payload {
+                        if remote && held.tier_source == TierSource::Mesh {
+                            // Same facts, but the connection's tier is current.
+                            held.trust_tier = trust_tier;
+                            held.origin = origin;
+                        }
+                        return Ok(InsertOutcome::Unchanged);
+                    }
+                    if entry.facts.seq <= held.facts.seq {
+                        return Err(CacheError::Stale {
+                            node_id,
+                            got: entry.facts.seq,
+                            held: held.facts.seq,
+                        });
+                    }
+                }
+                #[cfg(test)]
+                pause::here(&node_id, entry.facts.seq);
+                o.insert(entry);
+                Ok(InsertOutcome::Replaced)
+            }
+        }
     }
 
     fn count_discovered(&self) -> usize {

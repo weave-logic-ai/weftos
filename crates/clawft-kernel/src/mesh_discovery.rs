@@ -64,6 +64,15 @@ pub enum MeshPeerEvent {
         address: Option<String>,
         /// Platform label when known.
         platform: Option<String>,
+        /// The peer counts as a cluster member: admission verified `node_id`
+        /// for this connection, or admission is not `enforce` (under the
+        /// default `observe`, and under `off`, every peer counts). False only
+        /// under `enforce` for a connection whose id is just a claim (a
+        /// dialled seed, a legacy leaf); membership then holds it as
+        /// [`NodeState::Unverified`](crate::cluster::NodeState::Unverified),
+        /// not `Active`. Absent in older events (read as false).
+        #[serde(default)]
+        verified: bool,
     },
     /// Peer disconnected (graceful leave or connection drop).
     Left {
@@ -91,6 +100,9 @@ pub enum MeshPeerEvent {
         node_id: String,
         /// Address if known on recovery path.
         address: Option<String>,
+        /// As for [`MeshPeerEvent::Joined::verified`].
+        #[serde(default)]
+        verified: bool,
     },
 }
 
@@ -378,6 +390,7 @@ mod tests {
             node_id: "n1".into(),
             address: Some("127.0.0.1:9".into()),
             platform: None,
+            verified: false,
         };
         assert_eq!(e.node_id(), "n1");
         assert_eq!(
@@ -410,6 +423,7 @@ mod tests {
         let e = MeshPeerEvent::Recovered {
             node_id: "r1".into(),
             address: Some("10.0.0.2:9489".into()),
+            verified: true,
         };
         let json = serde_json::to_string(&e).unwrap();
         let back: MeshPeerEvent = serde_json::from_str(&json).unwrap();

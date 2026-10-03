@@ -72,6 +72,28 @@ Staging area for changes after the 0.8.1 cut.
   mixed-version mesh before packing with the flag. Manifests without it are
   unchanged.
 
+### Changed — unverified mesh peers are not cluster members (ADR-103 A10)
+
+- **Mode-dependent:** this applies only under `kernel.mesh.admission =
+  "enforce"`. Under `observe` (the shipped default) and `off`, every peer
+  joins as `Active` exactly as before: observe means observe, not enforce.
+  `MeshRuntime::set_enforcing` carries the mode (set at boot, by the mesh
+  service, and when an admin changes the mode).
+- Under enforce, `MeshPeerEvent::Joined` and `Recovered` carry `verified`
+  (true when the peer counts as a member). A peer admission did not verify
+  (a dialled seed, a legacy leaf) is held in cluster membership as the new
+  `NodeState::Unverified`, not `Active`: it keeps its routes, but is not in
+  `active_peers()`, is not reported healthy, placement treats it as not alive
+  and refuses to place on it, and the ruvector manager is not told about it.
+  Heartbeats and `Suspect` events never promote it; only a verified join does.
+  An `Unreachable` event, or an hour without a heartbeat, drops it from the
+  list. Anything that treated "present in membership" as "member" should check
+  for `Active`.
+- `seed_peers` entries may be `address#node-id` to pin the id a seed must
+  claim. A dialled seed with no pin is bound to the first id named by an
+  envelope or an assessment frame; frames that name no id before that are
+  dropped (assessment frames used to pass unbound).
+
 ### Changed — mesh connection limits and seed dials (ADR-103 A10)
 
 - **Behaviour change:** the per-IP connection cap (default 64) and the

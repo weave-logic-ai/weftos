@@ -98,7 +98,14 @@ fn pi5_linux_arm_facts() {
     );
 
     let ext = one("store.tier.external");
-    assert_eq!(ext.attrs["mount"], AttrValue::from("/media/pi/USB DRIVE"));
+    assert!(
+        !ext.attrs.contains_key("mount"),
+        "an external drive's label and user are not advertised"
+    );
+    assert!(
+        f.notes.iter().any(|n| n.probe == "store.tier.external" && !n.note.contains("USB")),
+        "the omission is explained without naming the drive"
+    );
     assert_eq!(ext.attrs["free"], AttrValue::Int(990 * 1024));
 
     assert!(

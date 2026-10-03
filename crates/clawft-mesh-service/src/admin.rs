@@ -273,6 +273,9 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
             if let Some(m) = apply_mode {
                 st.gate.set_mode(m).map_err(bad)?;
                 st.policy.set_admission(m);
+                if let Some(rt) = st.router.runtime() {
+                    rt.set_enforcing(m == clawft_types::config::MeshAdmissionMode::Enforce);
+                }
             }
             if apply_owner.is_some() || apply_mode.is_some() {
                 st.verdicts.clear();

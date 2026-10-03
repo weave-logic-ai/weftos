@@ -232,6 +232,44 @@ async fn responder_registers_an_admitted_peer_without_any_app_traffic() {
     let _ = c.ch.close().await;
 }
 
+#[tokio::test]
+async fn under_observe_no_one_joins_at_the_handshake_and_the_first_envelope_joins_as_a_member() {
+    use crate::mesh_discovery::MeshPeerEvent;
+    let srv = server(crypto(MeshAdmissionMode::Observe), true).await;
+    let mut events = srv.rt.subscribe_peer_events();
+    let k = key(1);
+    let mut c = Client::connect(&srv.addr, true).await;
+    c.send(&c.hello(&k, &GENESIS, vec![]).to_bytes()).await;
+    // A valid hello under observe is key possession, not membership: no
+    // early join (compare responder_registers_an_admitted_peer_...).
+    let early = tokio::time::timeout(Duration::from_millis(400), events.recv()).await;
+    assert!(early.is_err(), "no join before the first envelope: {early:?}");
+    assert!(srv.rt.peer_ids().is_empty());
+    c.publish(&id_of(&k), "t.first").await;
+    assert!(wait_for(&srv.rec, "t.first").await);
+    let ev = tokio::time::timeout(Duration::from_secs(3), events.recv()).await.unwrap().unwrap();
+    assert!(
+        // `verified: true` here means "counts as a member": observe does
+        // not exclude anyone (the runtime is not enforcing).
+        matches!(&ev, MeshPeerEvent::Joined { node_id, verified: true, .. } if *node_id == id_of(&k)),
+        "{ev:?}"
+    );
+    let _ = c.ch.close().await;
+}
+
+#[tokio::test]
+async fn under_enforce_the_join_event_is_verified() {
+    use crate::mesh_discovery::MeshPeerEvent;
+    let srv = server(crypto(MeshAdmissionMode::Enforce), true).await;
+    let mut events = srv.rt.subscribe_peer_events();
+    let k = key(2);
+    let mut c = Client::connect(&srv.addr, true).await;
+    c.send(&c.hello(&k, &GENESIS, vec![]).to_bytes()).await;
+    let ev = tokio::time::timeout(Duration::from_secs(3), events.recv()).await.unwrap().unwrap();
+    assert!(matches!(&ev, MeshPeerEvent::Joined { verified: true, .. }), "{ev:?}");
+    let _ = c.ch.close().await;
+}
+
 // ── 7: signed fields ─────────────────────────────────────────────
 
 #[test]

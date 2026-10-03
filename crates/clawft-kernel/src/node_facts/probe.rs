@@ -108,6 +108,26 @@ impl Collected {
     }
 }
 
+/// The mount point to advertise for the internal store, or `None` when the
+/// path would carry a user or volume name (`/Users/x`, `/home/x`, `/media/x`,
+/// `/Volumes/x` ...). `/` and system paths are the same on every machine.
+pub(crate) fn public_mount(mount: &str) -> Option<&str> {
+    let first = mount.trim_start_matches('/').split('/').next().unwrap_or("");
+    const PRIVATE: &[&str] = &["Users", "home", "media", "run", "mnt", "Volumes", "root", "private"];
+    (!PRIVATE.contains(&first)).then_some(mount)
+}
+
+/// Say that `count` external volumes were seen and that their names and mount
+/// points are not advertised (they are the user's, not the mesh's).
+pub(crate) fn note_external_withheld(c: &mut Collected, count: usize) {
+    if count > 0 {
+        c.note(
+            "store.tier.external",
+            format!("{count} external volume(s) mounted; names and mount points are not advertised"),
+        );
+    }
+}
+
 /// Build a capability, or `None` if the id is not valid (for example an
 /// arch string from a tool that does not fit the id grammar).
 pub fn cap(id: &str, provenance: Provenance) -> Option<Capability> {

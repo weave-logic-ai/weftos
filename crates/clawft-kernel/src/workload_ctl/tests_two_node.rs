@@ -42,6 +42,17 @@ fn order(pkg: &std::path::Path) -> PlaceOrder {
     }
 }
 
+/// Wait (bounded) for `path` to exist.
+async fn wait_for_file(path: &std::path::Path) {
+    for _ in 0..1_500 {
+        if path.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
 fn ctl_key() -> SigningKey {
     SigningKey::from_bytes(&[10; 32])
 }
@@ -49,7 +60,11 @@ fn ctl_key() -> SigningKey {
 #[tokio::test]
 async fn place_prefers_the_arm_board_over_the_dev_mac_and_explains_why() {
     let tmp = tempfile::tempdir().unwrap();
-    let pkg = package(tmp.path(), "probe-cog", SCRIPT, &[arch()]);
+    // The payload drops a marker file once it has printed: the test waits on
+    // that, not on a guess of how long a loaded host takes to exec it.
+    let printed = tmp.path().join("printed");
+    let script = format!("#!/bin/sh\necho placed-ok\n: > '{}'\nexec sleep 30\n", printed.display());
+    let pkg = package(tmp.path(), "probe-cog", &script, &[arch()]);
     let key = ctl_key();
     // The Mac's own adapter cannot run the payload (as macOS cannot run a
     // Linux ELF); the board's can.
@@ -133,7 +148,9 @@ async fn place_prefers_the_arm_board_over_the_dev_mac_and_explains_why() {
             .any(|(s, p)| s == "workload.host" && p["decision_id"] == r.decision_id.as_str())
     );
 
-    tokio::time::sleep(Duration::from_millis(500)).await; // let it print
+    // Stopping signals the process group, so it must have printed first
+    // (stdout is read back from the run's evidence at stop).
+    wait_for_file(&printed).await;
     plane
         .instance(method::STOP, &placed.instance_id)
         .await
@@ -456,4 +473,45 @@ async fn mutations_without_a_chained_decision_id_are_refused() {
             other => panic!("served without a decision: {other:?}"),
         }
     }
+}
+
+/// Membership holds a peer admission did not verify (under `enforce`) as
+/// `Unverified`; placement treats anything but `Active` as not alive, so it
+/// refuses to place onto it. The same node held `Active` (the shipped
+/// `observe` default) is placed on.
+#[tokio::test]
+async fn placement_refuses_a_node_membership_holds_as_unverified() {
+    use crate::cluster::{ClusterConfig, ClusterMembership, NodeState, PeerNode, NodePlatform};
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "probe-cog", "#!/bin/sh\nexec sleep 30\n", &[arch()]);
+    let key = ctl_key();
+    let pi = host_node(12, board_caps("pi5"), true, &key);
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("pi", pi.svc.clone());
+    let (plane, _chain) = controller(&key, conn);
+    let membership = Arc::new(ClusterMembership::new(ClusterConfig::default()));
+    let plane = plane.with_membership(membership.clone());
+    plane.add_target(&addr, TrustTier::Paired).await.unwrap();
+    let peer = |state: NodeState| PeerNode {
+        id: pi.id.clone(),
+        name: pi.id.clone(),
+        platform: NodePlatform::CloudNative,
+        state,
+        address: None,
+        first_seen: chrono::Utc::now(),
+        last_heartbeat: chrono::Utc::now(),
+        capabilities: vec![],
+        labels: Default::default(),
+    };
+
+    membership.add_peer(peer(NodeState::Unverified)).unwrap();
+    let mut o = order(&pkg);
+    o.dry_run = true;
+    let refused = plane.place(&o).await.unwrap();
+    assert!(refused.decision.placement.is_none(), "{}", refused.explain);
+    assert!(refused.explain.contains("unknown"), "{}", refused.explain);
+
+    membership.update_state(&pi.id, NodeState::Active).unwrap();
+    let ok = plane.place(&o).await.unwrap();
+    assert_eq!(ok.decision.placement.as_ref().map(|p| p.node_id.clone()), Some(pi.id.clone()), "{}", ok.explain);
 }

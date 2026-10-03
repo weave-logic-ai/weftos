@@ -30,6 +30,7 @@ fn mac() -> FakeHost {
         .out("system_profiler SPDisplaysDataType -json", SP_DISPLAYS)
         .path("/System/Library/Frameworks/CoreML.framework")
         .out("docker info --format {{json .}}", DOCKER_INFO)
+        .out("docker context show", "orbstack\n")
         .out("docker buildx inspect", BUILDX)
         .out("docker image inspect --format {{.Id}} alpine:3.20", "sha256:abc\n")
         .out(&format!("docker run --rm --privileged --pull=never --network=none --entrypoint /bin/sh alpine:3.20 -c {}", super::runtimes::BINFMT_LIST), VM_BINFMT)
@@ -120,6 +121,12 @@ fn apple_silicon_mac_facts_match_the_acceptance_machine() {
     let ext: Vec<_> = f.find("store.tier.external").collect();
     assert_eq!(ext.len(), 1, "the root alias is not an external drive");
     assert_eq!(ext[0].attrs["mounted"], AttrValue::Bool(true));
+    assert!(
+        !ext[0].attrs.contains_key("mount"),
+        "an external drive's label is not advertised"
+    );
+    let text = serde_json::to_string(&f).unwrap();
+    assert!(!text.contains("EXTDRIVE"), "no volume name anywhere in the facts");
     // No Rosetta on this host: the native runtime claims no emulation.
     assert!(strs(one("runtime.native").attrs.get("arches_emulated")).is_empty());
     // No vendor tools: nothing else is assumed.
@@ -235,4 +242,56 @@ fn the_live_refresh_rereads_only_free_memory() {
     // Everything else is the base, unchanged, and no other command ran.
     assert_eq!(live.capabilities.len(), facts.capabilities.len());
     assert_eq!(live_host.log.lock().unwrap().as_slice(), ["vm_stat"]);
+}
+
+#[test]
+fn the_docker_note_names_the_context_the_daemon_probed() {
+    let note = |h: &FakeHost| {
+        let c = probe_capabilities(h, &ProbeConfig::default());
+        c.notes
+            .iter()
+            .find(|n| n.probe == "docker")
+            .map(|n| n.note.clone())
+            .unwrap()
+    };
+    assert!(note(&mac()).contains("docker context orbstack"), "{}", note(&mac()));
+    let mut h = mac();
+    h.outputs.remove("docker context show");
+    assert!(note(&h).contains("docker context unknown"));
+}
+
+#[test]
+fn a_user_named_docker_context_is_reported_as_custom() {
+    let note = |h: &FakeHost| {
+        probe_capabilities(h, &ProbeConfig::default())
+            .notes
+            .into_iter()
+            .find(|n| n.probe == "docker")
+            .unwrap()
+            .note
+    };
+    for known in ["default", "desktop-linux", "orbstack", "colima", "rancher-desktop"] {
+        let mut h = mac();
+        h.outputs.insert("docker context show".into(), format!("{known}\n"));
+        assert!(note(&h).contains(&format!("docker context {known}")), "{known}");
+    }
+    let mut h = mac();
+    h.outputs.insert("docker context show".into(), "alice-work-laptop\n".into());
+    let n = note(&h);
+    assert!(n.contains("docker context custom") && !n.contains("alice"), "{n}");
+}
+
+#[test]
+fn an_internal_mount_that_names_a_user_is_not_advertised() {
+    let internal = |df: &str| {
+        let mut h = mac();
+        h.outputs.insert("df -kP /".into(), df.into());
+        let c = probe_capabilities(&h, &ProbeConfig::default());
+        c.caps.into_iter().find(|c| c.id.as_str() == "store.tier.internal").unwrap()
+    };
+    let root = internal(DF_ROOT);
+    assert_eq!(root.attrs["mount"], AttrValue::from("/"));
+    let home = internal("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/x 1000 10 990 1% /Users/alice\n");
+    assert!(!home.attrs.contains_key("mount"), "{:?}", home.attrs);
+    assert!(home.attrs.contains_key("free"));
 }

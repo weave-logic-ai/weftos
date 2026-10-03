@@ -8,7 +8,7 @@
 use clawft_types::placement::Provenance;
 
 use super::host::ProbeHost;
-use super::probe::{Collected, bytes_attr, cap, normalize_arch, parse_df};
+use super::probe::{Collected, bytes_attr, cap, normalize_arch, note_external_withheld, parse_df, public_mount};
 
 const BINFMT: &str = "/proc/sys/fs/binfmt_misc";
 /// Mount roots treated as external (removable) drives.
@@ -159,12 +159,14 @@ fn storage(host: &dyn ProbeHost, c: &mut Collected) {
     if let Some((free, mount)) = host.run("df", &["-kP", "/"]).as_deref().and_then(parse_df)
         && let Some(s) = cap("store.tier.internal", Provenance::Probed)
     {
-        c.push(
-            s.with_attr("free", bytes_attr(free))
-                .with_attr("mount", mount.as_str()),
-        );
+        let mut s = s.with_attr("free", bytes_attr(free));
+        if let Some(m) = public_mount(&mount) {
+            s = s.with_attr("mount", m);
+        }
+        c.push(s);
     }
     let mounts = host.read_file("/proc/mounts").unwrap_or_default();
+    let mut external = 0;
     for line in mounts.lines() {
         let Some(mp) = line.split_whitespace().nth(1) else {
             continue;
@@ -174,12 +176,15 @@ fn storage(host: &dyn ProbeHost, c: &mut Collected) {
             continue;
         }
         let free = host.run("df", &["-kP", &mp]).as_deref().and_then(parse_df);
+        // Mount points carry the user and the drive label: they stay local.
         if let Some(mut s) = cap("store.tier.external", Provenance::Probed) {
-            s = s.with_attr("mounted", true).with_attr("mount", mp.as_str());
+            s = s.with_attr("mounted", true);
             if let Some((f, _)) = free {
                 s = s.with_attr("free", bytes_attr(f));
             }
             c.push(s);
+            external += 1;
         }
     }
+    note_external_withheld(c, external);
 }
