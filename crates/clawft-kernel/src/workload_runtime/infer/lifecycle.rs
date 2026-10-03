@@ -78,6 +78,7 @@ fn spawn(rt: &InferRuntime, inst: &mut Instance) -> Result<(), RuntimeError> {
         proc,
         wanted,
         exited_at,
+        started_at,
         exposed,
         ..
     }) = inst.managed.as_mut()
@@ -100,6 +101,7 @@ fn spawn(rt: &InferRuntime, inst: &mut Instance) -> Result<(), RuntimeError> {
     })?);
     *wanted = true;
     *exited_at = None;
+    *started_at = Some(Instant::now());
     Ok(())
 }
 
@@ -655,6 +657,9 @@ impl InferRuntime {
                     return Ok(Reconcile::StoppedExposed { reachable_on: a });
                 }
                 let up = client.probe(flavor).await.health;
+                // Healthy for a while, not just once: a server that answers
+                // a probe and then dies keeps its restart count, so a crash
+                // loop still reaches `GaveUp`.
                 if up == Health::Up
                     && let Some(mg) = self
                         .instances
@@ -662,6 +667,7 @@ impl InferRuntime {
                         .await
                         .get_mut(&h.instance_id)
                         .and_then(|i| i.managed.as_mut())
+                    && mg.started_at.is_some_and(|t| t.elapsed() >= policy.stable_after)
                 {
                     mg.restarts = 0;
                 }

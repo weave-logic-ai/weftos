@@ -92,7 +92,7 @@ fn bad_input_is_refused_at_the_boundary() {
 }
 
 fn fast() -> RestartPolicy {
-    RestartPolicy { max_restarts: 1, base: Duration::from_millis(300), cap: Duration::from_secs(1) }
+    RestartPolicy { max_restarts: 1, base: Duration::from_millis(300), cap: Duration::from_secs(1), ..RestartPolicy::default() }
 }
 
 fn managed_with_ledger(ledger: &Arc<ResidencyLedger>) -> Managed {

@@ -21,7 +21,7 @@ use crate::workload_runtime::types::{InstanceState, WorkloadRuntime};
 const NAME: &str = "Model-L";
 
 fn fast() -> RestartPolicy {
-    RestartPolicy { max_restarts: 1, base: Duration::from_millis(200), cap: Duration::from_millis(400) }
+    RestartPolicy { max_restarts: 1, base: Duration::from_millis(200), cap: Duration::from_millis(400), ..RestartPolicy::default() }
 }
 
 fn llama(ledger: &Arc<ResidencyLedger>) -> Managed {
@@ -241,5 +241,97 @@ async fn an_aborted_ollama_load_is_still_unloaded_at_stop() {
     assert_eq!(loads(&server).await, 1, "the load request was sent");
     m.rt.stop(&h, Duration::from_secs(1)).await.unwrap();
     assert_eq!(unloads(&server).await, 1, "what we asked Ollama to load is unloaded even if the load was cut short");
+    m.rt.unload(h).await.unwrap();
+}
+
+/// Wait until nothing listens on `port` (a dropped fake server frees it).
+async fn port_free(port: u16) {
+    for _ in 0..100 {
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("port {port} never freed");
+}
+
+/// One life of a crash-looping server: it comes up, answers a probe, then
+/// dies. Returns what the next reconcile after the crash says.
+async fn one_life(m: &Managed, h: &crate::workload_runtime::InstanceHandle, port: u16) -> Reconcile {
+    let server = server_on(port).await;
+    mount_llama(&server, 200, NAME).await;
+    // The server answers: the reconcile that probes it sees it healthy.
+    assert_eq!(m.rt.reconcile(h).await.unwrap(), Reconcile::Healthy);
+    let pid = script_pid(&m.script_dir).await;
+    crash(pid);
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    drop(server);
+    port_free(port).await;
+    assert_eq!(m.rt.status(h).await.state, InstanceState::Exited);
+    tokio::time::sleep(Duration::from_millis(500)).await; // past the backoff
+    std::fs::remove_file(m.script_dir.join("pid.txt")).unwrap();
+    m.rt.reconcile(h).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_server_that_answers_one_probe_and_dies_still_reaches_gave_up() {
+    // Two restarts allowed; the window is longer than a life, so a healthy
+    // probe does not clear the count: Restarted 1, Restarted 2, GaveUp.
+    let ledger = Arc::new(ResidencyLedger::new(None));
+    let l = ledger.clone();
+    let policy = RestartPolicy {
+        max_restarts: 2,
+        base: Duration::from_millis(100),
+        cap: Duration::from_millis(200),
+        stable_after: Duration::from_secs(30),
+    };
+    let m = managed_with(InferFlavor::LlamaCpp, policy, move |c| c.ledger = Some(l));
+    adopt_model(&m.reg, m.tmp.path(), NAME, ModelFormat::Gguf);
+    let port = free_port();
+    let h = load(&m.rt, lspec(port)).await;
+    m.rt.start(&h).await.unwrap();
+    assert_eq!(one_life(&m, &h, port).await, Reconcile::Restarted { attempt: 1 });
+    assert_eq!(one_life(&m, &h, port).await, Reconcile::Restarted { attempt: 2 });
+    // The third life dies too: the budget is spent.
+    let server = server_on(port).await;
+    mount_llama(&server, 200, NAME).await;
+    assert_eq!(m.rt.reconcile(&h).await.unwrap(), Reconcile::Healthy);
+    crash(script_pid(&m.script_dir).await);
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(m.rt.reconcile(&h).await.unwrap(), Reconcile::GaveUp { attempts: 2 });
+    assert_eq!(ledger.used(), 0);
+    drop(server);
+    m.rt.unload(h).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_server_that_stays_up_for_the_window_gets_its_restart_count_back() {
+    let policy = RestartPolicy {
+        max_restarts: 2,
+        base: Duration::from_millis(100),
+        cap: Duration::from_millis(200),
+        stable_after: Duration::from_millis(300),
+    };
+    let m = managed_with(InferFlavor::LlamaCpp, policy, |_| {});
+    adopt_model(&m.reg, m.tmp.path(), NAME, ModelFormat::Gguf);
+    let port = free_port();
+    let h = load(&m.rt, lspec(port)).await;
+    m.rt.start(&h).await.unwrap();
+    // One crash and restart...
+    assert_eq!(one_life(&m, &h, port).await, Reconcile::Restarted { attempt: 1 });
+    // ...then the new process stays up and healthy past the window.
+    let server = server_on(port).await;
+    mount_llama(&server, 200, NAME).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(m.rt.reconcile(&h).await.unwrap(), Reconcile::Healthy);
+    // A later crash is attempt 1 again, not 2: the count was cleared.
+    crash(script_pid(&m.script_dir).await);
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    drop(server);
+    port_free(port).await;
+    assert_eq!(m.rt.status(&h).await.state, InstanceState::Exited);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    std::fs::remove_file(m.script_dir.join("pid.txt")).unwrap();
+    assert_eq!(m.rt.reconcile(&h).await.unwrap(), Reconcile::Restarted { attempt: 1 });
     m.rt.unload(h).await.unwrap();
 }

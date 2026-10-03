@@ -201,6 +201,7 @@ fn restart_backoff_doubles_and_caps() {
         max_restarts: 9,
         base: Duration::from_secs(2),
         cap: Duration::from_secs(10),
+        ..RestartPolicy::default()
     };
     let d: Vec<u64> = (0..5).map(|i| p.delay(i).as_secs()).collect();
     assert_eq!(d, [2, 4, 8, 10, 10]);

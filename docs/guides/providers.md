@@ -606,7 +606,9 @@ placed workloads. Managed roles are governed and off by default.
   run. A role whose server gave up restarting, or was stopped for listening
   beyond loopback, is no longer wanted: it stays down, with that reason in
   the status, until an explicit `infer.start` (which is also the only thing
-  that gives a server that gave up a fresh restart budget). An Ollama model
+  that gives a server that gave up a fresh restart budget; a running server
+  gets its restart count back only after it has stayed up and answering for
+  60 s, so one good probe before a crash does not hide a crash loop). An Ollama model
   that was already in memory when asked is never loaded or unloaded by
   WeftOS. Ollama has no ownership, though: a model WeftOS loaded that
   another client later evicted and reloaded is still unloaded at stop, and a

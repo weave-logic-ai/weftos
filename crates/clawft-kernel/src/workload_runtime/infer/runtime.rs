@@ -61,6 +61,8 @@ pub(super) struct Managed {
     pub wanted: bool,
     pub restarts: u32,
     pub exited_at: Option<Instant>,
+    /// When the current process was spawned.
+    pub started_at: Option<Instant>,
     pub last: Option<RunEvidence>,
     /// Set when the server was found listening beyond loopback and was
     /// stopped for it; the instance will not start again until reloaded.
@@ -344,6 +346,7 @@ impl WorkloadRuntime for InferRuntime {
                 wanted: false,
                 restarts: 0,
                 exited_at: None,
+                started_at: None,
                 last: None,
                 exposed: None,
                 load: None,

@@ -16,6 +16,10 @@ pub struct RestartPolicy {
     pub base: Duration,
     /// Longest delay.
     pub cap: Duration,
+    /// How long a process must have been up (and answering) before the
+    /// restart count is cleared. A server that answers one probe and then
+    /// dies is still crash-looping and must reach `GaveUp`.
+    pub stable_after: Duration,
 }
 
 impl Default for RestartPolicy {
@@ -24,6 +28,7 @@ impl Default for RestartPolicy {
             max_restarts: 5,
             base: Duration::from_secs(2),
             cap: Duration::from_secs(60),
+            stable_after: Duration::from_secs(60),
         }
     }
 }
