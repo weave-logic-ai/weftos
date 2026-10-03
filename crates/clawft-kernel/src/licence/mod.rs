@@ -43,6 +43,8 @@ mod tests_common;
 #[cfg(test)]
 mod tests_exchange;
 #[cfg(test)]
+mod tests_fixes;
+#[cfg(test)]
 mod tests_sync;
 #[cfg(test)]
 mod tests_policy;
@@ -184,6 +186,9 @@ pub enum LicenceError {
 pub enum Outcome {
     /// New state was recorded.
     Applied,
+    /// A record that only restricts (an unbind, a withdrawal) is in force
+    /// but could not be saved; `tick` retries. Propagate it like `Applied`.
+    AppliedUnsaved,
     /// Already held; nothing changed.
     Duplicate,
     /// A lower `seq` than the one held; ignored.

@@ -1,6 +1,7 @@
 //! Catch-up sync over in-process mesh runtimes (ADR-106 phase 1b).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::exchange_types::Budget;
 use super::tests_common::*;
@@ -87,7 +88,7 @@ async fn a_partition_heals_through_sync() {
     c.fx.bind();
     a.fx.bind();
     let prev = binding_rec(1, BindState::Bound, &grant_key(), &mesh());
-    a.ex.issue_binding(sign_unbind(&prev, T0 + 1, &op()).unwrap()).await.unwrap();
+    a.ex.issue_binding(sign_unbind(&prev, &op()).unwrap()).await.unwrap();
     a.ex.issue_approval(approval_i(1)).await.unwrap();
     wait_for("B to hear", || b.fx.store.held_binding().is_some_and(|(s, _)| s == 2)).await;
     assert_eq!(c.fx.store.held_binding().unwrap().0, 1);
@@ -119,7 +120,7 @@ async fn a_response_is_cut_at_the_caps_and_paged_per_record_kind() {
     let b = tnode("node-b");
     link(&a, &b, true);
     b.ex.sync_peer("node-a").await;
-    wait_for("B to hold every page", || held(&b) == 200 && b.fx.approvals.len() == 200).await;
+    wait_for_long("B to hold every page", || held(&b) == 200 && b.fx.approvals.len() == 200).await;
 }
 
 #[tokio::test]
@@ -206,7 +207,10 @@ async fn entries_under_another_key_or_with_a_stale_seq_are_dropped_before_verifi
     wait_for("the good entry", || b.fx.store.held_grant("fall-detect", "v9").is_some()).await;
     assert!(b.ex.banned.is_empty() && !b.fx.names().contains(&"sync_bad_signature"));
     assert_eq!(b.fx.store.held_grant("fall-detect", "v1").unwrap().0, 2);
-    // The stale binding record is dropped the same way.
+    // The stale binding record is dropped the same way. Re-open a request
+    // first: the one above was consumed by its response.
+    b.ex.sync_peer("node-m").await;
+    wait_for("a second request", || b.ex.pending.contains_key("node-m")).await;
     send_sync(&m, "node-b", response(Some(stale_binding), vec![], vec![])).await;
     settle().await;
     assert!(b.ex.banned.is_empty());
@@ -232,9 +236,17 @@ async fn an_oversized_response_is_cut_at_the_caps_by_the_receiver() {
     b.ex.sync_peer("node-m").await;
     wait_for("B's request", || b.ex.pending.contains_key("node-m")).await;
     send_sync(&m, "node-b", response(None, (0..300).map(|i| grant_v(i, 1)).collect(), vec![])).await;
-    wait_for("some entries", || held(&b) > 0).await;
-    settle().await;
-    let n = held(&b);
+    wait_for_long("the capped entries", || held(&b) >= 200).await;
+    // Let the page finish: nothing more arrives for half a second.
+    let mut n = held(&b);
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let now = held(&b);
+        if now == n {
+            break;
+        }
+        n = now;
+    }
     assert!((200..=SYNC_MAX_ENTRIES).contains(&n), "{n} entries applied");
 }
 

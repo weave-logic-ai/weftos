@@ -48,6 +48,10 @@ pub trait PeerAdmission: Send + Sync + 'static {
     /// True when `ctx` is an admitted full node. Phase 1c replaces the
     /// source of this answer with the service-stamped delivery origin.
     fn admitted(&self, ctx: &PeerCtx) -> bool;
+
+    /// True when `peer` may be sent bindings and grants: the outbound twin
+    /// of [`Self::admitted`], from the route the runtime holds for it.
+    fn peer_admitted(&self, runtime: &MeshRuntime, peer: &str) -> bool;
 }
 
 /// Admission as the mesh runtime reports it on the [`PeerCtx`]: a verified
@@ -58,6 +62,13 @@ pub struct CtxAdmission;
 impl PeerAdmission for CtxAdmission {
     fn admitted(&self, ctx: &PeerCtx) -> bool {
         ctx.node_verified && ctx.class == crate::mesh_admit::PeerClass::Node
+    }
+
+    /// A route registered by a connection whose node id admission verified.
+    /// The route does not carry the peer class, so a verified leaf passes
+    /// here and is stopped by `admitted` when it asks to sync.
+    fn peer_admitted(&self, runtime: &MeshRuntime, peer: &str) -> bool {
+        runtime.peer_verified(peer)
     }
 }
 

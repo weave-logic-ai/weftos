@@ -843,6 +843,12 @@ impl MeshRuntime {
         self.peers.len()
     }
 
+    /// True when `node_id` is routed through a connection whose node id
+    /// admission verified.
+    pub fn peer_verified(&self, node_id: &str) -> bool {
+        self.peers.get(node_id).is_some_and(|p| p.verified)
+    }
+
     /// List the node IDs of all connected peers.
     pub fn peer_ids(&self) -> Vec<String> {
         self.peers.iter().map(|entry| entry.key().clone()).collect()

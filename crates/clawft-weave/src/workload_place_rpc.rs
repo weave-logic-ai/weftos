@@ -187,7 +187,11 @@ fn spawn_licence_tick(store: Arc<clawft_kernel::licence::CheckoutGrantStore>, ev
         loop {
             t.tick().await;
             let Some(s) = weak.upgrade() else { break };
-            s.tick();
+            // The tick writes (fsync): keep it off the async workers, and
+            // let a panic cost one tick, not the loop.
+            if let Err(e) = tokio::task::spawn_blocking(move || s.tick()).await {
+                tracing::error!(error = %e, "licence store tick failed; will retry");
+            }
         }
     });
 }
@@ -762,10 +766,6 @@ mod revocation_wiring_tests {
         };
         policy.store().accept_grant(&sign_grant(&grant, &gk).unwrap()).unwrap();
         let file = tmp.path().join("licence").join("checkout_grants.json");
-        let floors = |p: &std::path::Path| -> usize {
-            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
-            v["floors"].as_object().map_or(0, |m| m.len())
-        };
         let hw = |p: &std::path::Path| -> u64 {
             let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
             v["floors"].as_object().and_then(|m| m.values().next()).map_or(0, |f| f["hw"].as_u64().unwrap_or(0))

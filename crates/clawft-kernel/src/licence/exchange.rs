@@ -29,6 +29,7 @@ use std::time::Instant;
 
 use dashmap::DashMap;
 use ed25519_dalek::SigningKey;
+use serde::Deserialize;
 
 use super::binding::require_operator;
 pub use super::exchange_types::{
@@ -71,6 +72,10 @@ pub struct LicenceExchange {
     pub(super) served: DashMap<String, Instant>,
     /// Peers banned from sync, and since when.
     pub(super) banned: DashMap<String, Instant>,
+    /// Open sync sessions served to a peer.
+    pub(super) sessions: DashMap<String, super::exchange_sync::ServeSession>,
+    /// Flood messages sent (a forward or an issue to one peer counts one).
+    pub(super) flooded: std::sync::atomic::AtomicU64,
 }
 
 impl LicenceExchange {
@@ -95,6 +100,8 @@ impl LicenceExchange {
             pending: DashMap::new(),
             served: DashMap::new(),
             banned: DashMap::new(),
+            sessions: DashMap::new(),
+            flooded: Default::default(),
         });
         rt.set_control_sink(COG_BINDING_TOPIC, Arc::new(BindingSink(me.clone())));
         rt.set_control_sink(COG_GRANT_TOPIC, Arc::new(GrantSink(me.clone())));
@@ -118,11 +125,25 @@ impl LicenceExchange {
         *h.finalize().as_bytes()
     }
 
-    fn already_seen(&self, key: &[u8; 32]) -> bool {
+    pub(super) fn already_seen(&self, key: &[u8; 32]) -> bool {
         self.seen.lock().unwrap_or_else(|p| p.into_inner()).0.contains(key)
     }
 
-    fn remember(&self, key: [u8; 32]) {
+    /// Records remembered for de-duplication.
+    #[cfg(test)]
+    pub(super) fn seen_len(&self) -> usize {
+        self.seen.lock().unwrap_or_else(|p| p.into_inner()).0.len()
+    }
+
+    /// A conflict is final for this exact record: remember it so it is not
+    /// verified and chained again.
+    fn remember_conflict(&self, key: [u8; 32], e: &LicenceError) {
+        if matches!(e, LicenceError::Conflict(_)) {
+            self.remember(key);
+        }
+    }
+
+    pub(super) fn remember(&self, key: [u8; 32]) {
         let mut g = self.seen.lock().unwrap_or_else(|p| p.into_inner());
         if g.0.insert(key) {
             g.1.push_back(key);
@@ -146,7 +167,7 @@ impl LicenceExchange {
 
     fn receipt(o: Outcome) -> Receipt {
         match o {
-            Outcome::Applied => Receipt::New,
+            Outcome::Applied | Outcome::AppliedUnsaved => Receipt::New,
             Outcome::Duplicate | Outcome::Ignored => Receipt::Known,
         }
     }
@@ -176,7 +197,10 @@ impl LicenceExchange {
             return Ok(Receipt::Known);
         }
         self.budget(Budget::Binding, spend)?;
-        let out = self.store.accept_binding(env, (self.posture)(), &NoExtraChecks)?;
+        let out = self
+            .store
+            .accept_binding(env, (self.posture)(), &NoExtraChecks)
+            .inspect_err(|e| self.remember_conflict(key, e))?;
         self.remember(key);
         Ok(Self::receipt(out))
     }
@@ -211,7 +235,10 @@ impl LicenceExchange {
                 Ok(Self::receipt(o))
             }
             Err(LicenceError::NotYetValid) => Ok(Receipt::Deferred),
-            Err(e) => Err(e.into()),
+            Err(e) => {
+                self.remember_conflict(key, &e);
+                Err(e.into())
+            }
         }
     }
 
@@ -279,9 +306,11 @@ impl LicenceExchange {
 
     async fn send_all(&self, topic: &str, value: serde_json::Value, except: Option<&str>) {
         for peer in self.runtime.peer_ids() {
-            if Some(peer.as_str()) != except {
-                self.send_to(&peer, topic, value.clone()).await;
+            if Some(peer.as_str()) == except || !self.admission.peer_admitted(&self.runtime, &peer) {
+                continue;
             }
+            self.flooded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.send_to(&peer, topic, value.clone()).await;
         }
     }
 
@@ -317,17 +346,15 @@ pub(super) enum Forward {
 }
 
 /// Sign the unbind of `prev`: same Seed and mesh, `state: unbound`, `seq`
-/// one higher. Any node holding an operator key can do this and
+/// one higher. Everything else, `bound_at` included, is copied from `prev`,
+/// so two operators unbinding the same record at once produce byte-identical
+/// records (Ed25519 is deterministic) instead of an equal-`seq` conflict.
+/// Any node holding an operator key can do this and
 /// [`LicenceExchange::issue_binding`] it.
-pub fn sign_unbind(
-    prev: &BindingRecord,
-    now: u64,
-    operator: &SigningKey,
-) -> Result<SignedBinding, LicenceError> {
+pub fn sign_unbind(prev: &BindingRecord, operator: &SigningKey) -> Result<SignedBinding, LicenceError> {
     let rec = BindingRecord {
         state: BindState::Unbound,
         seq: prev.seq.saturating_add(1),
-        bound_at: now,
         ..prev.clone()
     };
     sign_binding(&rec, operator)
@@ -337,13 +364,17 @@ struct BindingSink(Arc<LicenceExchange>);
 struct GrantSink(Arc<LicenceExchange>);
 
 fn refused(kind: &str, ctx: &PeerCtx, e: &ExchangeError) {
+    if matches!(e, ExchangeError::RateLimited) {
+        tracing::debug!(peer = %ctx.peer_id, "licence {kind} rate limited");
+        return;
+    }
     tracing::warn!(peer = %ctx.peer_id, verified = ctx.node_verified, error = %e,
         "licence {kind} refused");
 }
 
 impl PeerControlSink for BindingSink {
     fn on_peer_control(&self, ctx: &PeerCtx, conn: u64, payload: &serde_json::Value) -> Vec<serde_json::Value> {
-        let Ok(env) = serde_json::from_value::<SignedBinding>(payload.clone()) else {
+        let Ok(env) = SignedBinding::deserialize(payload) else {
             tracing::warn!(peer = %ctx.peer_id, "malformed licence binding message");
             return Vec::new();
         };
@@ -359,7 +390,7 @@ impl PeerControlSink for BindingSink {
 
 impl PeerControlSink for GrantSink {
     fn on_peer_control(&self, ctx: &PeerCtx, conn: u64, payload: &serde_json::Value) -> Vec<serde_json::Value> {
-        let Ok(msg) = serde_json::from_value::<GrantMsg>(payload.clone()) else {
+        let Ok(msg) = GrantMsg::deserialize(payload) else {
             tracing::warn!(peer = %ctx.peer_id, "malformed licence grant message");
             return Vec::new();
         };

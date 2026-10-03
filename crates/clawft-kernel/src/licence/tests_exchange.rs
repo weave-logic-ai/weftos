@@ -17,6 +17,10 @@ impl PeerAdmission for AdmitAll {
     fn admitted(&self, _: &PeerCtx) -> bool {
         true
     }
+
+    fn peer_admitted(&self, _: &MeshRuntime, _: &str) -> bool {
+        true
+    }
 }
 
 pub(super) struct TNode {
@@ -76,12 +80,29 @@ pub(super) fn link(a: &TNode, b: &TNode, verified: bool) {
             }
         });
     }
-    a.rt.add_peer(b.id.clone(), tx_ab);
-    b.rt.add_peer(a.id.clone(), tx_ba);
+    if verified {
+        let tally = crate::mesh_runtime::RouteTally::default();
+        assert!(a.rt.register_authenticated(b.id.clone(), tx_ab, true, &tally));
+        assert!(b.rt.register_authenticated(a.id.clone(), tx_ba, true, &tally));
+    } else {
+        a.rt.add_peer(b.id.clone(), tx_ab);
+        b.rt.add_peer(a.id.clone(), tx_ba);
+    }
 }
 
 pub(super) async fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
     for _ in 0..600 {
+        if ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+/// [`wait_for`] for work that takes many saves.
+pub(super) async fn wait_for_long(what: &str, mut ok: impl FnMut() -> bool) {
+    for _ in 0..8000 {
         if ok() {
             return;
         }
@@ -133,11 +154,17 @@ async fn binding_grant_and_approval_reach_every_node_once() {
         assert!(bound(n) && has_grant(n, "1.2.0") && n.fx.approvals.len() == 1, "{}", n.id);
         assert!(n.fx.store.valid_grant_for_artifact("fall-detect", "1.2.0", &shas[0], &b3_of("x86_64")).is_some());
     }
+    // Each record crossed each of the two links exactly once.
+    settle().await;
+    let sent = |n: &TNode| n.ex.flooded.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!((sent(&l.a), sent(&l.b), sent(&l.c)), (3, 3, 0), "one forward per record per link");
     // A repeat is known everywhere and goes nowhere new.
     assert_eq!(l.a.ex.issue_binding(binding(1, BindState::Bound)).await, Ok(Receipt::Known));
     assert_eq!(l.b.ex.accept_grant(&grant(1, T0, 3600, &["x86_64"]), Spend::Exempt), Ok(Receipt::Known));
     settle().await;
     assert!(l.a.fx.sink.events().is_empty() && l.c.fx.sink.events().is_empty());
+    // The issuer re-sends to its peers by design; they know it and send nothing.
+    assert_eq!((sent(&l.a), sent(&l.b), sent(&l.c)), (4, 3, 0), "a repeat is not forwarded");
 }
 
 #[tokio::test]
@@ -147,7 +174,7 @@ async fn an_unbind_issued_by_a_non_steward_node_reaches_every_node() {
     wait_for("C bound", || bound(&l.c)).await;
     let prev = binding_rec(1, BindState::Bound, &grant_key(), &mesh());
     // The far end of the line, which is not the steward, unbinds.
-    let unbind = sign_unbind(&prev, T0 + 5, &op()).unwrap();
+    let unbind = sign_unbind(&prev, &op()).unwrap();
     assert_eq!(l.c.ex.issue_binding(unbind).await, Ok(Receipt::New));
     wait_for("A unbound", || {
         l.a.fx.store.binding_status() == Err(LicenceError::Unbound)

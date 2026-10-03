@@ -82,67 +82,84 @@ pub enum SyncMsg {
 
 /// A request in flight.
 pub(super) struct Pending {
-    sent: Instant,
-    pages: u32,
-    grant_after: Option<GrantCursor>,
-    approval_after: Option<String>,
+    pub(super) sent: Instant,
+    pub(super) pages: u32,
+    pub(super) grant_after: Option<GrantCursor>,
+    pub(super) approval_after: Option<String>,
+}
+
+/// A sync this node is serving to a peer: opened by a fresh request, and the
+/// only thing a continuation request is answered against.
+pub(super) struct ServeSession {
+    pub(super) opened: Instant,
+    pub(super) pages: u32,
+    pub(super) grant_last: Option<GrantCursor>,
+    pub(super) approval_last: Option<String>,
+}
+
+/// A page and where it stopped.
+pub(super) struct Page {
+    pub(super) msg: SyncMsg,
+    pub(super) last_grant: Option<GrantCursor>,
+    pub(super) last_approval: Option<String>,
 }
 
 fn size(e: &SignedEnvelope) -> usize {
-    e.payload.len() + e.public_key.len() + e.signature.len()
+    super::store_sync::env_size(e)
 }
 
-/// Take entries while both caps hold. Returns the entries and whether any
-/// were left over.
-fn take_page<T>(
-    items: impl Iterator<Item = (SignedEnvelope, T)>,
-    max_entries: usize,
-    max_bytes: usize,
-) -> (Vec<SignedEnvelope>, usize, bool) {
-    let (mut out, mut bytes, mut more) = (Vec::new(), 0usize, false);
-    for (env, _) in items {
-        if out.len() >= max_entries || bytes + size(&env) > max_bytes {
-            more = true;
-            break;
-        }
-        bytes += size(&env);
-        out.push(env);
+/// True when `req` is not behind `last` (`None` is the start).
+fn not_behind<T: Ord>(req: &Option<T>, last: &Option<T>) -> bool {
+    match (req, last) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(r), Some(l)) => r >= l,
     }
-    (out, bytes, more)
 }
 
 impl LicenceExchange {
     /// The page of records after the given cursors. Grants get half the
     /// caps, approvals the rest after the binding and the grants.
-    pub(super) fn build_response(
+    pub(super) fn build_page(
         &self,
         grant_after: &Option<GrantCursor>,
         approval_after: &Option<String>,
-    ) -> SyncMsg {
+    ) -> Page {
         let binding = match grant_after {
             None => self.store.held_binding().map(|(_, b)| b),
             Some(_) => None,
         };
         let used = binding.as_ref().map(size).unwrap_or(0);
-        let grants = self.store.sync_grants().into_iter().filter(|(seq, cog, ver, _)| {
-            grant_after.as_ref().is_none_or(|c| (*seq, cog, ver) > (c.seq, &c.cog_id, &c.version))
-        });
-        let (grants, g_bytes, more_grants) = take_page(
-            grants.map(|(_, _, _, g)| (g, ())),
-            SYNC_MAX_ENTRIES / 2,
-            SYNC_MAX_BYTES / 2,
-        );
-        let approvals = self
-            .approvals
-            .sync_approvals()
-            .into_iter()
-            .filter(|(k, _)| approval_after.as_ref().is_none_or(|c| k > c));
-        let (approvals, _, more_approvals) = take_page(
-            approvals.map(|(_, a)| (a, ())),
+        let after = grant_after.as_ref().map(|c| (c.seq, c.cog_id.as_str(), c.version.as_str()));
+        let (g, more_grants) =
+            self.store.sync_grants_page(after, SYNC_MAX_ENTRIES / 2, SYNC_MAX_BYTES / 2);
+        let last_grant = g
+            .last()
+            .map(|(seq, cog, ver, _)| GrantCursor { seq: *seq, cog_id: cog.clone(), version: ver.clone() });
+        let grants: Vec<SignedEnvelope> = g.into_iter().map(|(_, _, _, e)| e).collect();
+        let g_bytes: usize = grants.iter().map(size).sum();
+        let (a, more_approvals) = self.approvals.sync_approvals_page(
+            approval_after.as_deref(),
             SYNC_MAX_ENTRIES - grants.len() - usize::from(binding.is_some()),
             SYNC_MAX_BYTES.saturating_sub(used + g_bytes),
         );
-        SyncMsg::Response { binding, grants, approvals, more_grants, more_approvals }
+        let last_approval = a.last().map(|(k, _)| k.clone());
+        let approvals = a.into_iter().map(|(_, e)| e).collect();
+        Page {
+            msg: SyncMsg::Response { binding, grants, approvals, more_grants, more_approvals },
+            last_grant,
+            last_approval,
+        }
+    }
+
+    /// [`Self::build_page`]'s message.
+    #[cfg(test)]
+    pub(super) fn build_response(
+        &self,
+        grant_after: &Option<GrantCursor>,
+        approval_after: &Option<String>,
+    ) -> SyncMsg {
+        self.build_page(grant_after, approval_after).msg
     }
 
     fn is_banned(&self, peer: &str) -> bool {
@@ -209,26 +226,56 @@ impl LicenceExchange {
         });
     }
 
-    fn serve(&self, ctx: &PeerCtx, conn: u64, req: SyncMsg) -> Vec<serde_json::Value> {
+    /// Answer a request. A fresh one (no cursor) is answered once per peer
+    /// per minute and opens a session. A continuation is answered only
+    /// against that session: within [`PENDING_TTL`] of opening, under
+    /// `max_pages`, with cursors not behind the last page served. Anything
+    /// else gets no answer.
+    pub(super) fn serve(&self, ctx: &PeerCtx, conn: u64, req: SyncMsg) -> Vec<serde_json::Value> {
         let SyncMsg::Request { grant_after, approval_after } = req else {
             return Vec::new();
         };
         if !self.sync_buckets.take(Budget::Sync, conn, 1.0) {
             return Vec::new();
         }
-        if grant_after.is_none() && approval_after.is_none() {
+        let peer = &ctx.peer_id;
+        let fresh = grant_after.is_none() && approval_after.is_none();
+        if fresh {
             let now = Instant::now();
-            if let Some(t) = self.served.get(&ctx.peer_id)
+            if let Some(t) = self.served.get(peer)
                 && now.duration_since(*t) < self.config.sync_min_gap
             {
                 return Vec::new();
             }
-            self.served.insert(ctx.peer_id.clone(), now);
+            self.served.insert(peer.clone(), now);
+        } else {
+            let ok = self.sessions.get(peer).is_some_and(|s| {
+                s.opened.elapsed() < PENDING_TTL
+                    && s.pages < self.config.max_pages
+                    && not_behind(&grant_after, &s.grant_last)
+                    && not_behind(&approval_after, &s.approval_last)
+            });
+            if !ok {
+                return Vec::new();
+            }
         }
-        match serde_json::to_value(self.build_response(&grant_after, &approval_after)) {
-            Ok(v) => vec![v],
-            Err(_) => Vec::new(),
+        let page = self.build_page(&grant_after, &approval_after);
+        if fresh {
+            self.sessions.insert(
+                peer.clone(),
+                ServeSession {
+                    opened: Instant::now(),
+                    pages: 1,
+                    grant_last: page.last_grant,
+                    approval_last: page.last_approval,
+                },
+            );
+        } else if let Some(mut s) = self.sessions.get_mut(peer) {
+            s.pages += 1;
+            s.grant_last = page.last_grant.or_else(|| s.grant_last.take());
+            s.approval_last = page.last_approval.or_else(|| s.approval_last.take());
         }
+        serde_json::to_value(page.msg).map(|v| vec![v]).unwrap_or_default()
     }
 
     fn ban(&self, peer: &str) {
@@ -239,10 +286,15 @@ impl LicenceExchange {
 
     /// What one verified-or-refused entry means for the rest of the response:
     /// `Some(true)` abort and ban (bad signature), `Some(false)` stop quietly
-    /// (budget spent), `None` carry on. A new record is forwarded.
-    fn step(&self, peer: &str, r: Result<Receipt, ExchangeError>, fwd: Forward) -> Option<bool> {
+    /// (budget spent), `None` carry on (a deferred or refused entry does not
+    /// stop the page). A new binding or restrictive record is forwarded.
+    fn step(&self, peer: &str, r: Result<Receipt, ExchangeError>, fwd: Option<Forward>) -> Option<bool> {
         match r {
-            Ok(Receipt::New) => self.forward(peer, fwd),
+            Ok(Receipt::New) => {
+                if let Some(f) = fwd {
+                    self.forward(peer, f);
+                }
+            }
             Err(ExchangeError::Licence(LicenceError::BadSignature)) => return Some(true),
             Err(ExchangeError::RateLimited) => return Some(false),
             _ => {}
@@ -251,13 +303,9 @@ impl LicenceExchange {
     }
 
     /// Apply one page. Returns the next request, if the peer has more.
-    fn absorb(&self, ctx: &PeerCtx, conn: u64, msg: SyncMsg) -> Vec<serde_json::Value> {
+    pub(super) fn absorb(&self, peer: &str, conn: u64, p: Pending, msg: SyncMsg) -> Vec<serde_json::Value> {
         let SyncMsg::Response { binding, grants, approvals, more_grants, more_approvals } = msg
         else {
-            return Vec::new();
-        };
-        let peer = ctx.peer_id.as_str();
-        let Some((_, p)) = self.pending.remove(peer) else {
             return Vec::new();
         };
         if p.sent.elapsed() >= PENDING_TTL || !self.sync_buckets.take(Budget::Sync, conn, 1.0) {
@@ -274,7 +322,7 @@ impl LicenceExchange {
         if let Some(b) = binding
             && within_caps(&b)
         {
-            abort = self.step(peer, self.accept_binding(&b, spend), Forward::Binding(b));
+            abort = self.step(peer, self.accept_binding(&b, spend), Some(Forward::Binding(b.clone())));
         }
         let mut last_grant = None;
         for g in &grants {
@@ -282,7 +330,12 @@ impl LicenceExchange {
                 break;
             }
             let parsed = serde_json::from_str::<CheckoutGrant>(&g.payload).ok();
-            abort = self.step(peer, self.accept_grant(g, spend), Forward::Grant(GrantMsg::Grant(g.clone())));
+            // Neighbours sync for themselves: only a withdrawal is passed on.
+            let fwd = parsed
+                .as_ref()
+                .filter(|c| c.is_withdrawal())
+                .map(|_| Forward::Grant(GrantMsg::Grant(g.clone())));
+            abort = self.step(peer, self.accept_grant(g, spend), fwd);
             last_grant = parsed.map(|c| GrantCursor { seq: c.seq, cog_id: c.cog_id, version: c.version });
         }
         let mut last_approval = None;
@@ -291,7 +344,7 @@ impl LicenceExchange {
                 break;
             }
             let parsed = serde_json::from_str::<super::Approval>(&a.payload).ok();
-            abort = self.step(peer, self.accept_approval(a, spend), Forward::Grant(GrantMsg::Approval(a.clone())));
+            abort = self.step(peer, self.accept_approval(a, spend), None);
             last_approval = parsed.map(|c| c.content_key());
         }
         match abort {
@@ -345,13 +398,54 @@ impl PeerControlSink for SyncSink {
         if !ex.admission.admitted(ctx) || ex.local().is_err() || ex.is_banned(&ctx.peer_id) {
             return Vec::new();
         }
-        let Ok(msg) = serde_json::from_value::<SyncMsg>(payload.clone()) else {
-            tracing::warn!(peer = %ctx.peer_id, "malformed licence sync message");
-            return Vec::new();
-        };
-        match msg {
-            SyncMsg::Request { .. } => ex.serve(ctx, conn, msg),
-            SyncMsg::Response { .. } => ex.absorb(ctx, conn, msg),
+        match payload.get("op").and_then(|o| o.as_str()) {
+            Some("request") => match SyncMsg::deserialize(payload) {
+                Ok(req) => ex.serve(ctx, conn, req),
+                Err(_) => {
+                    tracing::warn!(peer = %ctx.peer_id, "malformed licence sync request");
+                    Vec::new()
+                }
+            },
+            Some("response") => {
+                // Unsolicited or late: dropped before it is even parsed.
+                let open = ex.pending.get(&ctx.peer_id).is_some_and(|p| p.sent.elapsed() < PENDING_TTL);
+                if !open {
+                    return Vec::new();
+                }
+                let Ok(msg) = SyncMsg::deserialize(payload) else {
+                    tracing::warn!(peer = %ctx.peer_id, "malformed licence sync response");
+                    return Vec::new();
+                };
+                if let Some((_, p)) = ex.pending.remove(&ctx.peer_id) {
+                    self.apply(ctx.peer_id.clone(), conn, p, msg);
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
         }
+    }
+}
+
+impl SyncSink {
+    /// Verify and apply a page off the dispatch path: every entry is a
+    /// signature check and a fsync'd save. The follow-up request, if any, is
+    /// sent when it is done.
+    fn apply(&self, peer: String, conn: u64, p: Pending, msg: SyncMsg) {
+        let ex = self.0.clone();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            ex.absorb(&peer, conn, p, msg);
+            return;
+        };
+        handle.spawn(async move {
+            let (e2, peer2) = (ex.clone(), peer.clone());
+            match tokio::task::spawn_blocking(move || e2.absorb(&peer2, conn, p, msg)).await {
+                Ok(next) => {
+                    for v in next {
+                        ex.send_to(&peer, COG_SYNC_TOPIC, v).await;
+                    }
+                }
+                Err(e) => tracing::warn!(peer, error = %e, "licence sync page failed"),
+            }
+        });
     }
 }
