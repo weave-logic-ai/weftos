@@ -29,6 +29,10 @@ Staging area for changes after the 0.8.1 cut.
   (it has no TLS of its own). Loopback now means any loopback IP, including
   `127.0.0.0/8` and IPv4-mapped `::ffff:127.0.0.1`; this also tightens
   `weft mcp-server --listen`'s loopback test.
+- `/mcp`, `/events`, `/custody/witness` and tokened `/api/health` are now
+  rate-limited per client, and the gateway caps its own daemon token checks
+  (about 50/s, burst 100; excess gets 429). `/mcp` calls are serialised with a
+  10 s queue timeout and a 120 s call timeout.
 - A token revoked with `weft token revoke` can keep working on a running
   gateway for up to 30 seconds. Open WebSockets are not closed on revoke or
   expiry.

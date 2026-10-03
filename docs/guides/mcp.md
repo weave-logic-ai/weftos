@@ -160,6 +160,21 @@ token as the REST API (`weft token issue`; see
 token should cover both. `weft mcp-server --listen` still serves MCP alone,
 with its own static `--token`.
 
+**What a gateway token can do.** A gateway token is owner-equivalent
+(ADR-102 D4): `/mcp` runs the `full` profile with owner scopes, including
+shell, process, file-write and agent-spawn tools. The control tools attach to
+the daemon over its local socket as the gateway's own user, so a token holder
+can drive the daemon's admin RPCs through them. Treat a gateway token like
+shell access: keep the TTL short, never send it over plain HTTP off loopback
+(the gateway refuses that bind unless you opt in), and revoke it when done.
+
+**Daemon attach.** Control tools attach to the daemon when the gateway starts.
+If the daemon restarts later, the attach reconnects on the next call. If no
+daemon was running at gateway start, the control tools are omitted until the
+gateway is restarted. Calls are serialised: a caller waits at most 10 seconds
+behind a running tool (then gets 503), and a single call is cancelled after
+120 seconds.
+
 ## See also
 
 - [`mcp-integration.md`](./mcp-integration.md) — full integration

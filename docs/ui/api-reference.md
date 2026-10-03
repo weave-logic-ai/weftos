@@ -179,6 +179,12 @@ caching a positive answer for at most 30 seconds.
   token revoked with `weft token revoke` can keep working on a running gateway
   for up to 30 seconds (the positive cache). An unknown or revoked bearer is
   remembered for about 3 seconds so a flood of bad tokens is one daemon call.
+- **Rate limits and flood bounds.** Per client IP per minute: `/api/*` 60,
+  tokened `/api/health` 30, `/mcp` 120, `/ws` 10; anonymous health is exempt.
+  Separately, the gateway lets at most about 50 daemon token checks per second
+  (burst 100) through, whatever the path; beyond that a request with an
+  unrecognised bearer gets `429` with `Retry-After: 1`. Cached tokens are
+  unaffected.
 - **Open WebSockets are not closed** when their token is revoked or expires;
   the check happens once, at upgrade.
 - Only the path is logged for a request, never the query string, so a
@@ -353,8 +359,12 @@ process, file-write and spawn tools. Notifications get `202`; malformed JSON
 gets `400`. There is no SSE stream here; `weft mcp-server --listen` remains
 for headless use with its own static tokens.
 
-Control tools attach to the live daemon when the gateway starts; if no daemon
-answered then they are omitted until the gateway restarts.
+Control tools attach to the live daemon when the gateway starts (and reconnect
+if it restarts); if no daemon answered at start they are omitted until the
+gateway restarts. Calls run one at a time: a caller waits at most 10 s for its
+turn (503, JSON-RPC error -32002) and a call is cancelled after 120 s
+(JSON-RPC error -32003). `/mcp` is rate-limited to 120 calls per minute per
+client. See [MCP guide](../guides/mcp.md) for what an owner token can do.
 
 ```bash
 curl -X POST http://localhost:18789/mcp \

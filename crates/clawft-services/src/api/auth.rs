@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -55,6 +54,8 @@ pub enum TokenCheck {
     Invalid,
     /// The authority (daemon) could not be reached, so nothing can be proven.
     Unavailable,
+    /// The gateway is rate-limiting its own daemon validate calls; retry.
+    Busy,
 }
 
 /// Outcome of a revoke request.
@@ -75,17 +76,77 @@ pub trait TokenValidator: Send + Sync {
     async fn revoke(&self, id: &str) -> RevokeOutcome;
 }
 
+/// Daemon `auth.token.validate` calls allowed per second, process-wide, and
+/// the burst on top. Cached results do not count. A flood of *distinct*
+/// bearers is the only thing that reaches the daemon, and it is bounded here
+/// whatever path it arrives on.
+pub const VALIDATE_RATE_PER_SEC: f64 = 50.0;
+/// Burst allowance for [`VALIDATE_RATE_PER_SEC`].
+pub const VALIDATE_BURST: f64 = 100.0;
+/// Most validate calls in flight at once.
+const VALIDATE_CONCURRENCY: usize = 16;
+/// How long a revoked token id is refused regardless of what the daemon or a
+/// racing validation says.
+pub const REVOKE_TOMBSTONE_TTL: Duration = Duration::from_secs(30);
+
+/// Token bucket for daemon validate calls.
+struct Bucket {
+    tokens: f64,
+    last: Instant,
+    rate: f64,
+    burst: f64,
+}
+
+impl Bucket {
+    fn take(&mut self) -> bool {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.tokens = (self.tokens + dt * self.rate).min(self.burst);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Positive cache, revocation tombstones and the revoke generation, behind
+/// one lock so "was there a revoke since I started?" and "insert" are a
+/// single atomic step.
+#[derive(Default)]
+struct Inner {
+    entries: HashMap<u64, (Instant, TokenMeta)>,
+    /// Revoked token id -> when it was revoked.
+    revoked: HashMap<String, Instant>,
+    /// Bumped on every revoke attempt.
+    generation: u64,
+}
+
+impl Inner {
+    fn tombstoned(&mut self, id: &str) -> bool {
+        match self.revoked.get(id) {
+            Some(at) if at.elapsed() < REVOKE_TOMBSTONE_TTL => true,
+            Some(_) => {
+                self.revoked.remove(id);
+                false
+            }
+            None => false,
+        }
+    }
+}
+
 /// Validates bearers through the kernel daemon (`auth.token.validate`).
 pub struct DaemonTokenValidator {
     facade: Arc<DaemonKernelFacade>,
     ttl: Duration,
     keys: RandomState,
-    cache: Mutex<HashMap<u64, (Instant, TokenMeta)>>,
+    state: Mutex<Inner>,
     /// Invalid results by keyed hash, for [`NEGATIVE_CACHE_TTL`].
     negative: Mutex<HashMap<u64, Instant>>,
-    /// Bumped on every revoke. A validation that began before a revoke does
-    /// not populate the cache, so it cannot resurrect the revoked token.
-    revocations: AtomicU64,
+    bucket: Mutex<Bucket>,
+    in_flight: tokio::sync::Semaphore,
 }
 
 impl DaemonTokenValidator {
@@ -95,9 +156,15 @@ impl DaemonTokenValidator {
             facade,
             ttl: POSITIVE_CACHE_TTL,
             keys: RandomState::new(),
-            cache: Mutex::new(HashMap::new()),
+            state: Mutex::new(Inner::default()),
             negative: Mutex::new(HashMap::new()),
-            revocations: AtomicU64::new(0),
+            bucket: Mutex::new(Bucket {
+                tokens: VALIDATE_BURST,
+                last: Instant::now(),
+                rate: VALIDATE_RATE_PER_SEC,
+                burst: VALIDATE_BURST,
+            }),
+            in_flight: tokio::sync::Semaphore::new(VALIDATE_CONCURRENCY),
         }
     }
 
@@ -107,19 +174,37 @@ impl DaemonTokenValidator {
         self
     }
 
+    /// Override the daemon validate budget (tests).
+    pub fn with_validate_budget(self, per_sec: f64, burst: f64) -> Self {
+        *self.bucket.lock().unwrap() = Bucket {
+            tokens: burst,
+            last: Instant::now(),
+            rate: per_sec,
+            burst,
+        };
+        self
+    }
+
     /// Cache key: a keyed 64-bit hash, so secrets are not retained in memory.
     fn key(&self, token: &str) -> u64 {
         self.keys.hash_one(token)
     }
 
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn cached(&self, key: u64) -> Option<TokenMeta> {
-        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        match cache.get(&key) {
-            Some((at, meta)) if at.elapsed() < self.ttl && !is_expired(meta) => {
-                Some(meta.clone())
+        let mut st = self.lock();
+        let hit = st.entries.get(&key).cloned();
+        match hit {
+            Some((at, meta))
+                if at.elapsed() < self.ttl && !is_expired(&meta) && !st.tombstoned(&meta.id) =>
+            {
+                Some(meta)
             }
             Some(_) => {
-                cache.remove(&key);
+                st.entries.remove(&key);
                 None
             }
             None => None,
@@ -153,23 +238,56 @@ impl DaemonTokenValidator {
 
     #[cfg(test)]
     fn cache_len(&self) -> (usize, usize) {
-        (
-            self.cache.lock().unwrap().len(),
-            self.negative.lock().unwrap().len(),
-        )
+        (self.lock().entries.len(), self.negative.lock().unwrap().len())
     }
 
-    fn remember(&self, key: u64, meta: TokenMeta) {
-        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        if cache.len() >= CACHE_MAX_ENTRIES {
-            cache.retain(|_, (at, m)| at.elapsed() < self.ttl && !is_expired(m));
+    /// The revoke generation; take it before asking the daemon.
+    fn generation(&self) -> u64 {
+        self.lock().generation
+    }
+
+    /// Cache `meta` only if no revoke ran since `generation` was read and its
+    /// id is not tombstoned. The compare and the insert share one lock hold
+    /// with the revoke's bump. Returns whether it was cached.
+    fn remember(&self, key: u64, meta: TokenMeta, generation: u64) -> bool {
+        let mut st = self.lock();
+        if st.generation != generation || st.tombstoned(&meta.id) {
+            return false;
         }
-        if cache.len() >= CACHE_MAX_ENTRIES
-            && let Some(oldest) = cache.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| *k)
+        if st.entries.len() >= CACHE_MAX_ENTRIES {
+            let ttl = self.ttl;
+            st.entries.retain(|_, (at, m)| at.elapsed() < ttl && !is_expired(m));
+        }
+        if st.entries.len() >= CACHE_MAX_ENTRIES
+            && let Some(oldest) = st.entries.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| *k)
         {
-            cache.remove(&oldest);
+            st.entries.remove(&oldest);
         }
-        cache.insert(key, (Instant::now(), meta));
+        st.entries.insert(key, (Instant::now(), meta));
+        true
+    }
+
+    /// Start of a revoke: bump the generation and drop cached entries for
+    /// `id`, in one lock hold.
+    fn begin_revoke(&self, id: &str) {
+        let mut st = self.lock();
+        st.generation += 1;
+        st.entries.retain(|_, (_, m)| m.id != id);
+    }
+
+    /// The daemon confirmed the revoke: refuse `id` for a while no matter
+    /// what a racing validation or a stale cache entry says.
+    fn finish_revoke(&self, id: &str) {
+        let mut st = self.lock();
+        if st.revoked.len() >= CACHE_MAX_ENTRIES {
+            st.revoked.retain(|_, at| at.elapsed() < REVOKE_TOMBSTONE_TTL);
+        }
+        st.revoked.insert(id.to_owned(), Instant::now());
+        st.entries.retain(|_, (_, m)| m.id != id);
+    }
+
+    fn tombstoned(&self, id: &str) -> bool {
+        self.lock().tombstoned(id)
     }
 }
 
@@ -208,7 +326,14 @@ impl TokenValidator for DaemonTokenValidator {
         if self.recently_invalid(key) {
             return TokenCheck::Invalid;
         }
-        let generation = self.revocations.load(Ordering::SeqCst);
+        // Past the caches this costs a daemon call: bound them globally.
+        if !self.bucket.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            return TokenCheck::Busy;
+        }
+        let Ok(_permit) = self.in_flight.acquire().await else {
+            return TokenCheck::Unavailable;
+        };
+        let generation = self.generation();
         // `read` is enough to validate; never send `admin` for this.
         let resp = match self
             .facade
@@ -232,12 +357,10 @@ impl TokenValidator for DaemonTokenValidator {
             return TokenCheck::Invalid;
         }
         match result.get("token").and_then(parse_meta) {
+            // A reply that raced a revoke of this very token is not trusted.
+            Some(meta) if self.tombstoned(&meta.id) => TokenCheck::Invalid,
             Some(meta) if !is_expired(&meta) => {
-                // Cache only if no revoke ran while the daemon call was in
-                // flight; this request itself began earlier and still passes.
-                if self.revocations.load(Ordering::SeqCst) == generation {
-                    self.remember(key, meta.clone());
-                }
+                self.remember(key, meta.clone(), generation);
                 TokenCheck::Valid(meta)
             }
             _ => {
@@ -248,15 +371,7 @@ impl TokenValidator for DaemonTokenValidator {
     }
 
     async fn revoke(&self, id: &str) -> RevokeOutcome {
-        // Drop cached validations for this id first, so a revoke that races
-        // a daemon failure still cannot be served from cache afterwards, and
-        // bump the generation so a validation already in flight cannot
-        // re-cache the token after this point.
-        self.revocations.fetch_add(1, Ordering::SeqCst);
-        self.cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|_, (_, m)| m.id != id);
+        self.begin_revoke(id);
         // Revoking needs `admin`: the gateway is the local owner's process and
         // only ever revokes the id of the bearer that authenticated the call.
         match self
@@ -264,7 +379,10 @@ impl TokenValidator for DaemonTokenValidator {
             .auth_call("auth.token.revoke", serde_json::json!({ "id": id }), "admin")
             .await
         {
-            Ok(resp) if resp.ok => RevokeOutcome::Revoked,
+            Ok(resp) if resp.ok => {
+                self.finish_revoke(id);
+                RevokeOutcome::Revoked
+            }
             Ok(resp) => {
                 tracing::warn!(kind = ?resp.error_kind, "daemon refused auth.token.revoke");
                 RevokeOutcome::Unavailable
@@ -434,6 +552,7 @@ pub async fn auth_middleware(
         _ if public => Ok(next.run(request).await),
         TokenCheck::Invalid => Err(unauthorized_response()),
         TokenCheck::Unavailable => Err(unavailable_response()),
+        TokenCheck::Busy => Err(busy_response()),
     }
 }
 
@@ -454,6 +573,7 @@ pub async fn ws_auth_middleware(
         }
         TokenCheck::Invalid => Err(unauthorized_response()),
         TokenCheck::Unavailable => Err(unavailable_response()),
+        TokenCheck::Busy => Err(busy_response()),
     }
 }
 
@@ -520,6 +640,21 @@ fn unauthorized_response() -> axum::response::Response {
     response.headers_mut().insert(
         axum::http::header::WWW_AUTHENTICATE,
         axum::http::HeaderValue::from_static("Bearer"),
+    );
+    response
+}
+
+/// Build a 429: too many token checks are reaching the daemon right now.
+fn busy_response() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut response = (
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        axum::Json(serde_json::json!({ "error": "too many authentication attempts" })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        axum::http::header::RETRY_AFTER,
+        axum::http::HeaderValue::from_static("1"),
     );
     response
 }
@@ -606,12 +741,60 @@ mod tests {
     fn caches_are_bounded() {
         let v = offline_validator();
         for i in 0..(CACHE_MAX_ENTRIES as u64 + 300) {
-            v.remember(i, meta(&i.to_string()));
+            v.remember(i, meta(&i.to_string()), v.generation());
             v.remember_invalid(1_000_000 + i);
         }
         let (pos, neg) = v.cache_len();
         assert_eq!(pos, CACHE_MAX_ENTRIES);
         assert_eq!(neg, CACHE_MAX_ENTRIES);
+    }
+
+    /// Forced interleave 1: a validation reads the generation, a revoke
+    /// starts, then the validation tries to cache. The compare happens under
+    /// the lock the revoke's bump holds, so the insert is refused.
+    #[test]
+    fn stale_generation_cannot_populate_the_cache() {
+        let v = offline_validator();
+        let g = v.generation();
+        v.begin_revoke("id-a");
+        assert!(!v.remember(1, meta("id-a"), g));
+        assert_eq!(v.cache_len().0, 0);
+        // A fresh read after the revoke began may cache (e.g. another token),
+        assert!(v.remember(2, meta("id-b"), v.generation()));
+    }
+
+    /// Forced interleave 2: a validation that read the generation *after*
+    /// the revoke began (daemon not yet updated) caches; once the daemon
+    /// confirms, the tombstone evicts it and refuses it from then on.
+    #[test]
+    fn tombstone_evicts_and_blocks_a_late_cache_entry() {
+        let v = offline_validator();
+        v.begin_revoke("id-a");
+        assert!(v.remember(1, meta("id-a"), v.generation()), "cached before the daemon confirms");
+        assert!(v.cached(1).is_some());
+        v.finish_revoke("id-a");
+        assert!(v.cached(1).is_none(), "tombstone evicts the entry");
+        assert!(!v.remember(1, meta("id-a"), v.generation()), "and refuses a re-insert");
+        assert!(v.tombstoned("id-a"));
+        assert!(!v.tombstoned("id-other"));
+    }
+
+    #[test]
+    fn tombstones_lapse() {
+        let v = offline_validator();
+        v.finish_revoke("id-a");
+        v.lock()
+            .revoked
+            .insert("id-a".into(), Instant::now() - REVOKE_TOMBSTONE_TTL - Duration::from_millis(1));
+        assert!(!v.tombstoned("id-a"));
+    }
+
+    #[test]
+    fn validate_budget_is_a_token_bucket() {
+        let v = offline_validator().with_validate_budget(0.0, 3.0);
+        let take = || v.bucket.lock().unwrap().take();
+        assert!(take() && take() && take());
+        assert!(!take(), "burst exhausted, no refill at rate 0");
     }
 
     #[test]

@@ -11,6 +11,7 @@
 //! SSE stream here; JSON-RPC over POST only.
 
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use axum::{
     Json, Router,
@@ -30,6 +31,15 @@ use crate::mcp::session_cap::SessionScopes;
 /// Largest accepted request body.
 const MAX_BODY: usize = 1 << 20;
 
+/// The shell is one `&mut` state machine, so calls are serialised. A caller
+/// waits at most this long for its turn before getting 503 (so `tools/list`
+/// is not stuck behind a slow tool for long).
+pub const QUEUE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Longest a single JSON-RPC call may run. Past it the call is cancelled,
+/// the lock is released, and the caller gets a JSON-RPC error.
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// The shell mounted at `/mcp`, with the facts `/api/health` reports.
 pub struct McpMount {
     shell: Mutex<McpServerShell>,
@@ -37,6 +47,8 @@ pub struct McpMount {
     audit_label: Arc<RwLock<String>>,
     /// Serve profile name (e.g. `full`).
     pub profile: String,
+    queue_timeout: Duration,
+    call_timeout: Duration,
     /// Number of tools the shell lists.
     pub tool_count: usize,
 }
@@ -53,8 +65,17 @@ impl McpMount {
             shell: Mutex::new(shell),
             audit_label,
             profile: profile.into(),
+            queue_timeout: QUEUE_TIMEOUT,
+            call_timeout: CALL_TIMEOUT,
             tool_count,
         }
+    }
+
+    /// Override the queue and per-call timeouts (tests).
+    pub fn with_timeouts(mut self, queue: Duration, call: Duration) -> Self {
+        self.queue_timeout = queue;
+        self.call_timeout = call;
+        self
     }
 }
 
@@ -85,12 +106,35 @@ async fn mcp_post(State(state): State<ApiState>, request: axum::extract::Request
                 .into_response();
         }
     };
+    // Wait for our turn, but not forever behind a slow tool.
+    let Ok(mut shell) = tokio::time::timeout(mount.queue_timeout, mount.shell.lock()).await else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "jsonrpc": "2.0", "id": msg.get("id").cloned().unwrap_or(Value::Null),
+                "error": { "code": -32002, "message": "server busy: another call is still running" },
+            })),
+        )
+            .into_response();
+    };
+    // Set the audit label only now, while we hold the shell: another caller
+    // cannot run (and be audited) between this write and our call.
     if let (Some(label), Ok(mut g)) = (label, mount.audit_label.write()) {
         *g = label;
     }
-    let mut shell = mount.shell.lock().await;
-    match shell.handle_message(msg, Some(&SessionScopes::owner())).await {
-        Some(resp) => (StatusCode::OK, Json(resp)).into_response(),
-        None => StatusCode::ACCEPTED.into_response(),
+    let id = msg.get("id").cloned();
+    let scopes = SessionScopes::owner();
+    let call = shell.handle_message(msg, Some(&scopes));
+    match tokio::time::timeout(mount.call_timeout, call).await {
+        Ok(Some(resp)) => (StatusCode::OK, Json(resp)).into_response(),
+        Ok(None) => StatusCode::ACCEPTED.into_response(),
+        Err(_) => (
+            StatusCode::OK,
+            Json(json!({
+                "jsonrpc": "2.0", "id": id.unwrap_or(Value::Null),
+                "error": { "code": -32003, "message": "call timed out" },
+            })),
+        )
+            .into_response(),
     }
 }

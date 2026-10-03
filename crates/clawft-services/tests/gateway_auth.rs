@@ -407,6 +407,60 @@ async fn ws_query_token_is_validated() {
     assert_ne!(good, StatusCode::UNAUTHORIZED);
 }
 
+/// Routes that check a bearer are rate-limited per client: tokened health,
+/// `/events` and `/custody/witness`, not only `/api/*`. (`/mcp` below.)
+#[tokio::test]
+async fn bearer_checking_routes_are_rate_limited() {
+    // Tokened health: 30 per minute, then 429. Anonymous health is exempt.
+    let (app, _auth) = memory_app();
+    let mut codes = vec![];
+    for _ in 0..32 {
+        codes.push(get(&app, "/api/health", Some("junk")).await.0);
+    }
+    assert!(codes[..30].iter().all(|c| *c == StatusCode::OK), "{codes:?}");
+    assert_eq!(codes[30], StatusCode::TOO_MANY_REQUESTS);
+    for _ in 0..100 {
+        assert_eq!(get(&app, "/api/health", None).await.0, StatusCode::OK);
+    }
+
+    for (path, limit) in [("/events", 60usize), ("/api/openapi.json", 60)] {
+        let (app, _auth) = memory_app();
+        for i in 0..limit {
+            assert_eq!(get(&app, path, Some("junk")).await.0, StatusCode::UNAUTHORIZED, "{path} #{i}");
+        }
+        assert_eq!(get(&app, path, Some("junk")).await.0, StatusCode::TOO_MANY_REQUESTS, "{path}");
+    }
+
+    let (app, _auth) = memory_app();
+    for i in 0..60 {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/custody/witness")
+                    .header(header::AUTHORIZATION, "Bearer junk")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "#{i}");
+    }
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/custody/witness")
+                .header(header::AUTHORIZATION, "Bearer junk")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
 // ─── Daemon-backed validation (fake daemon over a unix socket) ──────────
 
 #[cfg(unix)]
@@ -430,6 +484,8 @@ mod daemon {
         up: AtomicBool,
         /// Milliseconds the daemon sits on a validate reply (after deciding it).
         validate_delay_ms: AtomicUsize,
+        /// Milliseconds before a revoke takes effect at the daemon.
+        revoke_delay_ms: AtomicUsize,
     }
 
     fn info(id: &str, scope: &str, project: &Option<String>) -> serde_json::Value {
@@ -480,6 +536,10 @@ mod daemon {
                         }
                         "auth.token.revoke" => {
                             let id = params["id"].as_str().unwrap().to_owned();
+                            let delay = f.revoke_delay_ms.load(Ordering::SeqCst) as u64;
+                            if delay > 0 {
+                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                            }
                             f.revoke_auth.lock().unwrap().push((id.clone(), req["auth"].as_str().map(str::to_owned)));
                             f.revoked.lock().unwrap().push(id.clone());
                             clawft_rpc::Response::success(serde_json::json!({ "revoked": true, "id": id }))
@@ -737,6 +797,63 @@ mod daemon {
         assert_eq!(get(&app, "/api/agents", Some("wft_good")).await.0, StatusCode::UNAUTHORIZED);
         assert_eq!(fake.revoke_auth.lock().unwrap().len(), 1);
     }
+
+    /// Forced interleave over the wire: a validation lands while a revoke is
+    /// still on its way to the daemon (so the daemon still says "valid").
+    /// Once the revoke completes, the token is refused: the tombstone evicts
+    /// whatever that validation cached.
+    #[tokio::test]
+    async fn validation_racing_a_slow_revoke_is_evicted_by_the_tombstone() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("k.sock");
+        let fake = spawn(&sock);
+        add(&fake, "wft_a", "id-x", "owner", None);
+        add(&fake, "wft_b", "id-x", "owner", None);
+        let app = app(&sock, TTL);
+        // wft_a authenticates the revoke of id-x; the daemon applies it late.
+        assert_eq!(get(&app, "/api/agents", Some("wft_a")).await.0, StatusCode::OK);
+        fake.revoke_delay_ms.store(400, Ordering::SeqCst);
+        let revoke = {
+            let app = app.clone();
+            tokio::spawn(async move { post(&app, "/api/auth/revoke", "wft_a").await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // Daemon has not applied the revoke yet: wft_b validates and caches.
+        assert_eq!(get(&app, "/api/agents", Some("wft_b")).await.0, StatusCode::OK);
+        assert_eq!(revoke.await.unwrap(), StatusCode::NO_CONTENT);
+        // Revoke confirmed: id-x is refused even though wft_b sits in cache.
+        assert_eq!(get(&app, "/api/agents", Some("wft_b")).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(get(&app, "/api/agents", Some("wft_a")).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    /// A flood of distinct bearers is bounded at the daemon whatever the
+    /// path; tokens already cached are unaffected.
+    #[tokio::test]
+    async fn distinct_token_flood_is_capped_at_the_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("k.sock");
+        let fake = spawn(&sock);
+        add(&fake, "wft_good", "id-good", "owner", None);
+        let facade = Arc::new(DaemonKernelFacade::with_socket(&sock).with_timeout(std::time::Duration::from_secs(2)));
+        let auth = Arc::new(DaemonTokenValidator::new(facade.clone()).with_validate_budget(0.0, 5.0));
+        let app = build_router(state_with(auth, facade), &[], None);
+
+        assert_eq!(get(&app, "/api/agents", Some("wft_good")).await.0, StatusCode::OK); // 1 of 5
+        let mut codes = vec![];
+        for i in 0..8 {
+            codes.push(get(&app, "/api/agents", Some(&format!("wft_junk{i}"))).await.0);
+        }
+        let refused = codes.iter().filter(|c| **c == StatusCode::UNAUTHORIZED).count();
+        let busy = codes.iter().filter(|c| **c == StatusCode::TOO_MANY_REQUESTS).count();
+        assert_eq!((refused, busy), (4, 4), "{codes:?}");
+        assert_eq!(fake.validate_calls.load(Ordering::SeqCst), 5, "daemon saw only the budget");
+        // The cached good token still works with the budget spent.
+        assert_eq!(get(&app, "/api/agents", Some("wft_good")).await.0, StatusCode::OK);
+        // The same cap applies on /mcp and tokened health.
+        let (code, _) = get(&app, "/api/health", Some("wft_junk99")).await;
+        assert_eq!(code, StatusCode::OK, "health still answers (anonymous view) when busy");
+        assert_eq!(fake.validate_calls.load(Ordering::SeqCst), 5);
+    }
 }
 
 
@@ -922,5 +1039,99 @@ mod mcp {
         let (code, body) = rpc(&app, Some("wft_any"), init()).await;
         assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["remedy"], "start the daemon: weft kernel start");
+    }
+
+    struct Slow;
+    #[async_trait]
+    impl ToolProvider for Slow {
+        fn namespace(&self) -> &str {
+            ""
+        }
+        fn list_tools(&self) -> Vec<ToolDefinition> {
+            vec![ToolDefinition { name: "slow".into(), description: "s".into(), input_schema: json!({"type": "object"}) }]
+        }
+        async fn call_tool(&self, _: &str, args: Value) -> Result<CallToolResult, ToolError> {
+            tokio::time::sleep(std::time::Duration::from_millis(args["ms"].as_u64().unwrap_or(0))).await;
+            Ok(CallToolResult::text("done"))
+        }
+    }
+
+    fn slow_app(queue_ms: u64, call_ms: u64) -> (axum::Router, Arc<MemoryTokenValidator>, Arc<std::sync::RwLock<String>>) {
+        let mut composite = CompositeToolProvider::new();
+        composite.register(Box::new(Slow));
+        let audit = AuditLog::new();
+        let label = audit.label_handle();
+        let mut shell = McpServerShell::new(composite);
+        shell.add_middleware(Box::new(audit));
+        let mount = McpMount::new(shell, label.clone(), "full", 1)
+            .with_timeouts(std::time::Duration::from_millis(queue_ms), std::time::Duration::from_millis(call_ms));
+        let auth = Arc::new(MemoryTokenValidator::new());
+        let mut state = state_with(auth.clone(), Arc::new(InMemoryKernelFacade::new()));
+        state.mcp = Some(Arc::new(mount));
+        (build_router(state, &[], None), auth, label)
+    }
+
+    fn call_slow(ms: u64) -> Value {
+        json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"slow","arguments":{"ms": ms}}})
+    }
+
+    /// A caller waits a bounded time behind a slow tool, then gets 503
+    /// instead of hanging.
+    #[tokio::test]
+    async fn queued_caller_gets_503_not_a_hang() {
+        let (app, auth, _) = slow_app(100, 5_000);
+        let token = auth.generate_token(3600).unwrap();
+        assert_eq!(rpc(&app, Some(&token), init()).await.0, StatusCode::OK);
+        let slow = {
+            let (app, token) = (app.clone(), token.clone());
+            tokio::spawn(async move { rpc(&app, Some(&token), call_slow(600)).await.0 })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let started = std::time::Instant::now();
+        let (code, body) = rpc(&app, Some(&token), json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).await;
+        assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], -32002);
+        assert!(started.elapsed() < std::time::Duration::from_millis(450), "waited {:?}", started.elapsed());
+        assert_eq!(slow.await.unwrap(), StatusCode::OK);
+        // And the shell serves again once the slow call is done.
+        assert_eq!(rpc(&app, Some(&token), json!({"jsonrpc":"2.0","id":3,"method":"tools/list"})).await.0, StatusCode::OK);
+    }
+
+    /// A call past its time limit is cancelled and the lock released.
+    #[tokio::test]
+    async fn runaway_call_is_cancelled_and_releases_the_shell() {
+        let (app, auth, _) = slow_app(2_000, 150);
+        let token = auth.generate_token(3600).unwrap();
+        assert_eq!(rpc(&app, Some(&token), init()).await.0, StatusCode::OK);
+        let (code, body) = rpc(&app, Some(&token), call_slow(5_000)).await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(body["id"], 7);
+        assert_eq!(body["error"]["code"], -32003);
+        let (code, _) = rpc(&app, Some(&token), json!({"jsonrpc":"2.0","id":4,"method":"tools/list"})).await;
+        assert_eq!(code, StatusCode::OK);
+    }
+
+    /// The audit label is the authenticated caller's: each call stamps its
+    /// own token's label while holding the shell.
+    #[tokio::test]
+    async fn audit_label_follows_the_caller() {
+        let (app, auth, label) = slow_app(2_000, 5_000);
+        let token = auth.generate_token(3600).unwrap();
+        assert_eq!(rpc(&app, Some(&token), init()).await.0, StatusCode::OK);
+        assert_eq!(*label.read().unwrap(), "memory");
+        *label.write().unwrap() = "someone-else".into();
+        assert_eq!(rpc(&app, Some(&token), json!({"jsonrpc":"2.0","id":5,"method":"tools/list"})).await.0, StatusCode::OK);
+        assert_eq!(*label.read().unwrap(), "memory");
+    }
+
+    /// `/mcp` shares the per-client budget: 120 calls a minute, then 429.
+    #[tokio::test]
+    async fn mcp_is_rate_limited_per_client() {
+        let (app, _auth) = app(true);
+        for i in 0..120 {
+            let (code, _) = rpc(&app, Some("junk"), init()).await;
+            assert_eq!(code, StatusCode::UNAUTHORIZED, "#{i}");
+        }
+        assert_eq!(rpc(&app, Some("junk"), init()).await.0, StatusCode::TOO_MANY_REQUESTS);
     }
 }

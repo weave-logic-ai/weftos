@@ -189,6 +189,12 @@ enum RateClass {
     Api,
     /// WebSocket (`/ws`).
     Ws,
+    /// MCP JSON-RPC (`/mcp`): tool calls are heavy and every call is a bearer
+    /// check.
+    Mcp,
+    /// `/api/health` carrying a bearer: it costs a token validation, and the
+    /// detailed view several daemon calls. Anonymous health stays exempt.
+    HealthTokened,
 }
 
 impl RateClass {
@@ -198,20 +204,31 @@ impl RateClass {
             RateClass::Auth => 10,
             RateClass::Api => 60,
             RateClass::Ws => 10,
+            RateClass::Mcp => 120,
+            RateClass::HealthTokened => 30,
         }
     }
 
     /// Identify the rate class from a request path. `None` means the
-    /// path is not subject to rate limiting (static SPA, health, etc.).
-    fn from_path(path: &str) -> Option<Self> {
+    /// path is not subject to rate limiting (static SPA, anonymous health).
+    ///
+    /// `has_credential` is whether the request carries an `Authorization`
+    /// header: only then does `/api/health` cost a token validation.
+    fn from_path(path: &str, has_credential: bool) -> Option<Self> {
         if path == "/ws" {
             Some(Self::Ws)
+        } else if path == "/mcp" || path.starts_with("/mcp/") {
+            Some(Self::Mcp)
+        } else if path == "/events" || path.starts_with("/custody/") {
+            // Top-level facade routes (SSE, witness): generic API budget.
+            Some(Self::Api)
         } else if path.starts_with("/api/auth/") || path.starts_with("/api/token/") {
             Some(Self::Auth)
         } else if path.starts_with("/api/") {
-            // Health is exempt: cheap, must always succeed for k8s probes.
+            // Anonymous health is exempt: cheap (cached probe) and must
+            // always succeed for k8s probes.
             if path == "/api/health" {
-                None
+                has_credential.then_some(Self::HealthTokened)
             } else {
                 Some(Self::Api)
             }
@@ -272,7 +289,8 @@ pub async fn rate_limit_middleware(
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let class = match RateClass::from_path(request.uri().path()) {
+    let has_credential = request.headers().contains_key(axum::http::header::AUTHORIZATION);
+    let class = match RateClass::from_path(request.uri().path(), has_credential) {
         Some(c) => c,
         None => return Ok(next.run(request).await),
     };
@@ -290,18 +308,25 @@ mod tests {
 
     #[test]
     fn rate_class_classifies_paths() {
-        assert_eq!(RateClass::from_path("/ws"), Some(RateClass::Ws));
-        assert_eq!(
-            RateClass::from_path("/api/auth/revoke"),
-            Some(RateClass::Auth)
-        );
-        assert_eq!(
-            RateClass::from_path("/api/token/refresh"),
-            Some(RateClass::Auth)
-        );
-        assert_eq!(RateClass::from_path("/api/agents"), Some(RateClass::Api));
-        assert_eq!(RateClass::from_path("/api/health"), None);
-        assert_eq!(RateClass::from_path("/index.html"), None);
+        let c = |p: &str| RateClass::from_path(p, false);
+        assert_eq!(c("/ws"), Some(RateClass::Ws));
+        assert_eq!(c("/api/auth/revoke"), Some(RateClass::Auth));
+        assert_eq!(c("/api/token/refresh"), Some(RateClass::Auth));
+        assert_eq!(c("/api/agents"), Some(RateClass::Api));
+        assert_eq!(c("/api/openapi.json"), Some(RateClass::Api));
+        assert_eq!(c("/index.html"), None);
+    }
+
+    /// Every route that validates a bearer is limited: `/mcp`, the top-level
+    /// facade routes, and `/api/health` once it carries a credential.
+    #[test]
+    fn credential_checking_routes_are_all_rate_limited() {
+        assert_eq!(RateClass::from_path("/mcp", false), Some(RateClass::Mcp));
+        assert_eq!(RateClass::from_path("/mcp", true), Some(RateClass::Mcp));
+        assert_eq!(RateClass::from_path("/events", false), Some(RateClass::Api));
+        assert_eq!(RateClass::from_path("/custody/witness", false), Some(RateClass::Api));
+        assert_eq!(RateClass::from_path("/api/health", false), None);
+        assert_eq!(RateClass::from_path("/api/health", true), Some(RateClass::HealthTokened));
     }
 
     #[test]

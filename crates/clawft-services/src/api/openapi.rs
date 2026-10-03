@@ -156,10 +156,7 @@ mod tests {
         }
     }
 
-    /// The router really serves every documented operation (not 404/405),
-    /// so the spec cannot describe a route that only exists in source text.
-    #[tokio::test]
-    async fn every_documented_operation_is_routed() {
+    fn full_app() -> (axum::Router, Arc<MemoryTokenValidator>) {
         let auth = Arc::new(MemoryTokenValidator::new());
         let mut state = stub_state();
         state.auth = auth.clone();
@@ -170,33 +167,78 @@ mod tests {
         let mut shell = McpServerShell::new(composite);
         shell.add_middleware(Box::new(audit));
         state.mcp = Some(Arc::new(McpMount::new(shell, label, "full", 0)));
-        let app = build_router(state, &[], None);
+        (build_router(state, &[], None), auth)
+    }
 
+    fn probe_uri(path: &str) -> String {
         let placeholder = regex::Regex::new(r"\{[^}]+\}").unwrap();
+        placeholder.replace_all(path, "probe-id").into_owned()
+    }
+
+    /// The router really serves every documented operation, `{param}` routes
+    /// included (probed with a dummy id), so the spec cannot describe a route
+    /// that only exists in source text. A handler may answer 404 for an
+    /// unknown id, but then it says so in a body; the router's own "no such
+    /// route" 404 is empty.
+    #[tokio::test]
+    async fn every_documented_operation_is_routed() {
         for op in spec_ops() {
+            // Fresh router per operation so the per-IP rate limit (429)
+            // cannot mask a missing route.
+            let (app, auth) = full_app();
             let (m, path) = op.split_once(' ').unwrap();
-            let uri = placeholder.replace_all(path, "x");
             let token = auth.generate_token(60).unwrap();
             let resp = app
-                .clone()
                 .oneshot(
                     Request::builder()
                         .method(Method::from_bytes(m.as_bytes()).unwrap())
-                        .uri(uri.as_ref())
+                        .uri(probe_uri(path))
                         .header(header::AUTHORIZATION, format!("Bearer {token}"))
                         .body(Body::empty())
                         .unwrap(),
                 )
                 .await
                 .unwrap();
-            // A handler may itself answer 404 for an unknown id (`{param}`
-            // routes probed with "x"); a literal path must exist.
+            let code = resp.status();
+            // Only a 404 body is read: `/events` is a stream that never ends.
+            let body = if code == StatusCode::NOT_FOUND {
+                axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap_or_default()
+            } else {
+                Default::default()
+            };
             assert!(
-                resp.status() != StatusCode::NOT_FOUND || path.contains('{'),
-                "{op} is documented but the router answers 404"
+                code != StatusCode::NOT_FOUND || !body.is_empty(),
+                "{op} is documented but the router answers an empty 404"
             );
-            assert_ne!(resp.status(), StatusCode::METHOD_NOT_ALLOWED, "{op}");
-            assert_ne!(resp.status(), StatusCode::UNAUTHORIZED, "{op}: a fresh token must pass");
+            assert_ne!(code, StatusCode::TOO_MANY_REQUESTS, "{op}");
+            assert_ne!(code, StatusCode::METHOD_NOT_ALLOWED, "{op}");
+            assert_ne!(code, StatusCode::UNAUTHORIZED, "{op}: a fresh token must pass");
+        }
+    }
+
+    /// Anonymous callers get 401 on every documented operation except health.
+    #[tokio::test]
+    async fn every_documented_operation_but_health_refuses_anonymous_callers() {
+        for op in spec_ops() {
+            // A fresh router per operation: one client IP would otherwise
+            // hit the per-IP rate limit (429) long before the list ends.
+            let (app, _auth) = full_app();
+            let (m, path) = op.split_once(' ').unwrap();
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .method(Method::from_bytes(m.as_bytes()).unwrap())
+                        .uri(probe_uri(path))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if op == "GET /api/health" {
+                assert_eq!(resp.status(), StatusCode::OK, "{op}");
+            } else {
+                assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{op}");
+            }
         }
     }
 
