@@ -5,7 +5,7 @@
 
 use serde_json::json;
 
-use super::{API_TIMEOUT, Instance, InstalledCog, SEED_ID, SeedApiRuntime, SeedPin};
+use super::{API_TIMEOUT, InstalledCog, Instance, SEED_ID, SeedApiRuntime, SeedPin};
 use crate::workload_runtime::seed_http::Method;
 use crate::workload_runtime::types::{InstanceHandle, RuntimeError, VerifiedWorkload};
 
@@ -29,6 +29,11 @@ impl SeedApiRuntime {
             store_installed: true,
         });
         let path = format!("/api/v1/apps/{}", w.id);
+        // The install auto-started it and the stop has not happened yet
+        // (an unpinned version): stop it, best effort, before removal.
+        if step == "version check" {
+            let _ = self.stop_cog(&w.id).await;
+        }
         match self.api(Method::Delete, &path, None, API_TIMEOUT).await {
             Ok(_) => RuntimeError::StrandedInstall {
                 handle,
@@ -80,16 +85,6 @@ impl SeedApiRuntime {
             _ => Err(e),
         }
     }
-
-    /// After an install: re-read the Seed and refuse unless `id` is
-    /// installed at the pinned `version`.
-    pub(super) async fn check_installed_pin(
-        &self,
-        id: &str,
-        version: &str,
-    ) -> Result<(), RuntimeError> {
-        pinned_on_seed(&self.installed().await?, id, version)
-    }
 }
 
 /// `id` must be installed on the Seed at exactly the pinned `version`.
@@ -104,8 +99,6 @@ pub(super) fn pinned_on_seed(
             "the Seed has {id}@{} installed but the operator pinned {version}",
             c.version
         ))),
-        None => Err(RuntimeError::AdmissionRefused(format!(
-            "{id} is not installed on the Seed"
-        ))),
+        None => Err(RuntimeError::NotInstalled(id.to_string())),
     }
 }

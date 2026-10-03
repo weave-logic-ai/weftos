@@ -415,7 +415,15 @@ impl PlacementControlPlane {
                     .unwrap_or(crate::workload_governance::NodeTrustTier::Discovered),
                 "network": "egress", "resource_cost": 0.0,
             }});
-            if let GateDecision::Deny { reason, .. } = self.gate.check(&self.node_id, m, &ctx) {
+            // Stop and unload only shrink what is running: a denial caused
+            // by the node's trust tier alone (a demoted peer) is waived by
+            // the gate and chained there; any other denial stands.
+            let verdict = if method::is_teardown(m) {
+                self.gate.check_teardown(&self.node_id, m, &ctx)
+            } else {
+                self.gate.check(&self.node_id, m, &ctx)
+            };
+            if let GateDecision::Deny { reason, .. } = verdict {
                 return Err(PlaneError::Governance(reason));
             }
             Some(

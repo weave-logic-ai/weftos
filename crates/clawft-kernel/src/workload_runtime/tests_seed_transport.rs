@@ -21,16 +21,28 @@ const TOKEN: &str = "seed-token-under-test";
 fn pin_of(cert: &CertificateDer<'_>) -> [u8; 32] {
     match SeedTls::pinned(&SeedTls::fingerprint(cert.as_ref())).unwrap() {
         SeedTls::PinnedSha256(p) => p,
-        SeedTls::WebPki => unreachable!(),
+        _ => unreachable!(),
     }
 }
 
 /// A TLS server with a fresh self-signed certificate. Every request that
 /// completes a handshake is recorded (head only) and answered `200 []`.
 fn tls_seed() -> (u16, CertificateDer<'static>, Arc<Mutex<Vec<String>>>) {
-    let ck = rcgen::generate_simple_self_signed(vec!["seed.local".into()]).unwrap();
-    let cert = ck.cert.der().clone();
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(ck.key_pair.serialize_der()));
+    let kp = rcgen::KeyPair::generate().unwrap();
+    let (port, cert, seen) = tls_seed_with(&kp, 1);
+    (port, cert, seen)
+}
+
+/// A TLS server whose self-signed certificate (serial `serial`) is issued
+/// for `kp`: the same key with another serial is a renewed certificate.
+fn tls_seed_with(
+    kp: &rcgen::KeyPair,
+    serial: u64,
+) -> (u16, CertificateDer<'static>, Arc<Mutex<Vec<String>>>) {
+    let mut params = rcgen::CertificateParams::new(vec!["seed.local".into()]).unwrap();
+    params.serial_number = Some(rcgen::SerialNumber::from(serial));
+    let cert = params.self_signed(kp).unwrap().der().clone();
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(kp.serialize_der()));
     let cfg = Arc::new(
         rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
@@ -221,4 +233,174 @@ async fn a_declared_length_over_the_cap_is_refused_before_reading() {
     assert!(err.to_string().contains("too large"), "{err}");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(sent.load(Ordering::SeqCst) < 8 * MAX_RESPONSE_BYTES);
+}
+
+fn spki_pin(cert: &CertificateDer<'_>) -> SeedTls {
+    SeedTls::pinned_spki(&SeedTls::spki_fingerprint(cert.as_ref()).unwrap()).unwrap()
+}
+
+#[test]
+fn spki_pins_parse_and_reject_junk() {
+    let hex = "cd".repeat(32);
+    assert_eq!(
+        SeedTls::pinned_spki(&format!("spki-sha256:{hex}")).unwrap(),
+        SeedTls::PinnedSpki([0xcd; 32])
+    );
+    for bad in [
+        "",
+        "sha256:".to_string().as_str(),
+        &format!("sha256:{hex}"),
+        "spki-sha256:zz",
+    ] {
+        assert!(SeedTls::pinned_spki(bad).is_err(), "{bad:?} accepted");
+    }
+    assert!(SeedTls::spki_fingerprint(b"not a certificate").is_none());
+}
+
+#[tokio::test]
+async fn a_renewed_leaf_certificate_under_the_same_key_still_connects() {
+    let kp = rcgen::KeyPair::generate().unwrap();
+    let (_, old_cert, _) = tls_seed_with(&kp, 1);
+    let key_pin = spki_pin(&old_cert);
+    let cert_pin = SeedTls::PinnedSha256(pin_of(&old_cert));
+
+    // The Seed renews: a new certificate (new serial), same device key.
+    let (port, new_cert, seen) = tls_seed_with(&kp, 2);
+    assert_ne!(old_cert.as_ref(), new_cert.as_ref());
+    let base = format!("https://127.0.0.1:{port}");
+
+    // The old leaf-hash pin breaks on rotation (the card's failure) ...
+    let t = HttpSeedTransport::new(&base, cert_pin).unwrap();
+    get(&t)
+        .await
+        .expect_err("leaf-hash pin survived a rotation");
+    assert!(seen.lock().unwrap().is_empty());
+    // ... the public-key pin does not.
+    let t = HttpSeedTransport::new(&base, key_pin).unwrap();
+    let (status, _) = get(&t).await.expect("key pin across a rotation");
+    assert_eq!(status, 200);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_certificate_under_another_key_is_refused_by_the_key_pin() {
+    let (_, old_cert, _) = tls_seed();
+    let key_pin = spki_pin(&old_cert);
+    // A different device key (a rekey, or an impostor): refused, and the
+    // token is never sent. The operator must re-pin over a trusted path.
+    let (port, _, seen) = tls_seed();
+    let t = HttpSeedTransport::new(&format!("https://127.0.0.1:{port}"), key_pin).unwrap();
+    get(&t).await.expect_err("a different key was accepted");
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_key_pin_on_a_plain_http_base_is_refused() {
+    let r = HttpSeedTransport::new("http://127.0.0.1:1", SeedTls::PinnedSpki([0; 32]));
+    assert!(matches!(r, Err(RuntimeError::InvalidConfig(_))));
+}
+
+/// Plain-http Seed (the USB base `http://169.254.42.1`) with the real
+/// firmware's keep-alive behaviour: the first request on a connection is
+/// answered with `Connection: keep-alive`, and a second request on the
+/// same socket is never answered (a stall, not a FIN). A client that pools
+/// idle connections reuses the socket and hangs; one that does not opens a
+/// fresh connection each time and always gets an answer.
+#[tokio::test]
+async fn plain_http_never_reuses_a_connection_the_seed_will_stall_on() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let heads = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = heads.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = listener.accept().await else {
+                return;
+            };
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                log.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = s
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                          Content-Length: 2\r\nConnection: keep-alive\r\n\r\n[]",
+                    )
+                    .await;
+                // A second request on this socket is read and ignored.
+                let _ = s.read(&mut buf).await;
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            });
+        }
+    });
+    let t = HttpSeedTransport::new(&format!("http://127.0.0.1:{port}"), SeedTls::WebPki).unwrap();
+    for i in 0..3 {
+        let (status, body) = t
+            .request(
+                Method::Get,
+                "/api/v1/apps",
+                None,
+                &SecretString::new(TOKEN.to_string()),
+                Duration::from_millis(1500),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("request {i} stalled on a reused connection: {e}"));
+        assert_eq!((status, body), (200, serde_json::json!([])));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let heads = heads.lock().unwrap();
+    assert_eq!(heads.len(), 3, "one fresh connection per request");
+    assert!(
+        heads[0]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {TOKEN}"))
+    );
+}
+
+const PROXY_CHILD: &str = "SEED_TEST_PROXY_CHILD";
+
+/// A proxy in the environment must not capture Seed traffic. The
+/// environment is read when a client is built, and mutating it in this
+/// process would race the other tests, so the check runs in a child
+/// process of this test binary.
+#[test]
+fn an_environment_proxy_is_not_used_for_a_seed() {
+    if std::env::var(PROXY_CHILD).is_ok() {
+        return; // the child runs `proxy_child_body` instead
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["proxy_child_body", "--nocapture"])
+        .env(PROXY_CHILD, "1")
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("http_proxy", "http://127.0.0.1:1")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "child failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[tokio::test]
+async fn proxy_child_body() {
+    if std::env::var(PROXY_CHILD).is_err() {
+        return; // only meaningful inside the child process above
+    }
+    let (port, _sent) = streaming_seed(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]",
+        2,
+        false,
+    )
+    .await;
+    let t = HttpSeedTransport::new(&format!("http://127.0.0.1:{port}"), SeedTls::WebPki).unwrap();
+    let (status, _) = get(&t).await.expect("request went through the env proxy");
+    assert_eq!(status, 200);
 }

@@ -32,7 +32,8 @@ pub struct WorkloadHost {
     gate: Arc<dyn GateBackend>,
     chain: Option<Arc<ChainManager>>,
     agent_id: String,
-    node_tier: NodeTrustTier,
+    /// Live: the control plane lowers it when the operator demotes the node.
+    node_tier: std::sync::RwLock<NodeTrustTier>,
     loaded: Mutex<HashMap<String, (VerifiedWorkload, bool)>>,
 }
 
@@ -49,7 +50,7 @@ impl WorkloadHost {
             gate,
             chain: None,
             agent_id: agent_id.into(),
-            node_tier,
+            node_tier: std::sync::RwLock::new(node_tier),
             loaded: Mutex::new(HashMap::new()),
         }
     }
@@ -58,6 +59,21 @@ impl WorkloadHost {
     pub fn with_chain(mut self, cm: Arc<ChainManager>) -> Self {
         self.chain = Some(cm);
         self
+    }
+
+    /// The trust tier this host's node is governed at right now.
+    pub fn node_tier(&self) -> NodeTrustTier {
+        self.node_tier
+            .read()
+            .map_or(NodeTrustTier::Discovered, |t| *t)
+    }
+
+    /// Change the governed tier (an operator demotion or promotion). Takes
+    /// effect on the next gated call, including on instances already placed.
+    pub fn set_node_tier(&self, tier: NodeTrustTier) {
+        if let Ok(mut t) = self.node_tier.write() {
+            *t = tier;
+        }
     }
 
     /// The adapter.
@@ -100,7 +116,7 @@ impl WorkloadHost {
         json!({ "workload": {
             "kind": kind,
             "package_trust": trust,
-            "node_tier": self.node_tier,
+            "node_tier": self.node_tier(),
             "network": network,
             "secrets": false,
             "emulated": emulated,
@@ -118,10 +134,37 @@ impl WorkloadHost {
         kind: &str,
         emulated: bool,
     ) -> Result<(), RuntimeError> {
-        match self
-            .gate
-            .check(&self.agent_id, action, &self.context(w, kind, emulated))
-        {
+        self.verdict(action, w, kind, emulated, false)
+    }
+
+    /// [`Self::check`] for taking down what is already placed (stop,
+    /// unload, re-adoption): a denial caused by the node tier alone is
+    /// waived by the gate ([`GateBackend::check_teardown`]).
+    fn check_teardown(
+        &self,
+        action: &str,
+        w: &VerifiedWorkload,
+        kind: &str,
+        emulated: bool,
+    ) -> Result<(), RuntimeError> {
+        self.verdict(action, w, kind, emulated, true)
+    }
+
+    fn verdict(
+        &self,
+        action: &str,
+        w: &VerifiedWorkload,
+        kind: &str,
+        emulated: bool,
+        teardown: bool,
+    ) -> Result<(), RuntimeError> {
+        let ctx = self.context(w, kind, emulated);
+        let d = if teardown {
+            self.gate.check_teardown(&self.agent_id, action, &ctx)
+        } else {
+            self.gate.check(&self.agent_id, action, &ctx)
+        };
+        match d {
             GateDecision::Permit { .. } => Ok(()),
             GateDecision::Deny { reason, .. } => Err(RuntimeError::Governance(format!(
                 "{action} denied: {reason}"
@@ -236,6 +279,31 @@ impl WorkloadHost {
                     .insert(handle.instance_id.clone(), (w.clone(), emulated));
             }
         }
+        self.outcome(chain::EVENT_KIND_WORKLOAD_LOAD, payload, &r);
+        r
+    }
+
+    /// Re-attach an instance loaded before a controller restart
+    /// ([`WorkloadRuntime::adopt`]), gated as `workload.load` and chained
+    /// with phase `readopted`. A no-op if the instance is already known.
+    pub async fn adopt(
+        &self,
+        h: &InstanceHandle,
+        w: &VerifiedWorkload,
+    ) -> Result<(), RuntimeError> {
+        if self.loaded.lock().await.contains_key(&h.instance_id) {
+            return Ok(());
+        }
+        self.check_teardown("workload.load", w, &w.kind, false)?;
+        let r = self.runtime.adopt(h, w).await;
+        if r.is_ok() {
+            self.loaded
+                .lock()
+                .await
+                .insert(h.instance_id.clone(), (w.clone(), false));
+        }
+        let mut payload = self.base(w, Some(&h.instance_id));
+        payload["phase"] = json!("readopted");
         self.outcome(chain::EVENT_KIND_WORKLOAD_LOAD, payload, &r);
         r
     }
@@ -367,7 +435,7 @@ impl WorkloadHost {
         grace: Duration,
     ) -> Result<RunEvidence, RuntimeError> {
         let (w, emu) = self.workload_of(h).await?;
-        self.check("workload.stop", &w, &w.kind, emu)?;
+        self.check_teardown("workload.stop", &w, &w.kind, emu)?;
         let r = self.runtime.stop(h, grace).await;
         let mut payload = self.base(&w, Some(&h.instance_id));
         if let Ok(ev) = &r {
@@ -380,7 +448,7 @@ impl WorkloadHost {
     /// Gate and unload.
     pub async fn unload(&self, h: InstanceHandle) -> Result<(), RuntimeError> {
         let (w, emu) = self.workload_of(&h).await?;
-        self.check("workload.unload", &w, &w.kind, emu)?;
+        self.check_teardown("workload.unload", &w, &w.kind, emu)?;
         let payload = self.base(&w, Some(&h.instance_id));
         let iid = h.instance_id.clone();
         let r = self.runtime.unload(h).await;

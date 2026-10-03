@@ -62,6 +62,13 @@ pub mod method {
     /// Every method of the set.
     pub const ALL: &[&str] = &[DESCRIBE, PLACE, LOAD, START, STOP, UNLOAD, STATUS, LOGS];
 
+    /// Methods that only take down what is running. Trust policy never
+    /// blocks these on the controller: an operator can always stop and
+    /// unload what they placed.
+    pub fn is_teardown(m: &str) -> bool {
+        matches!(m, STOP | UNLOAD)
+    }
+
     /// Methods that change state (they need a decision id).
     pub fn mutates(m: &str) -> bool {
         matches!(m, PLACE | LOAD | START | STOP | UNLOAD)

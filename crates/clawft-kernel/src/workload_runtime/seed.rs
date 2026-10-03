@@ -29,18 +29,18 @@ mod install;
 use super::evidence::RunEvidence;
 use super::seed_http::{Method, SeedCredentials, SeedTransport};
 use super::types::{
-    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, Preemption,
-    RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
+    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, LinkSecurity,
+    Preemption, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
 };
 use crate::workload_governance::NetworkPolicy;
 use crate::workload_pkg::manifest::{valid_cog_id, valid_token};
 
 use super::seed_types::lines;
-use install::pinned_on_seed;
 pub use super::seed_types::{
     API_TIMEOUT, CONSOLE_TIMEOUT, InstalledCog, LOG_LINES, SEED_CONCURRENCY_CAP, SEED_ID,
     SEED_REGISTRY, SeedConfig, SeedPin,
 };
+use install::pinned_on_seed;
 
 struct Instance {
     cog_id: String,
@@ -241,15 +241,23 @@ impl WorkloadRuntime for SeedApiRuntime {
                     )));
                 }
                 self.install_reconciled(&w.id).await?;
-                // Installed cogs auto-start; loading must not leave it running.
+                // The install call names only the id and the Seed starts
+                // what it installs (the documented contract; there is no
+                // way to install without starting), so an unpinned version
+                // could be running now. Read the Seed first: anything but
+                // the pinned version is stopped and removed at once.
+                let after = match self.installed().await {
+                    Ok(list) => list,
+                    Err(e) => {
+                        return Err(self.undo_install(w, &iid, &pin, "version check", e).await);
+                    }
+                };
+                if let Err(e) = pinned_on_seed(&after, &w.id, &pin.version) {
+                    return Err(self.undo_install(w, &iid, &pin, "version check", e).await);
+                }
+                // Pinned: loading must not leave it running.
                 if let Err(e) = self.stop_cog(&w.id).await {
                     return Err(self.undo_install(w, &iid, &pin, "stop", e).await);
-                }
-                // The install call names only the id: check that the Seed
-                // installed the pinned version, not whatever the store
-                // serves now.
-                if let Err(e) = self.check_installed_pin(&w.id, &pin.version).await {
-                    return Err(self.undo_install(w, &iid, &pin, "version check", e).await);
                 }
                 true
             }
@@ -270,6 +278,34 @@ impl WorkloadRuntime for SeedApiRuntime {
             workload_id: w.id.clone(),
             store_installed: installed_here,
         })
+    }
+
+    async fn adopt(&self, h: &InstanceHandle, w: &VerifiedWorkload) -> Result<(), RuntimeError> {
+        let pin = self.pin_for(w)?.clone();
+        let expect = format!("{}-seed-{}", w.id, self.cfg.node_id);
+        if h.runtime != SEED_ID || h.workload_id != w.id || h.instance_id != expect {
+            return Err(RuntimeError::InvalidConfig(format!(
+                "{} is not a handle of this Seed adapter",
+                h.instance_id
+            )));
+        }
+        if self.instances.lock().await.contains_key(&h.instance_id) {
+            return Ok(());
+        }
+        // The Seed is the source of truth: it must still hold the cog at
+        // the pinned version.
+        pinned_on_seed(&self.installed().await?, &w.id, &pin.version)?;
+        self.instances.lock().await.insert(
+            h.instance_id.clone(),
+            Instance {
+                cog_id: w.id.clone(),
+                version: pin.version.clone(),
+                installed_here: h.store_installed,
+                console_commands: pin.console_commands.clone(),
+                last: None,
+            },
+        );
+        Ok(())
     }
 
     async fn start(&self, h: &InstanceHandle) -> Result<(), RuntimeError> {
@@ -368,6 +404,10 @@ impl WorkloadRuntime for SeedApiRuntime {
         ControlMode::Managed
     }
 
+    fn link_security(&self) -> LinkSecurity {
+        self.transport.link_security()
+    }
+
     /// The Seed firmware, not WeftOS, decides what its cogs can reach; the
     /// Seed has internet access, so the gate is told `egress`.
     fn network_exposure(&self) -> NetworkPolicy {
@@ -421,9 +461,18 @@ impl WorkloadRuntime for SeedApiRuntime {
         }
         // UDP 5006 contention: the host preempts running cogs (each gated
         // as `workload.stop`) before calling this; never stop them here.
-        let running: Vec<String> = self
-            .installed()
-            .await?
+        // An unpinned version never runs, console included: the Seed may
+        // have been upgraded or reinstalled since `load`.
+        let list = self.installed().await?;
+        let version = self
+            .instances
+            .lock()
+            .await
+            .get(&h.instance_id)
+            .map(|i| i.version.clone())
+            .ok_or_else(|| RuntimeError::UnknownInstance(h.instance_id.clone()))?;
+        pinned_on_seed(&list, &id, &version)?;
+        let running: Vec<String> = list
             .into_iter()
             .filter(|c| c.running)
             .map(|c| c.id)
