@@ -163,7 +163,8 @@ The mesh-facts trait already has the needed shape (`allows(hash, grants, &Audien
      - the audience is `Serve(peer)` with `peer.verified`, or `Seed`.
    - `Advertise` is never allowed for Cognitum-origin content (the branch rule stays).
    - Validity is checked on each call, so expiry needs no sweep to take effect. A periodic sweep drops expired grants and evicts bytes that no running instance pins.
-4. **Fail-closed edges.**
+4. **No manifest change.** `CogPackageBody` is `deny_unknown_fields`, so an older verifier rejects a manifest that has a field it does not know. This design adds no manifest field and does not put the grant inside a package. The grant is a separate signed object, carried on its own topic and kept in `CheckoutGrantStore`. The phase 3 placement trust path takes the grant next to the package, not inside it. New fields go only in `provenance.json` (section 10), which `CogPackageBody` verifiers do not read.
+5. **Fail-closed edges.**
    - Under `off` or `observe` no peer is verified, so no Cognitum bytes move between nodes. A Seed-bound mesh needs `enforce`.
    - A `Legacy` or `Leaf` peer is never served Cognitum content.
 
