@@ -1072,3 +1072,27 @@ fn a_blob_left_on_disk_by_an_earlier_run_is_never_evicted_after_a_restart() {
     ex2.forget(&d2.id(), "lru").unwrap();
     assert!(!ex2.store().contains(&hex_encode(&d2.content_hash)));
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_redistribution_policy_is_one_pluggable_point() {
+    struct AllowAll;
+    impl crate::mesh_swarm_state::RedistributionPolicy for AllowAll {
+        fn allows(&self, _: &[u8; 32], g: &[crate::mesh_swarm_state::GrantInfo]) -> bool {
+            !g.is_empty()
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let dir = pack(tmp.path(), 2 * 1024 * 1024, &k, "ddddddd", false, false);
+    let holder = swarm_node("holder", cfg());
+    let pkg = holder.ex.seed_package_dir(&dir, &anchors_for(&k)).unwrap();
+    // Default policy: not signed redistributable, so nothing is shared.
+    assert!(holder.ex.servable_artifacts().is_empty());
+    assert!(holder.ex.held_capabilities(&Default::default()).is_empty());
+    // A different policy changes seeding, advertising and serving together.
+    assert!(holder.ex.set_redistribution_policy(Arc::new(AllowAll)));
+    assert!(!holder.ex.set_redistribution_policy(Arc::new(AllowAll)), "set once");
+    assert_eq!(holder.ex.servable_artifacts().len(), 3);
+    assert!(!holder.ex.held_capabilities(&Default::default()).is_empty());
+    let _ = pkg;
+}

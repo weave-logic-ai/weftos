@@ -91,13 +91,26 @@ impl ArtifactExchange {
         }
     }
 
+    /// Replace the redistribution policy (first call wins; the default is
+    /// [`crate::mesh_swarm_state::ManifestPolicy`]). Seeding, advertising and
+    /// serving all follow it, so a policy that consults something else (for
+    /// example a grant signed by the mesh's licence authority) plugs in here.
+    pub fn set_redistribution_policy(&self, p: Arc<dyn crate::mesh_swarm_state::RedistributionPolicy>) -> bool {
+        self.swarm.policy.set(p).is_ok()
+    }
+
+    fn redistribution_policy(&self) -> &dyn crate::mesh_swarm_state::RedistributionPolicy {
+        self.swarm
+            .policy
+            .get()
+            .map_or(&crate::mesh_swarm_state::ManifestPolicy as &dyn crate::mesh_swarm_state::RedistributionPolicy, |p| p.as_ref())
+    }
+
     /// The first grant that currently allows seeding `content_hash`: not
     /// revoked, and its package may be redistributed.
     pub(crate) fn servable_grant(&self, content_hash: &[u8; 32]) -> Option<GrantInfo> {
         let gs = self.grants.get(content_hash)?;
-        // One package that marks this content non-redistributable vetoes it
-        // for every package that lists it: fail closed.
-        if gs.iter().any(|g| !g.redistributable) {
+        if !self.redistribution_policy().allows(content_hash, &gs) {
             return None;
         }
         gs.iter()

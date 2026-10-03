@@ -105,6 +105,11 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   are banned and the fetch continues with the other candidates (three
   attempts). Candidates rank by trust tier first; a `net.lan` id is
   self-asserted and only orders peers of the same tier.
+- **One policy point.** Seeding, advertising and serving all ask
+  `RedistributionPolicy::allows` (via `servable_grant`); the default is
+  `ManifestPolicy`, and `ArtifactExchange::set_redistribution_policy` swaps it,
+  so a licence authority's grant (for example a Seed-signed, mesh-scoped one)
+  can plug in without touching those call sites.
 - **Eviction cannot break a running package.** `swarm_fetch_package` pins the
   manifest and every file before fetching them, and leaves them pinned until
   `ArtifactCache::unpin_package`. Bytes being downloaded count against the
