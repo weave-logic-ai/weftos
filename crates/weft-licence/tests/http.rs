@@ -138,3 +138,50 @@ fn the_http_layer_throttles_the_transfer() {
     assert!(took < std::time::Duration::from_secs(6), "took {took:?}");
     server.stop();
 }
+
+#[test]
+fn host_matching_is_semantic_for_ips_and_allows_listed_names() {
+    use weft_licence::http::host_allowed;
+    let bound: Vec<std::net::SocketAddr> =
+        vec!["127.0.0.1:8700".parse().unwrap(), "[::1]:8700".parse().unwrap(), "[fe80::1]:8700".parse().unwrap()];
+    let names = vec!["seed.tailnet.example".to_string()];
+    // IPv4, and IPv6 in any spelling: uncompressed, upper case.
+    assert!(host_allowed("127.0.0.1:8700", &bound, &names));
+    assert!(host_allowed("[::1]:8700", &bound, &names));
+    assert!(host_allowed("[0:0:0:0:0:0:0:1]:8700", &bound, &names));
+    assert!(host_allowed("[0000:0000:0000:0000:0000:0000:0000:0001]:8700", &bound, &names));
+    assert!(host_allowed("[FE80:0:0:0:0:0:0:1]:8700", &bound, &names));
+    // A link-local address with a zone id still names the same address.
+    assert!(host_allowed("[fe80::1%en0]:8700", &bound, &names));
+    // IPv4-mapped IPv6 is the IPv4 address.
+    assert!(host_allowed("[::ffff:127.0.0.1]:8700", &bound, &names));
+    // The port must match, and other addresses and names are refused.
+    assert!(!host_allowed("127.0.0.1:8701", &bound, &names));
+    assert!(!host_allowed("127.0.0.2:8700", &bound, &names));
+    assert!(!host_allowed("::1:8700", &bound, &names), "a bare IPv6 address is not a valid Host");
+    assert!(!host_allowed("evil.example:8700", &bound, &names));
+    // A listed name is case-insensitive and needs a bound port.
+    assert!(host_allowed("Seed.Tailnet.Example:8700", &bound, &names));
+    assert!(!host_allowed("seed.tailnet.example:9", &bound, &names));
+    assert!(!host_allowed("seed.tailnet.example.evil:8700", &bound, &names));
+    assert!(!host_allowed("[::1", &bound, &names));
+    assert!(!host_allowed("", &bound, &names));
+}
+
+#[test]
+fn a_listed_magicdns_name_reaches_the_seed_over_http() {
+    let h = Harness::with(&[], |c| c.allowed_hosts = vec!["seed.tailnet.example".into()]);
+    let server = weft_licence::http::serve(h.svc.clone(), &["127.0.0.1:0".parse().unwrap()]).unwrap();
+    let addr = server.addrs()[0];
+    let ask = |host: String| {
+        let mut s = open_conn(addr);
+        s.write_all(format!("GET /licence/v1/identity HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes()).unwrap();
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        String::from_utf8_lossy(&out).split_whitespace().nth(1).unwrap_or("").to_string()
+    };
+    assert_eq!(ask(format!("Seed.Tailnet.Example:{}", addr.port())), "200");
+    assert_eq!(ask(format!("other.example:{}", addr.port())), "400");
+    server.stop();
+    assert_eq!(weft_licence::http::ServerOpts::default().per_ip, 2);
+}

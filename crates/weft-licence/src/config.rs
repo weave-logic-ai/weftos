@@ -71,6 +71,9 @@ pub struct Config {
     /// Allow `listen` addresses outside the link-local, tailnet and loopback
     /// ranges (a LAN address). Plain HTTP on a LAN needs this explicit opt-in.
     pub allow_lan_listen: bool,
+    /// Host names (for example the MagicDNS name) a steward may use in the
+    /// `Host` header besides the listen addresses. Names only, no ports.
+    pub allowed_hosts: Vec<String>,
     /// Lab only: allow a local path or http registry (tests, never the Seed).
     pub allow_insecure_registry: bool,
     /// Grant lifetime, seconds (default 72 h, at most 7 days).
@@ -93,6 +96,7 @@ impl Default for Config {
             licence_file: PathBuf::from("/var/lib/weft-licence/licence.json"),
             registry_url: String::new(),
             allow_lan_listen: false,
+            allowed_hosts: Vec::new(),
             allow_insecure_registry: false,
             grant_ttl_secs: 72 * 3600,
             clock_floor: CLOCK_FLOOR,
@@ -126,6 +130,12 @@ impl Config {
         }
         if !self.device_id.is_empty() && !weft_licence_wire::valid_token(&self.device_id) {
             return bad("device_id must be 1 to 128 characters of [A-Za-z0-9._-+@/]");
+        }
+        let name_ok = |h: &String| {
+            !h.is_empty() && h.len() <= 253 && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        };
+        if !self.allowed_hosts.iter().all(name_ok) {
+            return bad("allowed_hosts entries must be host names ([A-Za-z0-9.-])");
         }
         if self.limits.rate_bytes_per_sec == 0 {
             return bad("limits.rate_bytes_per_sec must be above 0");

@@ -223,6 +223,14 @@ impl Service {
         let blake3 = hex_encode(blake3::hash(&bytes).as_bytes());
         let now = (self.clock)().max(now);
         let mut inner = self.lock();
+        // The binding may have changed during the fetch (an unbind, a rebind to
+        // another mesh or key): re-read it and refuse rather than sign.
+        self.refresh_binding(&mut inner);
+        if mesh_of(&inner).map(|m| m.to_hex()).as_deref() != Some(mesh_hex.as_str())
+            || inner.key.as_ref().map(|k| k.verifying_key().to_bytes()) != Some(pk)
+        {
+            return Err(ApiError::new(409, "binding_changed", "the binding changed during the checkout; nothing was signed"));
+        }
         let mut work = inner.store.slots.clone();
         let slot = work.slots.entry(key.clone()).or_insert_with(|| Slot {
             mesh_id: mesh_hex.clone(),
@@ -300,6 +308,7 @@ impl Service {
             serde_json::from_slice(&req.body).map_err(|e| ApiError::new(400, "bad_request", e.to_string()))?
         };
         let mut inner = self.lock();
+        self.refresh_binding(&mut inner);
         let mesh = mesh_of(&inner).ok_or_else(|| ApiError::new(409, "seed_not_bound", "no mesh binding"))?;
         let sk = inner.key.clone().ok_or_else(|| ApiError::new(503, "no_key", "no grant key"))?;
         let mesh_hex = mesh.to_hex();

@@ -291,3 +291,73 @@ fn a_symlinked_state_dir_or_key_is_refused_and_foreign_ownership_is_detected() {
     }
     assert!(weft_licence::fsio::require_owner(&real).is_ok());
 }
+
+#[test]
+fn an_unbind_during_the_fetch_signs_nothing() {
+    let h = Harness::new(&[("fall-detect", "arm", b"\x7fELF slow")]);
+    let released = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let r2 = released.clone();
+    h.svc.set_release_hook(Box::new(move |_| {
+        r2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    let (tx, rx) = std::sync::mpsc::channel();
+    *h.fetcher.gate.lock().unwrap() = Some(rx);
+    let svc = h.svc.clone();
+    let req = h.signed("POST", "/licence/v1/checkout", br#"{"request_id":"a","cog_id":"fall-detect","version":"latest","arch":"arm"}"#);
+    let t = std::thread::spawn(move || {
+        let r = svc.handle(&req);
+        (r.status, r.json_body())
+    });
+    while h.fetcher.fetch_count() == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // The operator unbinds while the checkout is downloading.
+    let ops = OperatorKeys::load(&h.cfg.state_dir, &h.cfg.operator_pubkeys).unwrap();
+    let cur = bind::load(&h.cfg.state_dir, &ops).unwrap();
+    let gpk = hex_encode(&h.grant_key());
+    bind::apply(&h.cfg.state_dir, "seed-test", &ops, &binding(2, BindState::Unbound, &gpk, &mesh()), cur.as_ref()).unwrap();
+    tx.send(()).unwrap();
+    let (st, body) = t.join().unwrap();
+    assert_eq!(st, 409, "{body:?}");
+    let code = body.unwrap()["error"].as_str().unwrap().to_string();
+    assert!(code == "binding_changed" || code == "seed_not_bound", "{code}");
+    assert_eq!(released.load(std::sync::atomic::Ordering::SeqCst), 0, "no grant was released");
+    let slots = std::fs::read(h.cfg.state_dir.join("slots.json")).ok();
+    assert!(slots.is_none_or(|b| !String::from_utf8_lossy(&b).contains("\"seq\":1")), "no seq was consumed");
+}
+
+#[test]
+fn a_binding_replaced_by_rename_with_the_same_size_and_mtime_is_still_seen() {
+    let h = Harness::new(&[]);
+    assert_eq!(h.unsigned("GET", "/licence/v1/identity").json_body().unwrap()["bound"], true);
+    let path = h.cfg.state_dir.join("binding.json");
+    let old_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+    // An unbind record of exactly the same encoded length: "unbound" is two
+    // characters longer than "bound", so the device id is two shorter.
+    let gpk = hex_encode(&h.grant_key());
+    let mut rec: weft_licence_wire::BindingRecord =
+        serde_json::from_str(&binding(1, BindState::Bound, &gpk, &mesh()).payload).unwrap();
+    rec.state = BindState::Unbound;
+    rec.device_id = "seed-te".into();
+    rec.seq = 1;
+    let env = weft_licence_wire::sign_binding(&rec, &operator()).unwrap();
+    let bytes = serde_json::to_vec(&env).unwrap();
+    assert_eq!(bytes.len() as u64, std::fs::metadata(&path).unwrap().len(), "same length");
+    let tmp = h.cfg.state_dir.join("binding.tmp");
+    std::fs::write(&tmp, &bytes).unwrap();
+    std::fs::File::options().write(true).open(&tmp).unwrap().set_modified(old_mtime).unwrap();
+    std::fs::rename(&tmp, &path).unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), old_mtime);
+    assert_eq!(h.unsigned("GET", "/licence/v1/identity").json_body().unwrap()["bound"], false);
+}
+
+#[test]
+fn require_owner_refuses_a_symlinked_state_dir() {
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = d.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(weft_licence::fsio::require_owner(&real).is_ok());
+    assert!(weft_licence::fsio::require_owner(&link).unwrap_err().contains("symlink"));
+}

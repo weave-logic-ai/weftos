@@ -19,6 +19,10 @@ operator_pubkeys = []
 licence_file = "/var/lib/weft-licence/licence.json"
 
 # Cognitum registry. https only.
+# Host names a steward may use besides the listen addresses (for example the
+# MagicDNS name). Names only.
+allowed_hosts = []
+
 registry_url = "https://registry.example/app-registry.json"
 
 # Grant lifetime. Default 72 h, at most 7 days.

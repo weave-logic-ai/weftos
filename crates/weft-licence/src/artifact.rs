@@ -105,6 +105,7 @@ impl Service {
             .try_acquire()
             .ok_or_else(|| ApiError::new(429, "busy", "a transfer is already in flight"))?;
         let mut inner = self.lock();
+        self.refresh_binding(&mut inner);
         let (Some(sk), Some(mesh)) = (inner.key.clone(), inner.binding.as_ref().filter(|b| b.is_bound()).map(|b| b.record.mesh_id.clone())) else {
             return Err(ApiError::new(409, "seed_not_bound", "no mesh binding"));
         };

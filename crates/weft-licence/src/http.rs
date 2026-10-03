@@ -24,13 +24,14 @@ const MAX_CONNECTIONS: usize = 16;
 pub struct ServerOpts {
     /// Total time to read the request line, headers and body.
     pub read_deadline: Duration,
-    /// Most open connections from one source address.
+    /// Most open connections from one source (IPv4-mapped IPv6 counts as the
+    /// IPv4 address).
     pub per_ip: usize,
 }
 
 impl Default for ServerOpts {
     fn default() -> Self {
-        Self { read_deadline: Duration::from_secs(10), per_ip: 4 }
+        Self { read_deadline: Duration::from_secs(10), per_ip: 2 }
     }
 }
 
@@ -82,6 +83,7 @@ pub fn serve_with(svc: Arc<Service>, addrs: &[SocketAddr], opts: ServerOpts) -> 
         per_ip: Mutex::new(HashMap::new()),
         opts,
         hosts: Mutex::new(Vec::new()),
+        names: svc.config().allowed_hosts.iter().map(|h| h.to_ascii_lowercase()).collect(),
     });
     let (mut bound, mut threads) = (Vec::new(), Vec::new());
     for a in addrs {
@@ -89,7 +91,7 @@ pub fn serve_with(svc: Arc<Service>, addrs: &[SocketAddr], opts: ServerOpts) -> 
         l.set_nonblocking(true)?;
         let local = l.local_addr()?;
         bound.push(local);
-        shared.hosts.lock().unwrap_or_else(|p| p.into_inner()).push(local.to_string());
+        shared.hosts.lock().unwrap_or_else(|p| p.into_inner()).push(local);
         let (svc, stop, shared) = (svc.clone(), stop.clone(), shared.clone());
         threads.push(std::thread::spawn(move || accept_loop(l, svc, stop, shared)));
     }
@@ -100,8 +102,44 @@ struct Shared {
     active: AtomicUsize,
     per_ip: Mutex<HashMap<IpAddr, usize>>,
     opts: ServerOpts,
-    /// `host:port` strings of the bound listeners, for the Host check.
-    hosts: Mutex<Vec<String>>,
+    /// The bound listener addresses, for the Host check.
+    hosts: Mutex<Vec<SocketAddr>>,
+    /// Allowed host names, lower-case.
+    names: Vec<String>,
+}
+
+/// Is a `Host` header value one of ours? It must be `ip:port` (an IPv6
+/// address in brackets, any spelling, an optional `%zone` ignored) naming a
+/// bound address, or `name:port` with `name` (case-insensitive) in `names`
+/// (given lower-case) and the port a bound port. The IP is compared as an address, not a string.
+pub fn host_allowed(header: &str, bound: &[SocketAddr], names: &[String]) -> bool {
+    let header = header.trim();
+    let (host, port) = if let Some(rest) = header.strip_prefix('[') {
+        let Some((inside, tail)) = rest.split_once(']') else { return false };
+        let port = tail.strip_prefix(':').unwrap_or("80");
+        (inside.to_string(), port)
+    } else {
+        match header.rsplit_once(':') {
+            Some((h, p)) if !h.contains(':') => (h.to_string(), p),
+            None => (header.to_string(), "80"),
+            _ => return false, // a bare IPv6 address without brackets
+        }
+    };
+    let Ok(port) = port.parse::<u16>() else { return false };
+    let bare = host.split('%').next().unwrap_or("");
+    if let Ok(ip) = bare.parse::<IpAddr>() {
+        return bound.iter().any(|b| b.port() == port && normalize_ip(b.ip()) == normalize_ip(ip));
+    }
+    let lower = host.to_ascii_lowercase();
+    names.contains(&lower) && bound.iter().any(|b| b.port() == port)
+}
+
+/// An IPv4-mapped IPv6 address is its IPv4 address.
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v)),
+        v4 => v4,
+    }
 }
 
 /// Releases a connection slot (global and per source address) on drop.
@@ -146,7 +184,7 @@ fn accept_loop(l: TcpListener, svc: Arc<Service>, stop: Arc<AtomicBool>, shared:
                 // BSD-derived systems let an accepted socket inherit the
                 // listener's non-blocking mode; the handler wants blocking I/O.
                 let _ = s.set_nonblocking(false);
-                let Some(slot) = take_slot(&shared, peer.ip()) else {
+                let Some(slot) = take_slot(&shared, normalize_ip(peer.ip())) else {
                     let _ = write_simple(s, 503, b"{\"error\":\"busy\"}");
                     continue;
                 };
@@ -258,7 +296,7 @@ fn handle_conn(mut s: TcpStream, svc: &Service, shared: &Shared) -> std::io::Res
         // A Host header, when sent, must name one of our listen addresses.
         let hosts = shared.hosts.lock().unwrap_or_else(|p| p.into_inner());
         match r.headers.get("host") {
-            Some(h) if !hosts.iter().any(|a| a == h) => Err(400),
+            Some(h) if !host_allowed(h, &hosts, &shared.names) => Err(400),
             _ => Ok(r),
         }
     });

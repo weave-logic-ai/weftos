@@ -19,8 +19,26 @@ use crate::providers::{CogFetcher, DeviceSigner, LicenceProvider};
 use crate::request::{self, AuthError, Request};
 use crate::state::{OperatorKeys, Store};
 
-fn binding_stamp(dir: &std::path::Path) -> Option<(SystemTime, u64)> {
-    std::fs::metadata(dir.join("binding.json")).ok().map(|m| (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()))
+/// What identifies one version of `binding.json`: mtime and length, plus
+/// device, inode and ctime on Unix, so a replace-by-rename with the same size
+/// and mtime is still seen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Stamp {
+    mtime: SystemTime,
+    len: u64,
+    id: (u64, u64, i64, i64),
+}
+
+fn binding_stamp(dir: &std::path::Path) -> Option<Stamp> {
+    let m = std::fs::metadata(dir.join("binding.json")).ok()?;
+    #[cfg(unix)]
+    let id = {
+        use std::os::unix::fs::MetadataExt;
+        (m.dev(), m.ino(), m.ctime(), m.ctime_nsec())
+    };
+    #[cfg(not(unix))]
+    let id = (0, 0, 0, 0);
+    Some(Stamp { mtime: m.modified().unwrap_or(SystemTime::UNIX_EPOCH), len: m.len(), id })
 }
 
 /// Source of unix seconds. Injected so tests control the clock.
@@ -91,7 +109,7 @@ pub(crate) struct Inner {
     /// The grant key; dropped from memory while unbound.
     pub key: Option<SigningKey>,
     /// mtime and length of `binding.json` when it was last read.
-    pub binding_stamp: Option<(SystemTime, u64)>,
+    pub binding_stamp: Option<Stamp>,
 }
 
 /// The licence proxy.

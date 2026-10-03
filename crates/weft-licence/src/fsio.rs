@@ -125,6 +125,9 @@ pub fn is_symlink(path: &Path) -> bool {
 /// that does not exist yet is fine, except for root, who would create it
 /// root-owned.
 pub fn require_owner(dir: &Path) -> Result<(), String> {
+    if is_symlink(dir) {
+        return Err(format!("{} is a symlink; name the real state directory", dir.display()));
+    }
     match owner_of(dir) {
         Ok(uid) if uid == euid() => Ok(()),
         Ok(uid) => Err(format!(

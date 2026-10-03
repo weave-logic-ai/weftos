@@ -115,6 +115,11 @@ rising).
 
 ## Declared licence
 
+`licence_file` normally lives in the state directory. If it is configured elsewhere
+(`/etc/weft-licence/licence.json`, say), it must be readable by the `weft-licence`
+user: `chown weft-licence: /etc/weft-licence/licence.json && chmod 0640 ...`. The file
+is public-key signed, not secret, but an unreadable one answers `licence_unreadable`.
+
 Until Cognitum provides a signed entitlement (phase 4), the licence is an
 operator-signed record placed at `licence_file`. Domain
 `weft-licence-v1/licence`, the signed envelope `{payload, public_key, signature}`
@@ -302,7 +307,12 @@ Not run from the repository. Steps, in order:
    peers, and the journal still shows exactly one `byte transfer`.
 8. Switch the Seed off for longer than the grant lifetime (72 h by default) and
    confirm sharing stops when the grants lapse.
-9. Check the clock floor: boot the Seed with no network time and confirm
+9. Check the syscall filter: after step 4, `systemctl status weft-licence` must show
+   `active (running)` and `journalctl -u weft-licence` must not show `status=31/SYS`
+   (SIGSYS). The unit has `SystemCallFilter=~@privileged @resources`, which blocks
+   `prlimit`/`setrlimit`; if the Rust runtime or the resolver calls one on this
+   firmware, remove `@resources` from that line and note which call it was.
+10. Check the clock floor: boot the Seed with no network time and confirm
    `"clock_ok": false` and `clock_not_set` on a signed request.
 
 Stop there and report. The Pi and the Seed hardware are owner-run.
