@@ -232,7 +232,7 @@ fn the_applied_event_records_the_pin_and_a_later_boot_cannot_drop_it() {
 
 #[test]
 fn a_swap_keeps_the_per_action_exemptions_of_the_running_gate() {
-    use crate::gate::{GateBackend, GateDecision, GovernanceGate};
+    use crate::gate::{GateDecision, GovernanceGate};
     use crate::governance::RuleSeverity;
     use crate::governance_overlay_tests::rule;
     let f = fixture(&base_parent(), None);
