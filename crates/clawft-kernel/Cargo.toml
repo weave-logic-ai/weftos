@@ -80,7 +80,7 @@ sensor = []
 containers = []
 # mesh-placement-09: WorkloadRuntime adapters (native process, container
 # engines, Cognitum Seed API). reqwest drives the Seed's HTTP API.
-workload-runtime = ["native", "ecc", "exochain", "dep:reqwest", "dep:rustls"]
+workload-runtime = ["native", "ecc", "exochain", "dep:reqwest", "dep:rustls", "dep:serde_yaml"]
 http-api = []
 
 [dependencies]
@@ -140,6 +140,7 @@ quinn = { workspace = true, optional = true }
 rcgen = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+serde_yaml = { workspace = true, optional = true }
 sha2 = { workspace = true }
 weft-licence-wire = { path = "../weft-licence-wire" }
 chrono = { workspace = true }

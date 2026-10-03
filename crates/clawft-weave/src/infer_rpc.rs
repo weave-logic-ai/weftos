@@ -2,6 +2,10 @@
 //!
 //! - `infer.status` (Read): roles, proxy state, where each role resolves,
 //!   exposure, and why the mesh is or is not available.
+//! - `infer.start {role}` / `infer.stop {role}` (Admin): bring a managed
+//!   role up or take it down through the governed host (chained); an
+//!   unplaceable start (memory budget, co-residency) is refused with its
+//!   reason, which the status shows.
 //! - `infer.expose {role, exposed}` (Admin): let a role leave loopback for
 //!   mesh peers (or stop). Audited on the chain.
 //! - `infer.allow {role, node, direction, allowed}` (Admin): `direction` is
@@ -12,7 +16,6 @@
 //! the persistent allowlists. In service mode the mesh verbs refuse with
 //! the reason (see [`crate::infer_wire`]).
 
-use clawft_kernel::infer_proxy::Target;
 use clawft_kernel::workload_pkg::manifest::valid_token;
 use clawft_rpc::Response;
 use serde::Deserialize;
@@ -25,6 +28,12 @@ use crate::infer_wire::{InferState, state};
 struct ExposeParams {
     role: String,
     exposed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoleParams {
+    role: String,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +65,17 @@ pub async fn handle(method: &str, params: Value) -> Response {
     let Some(st) = state() else { return off() };
     match method {
         "infer.status" => Response::success(status(st)),
+        "infer.start" | "infer.stop" => {
+            let p: RoleParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("invalid params: {e}")),
+            };
+            let r = if method == "infer.start" { st.start_role(&p.role).await } else { st.stop_role(&p.role).await };
+            match r {
+                Ok(v) => Response::success(v),
+                Err(e) => Response::error(e),
+            }
+        }
         "infer.expose" => {
             let p: ExposeParams = match serde_json::from_value(params) {
                 Ok(p) => p,
@@ -94,31 +114,30 @@ pub async fn handle(method: &str, params: Value) -> Response {
     }
 }
 
+/// `infer.status` body (tests).
+#[cfg(test)]
+pub(crate) fn status_for_test(st: &InferState) -> Value {
+    status(st)
+}
+
 fn status(st: &InferState) -> Value {
-    let exposed = st.table.exposed_roles();
-    let roles: Vec<Value> = st
-        .roles
-        .iter()
-        .map(|r| {
-            let target = match st.table.resolve(&r.cfg.role) {
-                Some(Target::Local { .. }) => json!("local"),
-                Some(Target::Remote { node_id }) => json!({"remote": node_id}),
-                None => Value::Null,
-            };
-            json!({
-                "role": r.cfg.role,
-                "flavor": r.cfg.flavor,
-                "instance_port": r.cfg.instance_port,
-                "proxy": &*r.proxy.lock().unwrap(),
-                "serves": target,
-                "exposed": exposed.contains(&r.cfg.role),
-            })
-        })
+    let roles: Vec<Value> = st.roles.iter().map(|r| st.role_json(r)).collect();
+    let resident: Vec<Value> = st
+        .ledger
+        .snapshot()
+        .into_iter()
+        .map(|(role, b)| json!({"role": role, "gb": b as f64 / 1e9}))
         .collect();
     json!({
         "node_id": st.node_id,
         "mesh": {"available": st.hub.is_some(), "note": st.mesh_note},
         "peers": st.hub.as_ref().map(|h| h.qualifying_peers()).unwrap_or_default(),
+        "memory": {
+            "budget_gb": st.ledger.budget().map(|b| b as f64 / 1e9),
+            "used_gb": st.ledger.used() as f64 / 1e9,
+            "resident": resident,
+        },
+        "roster_skipped": st.skipped_roster.iter().map(|(id, why)| json!({"id": id, "why": why})).collect::<Vec<_>>(),
         "roles": roles,
     })
 }

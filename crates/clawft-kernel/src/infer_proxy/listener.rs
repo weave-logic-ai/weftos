@@ -20,7 +20,7 @@ use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-use super::http::{read_request, write_error, write_head};
+use super::http::{read_request_with, write_error, write_head};
 use super::mesh_forward::forward_remote;
 use super::table::PlacementTable;
 use super::types::{ProxyAudit, ProxyError, ProxyLimits, ResponseSink, Target};
@@ -89,6 +89,15 @@ impl Drop for InferProxy {
     }
 }
 
+/// A bind address is loopback, or the caller holds a permit and a token.
+pub fn check_bind(addr: SocketAddr, exposed: bool) -> Result<(), ProxyError> {
+    if addr.ip().is_loopback() || exposed {
+        Ok(())
+    } else {
+        Err(ProxyError::NotLoopback(addr.to_string()))
+    }
+}
+
 async fn held(addr: SocketAddr) -> bool {
     matches!(
         tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(addr)).await,
@@ -96,7 +105,49 @@ async fn held(addr: SocketAddr) -> bool {
     )
 }
 
+/// The bearer credential of an exposed listener. At least 32 bytes; never
+/// logged, chained or forwarded.
+#[derive(Clone)]
+pub struct ExposureAuth(Vec<u8>);
+
+impl ExposureAuth {
+    /// Shortest accepted token.
+    pub const MIN_LEN: usize = 32;
+
+    /// Wrap `token` (trimmed of surrounding whitespace).
+    pub fn new(token: &str) -> Result<Self, ProxyError> {
+        let t = token.trim();
+        if t.len() < Self::MIN_LEN || !t.bytes().all(|b| (0x21..0x7f).contains(&b)) {
+            return Err(ProxyError::Forbidden(format!(
+                "an exposure token is {} or more visible ASCII characters",
+                Self::MIN_LEN
+            )));
+        }
+        Ok(Self(t.as_bytes().to_vec()))
+    }
+}
+
+impl std::fmt::Debug for ExposureAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExposureAuth(..)")
+    }
+}
+
+/// Proof that a governance decision permitted binding beyond loopback.
+/// Only a [`GateDecision::Permit`] makes one, so the caller must have asked
+/// the gate (which chains its decisions) first.
+#[derive(Debug)]
+pub struct ExposurePermit(());
+
+impl ExposurePermit {
+    /// `Some` only for a permit.
+    pub fn from_decision(d: &crate::gate::GateDecision) -> Option<Self> {
+        matches!(d, crate::gate::GateDecision::Permit { .. }).then_some(Self(()))
+    }
+}
+
 struct Shared {
+    bearer: Option<Vec<u8>>,
     role: String,
     table: Arc<PlacementTable>,
     upstream: Upstream,
@@ -126,7 +177,7 @@ impl ResponseSink for TcpSink<'_> {
 
 async fn serve_conn(sh: Arc<Shared>, mut s: TcpStream) {
     sh.stats.requests.fetch_add(1, Ordering::Relaxed);
-    let req = match read_request(&mut s, &sh.role, &sh.limits).await {
+    let req = match read_request_with(&mut s, &sh.role, &sh.limits, sh.bearer.as_deref()).await {
         Ok(r) => r,
         Err(e) => {
             sh.stats.rejected.fetch_add(1, Ordering::Relaxed);
@@ -184,6 +235,38 @@ impl InferProxy {
         limits: ProxyLimits,
         audit: Option<Arc<dyn ProxyAudit>>,
     ) -> Result<Started, ProxyError> {
+        Self::start_inner(role, addr, policy, table, limits, audit, None).await
+    }
+
+    /// Start fronting `role` on `addr`, which may be beyond loopback
+    /// (`0.0.0.0` for clients such as containers on this machine). Needs a
+    /// governance [`ExposurePermit`] and a bearer token: every request must
+    /// carry `Authorization: Bearer <token>` (checked before any body is
+    /// read), the token is never forwarded, and the `Host` need not be
+    /// loopback. The default, [`start`](Self::start), stays loopback only.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_exposed(
+        role: &str,
+        addr: SocketAddr,
+        policy: OccupiedPolicy,
+        table: Arc<PlacementTable>,
+        limits: ProxyLimits,
+        audit: Option<Arc<dyn ProxyAudit>>,
+        _permit: ExposurePermit,
+        auth: ExposureAuth,
+    ) -> Result<Started, ProxyError> {
+        Self::start_inner(role, addr, policy, table, limits, audit, Some(auth)).await
+    }
+
+    async fn start_inner(
+        role: &str,
+        addr: SocketAddr,
+        policy: OccupiedPolicy,
+        table: Arc<PlacementTable>,
+        limits: ProxyLimits,
+        audit: Option<Arc<dyn ProxyAudit>>,
+        auth: Option<ExposureAuth>,
+    ) -> Result<Started, ProxyError> {
         let note = |kind: &str, extra: serde_json::Value| {
             if let Some(a) = &audit {
                 a.record(
@@ -192,9 +275,9 @@ impl InferProxy {
                 );
             }
         };
-        if !addr.ip().is_loopback() {
+        if let Err(e) = check_bind(addr, auth.is_some()) {
             note("infer.proxy.refused", serde_json::json!("not loopback"));
-            return Err(ProxyError::NotLoopback(addr.to_string()));
+            return Err(e);
         }
         // Probe the same port on every loopback name a client might use, v4
         // and v6, so a server bound to the wildcard or to the other family
@@ -235,10 +318,14 @@ impl InferProxy {
             .local_addr()
             .map_err(|e| ProxyError::Io(e.to_string()))?;
         table.set_proxy_port(role, bound.port());
-        note("infer.proxy.bind", serde_json::json!("listening"));
+        note(
+            "infer.proxy.bind",
+            serde_json::json!({"listening": bound.to_string(), "exposed": auth.is_some()}),
+        );
 
         let stats = Arc::new(ProxyStats::default());
         let sh = Arc::new(Shared {
+            bearer: auth.map(|a| a.0),
             role: role.to_string(),
             table,
             upstream: Upstream::new(limits.clone())?,
@@ -246,6 +333,7 @@ impl InferProxy {
             stats: stats.clone(),
         });
         let permits = Arc::new(Semaphore::new(limits.max_connections));
+        let exposed = sh.bearer.is_some();
         let task = tokio::spawn(async move {
             let mut backoff = Duration::from_millis(10);
             loop {
@@ -263,7 +351,7 @@ impl InferProxy {
                 };
                 // Loopback listener: a non-loopback peer cannot arrive, but
                 // the check costs nothing.
-                if !peer.ip().is_loopback() {
+                if !exposed && !peer.ip().is_loopback() {
                     continue;
                 }
                 let Ok(permit) = permits.clone().try_acquire_owned() else {

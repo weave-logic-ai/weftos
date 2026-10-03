@@ -111,6 +111,9 @@ pub enum ProxyError {
     /// Malformed request.
     #[error("bad request: {0}")]
     BadRequest(String),
+    /// Missing or wrong bearer token on an exposed listener.
+    #[error("unauthorized")]
+    Unauthorized,
     /// The request is not one the proxy forwards (path, host, origin).
     #[error("forbidden: {0}")]
     Forbidden(String),
@@ -154,6 +157,7 @@ impl ProxyError {
     pub fn status(&self) -> u16 {
         match self {
             Self::BadRequest(_) => 400,
+            Self::Unauthorized => 401,
             Self::Forbidden(_) | Self::Refused(_) => 403,
             Self::MethodNotAllowed => 405,
             Self::TooLarge(_) => 413,

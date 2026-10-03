@@ -188,6 +188,33 @@ pub async fn read_request<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    read_request_with(s, role, limits, None).await
+}
+
+/// Constant-time equality of two byte strings of any length.
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = a.len() ^ b.len();
+    for i in 0..a.len().max(b.len()) {
+        diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0));
+    }
+    diff == 0
+}
+
+/// [`read_request`] for a listener with a bearer token (an exposed
+/// listener, see `InferProxy::start_exposed`). The token is checked right
+/// after the head, before any body is read, and then removed from the
+/// request: it is this listener's credential, not the model server's. With
+/// a token the `Host` need not be loopback (the credential, not the
+/// address, is the guard); without one it must be.
+pub async fn read_request_with<S>(
+    s: &mut S,
+    role: &str,
+    limits: &ProxyLimits,
+    bearer: Option<&[u8]>,
+) -> Result<ProxyRequest, ProxyError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let timeout = |what: &str| ProxyError::Timeout(format!("reading request {what}"));
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = [0u8; 4096];
@@ -226,9 +253,20 @@ where
         _ => return Err(ProxyError::MethodNotAllowed),
     };
     validate_path(&head.target)?;
-    match head.header("host") {
-        Some(h) if loopback_host(h) => {}
-        _ => return Err(ProxyError::Forbidden("Host is not loopback".into())),
+    match bearer {
+        Some(token) => {
+            let sent = head
+                .header("authorization")
+                .and_then(|a| a.strip_prefix("Bearer "))
+                .unwrap_or("");
+            if !ct_eq(sent.as_bytes(), token) {
+                return Err(ProxyError::Unauthorized);
+            }
+        }
+        None => match head.header("host") {
+            Some(h) if loopback_host(h) => {}
+            _ => return Err(ProxyError::Forbidden("Host is not loopback".into())),
+        },
     }
     if !origin_ok(head.header("origin")) {
         return Err(ProxyError::Forbidden("cross-origin request".into()));
@@ -287,7 +325,13 @@ where
         path: head.target.clone(),
         content_type: head.header("content-type").map(str::to_string),
         accept: head.header("accept").map(str::to_string),
-        authorization: head.header("authorization").map(str::to_string),
+        // With a bearer token the Authorization header was this listener's
+        // credential: never pass it on.
+        authorization: if bearer.is_some() {
+            None
+        } else {
+            head.header("authorization").map(str::to_string)
+        },
         body,
     })
 }
@@ -344,8 +388,13 @@ pub async fn write_error<S: AsyncWrite + Unpin>(s: &mut S, e: &ProxyError) {
         "error": {"message": e.to_string(), "type": "weftos_inference_proxy"}
     })
     .to_string();
+    let challenge = if matches!(e, ProxyError::Unauthorized) {
+        "WWW-Authenticate: Bearer\r\n"
+    } else {
+        ""
+    };
     let head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\n{challenge}Content-Length: {}\r\nConnection: close\r\n\r\n",
         e.status(),
         reason(e.status()),
         body.len()

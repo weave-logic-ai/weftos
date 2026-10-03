@@ -23,6 +23,8 @@ pub mod launch;
 pub mod lifecycle;
 pub mod ollama;
 pub mod probe;
+pub mod residency;
+pub mod roster;
 pub mod runtime;
 pub mod spec;
 
@@ -35,10 +37,14 @@ mod tests_managed;
 #[cfg(test)]
 mod tests_ollama;
 #[cfg(test)]
+mod tests_roster;
+#[cfg(test)]
 mod tests_spec;
 
 pub use config::{InferConfig, InferMode, ManagedConfig, RestartPolicy, lab_serve_program};
 pub use lifecycle::Reconcile;
 pub use probe::{Health, ServerClient, ServerReport};
+pub use residency::{CoResidency, GB, ResidencyLedger};
+pub use roster::{ImportedRoster, ImportedSpec, RosterOverlay, import_roster};
 pub use runtime::InferRuntime;
 pub use spec::{InferFlavor, InferenceSpec, KIND_INFERENCE, LatencyClass, MemoryBudget, ServeArgs};

@@ -1,0 +1,129 @@
+# A trimmed copy of the model lab's roster shape (docs/models/queue.yaml),
+# kept in this repo for tests. Real roster files are never read by tests.
+meta:
+  updated: '2026-09-19'
+  schema: 1
+  hardware: Apple M5 Max 128 GB (~96 GB comfortable / ~112 GB aggressive)
+roster:
+- id: coder-daily
+  role: daily coding agent
+  name: Qwen3-Coder-Next-80B-A3B
+  repo: example-org/Qwen3-Coder-Next-4bit
+  quant: 4bit
+  ram_gb: 55
+  backend: mlx_lm
+  port: 8081
+  serve: bin/serve example-org/Qwen3-Coder-Next-4bit --port 8081 --host 0.0.0.0 --temp 1.0
+  grok: local-coder
+  why: Live. Fixture text.
+  status: live
+- id: coder-next
+  role: daily coding agent (alias of coder-daily)
+  name: Qwen3-Coder-Next-80B-A3B
+  repo: example-org/Qwen3-Coder-Next-4bit
+  quant: 4bit
+  ram_gb: 55
+  backend: mlx_lm
+  port: 8081
+  serve: bin/serve example-org/Qwen3-Coder-Next-4bit --port 8081
+  grok: local-coder-next
+  why: Same process as coder-daily.
+  status: live
+- id: coder-compact
+  role: compact fallback coding agent
+  name: Qwen3-Coder-30B-A3B-Instruct
+  repo: example-org/Qwen3-Coder-30B-A3B-Instruct-8bit
+  quant: 8bit
+  ram_gb: 38
+  backend: ollama
+  port: 11434
+  serve: ollama (tag example-coder:latest)
+  status: ready
+- id: coder-small
+  role: small best-per-GB coding agent
+  name: Nemotron-9B-OpenCode
+  repo: example-org/Nemotron-9B-OpenCode-8bit
+  quant: 8bit
+  ram_gb: 9.7
+  backend: mlx_lm
+  port: 8092
+  serve: bin/serve example-org/Nemotron-9B-OpenCode-8bit --port 8092
+  status: ready
+- id: planner
+  role: planner
+  name: Qwen3-Next-80B-A3B-Instruct
+  repo: example-org/Qwen3-Next-80B-A3B-Instruct-4bit
+  quant: 4bit
+  ram_gb: 55
+  backend: mlx_lm
+  port: 8082
+  serve: bin/serve example-org/Qwen3-Next-80B-A3B-Instruct-4bit --port 8082
+  status: ready
+- id: swarm-worker
+  role: swarm worker
+  name: granite-4.0-h-tiny
+  repo: example-org/granite-4.0-h-tiny-8bit
+  quant: 8bit
+  ram_gb: 7.5
+  backend: ollama or llamacpp
+  port: 8084
+  serve: bin/serve example-org/granite-4.0-h-tiny-8bit --port 8084
+  status: ready
+- id: swarm-micro
+  role: micro worker
+  name: Llama-3.2-1B-Instruct
+  repo: example-org/Llama-3.2-1B-Instruct-8bit
+  quant: 8bit
+  ram_gb: 1.4
+  backend: mlx_lm (chat) or llamacpp (tools)
+  port: 8085
+  serve: bin/serve example-org/Llama-3.2-1B-Instruct-8bit --port 8085
+  status: ready
+- id: vlm
+  role: vision
+  name: Qwen3-VL-8B
+  repo: example-org/Qwen3-VL-8B-Instruct-8bit
+  quant: 8bit
+  ram_gb: ~10
+  backend: mlx_vlm
+  serve: bin/vlm example-org/Qwen3-VL-8B-Instruct-8bit
+  status: unmeasured
+- id: tts
+  role: voice synthesis
+  name: Kokoro-82M
+  repo: example-org/Kokoro-82M-bf16
+  quant: bf16
+  ram_gb: 0.33
+  backend: mlx-audio
+  serve: bin/tts --voice af_heart
+  status: ready
+- id: voice-llm
+  role: realtime voice reply model
+  name: Voice-Small-3B
+  repo: example-org/Voice-Small-3B-4bit
+  quant: 4bit
+  ram_gb: 2
+  backend: llamacpp
+  port: 8086
+  serve: bin/serve-llamacpp voice.gguf --port 8086
+  status: ready
+- id: broken-mem
+  role: no memory figure
+  name: Mystery
+  repo: example-org/Mystery
+  quant: 4bit
+  backend: mlx_lm
+  port: 8087
+  serve: bin/serve example-org/Mystery
+  status: ready
+- id: "bad id!"
+  role: invalid token
+  name: Whatever
+  repo: example-org/Whatever
+  ram_gb: 1
+  backend: mlx_lm
+  port: 8088
+  serve: x
+  status: ready
+items: []
+inbox: []

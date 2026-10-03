@@ -33,6 +33,8 @@ pub mod wire;
 #[cfg(test)]
 mod support;
 #[cfg(test)]
+mod tests_expose;
+#[cfg(test)]
 mod tests_http;
 #[cfg(test)]
 mod tests_hub;
@@ -46,7 +48,7 @@ mod tests_proxy;
 #[cfg(feature = "exochain")]
 pub use types::ChainAudit;
 pub use hub::InferHub;
-pub use listener::{InferProxy, OccupiedPolicy, ProxyStats, Started};
+pub use listener::{ExposureAuth, ExposurePermit, InferProxy, OccupiedPolicy, ProxyStats, Started, check_bind};
 pub use mesh_forward::{InferPeer, ServeGate, ServePolicy, Served, forward_remote, serve_infer};
 pub use table::{DEFAULT_ADVERT_TTL, MeshLocal, PlacementTable, SERVICE_PREFIX, SyncOutcome};
 pub use types::{

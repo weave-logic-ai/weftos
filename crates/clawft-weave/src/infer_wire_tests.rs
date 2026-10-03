@@ -13,9 +13,9 @@ use crate::infer_wire::*;
 
 /// A fake llama.cpp server: `/health` and `/v1/models` answer 200, anything
 /// else echoes the request line. Counts what it saw.
-struct Fake {
-    addr: SocketAddr,
-    seen: Arc<Mutex<Vec<String>>>,
+pub(crate) struct Fake {
+    pub(crate) addr: SocketAddr,
+    pub(crate) seen: Arc<Mutex<Vec<String>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -25,44 +25,16 @@ impl Drop for Fake {
     }
 }
 
-async fn fake() -> Fake {
-    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = l.local_addr().unwrap();
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let sn = seen.clone();
-    let task = tokio::spawn(async move {
-        loop {
-            let Ok((mut s, _)) = l.accept().await else { return };
-            let sn = sn.clone();
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; 8192];
-                let n = s.read(&mut buf).await.unwrap_or(0);
-                let line = String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or("").to_string();
-                sn.lock().unwrap().push(line.clone());
-                let body = if line.contains("/health") {
-                    r#"{"status":"ok"}"#.to_string()
-                } else if line.contains("/v1/models") {
-                    r#"{"data":[{"id":"m.gguf"}]}"#.to_string()
-                } else {
-                    r#"{"echo":"served"}"#.to_string()
-                };
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = s.write_all(resp.as_bytes()).await;
-            });
-        }
-    });
-    Fake { addr, seen, task }
+pub(crate) async fn fake() -> Fake {
+    fake_on(0).await
 }
 
-fn free_port() -> u16 {
+pub(crate) fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
 #[derive(Default)]
-struct Audit(Mutex<Vec<String>>);
+pub(crate) struct Audit(pub(crate) Mutex<Vec<String>>);
 
 impl ProxyAudit for Audit {
     fn record(&self, kind: &str, _: serde_json::Value) {
@@ -70,20 +42,29 @@ impl ProxyAudit for Audit {
     }
 }
 
-fn write_cfg(dir: &std::path::Path, v: serde_json::Value) {
+pub(crate) fn write_cfg(dir: &std::path::Path, v: serde_json::Value) {
     std::fs::write(dir.join(CONFIG_FILE), v.to_string()).unwrap();
 }
 
-fn parts<'a>(
+pub(crate) fn parts<'a>(
     dir: &'a std::path::Path,
     mesh: Option<Arc<MeshRuntime>>,
     service: bool,
     audit: Option<Arc<dyn ProxyAudit>>,
 ) -> InitParts<'a> {
-    InitParts { dir, node_id: "node-a".into(), mesh, service_mode: service, audit, limits: ProxyLimits::default() }
+    InitParts {
+        dir,
+        node_id: "node-a".into(),
+        mesh,
+        service_mode: service,
+        audit,
+        limits: ProxyLimits::default(),
+        gate: None,
+        chain: None,
+    }
 }
 
-fn role(fake_port: u16, proxy_port: Option<u16>) -> serde_json::Value {
+pub(crate) fn role(fake_port: u16, proxy_port: Option<u16>) -> serde_json::Value {
     let mut r = serde_json::json!({"role": "hermes", "flavor": "llamacpp", "instance_port": fake_port});
     if let Some(p) = proxy_port {
         r["proxy_port"] = p.into();
@@ -91,7 +72,7 @@ fn role(fake_port: u16, proxy_port: Option<u16>) -> serde_json::Value {
     r
 }
 
-async fn http_get(addr: SocketAddr, path: &str) -> String {
+pub(crate) async fn http_get(addr: SocketAddr, path: &str) -> String {
     let mut s = TcpStream::connect(addr).await.unwrap();
     s.write_all(format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes()).await.unwrap();
     let mut out = Vec::new();
@@ -178,19 +159,33 @@ async fn a_server_that_is_not_up_yet_is_picked_up_on_a_later_pass() {
     drop(up);
 }
 
-async fn fake_on(port: u16) -> Fake {
-    // A fake bound to a chosen port (the adapter probes it by number).
+/// A fake model server on `port` (0: any free one): llama.cpp and Ollama
+/// probe endpoints answer, anything else echoes. Records request lines.
+pub(crate) async fn fake_on(port: u16) -> Fake {
     let l = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
     let addr = l.local_addr().unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
+    let sn = seen.clone();
     let task = tokio::spawn(async move {
         loop {
             let Ok((mut s, _)) = l.accept().await else { return };
+            let sn = sn.clone();
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 4096];
+                let mut buf = vec![0u8; 8192];
                 let n = s.read(&mut buf).await.unwrap_or(0);
                 let line = String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or("").to_string();
-                let body = if line.contains("/v1/models") { r#"{"data":[{"id":"m"}]}"# } else { r#"{"status":"ok"}"# };
+                sn.lock().unwrap().push(line.clone());
+                let body = if line.contains("/health") {
+                    r#"{"status":"ok"}"#.to_string()
+                } else if line.contains("/api/version") {
+                    r#"{"version":"0.0.0-test"}"#.to_string()
+                } else if line.contains("/api/tags") || line.contains("/api/ps") {
+                    r#"{"models":[]}"#.to_string()
+                } else if line.contains("/v1/models") {
+                    r#"{"data":[{"id":"m.gguf"}]}"#.to_string()
+                } else {
+                    r#"{"echo":"served"}"#.to_string()
+                };
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()

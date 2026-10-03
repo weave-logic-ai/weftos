@@ -222,42 +222,70 @@ impl InferRuntime {
             }
             Some(false) => {}
         }
-        // Phase 3: act, under the lock (no awaits).
-        let mut g = self.instances.lock().await;
-        let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
-        let Some(mg) = inst.managed.as_mut() else {
-            return Err(unknown(h));
-        };
-        match &mg.plan {
-            ManagedPlan::Process(_) => {
-                if mg.proc.as_mut().is_some_and(|p| p.try_exit().is_none()) {
-                    return Err(RuntimeError::InvalidState("already running".into()));
-                }
-                mg.proc = None;
-                spawn(self, inst)
+        // Unified-memory budget and co-residency (managed only): refuse
+        // before anything is spawned.
+        let mut reserved_new = false;
+        if supervised.is_some()
+            && let Some(ledger) = self.managed_cfg().and_then(|m| m.ledger.clone())
+        {
+            match ledger.reserve(&h.instance_id, &spec) {
+                Ok(newly) => reserved_new = newly,
+                Err(e) => return Err(RuntimeError::AdmissionRefused(e.to_string())),
             }
-            ManagedPlan::Ollama { tag } => {
-                if matches!(&mg.load, Some((s, _))
-                    if matches!(*s.lock().unwrap_or_else(|e| e.into_inner()), LoadState::Loading))
-                {
-                    return Err(RuntimeError::InvalidState("already loading".into()));
+        }
+        let result: Result<(), RuntimeError> = async {
+            // Phase 3: act, under the lock (no awaits).
+            let mut g = self.instances.lock().await;
+            let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
+            let Some(mg) = inst.managed.as_mut() else {
+                return Err(unknown(h));
+            };
+            match &mg.plan {
+                ManagedPlan::Process(_) => {
+                    if mg.proc.as_mut().is_some_and(|p| p.try_exit().is_none()) {
+                        return Err(RuntimeError::InvalidState("already running".into()));
+                    }
+                    mg.proc = None;
+                    spawn(self, inst)
                 }
-                let keep = self
-                    .managed_cfg()
-                    .map_or("5m".to_string(), |m| m.keep_alive.clone());
-                let client =
-                    ServerClient::new(inst.client.base().to_string(), OLLAMA_LOAD_TIMEOUT)?;
-                let state = std::sync::Arc::new(std::sync::Mutex::new(LoadState::Loading));
-                let (s2, tag) = (state.clone(), tag.clone());
-                let task = tokio::spawn(async move {
-                    let r = ollama::load(&client, &tag, &keep).await;
-                    *s2.lock().unwrap_or_else(|e| e.into_inner()) =
-                        r.map_or_else(LoadState::Failed, |()| LoadState::Done);
-                });
-                mg.load = Some((state, task));
-                mg.wanted = true;
-                Ok(())
+                ManagedPlan::Ollama { tag } => {
+                    if matches!(&mg.load, Some((s, _))
+                        if matches!(*s.lock().unwrap_or_else(|e| e.into_inner()), LoadState::Loading))
+                    {
+                        return Err(RuntimeError::InvalidState("already loading".into()));
+                    }
+                    let keep = self
+                        .managed_cfg()
+                        .map_or("5m".to_string(), |m| m.keep_alive.clone());
+                    let client =
+                        ServerClient::new(inst.client.base().to_string(), OLLAMA_LOAD_TIMEOUT)?;
+                    let state = std::sync::Arc::new(std::sync::Mutex::new(LoadState::Loading));
+                    let (s2, tag) = (state.clone(), tag.clone());
+                    let task = tokio::spawn(async move {
+                        let r = ollama::load(&client, &tag, &keep).await;
+                        *s2.lock().unwrap_or_else(|e| e.into_inner()) =
+                            r.map_or_else(LoadState::Failed, |()| LoadState::Done);
+                    });
+                    mg.load = Some((state, task));
+                    mg.wanted = true;
+                    Ok(())
+                }
             }
+        }
+        .await;
+        if result.is_err()
+            && reserved_new
+            && let Some(ledger) = self.managed_cfg().and_then(|m| m.ledger.clone())
+        {
+            ledger.release(&h.instance_id);
+        }
+        result
+    }
+
+    /// Give back the instance's budget (no-op without a ledger).
+    fn release_residency(&self, h: &InstanceHandle) {
+        if let Some(l) = self.managed_cfg().and_then(|m| m.ledger.as_ref()) {
+            l.release(&h.instance_id);
         }
     }
 
@@ -298,6 +326,7 @@ impl InferRuntime {
                 }
             }
         };
+        self.release_residency(h);
         match todo {
             Todo::Proc(p) => {
                 let ev = p.terminate(grace).await;
@@ -338,6 +367,7 @@ impl InferRuntime {
             .await
             .remove(&h.instance_id)
             .ok_or_else(|| unknown(h))?;
+        self.release_residency(h);
         if let Some(mg) = inst.managed.as_mut() {
             // Only ever a process this adapter spawned itself.
             if let Some(p) = mg.proc.take() {

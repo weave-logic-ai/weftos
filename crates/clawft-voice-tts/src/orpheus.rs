@@ -34,6 +34,8 @@ use crate::snac::{FRAME_TOKENS, SNAC_CODEBOOK_SIZE, SnacDecode};
 pub const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434/api/generate";
 /// Default Ollama model tag serving Orpheus.
 pub const DEFAULT_MODEL: &str = "orpheus-tts";
+/// Inference role the default-endpoint engine follows when placed.
+pub const PLACEMENT_ROLE: &str = "orpheus-tts";
 /// Default Orpheus preset voice.
 pub const DEFAULT_VOICE: &str = "dan";
 /// Default frames per emitted chunk (≈ the reference 28-token streaming
@@ -164,6 +166,10 @@ pub struct OrpheusTts {
     model: String,
     voice: String,
     decoder: Arc<dyn SnacDecode>,
+    /// Inference role this engine follows when the daemon placed it (card
+    /// mesh-placement-20). Set only for the default endpoint: an explicit
+    /// URL is an explicit setting and always wins.
+    role: Option<String>,
     /// Retained for a future lead-chunks streaming mode; the live path
     /// decodes whole-utterance (see synthesize_stream seam note).
     #[allow(dead_code)]
@@ -172,8 +178,28 @@ pub struct OrpheusTts {
 
 impl OrpheusTts {
     /// Build against the default local Ollama endpoint + `orpheus-tts` model.
+    /// If the daemon placed a role named [`PLACEMENT_ROLE`], requests follow
+    /// it (a local role resolves straight to its server, so the latency path
+    /// is unchanged); otherwise the default endpoint is used.
     pub fn new(decoder: Arc<dyn SnacDecode>) -> Result<Self, VoiceError> {
-        Self::with_endpoint(DEFAULT_OLLAMA_URL, DEFAULT_MODEL, DEFAULT_VOICE, decoder)
+        Ok(Self::with_endpoint(DEFAULT_OLLAMA_URL, DEFAULT_MODEL, DEFAULT_VOICE, decoder)?
+            .with_role(PLACEMENT_ROLE))
+    }
+
+    /// Follow the placed inference role `role` when one is installed; the
+    /// configured URL stays the fallback.
+    pub fn with_role(mut self, role: impl Into<String>) -> Self {
+        self.role = Some(role.into());
+        self
+    }
+
+    /// The generate URL for this request: the placed role's server when the
+    /// daemon installed one, else the configured URL.
+    fn target_url(&self) -> String {
+        self.role
+            .as_deref()
+            .and_then(clawft_types::placement::roles::resolve)
+            .map_or_else(|| self.url.clone(), |root| format!("{root}/api/generate"))
     }
 
     /// Build against an explicit Ollama generate URL, model tag, and voice.
@@ -192,6 +218,7 @@ impl OrpheusTts {
             model: model.into(),
             voice: voice.into(),
             decoder,
+            role: None,
             batch_frames: DEFAULT_BATCH_FRAMES,
         })
     }
@@ -242,7 +269,7 @@ impl TtsEngine for OrpheusTts {
         });
         let resp = self
             .http
-            .post(&self.url)
+            .post(self.target_url())
             .json(&body)
             .send()
             .await
@@ -333,6 +360,31 @@ mod tests {
         fn sample_rate(&self) -> u32 {
             24_000
         }
+    }
+
+    #[test]
+    fn placed_role_overrides_the_default_url_but_never_an_explicit_endpoint() {
+        use clawft_types::placement::roles;
+        use std::collections::HashMap;
+        let explicit = OrpheusTts::with_endpoint("http://10.9.9.9:1/api/generate", "m", "dan", Arc::new(FakeSnac)).unwrap();
+        let default = OrpheusTts::new(Arc::new(FakeSnac)).unwrap();
+        let followed = OrpheusTts::with_endpoint(DEFAULT_OLLAMA_URL, "m", "dan", Arc::new(FakeSnac))
+            .unwrap()
+            .with_role("orpheus-unit-test");
+        // Nothing installed: every engine keeps its configured address.
+        assert_eq!(default.target_url(), DEFAULT_OLLAMA_URL);
+        assert_eq!(followed.target_url(), DEFAULT_OLLAMA_URL);
+        roles::install(
+            Arc::new(|r| match r {
+                "orpheus-unit-test" => Some("http://127.0.0.1:55555/v1".to_string()),
+                _ => None,
+            }),
+            HashMap::new(),
+        );
+        assert_eq!(followed.target_url(), "http://127.0.0.1:55555/api/generate");
+        assert_eq!(explicit.target_url(), "http://10.9.9.9:1/api/generate", "an explicit endpoint wins");
+        assert_eq!(default.target_url(), DEFAULT_OLLAMA_URL, "no role installed for the default name");
+        roles::clear();
     }
 
     #[test]

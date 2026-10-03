@@ -83,7 +83,7 @@ pub fn required_capability(method: &str) -> Capability {
         "workload.revoke" => Capability::Admin,
         // mesh-placement-19: who may use whose model server is a governed
         // decision, the same standing as a revocation.
-        "infer.expose" | "infer.allow" => Capability::Admin,
+        "infer.expose" | "infer.allow" | "infer.start" | "infer.stop" => Capability::Admin,
         "workload.node.bind" => Capability::Admin,
         // ADR-106: withdrawing a Seed binding is the same trust change.
         "workload.node.unbind" => Capability::Admin,
