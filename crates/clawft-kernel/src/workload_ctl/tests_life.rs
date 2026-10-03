@@ -192,3 +192,34 @@ fn the_default_lifecycle_policy_allows_moving_a_bounded_number_of_times() {
     assert!(p.migratable);
     assert!(p.max_reschedules > 0);
 }
+
+fn spec_requiring(ids: &[&str]) -> clawft_types::placement::engine::WorkloadSpec {
+    use clawft_types::placement::engine::{PlacementPolicy, WorkloadRequirements, WorkloadSpec};
+    use clawft_types::placement::{CapabilityId, Requirement};
+    WorkloadSpec {
+        kind: "cog".into(),
+        name: "x".into(),
+        requirements: WorkloadRequirements {
+            common: ids
+                .iter()
+                .map(|i| Requirement::exact(CapabilityId::new(*i).unwrap()))
+                .collect(),
+            ..WorkloadRequirements::default()
+        },
+        policy: PlacementPolicy::default(),
+    }
+}
+
+#[test]
+fn a_spec_needing_an_attached_sensor_or_device_is_hardware_bound() {
+    use super::lifecycle::needs_attached_hardware as bound;
+    assert!(!bound(&spec_requiring(&["cpu.arch.aarch64", "os.linux", "runtime.native", "mem.system"])));
+    assert!(bound(&spec_requiring(&["os.linux", "sensor.csi.esp32"])));
+    assert!(bound(&spec_requiring(&["accel.npu.hailo"])));
+    assert!(bound(&spec_requiring(&["device.gpio"])));
+    // The real cog routes (arch, runtime) are not hardware-bound.
+    let routes = super::cog_kind::arch_routes("aarch64").unwrap();
+    let mut s = spec_requiring(&[]);
+    s.requirements.variants = routes;
+    assert!(!bound(&s));
+}

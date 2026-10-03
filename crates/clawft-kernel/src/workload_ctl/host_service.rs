@@ -101,6 +101,11 @@ pub struct InstanceBody {
     /// Stop grace period.
     #[serde(default)]
     pub grace_ms: Option<u64>,
+    /// With a listing: also report instances taken down on purpose
+    /// (`departed_instance` rows), which a controller needs to tell a
+    /// teardown from an instance lost with a restart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_departed: bool,
 }
 
 pub(super) struct Placed {
@@ -122,6 +127,9 @@ pub(super) struct Placed {
     /// The operator wants it running: set by `start`, cleared by `stop`.
     /// A supervisor restarts only what is meant to run.
     pub(super) desired_running: bool,
+    /// Stopped because the controller lease expired (see `host_supervise`);
+    /// the controller restarts it if it comes back still owning it.
+    pub(super) lease_stopped: bool,
 }
 
 /// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
@@ -157,6 +165,15 @@ pub struct WorkloadHostService {
     pub(super) kinds: crate::workload_kind::KindRegistry,
     /// Bounds on supervisor restarts.
     pub(super) restart: super::lifecycle::RestartPolicy,
+    /// Opt-in node-side lease: continuous instances stop once no other
+    /// controller has been heard from for this long (default off).
+    pub(super) lease: Option<std::time::Duration>,
+    /// Instances taken down on purpose (revoked, unloaded), newest last, so
+    /// a controller can tell them from instances lost with a restart (this
+    /// list is in memory: a restart empties it, which is the signal).
+    pub(super) departed: Mutex<std::collections::VecDeque<(String, &'static str)>>,
+    /// Last request from a controller other than this node itself (ms).
+    pub(super) last_contact_ms: std::sync::atomic::AtomicU64,
 }
 
 fn now_ms() -> u64 {
@@ -207,6 +224,9 @@ impl WorkloadHostService {
             revocations: std::sync::OnceLock::new(),
             kinds: crate::workload_kind::KindRegistry::builtin(),
             restart: super::lifecycle::RestartPolicy::default(),
+            lease: None,
+            departed: Mutex::new(std::collections::VecDeque::new()),
+            last_contact_ms: std::sync::atomic::AtomicU64::new(now_ms()),
         }
     }
 
@@ -314,6 +334,17 @@ impl WorkloadHostService {
         }
     }
 
+    /// Remember that `instance_id` was taken down on purpose (`why`:
+    /// `revoked` or `unloaded`); the last 256 are reported by `status`.
+    pub(super) fn note_departed(&self, instance_id: &str, why: &'static str) {
+        if let Ok(mut d) = self.departed.lock() {
+            if d.len() >= 256 {
+                d.pop_front();
+            }
+            d.push_back((instance_id.to_string(), why));
+        }
+    }
+
     pub(super) fn record(&self, kind: &str, payload: Value) {
         if let Some(cm) = &self.chain {
             cm.append(HOST_CHAIN_SOURCE, kind, Some(payload));
@@ -387,6 +418,10 @@ impl WorkloadHostService {
                 (nonce, header_method.to_string(), Err(r))
             }
             Ok(req) => {
+                if req.requester != self.node_id {
+                    self.last_contact_ms
+                        .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+                }
                 let out = self.dispatch(&req, fetch).await;
                 if let Err(r) = &out {
                     self.refused(Some(&req), "handle", r);
@@ -576,6 +611,7 @@ impl WorkloadHostService {
                 life,
                 continuous,
                 desired_running: will_start,
+                lease_stopped: false,
             },
         );
         if let (Some(list), Some(g0)) = (self.revocations.get(), list_at_start)

@@ -149,3 +149,67 @@ async fn a_slow_poll_does_not_count_before_the_kinds_interval() {
     assert_eq!(rows[0]["lifecycle"], "running", "one miss of three so far");
     r.plane.instance(method::UNLOAD, &r.iid).await.unwrap();
 }
+
+#[tokio::test]
+async fn the_opt_in_lease_stops_continuous_instances_when_no_controller_is_heard() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "lease-cog", "#!/bin/sh\nexec sleep 60\n", &[arch()]);
+    let key = SigningKey::from_bytes(&[10; 32]);
+    let node = host_node_leased(23, board_caps("pi5"), &key, Duration::from_secs(5));
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("n", node.svc.clone());
+    let (plane, _) = controller(&key, conn);
+    plane.add_target(&addr, TrustTier::Paired).await.unwrap();
+    let mut o = mode_order(&pkg, RunMode::Listener, None);
+    o.pin = Some(node.id.clone());
+    let iid = plane.place(&o).await.unwrap().placed.unwrap().instance_id;
+    let real_now = chrono::Utc::now().timestamp_millis() as u64;
+
+    // Heard recently: left alone.
+    assert!(node.svc.supervise(real_now + 1_000).await.is_empty());
+    // Silent past the lease: stopped, held, chained, token gone.
+    let seen = node.svc.supervise(real_now + 60_000).await;
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].to, LifecycleState::Stopped);
+    assert!(seen[0].reason.contains("lease expired"), "{}", seen[0].reason);
+    assert_eq!(node.svc.lifecycle_of(&iid).await, Some(LifecycleState::Stopped));
+    let chained = events(&node.chain, EVENT_KIND_WORKLOAD_LIFECYCLE);
+    assert!(chained.iter().any(|(_, p)| p["phase"] == "lease"));
+    // Not restarted by the supervisor, however long it stays silent.
+    assert!(node.svc.supervise(real_now + 120_000).await.is_empty());
+    let rows = plane.call(&node.id, method::STATUS, None, serde_json::json!({})).await.unwrap();
+    assert_eq!(rows[0]["lease_stopped"], true);
+
+    // The controller is back and still owns it: it starts it again.
+    plane.instance(method::START, &iid).await.unwrap();
+    assert_eq!(node.svc.lifecycle_of(&iid).await, Some(LifecycleState::Running));
+    let rows = plane.call(&node.id, method::STATUS, None, serde_json::json!({})).await.unwrap();
+    assert_eq!(rows[0]["lease_stopped"], false);
+    plane.instance(method::STOP, &iid).await.unwrap();
+}
+
+#[tokio::test]
+async fn without_a_lease_a_silent_controller_changes_nothing() {
+    let r = rig("#!/bin/sh\nexec sleep 30\n", RunMode::Listener).await;
+    let far = chrono::Utc::now().timestamp_millis() as u64 + 10_000_000;
+    assert!(r.node.svc.supervise(far).await.is_empty());
+    assert_eq!(r.node.svc.lifecycle_of(&r.iid).await, Some(LifecycleState::Running));
+    r.plane.instance(method::STOP, &r.iid).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_operator_start_gives_a_failed_instance_a_fresh_restart_budget() {
+    let r = rig("#!/bin/sh\nexit 3\n", RunMode::Listener).await;
+    for k in 0..30 {
+        pass(&r, k).await;
+        if r.node.svc.lifecycle_of(&r.iid).await == Some(LifecycleState::Failed) {
+            break;
+        }
+    }
+    assert_eq!(r.node.svc.lifecycle_of(&r.iid).await, Some(LifecycleState::Failed));
+    r.plane.instance(method::START, &r.iid).await.unwrap();
+    let rows = r.plane.call(&r.node.id, method::STATUS, None, serde_json::json!({})).await.unwrap();
+    assert_eq!(rows[0]["restarts"], 0, "the budget starts over");
+    assert_eq!(rows[0]["lifecycle"], "running");
+    r.plane.instance(method::UNLOAD, &r.iid).await.unwrap();
+}

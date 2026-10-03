@@ -32,6 +32,7 @@ pub mod plane;
 pub mod plane_peers;
 pub mod plane_lifecycle;
 pub mod plane_place;
+mod plane_reschedule;
 mod plane_prepare;
 mod plane_reconcile;
 pub mod plane_seed;
@@ -52,6 +53,8 @@ mod tests_ingest;
 mod tests_kind;
 #[cfg(test)]
 mod tests_life;
+#[cfg(test)]
+mod tests_life_fix;
 #[cfg(test)]
 mod tests_life_node;
 #[cfg(test)]

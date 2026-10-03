@@ -72,10 +72,73 @@ impl WorkloadHostService {
         self
     }
 
+    /// Opt in to the node-side lease: continuous instances stop once no
+    /// controller other than this node itself has been heard from for
+    /// `lease`. Set it at or below the controller's `dead_after`, so the
+    /// copy on a partitioned node stops before the controller starts a
+    /// replacement. Off by default.
+    pub fn with_lease(mut self, lease: Duration) -> Self {
+        self.lease = Some(lease);
+        self
+    }
+
     /// Replace the restart bounds.
     pub fn with_restart_policy(mut self, p: RestartPolicy) -> Self {
         self.restart = p;
         self
+    }
+
+    /// Stop continuous instances when the controller lease is on and has
+    /// expired (opt-in, see [`Self::with_lease`]). Returns what it stopped.
+    async fn expire_lease(&self, now_ms: u64) -> Vec<Supervised> {
+        let Some(lease) = self.lease else {
+            return Vec::new();
+        };
+        let silent = now_ms.saturating_sub(self.last_contact_ms.load(std::sync::atomic::Ordering::Relaxed));
+        if silent <= lease.as_millis() as u64 {
+            return Vec::new();
+        }
+        let mut targets = Vec::new();
+        {
+            let mut map = self.instances.lock().await;
+            for (id, p) in map.iter_mut() {
+                if !p.continuous || !p.desired_running || !p.life.state.is_live() {
+                    continue;
+                }
+                let Some(host) = self.routes.get(&p.route).cloned() else {
+                    continue;
+                };
+                // The token goes first, as for an operator stop.
+                if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
+                    hk.deactivate(l);
+                }
+                p.desired_running = false;
+                targets.push((id.clone(), p.handle.clone(), host, p.life.state));
+            }
+        }
+        let mut out = Vec::new();
+        for (id, handle, host, from) in targets {
+            let name = host.workload_for(&handle).await.map(|w| w.id).unwrap_or_default();
+            let r = host.stop(&handle, RESTART_GRACE).await;
+            let mut map = self.instances.lock().await;
+            if let Some(p) = map.get_mut(&id) {
+                p.lease_stopped = r.is_ok();
+                if let Ok(ev) = r {
+                    p.last = Some(ev);
+                }
+                enter(&mut p.life, LifecycleState::Stopped);
+            }
+            let s = Supervised {
+                instance_id: id,
+                workload: name,
+                from,
+                to: LifecycleState::Stopped,
+                reason: format!("controller lease expired: no controller heard for {silent} ms"),
+            };
+            self.chain_life(&s, &self.node_id, json!({ "phase": "lease" }));
+            out.push(s);
+        }
+        out
     }
 
     fn health_spec(&self, kind: &str) -> HealthSpec {
@@ -116,6 +179,7 @@ impl WorkloadHostService {
             kind: String,
             continuous: bool,
         }
+        let mut out = self.expire_lease(now_ms).await;
         let mut due = Vec::new();
         {
             let mut map = self.instances.lock().await;
@@ -149,7 +213,6 @@ impl WorkloadHostService {
                 });
             }
         }
-        let mut out = Vec::new();
         for d in due {
             let st = d.host.status(&d.handle).await;
             let verdict = self.judge(&d.kind, &sample(&st, d.continuous));

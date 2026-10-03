@@ -85,6 +85,7 @@ impl WorkloadHostService {
             let gone = matches!(r, Ok(()) | Err(RuntimeError::UnknownInstance(_)));
             if gone {
                 self.instances.lock().await.remove(&id);
+                self.note_departed(&id, "revoked");
             }
             out.push(ForcedTeardown {
                 instance_id: id,

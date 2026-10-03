@@ -10,25 +10,49 @@
 //! (revocation list, eviction, forced unload of what it runs) and forwarded
 //! like any other. Revocations are only ever added, so a replayed old notice
 //! cannot undo anything.
+//!
+//! Bounded: only peers admission verified are replayed to, at most one replay
+//! per peer runs at a time, a peer is replayed to at most once per
+//! [`REPLAY_COOLDOWN`] (a flapping link cannot make this node a signature-verify
+//! amplifier), and a replay stops when the peer leaves. Only notices whose
+//! subject is *still revoked here* are kept or replayed: lifting a revocation
+//! (`unrevoke`) drops its notice, and a notice signed by a key since revoked
+//! is dropped too, so a lifted revocation does not come back through this log.
+//! Peers that still hold the old notice can re-send it; lifting a revocation
+//! everywhere means lifting it (and clearing `revocation-notices.json`) on
+//! every node.
 
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::mesh_discovery::MeshPeerEvent;
 
 /// Notices kept for replay (oldest dropped first).
 pub const MAX_LOGGED: usize = 1024;
+/// A peer is replayed to at most once per this long.
+pub const REPLAY_COOLDOWN: Duration = Duration::from_secs(60);
 /// Largest log file read at start.
 const MAX_LOG_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The ordered notices this node has verified, and where they are saved.
 #[derive(Default)]
 pub(super) struct NoticeLog {
-    entries: Vec<SignedRevocation>,
+    pub(super) entries: Vec<SignedRevocation>,
     file: Option<PathBuf>,
 }
+
+/// One peer's replay bookkeeping.
+pub(super) struct ReplayState {
+    running: bool,
+    started: Instant,
+    cancel: Arc<AtomicBool>,
+}
+
+pub(super) type Replays = HashMap<String, ReplayState>;
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
@@ -74,7 +98,7 @@ impl RevocationExchange {
                     )
                 })
                 .unwrap_or(false);
-            if signer_ok && verify_revocation(&s, &self.anchors).is_ok() {
+            if signer_ok && self.is_current(&s) && verify_revocation(&s, &self.anchors).is_ok() {
                 // Known from now on: replayed copies cost no budget here.
                 let key = Self::notice_key(&s);
                 let mut g = self.seen.lock().unwrap_or_else(|p| p.into_inner());
@@ -91,6 +115,45 @@ impl RevocationExchange {
         n
     }
 
+    /// The notice still describes something this node holds revoked, and its
+    /// signer has not been revoked since.
+    fn is_current(&self, s: &SignedRevocation) -> bool {
+        let Ok(n) = serde_json::from_str::<RevocationNotice>(&s.payload) else {
+            return false;
+        };
+        let signer_revoked = <[u8; 32]>::try_from(s.public_key.as_slice()).is_ok_and(|pk| {
+            self.list
+                .is_subject_revoked(RevocationKind::SignerKey, &crate::workload_pkg::codec::hex_encode(&pk))
+        });
+        !signer_revoked && self.list.is_subject_revoked(n.kind, &n.id)
+    }
+
+    /// Drop the logged notices for one subject (call when it is lifted) and
+    /// save. Returns how many were dropped.
+    pub fn forget_subject(&self, kind: RevocationKind, id: &str) -> usize {
+        let Ok(id) = kind.normalize(id) else { return 0 };
+        let mut log = self.log.lock().unwrap_or_else(|p| p.into_inner());
+        let before = log.entries.len();
+        log.entries.retain(|e| {
+            serde_json::from_str::<RevocationNotice>(&e.payload).is_ok_and(|n| !(n.kind == kind && n.id == id))
+        });
+        let dropped = before - log.entries.len();
+        if dropped > 0 {
+            Self::save_log(&log);
+        }
+        dropped
+    }
+
+    fn save_log(log: &NoticeLog) {
+        if let Some(path) = &log.file
+            && let Err(e) = serde_json::to_vec(&log.entries)
+                .map_err(std::io::Error::other)
+                .and_then(|b| write_atomic(path, &b))
+        {
+            tracing::warn!(path = %path.display(), error = %e, "revocation log not saved");
+        }
+    }
+
     /// Remember a verified notice for replay, once, and save the log.
     pub(super) fn log_notice(&self, signed: &SignedRevocation) {
         let mut log = self.log.lock().unwrap_or_else(|p| p.into_inner());
@@ -101,18 +164,25 @@ impl RevocationExchange {
         if log.entries.len() > MAX_LOGGED {
             log.entries.remove(0);
         }
-        if let Some(path) = log.file.clone()
-            && let Err(e) = serde_json::to_vec(&log.entries)
-                .map_err(std::io::Error::other)
-                .and_then(|b| write_atomic(&path, &b))
-        {
-            tracing::warn!(path = %path.display(), error = %e, "revocation log not saved");
-        }
+        Self::save_log(&log);
     }
 
     /// The notices kept for replay, oldest first.
+    /// Those no longer in force here (lifted, or signer revoked) are dropped
+    /// first, and the log saved without them.
     pub fn logged(&self) -> Vec<SignedRevocation> {
-        self.log.lock().unwrap_or_else(|p| p.into_inner()).entries.clone()
+        let mut log = self.log.lock().unwrap_or_else(|p| p.into_inner());
+        let before = log.entries.len();
+        log.entries.retain(|e| self.is_current(e));
+        if log.entries.len() != before {
+            Self::save_log(&log);
+        }
+        log.entries.clone()
+    }
+
+    /// Replays started so far (for tests and diagnostics).
+    pub fn replays_started(&self) -> u64 {
+        self.replays_started.load(Ordering::Relaxed)
     }
 
     /// Send every logged notice to `peer`, oldest first. The first
@@ -120,13 +190,23 @@ impl RevocationExchange {
     /// receiver accepts so a long log is not rate-limited away. Returns how
     /// many were sent.
     pub async fn replay_to(&self, peer: &str) -> usize {
+        self.replay_cancellable(peer, &AtomicBool::new(false)).await
+    }
+
+    async fn replay_cancellable(&self, peer: &str, cancel: &AtomicBool) -> usize {
         let mut sent = 0usize;
         for signed in self.logged() {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
             let Ok(value) = serde_json::to_value(&signed) else {
                 continue;
             };
             if sent as f64 >= NOTICE_BURST {
                 tokio::time::sleep(Duration::from_secs_f64(1.0 / NOTICES_PER_SEC)).await;
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
             }
             let msg = KernelMessage::new(
                 0,
@@ -142,8 +222,44 @@ impl RevocationExchange {
         sent
     }
 
-    /// Replay the log to every peer that joins or recovers, for as long as
-    /// the exchange lives. No-op outside a tokio runtime.
+    /// Start a replay to `peer` unless one is running or one started within
+    /// [`REPLAY_COOLDOWN`].
+    fn start_replay(me: &Arc<Self>, peer: String) {
+        let cancel = {
+            let mut g = me.replays.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(r) = g.get(&peer)
+                && (r.running || r.started.elapsed() < REPLAY_COOLDOWN)
+            {
+                return;
+            }
+            // Bounded like the other per-peer maps.
+            if g.len() >= 1024 && !g.contains_key(&peer) {
+                g.retain(|_, r| r.running);
+            }
+            let cancel = Arc::new(AtomicBool::new(false));
+            g.insert(
+                peer.clone(),
+                ReplayState {
+                    running: true,
+                    started: Instant::now(),
+                    cancel: cancel.clone(),
+                },
+            );
+            cancel
+        };
+        me.replays_started.fetch_add(1, Ordering::Relaxed);
+        let x = me.clone();
+        tokio::spawn(async move {
+            x.replay_cancellable(&peer, &cancel).await;
+            if let Some(r) = x.replays.lock().unwrap_or_else(|p| p.into_inner()).get_mut(&peer) {
+                r.running = false;
+            }
+        });
+    }
+
+    /// Replay the log to every verified peer that joins or recovers, for as
+    /// long as the exchange lives; stop a replay when its peer leaves. No-op
+    /// outside a tokio runtime.
     pub(super) fn spawn_rejoin_replay(me: &Arc<Self>) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
@@ -157,14 +273,17 @@ impl RevocationExchange {
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
-                let peer = match ev {
-                    MeshPeerEvent::Joined { node_id, .. } | MeshPeerEvent::Recovered { node_id, .. } => node_id,
-                    _ => continue,
-                };
                 let Some(x) = weak.upgrade() else { break };
-                tokio::spawn(async move {
-                    x.replay_to(&peer).await;
-                });
+                match ev {
+                    MeshPeerEvent::Joined { node_id, verified: true, .. }
+                    | MeshPeerEvent::Recovered { node_id, verified: true, .. } => Self::start_replay(&x, node_id),
+                    MeshPeerEvent::Left { node_id } => {
+                        if let Some(r) = x.replays.lock().unwrap_or_else(|p| p.into_inner()).get(&node_id) {
+                            r.cancel.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    _ => {}
+                }
             }
         });
     }

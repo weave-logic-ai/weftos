@@ -52,6 +52,13 @@ pub struct PlaneConfig {
     /// peer state, when known, decides first). Its instances become `Lost`
     /// and are rescheduled by [`PlacementControlPlane::lifecycle_tick`].
     pub dead_after: Duration,
+    /// Timeout for the `place` of a reschedule (shorter than
+    /// `place_timeout`: a replacement that cannot be fetched in this time
+    /// is retried on a later tick rather than holding this one).
+    pub reschedule_timeout: Duration,
+    /// First wait before retrying a reschedule that found no node, or an
+    /// orphan unload that failed; doubles per attempt up to five minutes.
+    pub retry_backoff: Duration,
 }
 
 impl Default for PlaneConfig {
@@ -62,6 +69,8 @@ impl Default for PlaneConfig {
             request_ttl_ms: 290_000,
             weights: ScoringWeights::default(),
             dead_after: Duration::from_secs(30),
+            reschedule_timeout: Duration::from_secs(60),
+            retry_backoff: Duration::from_secs(10),
         }
     }
 }
@@ -188,6 +197,9 @@ pub(super) struct Call<'a> {
     pub body: Value,
     /// Serve the payload to the target during the call.
     pub serve: bool,
+    /// Replace the method's default timeout (a reschedule must not hold
+    /// the lifecycle tick for the full `place_timeout`).
+    pub timeout: Option<Duration>,
 }
 
 /// The controller.
@@ -376,12 +388,13 @@ impl PlacementControlPlane {
             decision_id,
             body,
             serve,
+            timeout: timeout_override,
         } = c;
-        let timeout = if m == method::PLACE || m == method::LOAD {
+        let timeout = timeout_override.unwrap_or(if m == method::PLACE || m == method::LOAD {
             self.cfg.place_timeout
         } else {
             self.cfg.call_timeout
-        };
+        });
         let req = CtlRequest::new(
             &self.key,
             m,
@@ -445,6 +458,7 @@ impl PlacementControlPlane {
                 decision_id: None,
                 body: json!({}),
                 serve: false,
+                timeout: None,
             })
             .await?;
         let node_id = node_id_from_pubkey(&pk);
@@ -538,6 +552,7 @@ impl PlacementControlPlane {
                 decision_id,
                 body,
                 serve: false,
+                timeout: None,
             })
             .await?
             .0)

@@ -154,7 +154,13 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
 - Revocation is monotonic mesh-wide. Nothing removes an entry, and a notice is
   re-flooded to every peer, so a local `unrevoke_subject` is undone by the next
   re-flood. To lift a revocation, clear the list on every node or ship the
-  package under a new key.
+  package under a new key. Each node also keeps the signed notices it has
+  verified in `revocation-notices.json` and replays them to a verified peer
+  that joins or recovers (at most one replay per peer per 60 s, stopped when
+  the peer leaves). Only notices whose subject is still revoked on this node
+  are kept or replayed, so unrevoking on a node drops its notice from that
+  node's log; a peer that still holds the notice can re-send it, so lift a
+  revocation on every node and delete `revocation-notices.json` there too.
 - A signer key that is itself revoked cannot issue notices. Signatures are
   checked strictly. Cheap checks come first and cost nothing (size, pinned
   operator/WeftOS key, revoked signer, notice already applied); a notice that

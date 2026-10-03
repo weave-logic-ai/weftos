@@ -265,3 +265,28 @@ impl Default for LifecyclePolicy {
         }
     }
 }
+
+/// Capability namespaces any node can offer: what a spec asks of the
+/// machine and OS it runs on, not of anything attached to it.
+const GENERIC_NAMESPACES: &[&str] = &["cpu", "os", "runtime", "mem", "node", "perf"];
+
+/// Whether `spec` needs something attached to a particular node (a sensor
+/// feed, a device, an accelerator): any requirement outside the generic
+/// namespaces. Such a workload's data source is physically tied to its
+/// node, so moving it is not a failover; it is held and alerted instead.
+pub fn needs_attached_hardware(spec: &clawft_types::placement::engine::WorkloadSpec) -> bool {
+    use clawft_types::placement::IdSelector;
+    let reqs = spec
+        .requirements
+        .common
+        .iter()
+        .chain(spec.requirements.variants.iter().flat_map(|v| v.requirements.iter()));
+    reqs.into_iter().any(|r| {
+        let id = match &r.selector {
+            IdSelector::Exact(c) => c.as_str(),
+            IdSelector::Prefix(p) => p.as_str(),
+        };
+        let ns = id.split('.').next().unwrap_or(id);
+        !GENERIC_NAMESPACES.contains(&ns)
+    })
+}

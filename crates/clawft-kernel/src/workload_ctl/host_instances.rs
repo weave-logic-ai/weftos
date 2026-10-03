@@ -66,8 +66,13 @@ impl WorkloadHostService {
                     "instance_id": id, "workload": p.name, "variant": p.variant,
                     "decision_id": p.decision_id, "status": host.status(&p.handle).await,
                     "ingest": p.ingest_state, "lifecycle": p.life.state,
-                    "restarts": p.life.restarts.len(),
+                    "restarts": p.life.restarts.len(), "lease_stopped": p.lease_stopped,
                 }));
+            }
+            if b.include_departed
+                && let Ok(d) = self.departed.lock()
+            {
+                all.extend(d.iter().map(|(id, why)| json!({ "departed_instance": id, "reason": why })));
             }
             return Ok(Value::Array(all));
         };
@@ -85,7 +90,10 @@ impl WorkloadHostService {
                 let r = host.start(&p.handle).await.map(|_| json!({"started": iid}));
                 if r.is_ok() {
                     p.desired_running = true;
+                    p.lease_stopped = false;
                     p.life.misses = 0;
+                    // An explicit start is a fresh budget (item: operator start).
+                    p.life.restarts.clear();
                     super::host_supervise::enter(&mut p.life, LifecycleState::Running);
                 }
                 r
@@ -113,6 +121,7 @@ impl WorkloadHostService {
                 let r = host.unload(h).await.map(|_| json!({ "unloaded": iid }));
                 if r.is_ok() {
                     map.remove(&iid);
+                    self.note_departed(&iid, "unloaded");
                 }
                 r
             }

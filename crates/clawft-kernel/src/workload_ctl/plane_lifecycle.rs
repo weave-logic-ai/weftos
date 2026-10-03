@@ -3,31 +3,41 @@
 //! reschedule them through the same gate and placement engine as any
 //! placement, and settle with a node that comes back.
 //!
+//! **Delivery is at-least-once, with no fencing.** While a node is cut off
+//! but still running, its copy keeps running (and a sensor cog keeps
+//! producing) until the controller notices, replaces it and the node
+//! returns to be told to unload the old one. For the length of the
+//! partition the workload may run twice. The opt-in node lease
+//! (`WorkloadHostService::with_lease`) narrows that window: a node that has
+//! heard no controller for the lease stops its continuous instances itself.
+//! See ADR-099 section 7.
+//!
 //! [`PlacementControlPlane::lifecycle_tick`] is one pass:
 //!
 //! 1. re-describe every target (reachability) and note how long each has
 //!    been down;
-//! 2. a node is `Dead` when membership says so, or it has been unreachable
-//!    for `PlaneConfig::dead_after`;
-//! 3. each instance on a `Dead` node becomes `Lost`. It is rescheduled
-//!    unless the order pinned it, the operator or its kind said it must not
-//!    move, it has no stored order, or it moved too often already; those
-//!    raise an alert (chained) and stay `Lost`;
-//! 4. a replacement goes through [`PlacementControlPlane::place`]: the gate
-//!    asks `workload.place`, the engine sees only nodes that are `Alive`,
-//!    verified members and not demoted below what governance allows, and
-//!    the dead node is added to `avoid`. If nothing is placeable the
-//!    instance stays `Lost` and the next tick tries again;
-//! 5. the old record becomes `Rescheduled` and is kept. When its node
-//!    returns, the orphan is unloaded there (signed, gated, chained), so the
-//!    workload never runs twice;
-//! 6. an instance that was `Lost` but is still on its node when it returns
-//!    is adopted back; one the node no longer has is `Failed`.
+//! 2. a node is `Dead` when it has been unreachable for
+//!    `PlaneConfig::dead_after` and membership, when it knows the peer, does
+//!    not still hold it as healthy. Direct contact is the authority:
+//!    membership never makes a node dead that answers;
+//! 3. each instance on a `Dead` node becomes `Lost` and is rescheduled
+//!    (`plane_reschedule`) unless it is pinned, non-migratable (operator,
+//!    kind, or needing attached hardware), has no stored order, or moved or
+//!    failed to move too often; those raise an alert (chained) and stay
+//!    `Lost`;
+//! 4. the old record of a rescheduled instance is kept as `Rescheduled`.
+//!    When its node returns, that copy is unloaded there (signed, gated,
+//!    chained), with backoff and one chained report per distinct failure;
+//! 5. a node that is reachable but no longer holds an instance is told
+//!    apart: it reports explicitly what a revocation or an unload took
+//!    down, and anything else was lost with the node (a reboot) and is
+//!    placed again;
+//! 6. an instance that was `Lost` and is still on its node when it returns
+//!    is adopted back (a lease-stopped one is restarted).
 //!
 //! Every step is chained: `workload.lifecycle` for state changes and alerts,
 //! `workload.migrate` for a reschedule.
 
-use clawft_types::placement::engine::Liveness;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -57,10 +67,48 @@ pub struct ControllerLife {
     /// failed or finished instance is never started somewhere else.
     #[serde(default = "yes")]
     pub was_running: bool,
+    /// Reschedule attempts that found no node (bounded by `max_reschedules`).
+    #[serde(default)]
+    pub attempts: u32,
+    /// Earliest time of the next reschedule attempt (ms).
+    #[serde(default)]
+    pub next_attempt_ms: u64,
+    /// Failed unloads of the replaced copy on its returned node.
+    #[serde(default)]
+    pub orphan_attempts: u32,
+    /// Earliest time of the next orphan unload (ms).
+    #[serde(default)]
+    pub orphan_next_ms: u64,
+    /// Last orphan-unload failure (chained once per change).
+    #[serde(default)]
+    pub orphan_error: Option<String>,
 }
 
 fn yes() -> bool {
     true
+}
+
+impl ControllerLife {
+    pub(super) fn new(
+        state: LifecycleState,
+        policy: LifecyclePolicy,
+        order: Option<PlaceOrder>,
+        reschedules: u32,
+    ) -> Self {
+        Self {
+            life: InstanceLife::new(state, now_ms()),
+            policy,
+            order,
+            reschedules,
+            last_error: None,
+            was_running: true,
+            attempts: 0,
+            next_attempt_ms: 0,
+            orphan_attempts: 0,
+            orphan_next_ms: 0,
+            orphan_error: None,
+        }
+    }
 }
 
 /// Something one [`PlacementControlPlane::lifecycle_tick`] did.
@@ -70,20 +118,30 @@ pub struct LifecycleEvent {
     pub instance_id: String,
     /// That node.
     pub node_id: String,
-    /// `lost`, `rescheduled`, `alert`, `reschedule_failed`, `orphan_unloaded`,
-    /// `recovered`, `failed` or `gone`.
+    /// `lost`, `rescheduled`, `replaced`, `alert`, `reschedule_failed`,
+    /// `orphan_unloaded`, `orphan_unload_failed`, `recovered`, `failed` or
+    /// `gone`.
     pub action: String,
     /// Human-readable detail.
     pub detail: String,
 }
 
-fn event(rec: &PlacementRecord, action: &str, detail: impl Into<String>) -> LifecycleEvent {
+pub(super) fn event(rec: &PlacementRecord, action: &str, detail: impl Into<String>) -> LifecycleEvent {
     LifecycleEvent {
         instance_id: rec.instance_id.clone(),
         node_id: rec.node_id.clone(),
         action: action.into(),
         detail: detail.into(),
     }
+}
+
+/// Longest wait between retries of a failed reschedule or orphan unload.
+const MAX_BACKOFF_MS: u64 = 300_000;
+
+pub(super) fn backoff_ms(base_ms: u64, attempts: u32) -> u64 {
+    base_ms
+        .saturating_mul(1u64 << attempts.saturating_sub(1).min(20))
+        .min(MAX_BACKOFF_MS)
 }
 
 impl PlacementControlPlane {
@@ -97,14 +155,7 @@ impl PlacementControlPlane {
         if let Ok(mut l) = self.lives.lock() {
             l.insert(
                 rec.instance_id.clone(),
-                ControllerLife {
-                    life: InstanceLife::new(state, now_ms()),
-                    policy: p,
-                    order: Some(order.clone()),
-                    reschedules: 0,
-                    last_error: None,
-                    was_running: true,
-                },
+                ControllerLife::new(state, p, Some(order.clone()), 0),
             );
         }
         self.persist();
@@ -124,17 +175,24 @@ impl PlacementControlPlane {
             .and_then(|l| l.get(instance_id).map(|c| c.life.state))
     }
 
-    fn set_state(&self, rec: &PlacementRecord, to: LifecycleState, reason: &str, force: bool) {
+    pub(super) fn life_of(&self, instance_id: &str) -> Option<ControllerLife> {
+        self.lives.lock().ok().and_then(|l| l.get(instance_id).cloned())
+    }
+
+    pub(super) fn update_life(&self, instance_id: &str, f: impl FnOnce(&mut ControllerLife)) {
+        if let Ok(mut l) = self.lives.lock()
+            && let Some(c) = l.get_mut(instance_id)
+        {
+            f(c);
+        }
+    }
+
+    pub(super) fn set_state(&self, rec: &PlacementRecord, to: LifecycleState, reason: &str, force: bool) {
         let kind = chain::EVENT_KIND_WORKLOAD_LIFECYCLE;
         let from = {
             let Ok(mut l) = self.lives.lock() else { return };
-            let c = l.entry(rec.instance_id.clone()).or_insert_with(|| ControllerLife {
-                life: InstanceLife::new(LifecycleState::Running, now_ms()),
-                policy: LifecyclePolicy::default(),
-                order: None,
-                reschedules: 0,
-                last_error: None,
-                was_running: true,
+            let c = l.entry(rec.instance_id.clone()).or_insert_with(|| {
+                ControllerLife::new(LifecycleState::Running, LifecyclePolicy::default(), None, 0)
             });
             if to == LifecycleState::Lost {
                 c.was_running = c.life.state.is_live();
@@ -158,16 +216,21 @@ impl PlacementControlPlane {
         );
     }
 
-    /// Whether `node` is `Dead` now: membership says so, or it has been
-    /// unreachable for `dead_after`.
+    /// Whether `node` is `Dead` now: unreachable for `dead_after`, and
+    /// membership (when it knows the peer) does not hold it healthy.
     fn node_dead(&self, node: &str, now: u64) -> bool {
-        if let Some(p) = self.membership.as_ref().and_then(|m| m.get_peer(node))
-            && super::facts::liveness_of(&p.state) == Liveness::Dead
-        {
-            return true;
-        }
         let since = self.down_since.lock().ok().and_then(|d| d.get(node).copied());
-        since.is_some_and(|s| now.saturating_sub(s) >= self.cfg.dead_after.as_millis() as u64)
+        let down = since.is_some_and(|s| now.saturating_sub(s) >= self.cfg.dead_after.as_millis() as u64);
+        if !down {
+            return false;
+        }
+        match self.membership.as_ref().and_then(|m| m.get_peer(node)) {
+            Some(p) => !matches!(
+                super::facts::liveness_of(&p.state),
+                clawft_types::placement::engine::Liveness::Alive
+            ),
+            None => true,
+        }
     }
 
     fn note_reachability(&self, now: u64) {
@@ -179,27 +242,6 @@ impl PlacementControlPlane {
             } else {
                 d.entry(t.node_id).or_insert(now);
             }
-        }
-    }
-
-    /// Why this instance must not be moved, if so.
-    fn immovable(&self, rec: &PlacementRecord, c: &ControllerLife) -> Option<String> {
-        let kind_ok = self
-            .kinds
-            .get(&rec.kind)
-            .is_none_or(|k| k.migratable());
-        match &c.order {
-            _ if !c.was_running => Some("it was not running when the node was lost".into()),
-            None => Some("no stored placement order (adopted instance)".into()),
-            Some(o) if o.pin.is_some() => Some(format!("pinned to {}", o.pin.as_deref().unwrap_or(""))),
-            Some(_) if !c.policy.migratable => Some("operator marked it non-migratable".into()),
-            Some(_) if !kind_ok => Some(format!("kind {} is non-migratable", rec.kind)),
-            Some(o) if !o.package_dir.is_dir() => Some("its package directory is gone".into()),
-            Some(_) if c.reschedules >= c.policy.max_reschedules => Some(format!(
-                "already rescheduled {} times",
-                c.reschedules
-            )),
-            Some(_) => None,
         }
     }
 
@@ -225,11 +267,11 @@ impl PlacementControlPlane {
             match (dead, state) {
                 (false, LifecycleState::Rescheduled) => self.unload_orphan(&rec, &mut out).await,
                 (_, LifecycleState::Rescheduled) => {}
-                (true, LifecycleState::Lost) => self.try_reschedule(&rec, &mut out).await,
+                (true, LifecycleState::Lost) => self.reschedule(&rec, true, &mut out).await,
                 (true, s) if !s.is_terminal() => {
                     self.set_state(&rec, LifecycleState::Lost, "node is dead", false);
                     out.push(event(&rec, "lost", format!("node {} is dead", rec.node_id)));
-                    self.try_reschedule(&rec, &mut out).await;
+                    self.reschedule(&rec, true, &mut out).await;
                 }
                 (false, LifecycleState::Lost) => self.rejoined(&rec, &mut out).await,
                 _ => {}
@@ -239,9 +281,10 @@ impl PlacementControlPlane {
         out
     }
 
-    /// Mirror each reachable node's instance states and drop records the
-    /// node no longer has (taken down by a revocation, or lost with a
-    /// restart of the node).
+    /// Mirror each reachable node's instance states. An instance the node no
+    /// longer holds is a real teardown when the node says so (revoked,
+    /// unloaded), and otherwise was lost with the node (a reboot): it is
+    /// placed again.
     async fn mirror_states(&self, out: &mut Vec<LifecycleEvent>) {
         let recs = self.placements();
         for t in self.targets().into_iter().filter(|t| t.reachable) {
@@ -249,7 +292,8 @@ impl PlacementControlPlane {
             if mine.is_empty() {
                 continue;
             }
-            let Ok(Value::Array(rows)) = self.call(&t.node_id, method::STATUS, None, json!({})).await else {
+            let body = json!({ "include_departed": true });
+            let Ok(Value::Array(rows)) = self.call(&t.node_id, method::STATUS, None, body).await else {
                 continue;
             };
             for rec in mine {
@@ -261,11 +305,7 @@ impl PlacementControlPlane {
                     .iter()
                     .find(|r| r["instance_id"].as_str() == Some(rec.instance_id.as_str()));
                 match row {
-                    None => {
-                        self.set_state(rec, LifecycleState::Unloaded, "no longer on its node", false);
-                        self.forget_instances(std::slice::from_ref(&rec.instance_id));
-                        out.push(event(rec, "gone", "the node no longer holds it"));
-                    }
+                    None => self.missing_on_node(rec, &rows, state, out).await,
                     Some(r) => {
                         let to = serde_json::from_value::<LifecycleState>(r["lifecycle"].clone()).ok();
                         if let Some(to) = to
@@ -279,113 +319,74 @@ impl PlacementControlPlane {
         }
     }
 
-    async fn try_reschedule(&self, rec: &PlacementRecord, out: &mut Vec<LifecycleEvent>) {
-        let Some(c) = self.lives.lock().ok().and_then(|l| l.get(&rec.instance_id).cloned()) else {
+    async fn missing_on_node(
+        &self,
+        rec: &PlacementRecord,
+        rows: &[Value],
+        state: Option<LifecycleState>,
+        out: &mut Vec<LifecycleEvent>,
+    ) {
+        let told = rows
+            .iter()
+            .find(|r| r["departed_instance"].as_str() == Some(rec.instance_id.as_str()))
+            .and_then(|r| r["reason"].as_str());
+        let was_live = state.is_some_and(|s| s.is_live() || s == LifecycleState::Loaded);
+        if told.is_none() && was_live {
+            self.set_state(rec, LifecycleState::Lost, "instance missing though its node is up (restart?)", false);
+            out.push(event(rec, "lost", "the node answers but no longer holds it"));
+            self.reschedule(rec, false, out).await;
             return;
-        };
-        if let Some(why) = self.immovable(rec, &c) {
-            if c.last_error.as_deref() != Some(why.as_str()) {
-                self.chain_event(
-                    chain::EVENT_KIND_WORKLOAD_LIFECYCLE,
-                    json!({ "phase": "alert", "instance_id": rec.instance_id, "node": rec.node_id,
-                            "workload": rec.workload,
-                            "reason": format!("node lost, not rescheduled: {why}") }),
-                );
-                self.note_error(&rec.instance_id, Some(why.clone()));
-                out.push(event(rec, "alert", why));
-            }
-            return;
         }
-        let mut order = c.order.clone().expect("immovable() requires an order");
-        order.avoid.push(rec.node_id.clone());
-        order.dry_run = false;
-        // Same gate, same engine: nothing here bypasses placement.
-        let report = match self.place_unregistered(&order).await {
-            Ok(r) => r,
-            Err(e) => return self.reschedule_failed(rec, e.to_string(), out),
-        };
-        let Some(new) = report.placed else {
-            let why = report
-                .attempts
-                .last()
-                .map(|a| format!("{}: {}", a.outcome, a.reason.clone().unwrap_or_default()))
-                .unwrap_or_else(|| "no node accepted it".into());
-            return self.reschedule_failed(rec, why, out);
-        };
-        // The replacement carries the history; the old record waits for its node.
-        if let Ok(mut l) = self.lives.lock() {
-            l.insert(
-                new.instance_id.clone(),
-                ControllerLife {
-                    life: InstanceLife::new(
-                        if order.start { LifecycleState::Running } else { LifecycleState::Loaded },
-                        now_ms(),
-                    ),
-                    policy: c.policy,
-                    order: c.order.clone(),
-                    reschedules: c.reschedules + 1,
-                    last_error: None,
-                    was_running: true,
-                },
-            );
-        }
-        self.set_state(rec, LifecycleState::Rescheduled, &format!("replaced on {}", new.node_id), false);
-        self.chain_event(
-            chain::EVENT_KIND_WORKLOAD_MIGRATE,
-            json!({ "phase": "rescheduled", "reason": "node_dead", "workload": rec.workload,
-                    "from_node": rec.node_id, "from_instance": rec.instance_id,
-                    "to_node": new.node_id, "to_instance": new.instance_id,
-                    "decision_id": report.decision_id }),
-        );
-        out.push(event(
-            rec,
-            "rescheduled",
-            format!("now {} on {}", new.instance_id, new.node_id),
-        ));
+        let why = told.unwrap_or("not running when it went");
+        self.set_state(rec, LifecycleState::Unloaded, &format!("no longer on its node: {why}"), false);
+        self.forget_instances(std::slice::from_ref(&rec.instance_id));
+        out.push(event(rec, "gone", format!("the node no longer holds it ({why})")));
     }
 
-    fn note_error(&self, instance_id: &str, e: Option<String>) {
-        if let Ok(mut l) = self.lives.lock()
-            && let Some(c) = l.get_mut(instance_id)
-        {
-            c.last_error = e;
-        }
-    }
-
-    fn reschedule_failed(&self, rec: &PlacementRecord, why: String, out: &mut Vec<LifecycleEvent>) {
-        let first = self
-            .lives
-            .lock()
-            .ok()
-            .and_then(|l| l.get(&rec.instance_id).map(|c| c.last_error.clone()))
-            .flatten();
-        if first.as_deref() == Some(why.as_str()) {
-            return; // same reason as last tick: already chained
-        }
-        self.chain_event(
-            chain::EVENT_KIND_WORKLOAD_REFUSE,
-            json!({ "phase": "reschedule", "instance_id": rec.instance_id, "node": rec.node_id,
-                    "workload": rec.workload, "reason": why, "next": "retry on the next tick" }),
-        );
-        self.note_error(&rec.instance_id, Some(why.clone()));
-        out.push(event(rec, "reschedule_failed", why));
-    }
-
-    /// An old record whose node answers again: unload what is left there.
+    /// An old record whose node answers again: unload what is left there,
+    /// backing off after a failure and chaining each distinct failure once.
     async fn unload_orphan(&self, rec: &PlacementRecord, out: &mut Vec<LifecycleEvent>) {
-        match self.instance(method::UNLOAD, &rec.instance_id).await {
-            Ok(_) => out.push(event(rec, "orphan_unloaded", "node returned; the replaced copy was unloaded")),
+        let now = now_ms();
+        let Some(c) = self.life_of(&rec.instance_id) else { return };
+        if now < c.orphan_next_ms {
+            return;
+        }
+        let failure = match self.instance(method::UNLOAD, &rec.instance_id).await {
+            Ok(_) => {
+                out.push(event(rec, "orphan_unloaded", "node returned; the replaced copy was unloaded"));
+                return;
+            }
             Err(PlaneError::Call(CallFailure::Refused(r))) if r.code == RefusalCode::UnknownInstance => {
                 // The node restarted and no longer holds it.
                 self.drop_life(&rec.instance_id);
                 self.forget_instances(std::slice::from_ref(&rec.instance_id));
                 out.push(event(rec, "orphan_unloaded", "node returned without the replaced copy"));
+                return;
             }
-            Err(_) => {} // still unreachable or refused: retried next tick
+            Err(e) => e.to_string(),
+        };
+        let attempts = c.orphan_attempts + 1;
+        let next = now + backoff_ms(self.cfg.retry_backoff.as_millis() as u64, attempts);
+        let fresh = c.orphan_error.as_deref() != Some(failure.as_str());
+        self.update_life(&rec.instance_id, |l| {
+            l.orphan_attempts = attempts;
+            l.orphan_next_ms = next;
+            l.orphan_error = Some(failure.clone());
+        });
+        if fresh {
+            self.chain_event(
+                chain::EVENT_KIND_WORKLOAD_LIFECYCLE,
+                json!({ "phase": "alert", "instance_id": rec.instance_id, "node": rec.node_id,
+                        "workload": rec.workload, "attempt": attempts,
+                        "reason": format!("replaced copy not unloaded on the returned node: {failure}") }),
+            );
+            out.push(event(rec, "orphan_unload_failed", failure));
         }
     }
 
-    /// A `Lost` instance whose node is back: adopt it if it is still there.
+    /// A `Lost` instance whose node is back: adopt it if it is still there
+    /// (restarting it when the node's lease stopped it), otherwise place it
+    /// again.
     async fn rejoined(&self, rec: &PlacementRecord, out: &mut Vec<LifecycleEvent>) {
         let Ok(Value::Array(rows)) = self.call(&rec.node_id, method::STATUS, None, json!({})).await else {
             return;
@@ -393,17 +394,22 @@ impl PlacementControlPlane {
         let row = rows
             .iter()
             .find(|r| r["instance_id"].as_str() == Some(rec.instance_id.as_str()));
-        match row {
-            Some(_) => {
-                self.set_state(rec, LifecycleState::Running, "node rejoined with the instance", false);
-                self.note_error(&rec.instance_id, None);
-                out.push(event(rec, "recovered", "node rejoined; the instance is still there"));
-            }
-            None => {
-                self.set_state(rec, LifecycleState::Failed, "node rejoined without the instance", false);
-                out.push(event(rec, "failed", "node rejoined without the instance"));
-            }
+        let Some(row) = row else {
+            return self.reschedule(rec, false, out).await;
+        };
+        if row["lease_stopped"] == true
+            && let Err(e) = self.instance(method::START, &rec.instance_id).await
+        {
+            // Retried next tick; the instance stays Lost until it runs.
+            out.push(event(rec, "alert", format!("lease-stopped instance not restarted: {e}")));
+            return;
         }
+        self.set_state(rec, LifecycleState::Running, "node rejoined with the instance", false);
+        self.update_life(&rec.instance_id, |l| {
+            l.last_error = None;
+            l.attempts = 0;
+        });
+        out.push(event(rec, "recovered", "node rejoined; the instance is still there"));
     }
 
     /// Run [`Self::lifecycle_tick`] every `period` for as long as the runtime lives.

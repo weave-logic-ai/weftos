@@ -167,6 +167,8 @@ async fn the_replay_log_survives_a_restart_and_drops_what_no_longer_verifies() {
     // A restarted node (fresh list and runtime) reads the log back and a
     // new peer that joins it receives the notice.
     let second = member(71, &net, tmp.path(), &key);
+    // The node's own list persists across a restart; the log is read after it.
+    revoke_and_record(&second.list, None, RevocationKind::ArtifactHash, &hash, "test", "operator").unwrap();
     assert_eq!(second.rev.with_log_file(&file), 1);
     let joiner = member(72, &net, tmp.path(), &key);
     assert!(!joiner.list.is_subject_revoked(RevocationKind::ArtifactHash, &hash));
@@ -180,6 +182,7 @@ async fn the_replay_log_survives_a_restart_and_drops_what_no_longer_verifies() {
     let rogue = sign_revocation(RevocationKind::ArtifactHash, &hash, "x", 1, &SigningKey::from_bytes(&[99; 32])).unwrap();
     std::fs::write(&file, serde_json::to_vec(&vec![notice, rogue]).unwrap()).unwrap();
     let third = member(73, &net, tmp.path(), &key);
+    revoke_and_record(&third.list, None, RevocationKind::ArtifactHash, &hash, "test", "operator").unwrap();
     assert_eq!(third.rev.with_log_file(&file), 1, "only the verifiable one");
     // Garbage is ignored, not fatal.
     std::fs::write(&file, b"not json").unwrap();
@@ -248,4 +251,104 @@ async fn scripted_scenario_place_kill_reschedule_revoke_unload() {
         "revoked package was placed: {again:?}"
     );
     assert_eq!(count(&b.host).await, 0);
+}
+
+fn hash_of(i: u8) -> String {
+    crate::workload_pkg::codec::hex_encode(&[i; 32])
+}
+
+/// Revoke `n` artifact hashes on `m` (list and notice log), as the operator would.
+async fn revoke_many(m: &Member, n: u8) {
+    for i in 1..=n {
+        let notice = sign_revocation(RevocationKind::ArtifactHash, &hash_of(i), "t", 1, &signer()).unwrap();
+        assert!(m.rev.issue(notice).await.unwrap());
+    }
+}
+
+fn recovered(id: &str, verified: bool) -> crate::mesh_discovery::MeshPeerEvent {
+    crate::mesh_discovery::MeshPeerEvent::Recovered {
+        node_id: id.to_string(),
+        address: None,
+        verified,
+    }
+}
+
+#[tokio::test]
+async fn repeated_recoveries_of_one_peer_cause_one_replay_and_unverified_peers_get_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let key = SigningKey::from_bytes(&[10; 32]);
+    let net = Killable::new();
+    let a = member(90, &net, tmp.path(), &key);
+    let b = member(91, &net, tmp.path(), &key);
+    revoke_many(&a, 2).await;
+    link(&a, &b); // Joined, verified: replay number one
+    wait_for("the first replay", || a.rev.replays_started() == 1).await;
+    wait_for("B to learn both", || {
+        (1..=2).all(|i| b.list.is_subject_revoked(RevocationKind::ArtifactHash, &hash_of(i)))
+    })
+    .await;
+
+    // A link that flaps: five more recoveries inside the cooldown.
+    for _ in 0..5 {
+        a.rt.emit_peer_event(recovered(&b.host.id, true));
+    }
+    // A peer admission did not verify is never replayed to.
+    a.rt.emit_peer_event(recovered("someone-else", false));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(a.rev.replays_started(), 1, "cooldown and verification bound the replays");
+}
+
+#[tokio::test]
+async fn a_replay_stops_when_its_peer_leaves() {
+    let tmp = tempfile::tempdir().unwrap();
+    let key = SigningKey::from_bytes(&[10; 32]);
+    let net = Killable::new();
+    let a = member(92, &net, tmp.path(), &key);
+    let b = member(93, &net, tmp.path(), &key);
+    // More than the receiver's burst, so the replay is paced and still running.
+    revoke_many(&a, 14).await;
+    link(&a, &b);
+    let learned = || (1..=14).filter(|i| b.list.is_subject_revoked(RevocationKind::ArtifactHash, &hash_of(*i))).count();
+    wait_for("the burst to arrive", || learned() >= 10).await;
+    a.rt.emit_peer_event(crate::mesh_discovery::MeshPeerEvent::Left { node_id: b.host.id.clone() });
+    tokio::time::sleep(Duration::from_millis(1_800)).await;
+    assert_eq!(learned(), 10, "the paced remainder was not sent after the peer left");
+}
+
+#[tokio::test]
+async fn a_lifted_revocation_does_not_come_back_through_the_replay_log() {
+    let tmp = tempfile::tempdir().unwrap();
+    let key = SigningKey::from_bytes(&[10; 32]);
+    let net = Killable::new();
+    let a = member(94, &net, tmp.path(), &key);
+    let b = member(95, &net, tmp.path(), &key);
+    revoke_many(&a, 2).await;
+    assert_eq!(a.rev.logged().len(), 2);
+
+    // The operator lifts one of them on this node.
+    assert!(
+        crate::workload_governance::unrevoke_and_record(
+            &a.list, None, RevocationKind::ArtifactHash, &hash_of(1), "operator"
+        )
+        .unwrap()
+    );
+    assert_eq!(a.rev.logged().len(), 1, "its notice left the log");
+
+    link(&a, &b);
+    wait_for("B to learn the other", || {
+        b.list.is_subject_revoked(RevocationKind::ArtifactHash, &hash_of(2))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!b.list.is_subject_revoked(RevocationKind::ArtifactHash, &hash_of(1)), "not re-revoked");
+
+    // Explicit purge works too, and the saved log follows.
+    let c = member(96, &net, tmp.path(), &key);
+    let file = tmp.path().join("log.json");
+    c.rev.with_log_file(&file);
+    revoke_many(&c, 1).await;
+    assert_eq!(c.rev.forget_subject(RevocationKind::ArtifactHash, &hash_of(1)), 1);
+    let saved: Vec<crate::mesh_swarm_revoke::SignedRevocation> =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert!(saved.is_empty());
 }

@@ -193,7 +193,7 @@ pub fn host_node_with(
     let container = caps
         .iter()
         .any(|c| c.id.as_str().starts_with("runtime.container"));
-    host_node_routes(seed, caps, scripts, controller, make_gate, container, None)
+    host_node_routes(seed, caps, scripts, controller, make_gate, container, None, None)
 }
 
 /// [`host_node`] serving only its native adapter, whatever its facts say.
@@ -203,7 +203,7 @@ pub fn host_node_native_only(
     scripts: bool,
     controller: &SigningKey,
 ) -> HostNode {
-    host_node_routes(seed, caps, scripts, controller, gate, false, None)
+    host_node_routes(seed, caps, scripts, controller, gate, false, None, None)
 }
 
 /// [`host_node_native_only`] with the ingest bridge wired in.
@@ -213,9 +213,20 @@ pub fn host_node_ingest(
     controller: &SigningKey,
     ingest: crate::cog_ingest::IngestHooks,
 ) -> HostNode {
-    host_node_routes(seed, caps, true, controller, gate, false, Some(ingest))
+    host_node_routes(seed, caps, true, controller, gate, false, Some(ingest), None)
 }
 
+/// [`host_node`] with the opt-in controller lease.
+pub fn host_node_leased(
+    seed: u8,
+    caps: Vec<Capability>,
+    controller: &SigningKey,
+    lease: std::time::Duration,
+) -> HostNode {
+    host_node_routes(seed, caps, true, controller, gate, false, None, Some(lease))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn host_node_routes(
     seed: u8,
     caps: Vec<Capability>,
@@ -224,6 +235,7 @@ fn host_node_routes(
     make_gate: impl FnOnce(&Arc<ChainManager>) -> Arc<WorkloadGate>,
     container: bool,
     ingest: Option<crate::cog_ingest::IngestHooks>,
+    lease: Option<std::time::Duration>,
 ) -> HostNode {
     let key = SigningKey::from_bytes(&[seed; 32]);
     let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
@@ -268,6 +280,9 @@ fn host_node_routes(
     }
     if let Some(h) = ingest {
         svc = svc.with_ingest(h);
+    }
+    if let Some(l) = lease {
+        svc = svc.with_lease(l);
     }
     let svc = svc
         .with_controllers(vec![controller.verifying_key().to_bytes()])

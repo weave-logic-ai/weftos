@@ -22,19 +22,31 @@ const SCRIPT: &str = "#!/bin/sh\nexec sleep 60\n";
 /// How long a node must be unreachable to count as dead in these tests.
 const DEAD_AFTER: Duration = Duration::from_millis(300);
 
-struct Rig {
-    a: HostNode,
-    b: HostNode,
-    addr_a: String,
-    addr_b: String,
-    net: Arc<Killable>,
-    plane: PlacementControlPlane,
-    chain: Arc<ChainManager>,
-    pkg: std::path::PathBuf,
-    _tmp: tempfile::TempDir,
+pub(super) fn cfg() -> PlaneConfig {
+    PlaneConfig {
+        dead_after: DEAD_AFTER,
+        retry_backoff: Duration::from_millis(60),
+        ..PlaneConfig::default()
+    }
 }
 
-async fn rig() -> Rig {
+pub(super) async fn past_backoff() {
+    tokio::time::sleep(Duration::from_millis(260)).await;
+}
+
+pub(super) struct Rig {
+    pub(super) a: HostNode,
+    pub(super) b: HostNode,
+    pub(super) addr_a: String,
+    pub(super) addr_b: String,
+    pub(super) net: Arc<Killable>,
+    pub(super) plane: PlacementControlPlane,
+    pub(super) chain: Arc<ChainManager>,
+    pub(super) pkg: std::path::PathBuf,
+    pub(super) _tmp: tempfile::TempDir,
+}
+
+pub(super) async fn rig() -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let pkg = package(tmp.path(), "life-cog", SCRIPT, &[arch()]);
     let key = SigningKey::from_bytes(&[10; 32]);
@@ -44,28 +56,25 @@ async fn rig() -> Rig {
     let addr_a = net.serve("a", a.svc.clone());
     let addr_b = net.serve("b", b.svc.clone());
     let (plane, chain) = controller(&key, net.clone());
-    let plane = plane.with_config(PlaneConfig {
-        dead_after: DEAD_AFTER,
-        ..PlaneConfig::default()
-    });
+    let plane = plane.with_config(cfg());
     plane.add_target(&addr_a, TrustTier::Paired).await.unwrap();
     plane.add_target(&addr_b, TrustTier::Paired).await.unwrap();
     Rig { a, b, addr_a, addr_b, net, plane, chain, pkg, _tmp: tmp }
 }
 
-async fn count(n: &HostNode) -> usize {
+pub(super) async fn count(n: &HostNode) -> usize {
     n.svc.instances.lock().await.len()
 }
 
-async fn past_dead_after() {
+pub(super) async fn past_dead_after() {
     tokio::time::sleep(DEAD_AFTER + Duration::from_millis(80)).await;
 }
 
-fn actions(ev: &[LifecycleEvent]) -> Vec<&str> {
+pub(super) fn actions(ev: &[LifecycleEvent]) -> Vec<&str> {
     ev.iter().map(|e| e.action.as_str()).collect()
 }
 
-fn chained(chain: &ChainManager, kind: &str) -> Vec<serde_json::Value> {
+pub(super) fn chained(chain: &ChainManager, kind: &str) -> Vec<serde_json::Value> {
     events(chain, kind).into_iter().map(|(_, p)| p).collect()
 }
 
@@ -206,19 +215,25 @@ async fn a_lost_instance_is_not_placed_on_an_unverified_node_until_it_is_verifie
     membership.add_peer(peer(&r.b.id, NodeState::Active)).unwrap();
     r.plane.place(&mode_order(&r.pkg, RunMode::Listener, Some(&r.a.id))).await.unwrap();
 
-    // Membership declares `a` dead at once; `b` is only an unverified claim.
+    // `a` goes dark and membership agrees; `b` is only an unverified claim.
     membership.update_state(&r.a.id, NodeState::Unreachable).unwrap();
     membership.update_state(&r.b.id, NodeState::Unverified).unwrap();
+    r.net.kill(&r.addr_a);
+    assert!(r.plane.lifecycle_tick().await.is_empty(), "grace period first");
+    past_dead_after().await;
     let ev = r.plane.lifecycle_tick().await;
     assert_eq!(actions(&ev), ["lost", "reschedule_failed"], "{ev:#?}");
     assert_eq!(count(&r.b).await, 0, "never placed on an unverified node");
     assert!(!chained(&r.chain, EVENT_KIND_WORKLOAD_REFUSE).is_empty());
     // The same refusal is not chained again every tick.
     let n = chained(&r.chain, EVENT_KIND_WORKLOAD_REFUSE).len();
-    assert!(r.plane.lifecycle_tick().await.is_empty());
+    assert!(r.plane.lifecycle_tick().await.is_empty(), "backing off");
+    past_backoff().await;
+    assert!(r.plane.lifecycle_tick().await.is_empty(), "same reason, chained once");
     assert_eq!(chained(&r.chain, EVENT_KIND_WORKLOAD_REFUSE).len(), n);
 
     membership.update_state(&r.b.id, NodeState::Active).unwrap();
+    past_backoff().await;
     let ev = r.plane.lifecycle_tick().await;
     assert_eq!(actions(&ev), ["rescheduled"], "{ev:#?}");
     assert_eq!(count(&r.b).await, 1);
@@ -237,6 +252,7 @@ async fn a_lost_instance_is_not_placed_on_a_demoted_node() {
     assert_eq!(count(&r.b).await, 0, "a demoted node gets nothing");
 
     assert!(r.plane.set_tier(&r.b.id, TrustTier::Paired));
+    past_backoff().await;
     let ev = r.plane.lifecycle_tick().await;
     assert_eq!(actions(&ev), ["rescheduled"], "{ev:#?}");
     assert_eq!(count(&r.b).await, 1);
