@@ -193,23 +193,6 @@ fn check_shape(g: &CheckoutGrant, pk: &[u8; 32]) -> Result<(), LicenceError> {
     if g.licence.expires == 0 || times.iter().any(|t| *t > MAX_UNIX_TIME) {
         return bad("time");
     }
-    let dup = |f: fn(&GrantArtifact) -> &String| {
-        let set: BTreeSet<&String> = g.artifacts.iter().map(f).collect();
-        set.len() != g.artifacts.len()
-    };
-    if dup(|a| &a.sha256) || dup(|a| &a.blake3) {
-        return bad("duplicate artifact hash");
-    }
-    if g.artifacts.iter().any(|a| a.size == 0 || a.size > MAX_ARTIFACT_BYTES) {
-        return bad("artifact size");
-    }
-    if !g.registry.bytes().all(|c| (0x20..=0x7e).contains(&c)) {
-        return bad("registry");
-    }
-    let times = [g.licence.expires, g.issued_at, g.expires_at];
-    if g.licence.expires == 0 || times.iter().any(|t| *t > MAX_UNIX_TIME) {
-        return bad("time");
-    }
     if g.expires_at.saturating_sub(g.issued_at) > MAX_GRANT_TTL_SECS {
         return Err(LicenceError::TtlTooLong);
     }

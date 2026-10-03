@@ -10,7 +10,7 @@ use weft_licence_wire::{
 use crate::error::ApiError;
 use crate::request::Request;
 use crate::service::{Body, Response, Service, Steward};
-use crate::state::{ServeRec, SlotStatus};
+use crate::state::ServeRec;
 
 /// Domain tag of operator serve overrides.
 pub const OVERRIDE_DOMAIN: &str = "weft-licence-v1/serve-override";
@@ -67,7 +67,15 @@ pub fn install_override(dir: &std::path::Path, env: &SignedEnvelope) -> Result<(
 
 impl Service {
     fn override_extra(&self, dir: &std::path::Path, key_id: &str, rec: &ServeRec, now: u64) -> u32 {
-        let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+            Err(e) => {
+                // No extra transfers are allowed while the overrides cannot be read.
+                self.log(&format!("cannot read the overrides directory: {e}"));
+                return 0;
+            }
+        };
         let mut extra = 0u32;
         for ent in rd.flatten().take(64) {
             let Ok(Some(raw)) = crate::fsio::read_capped(&ent.path(), 16 * 1024) else { continue };
@@ -97,13 +105,17 @@ impl Service {
             .try_acquire()
             .ok_or_else(|| ApiError::new(429, "busy", "a transfer is already in flight"))?;
         let mut inner = self.lock();
+        let (Some(sk), Some(mesh)) = (inner.key.clone(), inner.binding.as_ref().filter(|b| b.is_bound()).map(|b| b.record.mesh_id.clone())) else {
+            return Err(ApiError::new(409, "seed_not_bound", "no mesh binding"));
+        };
+        let pk = sk.verifying_key().to_bytes();
         let found = inner.store.slots.slots.values().find_map(|s| {
-            let live = s.status == SlotStatus::Active && self.grant_live(s, now);
+            let live = Service::valid_grant(s, now, &pk, &mesh).is_some();
             s.arches.values().find(|a| a.blake3 == hash).filter(|_| live).map(|a| (s.cog_id.clone(), s.version.clone(), a.arch.clone()))
         });
         let (cog_id, version, arch) = found.ok_or_else(|| ApiError::new(404, "no_grant", "no active grant covers this artifact"))?;
         let rec = ServeRec { key_id: steward.key_id.clone(), cog_id, version, arch, ts: now };
-        inner.store.serves.retain(|s| s.ts + 86_400 > now);
+        inner.store.serves.retain(|s| s.ts.saturating_add(86_400) > now);
         let used = inner
             .store
             .serves
@@ -116,33 +128,29 @@ impl Service {
             return Err(ApiError::new(429, "serve_limit", format!("{used} transfers in 24 h; an operator override raises it")));
         }
         let (path, len) = inner.cache.get(hash).ok_or_else(|| ApiError::new(410, "gone", "the artifact is no longer cached"))?;
+        // Open under the lock: the handle, not the path, is what gets sent.
+        let file = std::fs::File::open(&path).map_err(|_| ApiError::new(410, "gone", "the artifact file is missing"))?;
         let line = format!(
             "byte transfer cog={} version={} arch={} bytes={} steward={} (serve {} of {})",
-            rec.cog_id, rec.version, rec.arch, len, rec.key_id, used + 1, allowed
+            rec.cog_id, rec.version, rec.arch, len, rec.key_id, used.saturating_add(1), allowed
         );
         inner.store.serves.push(rec);
         inner.store.persist_serves().map_err(|e| ApiError::new(503, "persist_failed", e.to_string()))?;
         self.log(&line);
-        Ok(Response { status: 200, body: Body::File { path, len }, permit: Some(permit) })
-    }
-
-    fn grant_live(&self, slot: &crate::state::Slot, now: u64) -> bool {
-        let Some(sk) = self.key.as_ref() else { return false };
-        slot.grant
-            .as_ref()
-            .and_then(|g| weft_licence_wire::verify_grant_signature(g, &sk.verifying_key().to_bytes()).ok())
-            .is_some_and(|g| !g.is_withdrawal() && g.expires_at > now)
+        Ok(Response { status: 200, body: Body::File { file, len }, permit: Some(permit) })
     }
 
     pub(crate) fn grants(&self, req: &Request) -> Response {
         let since: u64 = req.query("since").and_then(|v| v.parse().ok()).unwrap_or(0);
-        let inner = self.lock();
+        let mut inner = self.lock();
+        self.refresh_binding(&mut inner);
+        let mesh = inner.binding.as_ref().filter(|b| b.is_bound()).map(|b| b.record.mesh_id.clone()).unwrap_or_default();
         let mut rows: Vec<(u64, &SignedEnvelope)> = inner
             .store
             .slots
             .slots
             .values()
-            .filter(|s| s.issue_ctr > since)
+            .filter(|s| s.mesh_id == mesh && s.issue_ctr > since)
             .filter_map(|s| s.grant.as_ref().map(|g| (s.issue_ctr, g)))
             .collect();
         rows.sort_by_key(|(c, _)| *c);

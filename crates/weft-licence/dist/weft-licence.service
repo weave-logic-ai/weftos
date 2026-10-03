@@ -9,6 +9,10 @@ Documentation=https://github.com/weave-logic-ai/weftos/blob/master/docs/cogs/wef
 After=network.target time-sync.target
 Wants=time-sync.target
 # Do not start without the grant key: run `weft-licence init` first (USB).
+# After an unbind the key is deleted: the running service notices at the next
+# request and goes idle (no key in memory, every checkout released), but this
+# condition then stops systemd from starting it again until `init` runs for the
+# next mesh. That is intended.
 ConditionPathExists=/var/lib/weft-licence/grant.key
 
 [Service]
@@ -34,16 +38,28 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
+# AF_UNIX is for name resolution (nscd) when the registry host is looked up.
+# Check on the Seed whether it is needed and drop it if not.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=true
+RestrictSUIDSGID=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-# The cache is 256 MiB on disk and one artifact (at most 64 MiB) is in memory
-# during a checkout.
-MemoryMax=192M
+# The cache is on disk. During a checkout one artifact (at most 64 MiB) is held
+# in memory, up to twice over while the https reader grows its buffer, plus
+# the write to the cache. Transfers to the steward stream from the file.
+MemoryMax=320M
 TasksMax=64
 
 [Install]

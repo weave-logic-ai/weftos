@@ -94,11 +94,4 @@ impl Cache {
         self.sizes.insert(blake3.to_string(), need);
         Ok(())
     }
-
-    /// Delete an entry (an artifact whose bytes failed a re-check).
-    pub fn remove(&mut self, blake3: &str) {
-        let _ = std::fs::remove_file(self.dir.join(blake3));
-        self.order.retain(|h| h != blake3);
-        self.sizes.remove(blake3);
-    }
 }

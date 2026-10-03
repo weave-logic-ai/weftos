@@ -68,6 +68,9 @@ pub struct Config {
     pub licence_file: PathBuf,
     /// Cognitum registry (`app-registry.json`) URL. https only.
     pub registry_url: String,
+    /// Allow `listen` addresses outside the link-local, tailnet and loopback
+    /// ranges (a LAN address). Plain HTTP on a LAN needs this explicit opt-in.
+    pub allow_lan_listen: bool,
     /// Lab only: allow a local path or http registry (tests, never the Seed).
     pub allow_insecure_registry: bool,
     /// Grant lifetime, seconds (default 72 h, at most 7 days).
@@ -89,6 +92,7 @@ impl Default for Config {
             operator_pubkeys: Vec::new(),
             licence_file: PathBuf::from("/var/lib/weft-licence/licence.json"),
             registry_url: String::new(),
+            allow_lan_listen: false,
             allow_insecure_registry: false,
             grant_ttl_secs: 72 * 3600,
             clock_floor: CLOCK_FLOOR,
@@ -113,6 +117,22 @@ impl Config {
         if self.listen.iter().any(|a| a.ip().is_unspecified()) {
             return bad("listen: 0.0.0.0 and :: are refused; name the USB and tailnet addresses");
         }
+        if !self.allow_lan_listen
+            && let Some(a) = self.listen.iter().find(|a| !listen_ip_allowed(a.ip()))
+        {
+            return Err(SvcError::Config(format!(
+                "listen {a} is outside the USB link-local, tailnet and loopback ranges; set allow_lan_listen to accept plain HTTP on a LAN"
+            )));
+        }
+        if !self.device_id.is_empty() && !weft_licence_wire::valid_token(&self.device_id) {
+            return bad("device_id must be 1 to 128 characters of [A-Za-z0-9._-+@/]");
+        }
+        if self.limits.rate_bytes_per_sec == 0 {
+            return bad("limits.rate_bytes_per_sec must be above 0");
+        }
+        if self.limits.cache_bytes < self.limits.max_artifact_bytes {
+            return bad("limits.cache_bytes must be at least max_artifact_bytes");
+        }
         if self.grant_ttl_secs == 0 || self.grant_ttl_secs > weft_licence_wire::MAX_GRANT_TTL_SECS {
             return bad("grant_ttl_secs must be between 1 s and 7 days");
         }
@@ -126,5 +146,21 @@ impl Config {
             return bad("limits.renew_batch must be 1 to 256");
         }
         Ok(())
+    }
+}
+
+/// Loopback, IPv4 link-local 169.254/16, IPv6 link-local fe80::/10, the
+/// tailnet CGNAT range 100.64/10 and the tailnet ULA fd7a:115c:a1e0::/48.
+pub fn listen_ip_allowed(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v) => {
+            let o = v.octets();
+            v.is_loopback() || (o[0] == 169 && o[1] == 254) || (o[0] == 100 && (o[1] & 0xc0) == 64)
+        }
+        IpAddr::V6(v) => {
+            let s = v.segments();
+            v.is_loopback() || (s[0] & 0xffc0) == 0xfe80 || (s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0)
+        }
     }
 }

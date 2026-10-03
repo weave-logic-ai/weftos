@@ -5,7 +5,9 @@ state_dir = "/var/lib/weft-licence"
 device_id = "REPLACE-WITH-THE-SEED-DEVICE-ID"
 
 # Named addresses only: the USB link-local interface and the tailnet
-# interface. 0.0.0.0 and :: are refused at startup. Placeholders below.
+# interface. 0.0.0.0 and :: are refused at startup, and so is anything outside
+# loopback, 169.254/16, fe80::/10, 100.64/10 and fd7a:115c:a1e0::/48 unless
+# allow_lan_listen = true. Placeholders below.
 listen = ["169.254.42.1:8700", "100.64.0.9:8700"]
 
 # Pinned operator public keys (64 hex). `init --operator-key` also records

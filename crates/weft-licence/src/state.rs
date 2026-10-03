@@ -33,6 +33,10 @@ pub enum SlotStatus {
 /// latest signed grant (re-served by `GET /grants` without signing again).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Slot {
+    /// The mesh this checkout belongs to (hex). A slot is live only for the
+    /// currently bound mesh; empty (older state) never matches.
+    #[serde(default)]
+    pub mesh_id: String,
     /// Cog id.
     pub cog_id: String,
     /// Version.

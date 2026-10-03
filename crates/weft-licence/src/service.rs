@@ -2,8 +2,8 @@
 //! the identity endpoint. Checkout, renewal, listing and transfer live in
 //! `checkout.rs` and `artifact.rs`.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::SystemTime;
 
 use ed25519_dalek::SigningKey;
 use serde_json::json;
@@ -18,6 +18,10 @@ use crate::limits::{Permit, Permits, RateWindow};
 use crate::providers::{CogFetcher, DeviceSigner, LicenceProvider};
 use crate::request::{self, AuthError, Request};
 use crate::state::{OperatorKeys, Store};
+
+fn binding_stamp(dir: &std::path::Path) -> Option<(SystemTime, u64)> {
+    std::fs::metadata(dir.join("binding.json")).ok().map(|m| (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()))
+}
 
 /// Source of unix seconds. Injected so tests control the clock.
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
@@ -41,8 +45,9 @@ pub enum Body {
     Json(Vec<u8>),
     /// A cached artifact to stream (rate limited by the HTTP layer).
     File {
-        /// File to send.
-        path: PathBuf,
+        /// The open cache file (opened under the state lock, so a later
+        /// eviction cannot change what is sent).
+        file: std::fs::File,
         /// Its length.
         len: u64,
     },
@@ -83,13 +88,16 @@ pub(crate) struct Inner {
     pub cache: Cache,
     pub steward_rate: RateWindow,
     pub unsigned_rate: RateWindow,
+    /// The grant key; dropped from memory while unbound.
+    pub key: Option<SigningKey>,
+    /// mtime and length of `binding.json` when it was last read.
+    pub binding_stamp: Option<(SystemTime, u64)>,
 }
 
 /// The licence proxy.
 pub struct Service {
     pub(crate) cfg: Config,
     pub(crate) clock: Clock,
-    pub(crate) key: Option<SigningKey>,
     pub(crate) ops: OperatorKeys,
     pub(crate) licence: Box<dyn LicenceProvider>,
     pub(crate) fetcher: Box<dyn CogFetcher>,
@@ -115,6 +123,9 @@ impl Service {
         device: Box<dyn DeviceSigner>,
     ) -> Result<Self, SvcError> {
         cfg.validate()?;
+        if cfg.device_id.is_empty() {
+            return Err(SvcError::Config("device_id is not set".into()));
+        }
         let ops = OperatorKeys::load(&cfg.state_dir, &cfg.operator_pubkeys)?;
         let binding = bind::load(&cfg.state_dir, &ops)?;
         let key = match keys::load(&cfg.state_dir) {
@@ -123,13 +134,14 @@ impl Service {
             Err(e) => return Err(e),
         };
         let store = Store::open(&cfg.state_dir)?;
+        let binding_stamp = binding_stamp(&cfg.state_dir);
         let cache = Cache::open(&cfg.state_dir.join("cache"), cfg.limits.cache_bytes)
             .map_err(|e| SvcError::Io(format!("{e:?}")))?;
-        Ok(Self {
+        let bound = binding.as_ref().is_some_and(|b| b.is_bound());
+        let svc = Self {
             permits: Permits::new(cfg.limits.in_flight),
             cfg,
             clock,
-            key,
             ops,
             licence,
             fetcher,
@@ -140,9 +152,63 @@ impl Service {
                 cache,
                 steward_rate: RateWindow::default(),
                 unsigned_rate: RateWindow::default(),
+                key: if bound { key } else { None },
+                binding_stamp,
             }),
             on_release: Mutex::new(None),
-        })
+        };
+        if !bound {
+            // An unbind that happened while the service was down.
+            let mut inner = svc.lock();
+            svc.release_all(&mut inner);
+        }
+        Ok(svc)
+    }
+
+    /// Re-read `binding.json` when it changed (mtime or length), so a bind or
+    /// unbind applied by the CLI takes effect without a restart. Unbound,
+    /// missing or corrupt means fail closed: the key leaves memory and every
+    /// checkout is released.
+    pub(crate) fn refresh_binding(&self, inner: &mut Inner) {
+        let stamp = binding_stamp(&self.cfg.state_dir);
+        if stamp == inner.binding_stamp {
+            return;
+        }
+        inner.binding_stamp = stamp;
+        let new = match bind::load(&self.cfg.state_dir, &self.ops) {
+            Ok(b) => b,
+            Err(e) => {
+                self.log(&format!("binding.json refused, failing closed: {e}"));
+                None
+            }
+        };
+        let bound = new.as_ref().is_some_and(|b| b.is_bound());
+        inner.binding = new;
+        if bound {
+            inner.key = keys::load(&self.cfg.state_dir).ok();
+            if inner.key.is_none() {
+                self.log("bound, but the grant key cannot be loaded");
+            }
+        } else {
+            inner.key = None;
+            self.release_all(inner);
+        }
+        self.log(&format!("binding reloaded, bound={bound}"));
+    }
+
+    /// Mark every checkout released (unbind): none is served or renewed again
+    /// unless a new binding for its mesh re-creates it.
+    pub(crate) fn release_all(&self, inner: &mut Inner) {
+        let mut changed = false;
+        for s in inner.store.slots.slots.values_mut() {
+            if s.status == crate::state::SlotStatus::Active {
+                s.status = crate::state::SlotStatus::Released;
+                changed = true;
+            }
+        }
+        if changed && let Err(e) = inner.store.persist_slots() {
+            self.log(&format!("could not persist the release on unbind: {e}"));
+        }
     }
 
     /// One log line to stderr (journald under systemd). Fields are ids and
@@ -223,10 +289,11 @@ impl Service {
 
     fn identity(&self, now: u64) -> Response {
         let mut inner = self.lock();
+        self.refresh_binding(&mut inner);
         if let Err(e) = self.charge_unsigned(&mut inner, now) {
             return Response::err(e);
         }
-        let pk = self.key.as_ref().map(|k| k.verifying_key().to_bytes());
+        let pk = inner.key.as_ref().map(|k| k.verifying_key().to_bytes());
         let bound = inner.binding.as_ref().filter(|b| b.is_bound());
         Response::json(
             200,
@@ -248,6 +315,7 @@ impl Service {
     /// matters: forged traffic is charged to the unsigned pool only.
     fn authenticate(&self, req: &Request, now: u64) -> Result<Steward, ApiError> {
         let mut inner = self.lock();
+        self.refresh_binding(&mut inner);
         if !self.clock_ok(&inner, now) {
             return Err(self.refuse(&mut inner, now, ApiError::new(503, "clock_not_set", "the Seed clock is below its floor")));
         }
@@ -256,7 +324,7 @@ impl Service {
         };
         let (pk, node) = (b.steward_key(), b.record.steward_node_id.clone());
         let (now_ms, window) = (now.saturating_mul(1000), self.cfg.request_window_secs.saturating_mul(1000));
-        let verified = match request::verify(req, &pk, &node, now_ms, window) {
+        let verified = match request::verify(req, &pk, &node, &self.cfg.device_id, now_ms, window) {
             Ok(v) => v,
             Err(e) => {
                 let (status, code) = match e {

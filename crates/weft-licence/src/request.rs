@@ -1,8 +1,9 @@
 //! Steward request signatures (ADR-106 section 4 step 3, section 7).
 //!
-//! Signed string, one field per line, COG-011 field layout under its own
-//! domain: `weft-licence-v1/request`, method, target (path and query), node,
-//! timestamp, nonce, sha256 of the body. Headers: `x-licence-node`,
+//! Signed string, one field per line, the COG-011 field layout under its own
+//! domain, plus the audience: `weft-licence-v1/request`, method, target (path
+//! and query), node, `seed_device_id` (the audience: a request signed for one
+//! Seed is refused by another), timestamp, nonce, sha256 of the body. Headers: `x-licence-node`,
 //! `x-licence-ts` (unix MILLISECONDS, as the bridge's `x-bridge-timestamp`),
 //! `x-licence-nonce` (16 to 64 alphanumerics), `x-licence-sig`.
 
@@ -46,24 +47,34 @@ impl Request {
 }
 
 /// The bytes that are signed.
-pub fn signing_string(method: &str, target: &str, node: &str, ts_ms: u64, nonce: &str, body: &[u8]) -> String {
+pub fn signing_string(
+    method: &str,
+    target: &str,
+    node: &str,
+    audience: &str,
+    ts_ms: u64,
+    nonce: &str,
+    body: &[u8],
+) -> String {
     format!(
-        "{REQUEST_DOMAIN}\n{method}\n{target}\n{node}\n{ts_ms}\n{nonce}\n{}",
+        "{REQUEST_DOMAIN}\n{method}\n{target}\n{node}\n{audience}\n{ts_ms}\n{nonce}\n{}",
         hex_encode(&Sha256::digest(body))
     )
 }
 
 /// Sign a request as the steward: the headers to send.
+#[allow(clippy::too_many_arguments)]
 pub fn sign_request(
     key: &SigningKey,
     node: &str,
+    audience: &str,
     method: &str,
     target: &str,
     body: &[u8],
     ts_ms: u64,
     nonce: &str,
 ) -> BTreeMap<String, String> {
-    let sig = key.sign(signing_string(method, target, node, ts_ms, nonce, body).as_bytes());
+    let sig = key.sign(signing_string(method, target, node, audience, ts_ms, nonce, body).as_bytes());
     BTreeMap::from([
         ("x-licence-node".to_string(), node.to_string()),
         ("x-licence-ts".to_string(), ts_ms.to_string()),
@@ -100,6 +111,7 @@ pub fn verify(
     req: &Request,
     steward_pubkey: &[u8; 32],
     steward_node: &str,
+    audience: &str,
     now_ms: u64,
     window_ms: u64,
 ) -> Result<Verified, AuthError> {
@@ -126,7 +138,7 @@ pub fn verify(
     }
     let vk = VerifyingKey::from_bytes(steward_pubkey).map_err(|_| AuthError::BadSignature)?;
     vk.verify_strict(
-        signing_string(&req.method, &req.target, node, ts, nonce, &req.body).as_bytes(),
+        signing_string(&req.method, &req.target, node, audience, ts, nonce, &req.body).as_bytes(),
         &Signature::from_bytes(&sig),
     )
     .map_err(|_| AuthError::BadSignature)?;

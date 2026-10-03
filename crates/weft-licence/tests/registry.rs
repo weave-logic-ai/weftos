@@ -93,7 +93,7 @@ fn the_service_checks_out_through_the_registry_fetcher() {
     let sign = |body: &[u8]| weft_licence::request::Request {
         method: "POST".into(),
         target: "/licence/v1/checkout".into(),
-        headers: weft_licence::request::sign_request(&steward(), NODE, "POST", "/licence/v1/checkout", body, T0 * 1000, "ab".repeat(16).as_str()),
+        headers: weft_licence::request::sign_request(&steward(), NODE, "seed-test", "POST", "/licence/v1/checkout", body, T0 * 1000, "ab".repeat(16).as_str()),
         body: body.to_vec(),
     };
     let r = svc.handle(&sign(br#"{"request_id":"r","cog_id":"fall-detect","version":"latest","arch":"arm"}"#));

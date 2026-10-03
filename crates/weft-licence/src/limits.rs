@@ -13,11 +13,11 @@ pub struct RateWindow {
 impl RateWindow {
     /// Count one event at `now` if fewer than `max` happened in the last 60 s.
     pub fn try_acquire(&mut self, now: u64, max: u32) -> bool {
-        while self.events.front().is_some_and(|t| t + 60 <= now) {
+        while self.events.front().is_some_and(|t| t.saturating_add(60) <= now) {
             self.events.pop_front();
         }
         // A clock set back must not freeze the window.
-        while self.events.back().is_some_and(|t| *t > now + 60) {
+        while self.events.back().is_some_and(|t| *t > now.saturating_add(60)) {
             self.events.pop_back();
         }
         if self.events.len() as u32 >= max {

@@ -10668,6 +10668,7 @@ dependencies = [
  "blake3",
  "chrono",
  "ed25519-dalek",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
@@ -10677,6 +10678,7 @@ dependencies = [
  "weft-licence-wire",
  "weftos-cog-market",
  "weftos-cog-sources",
+ "zeroize",
 ]
 
 [[package]]

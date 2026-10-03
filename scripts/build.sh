@@ -1541,7 +1541,8 @@ cmd_cogs_launcher() {
 # (weavelogic-cogs-cross:1.97.1, built by cogs/scripts/cross-build.sh from
 # scripts/cross/Dockerfile in the private cogs repo, so the toolchain is the
 # one the cogs themselves use). Offline: crates come from the host's cargo
-# registry, nothing is downloaded. Skips with a message when docker or the
+# cache (mounted read-only; sources are unpacked inside the container, so the
+# host registry is never written), nothing is downloaded. Skips with a message when docker or the
 # image is missing. Output: target/licence-cross/<triple>/release/weft-licence
 # (stripped copy beside it as weft-licence.stripped) and a size report.
 cmd_licence_cross() {
@@ -1558,10 +1559,17 @@ cmd_licence_cross() {
         skip "cross toolchain not available (need docker and image $image; build it with the cogs repo scripts/cross-build.sh)"
         return 0
     fi
-    [ -d "$HOME/.cargo/registry" ] || { fail "no host cargo registry at ~/.cargo/registry (offline build needs it)"; return 1; }
+    [ -d "$HOME/.cargo/registry/cache" ] || { fail "no host cargo registry at ~/.cargo/registry (offline build needs it)"; return 1; }
+    # Make sure every crate is in the host cache first. This is offline: it
+    # fails (and says what is missing) instead of downloading.
+    local ft
+    for ft in "${targets[@]}"; do
+        cargo fetch --locked --offline --target "$ft" >/dev/null 2>&1 \
+            || { fail "host cargo cache is missing crates for $ft; run 'cargo fetch --locked --target $ft' once with network, then retry"; return 1; }
+    done
     timer_start
     local rc=0 t strip_bin
-    mkdir -p "$out"
+    mkdir -p "$out/cargo-src"
     for t in "${targets[@]}"; do
         case "$t" in
             armv7-unknown-linux-gnueabihf) strip_bin=arm-linux-gnueabihf-strip ;;
@@ -1571,7 +1579,9 @@ cmd_licence_cross() {
         info "building weft-licence for $t"
         docker run --rm --user "$(id -u):$(id -g)" \
             -v "$ROOT":/src:ro -v "$out":/target \
-            -v "$HOME/.cargo/registry":/cargo-home/registry \
+            -v "$HOME/.cargo/registry/cache":/cargo-home/registry/cache:ro \
+            -v "$HOME/.cargo/registry/index":/cargo-home/registry/index:ro \
+            -v "$out/cargo-src":/cargo-home/registry/src \
             -w /src -e HOME=/tmp -e CARGO_HOME=/cargo-home \
             -e CARGO_TARGET_DIR=/target -e RUSTUP_TOOLCHAIN=1.97.1 -e CARGO_NET_OFFLINE=true \
             -e CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
@@ -1605,7 +1615,16 @@ cmd_licence_uid_check() {
         return 0
     fi
     [ -x "$bin" ] || { fail "no aarch64 binary; run: scripts/build.sh licence-cross aarch64"; return 1; }
-    docker run --rm -v "$bin":/usr/local/bin/weft-licence:ro "$image" bash -euo pipefail -c '
+    # The aarch64 binary needs an arm64 container: native on an arm64 host,
+    # otherwise only with qemu/binfmt. Skip cleanly when neither is there.
+    case "$(uname -m)" in
+        arm64|aarch64) ;;
+        *) if ! docker run --rm --platform linux/arm64 "$image" true >/dev/null 2>&1; then
+               skip "this host is not arm64 and has no qemu for linux/arm64 containers"
+               return 0
+           fi ;;
+    esac
+    docker run --rm --platform linux/arm64 -v "$bin":/usr/local/bin/weft-licence:ro "$image" bash -euo pipefail -c '
         useradd --system --no-create-home weft-licence
         useradd --no-create-home cog1
         install -d -m 0700 -o weft-licence -g weft-licence /var/lib/weft-licence

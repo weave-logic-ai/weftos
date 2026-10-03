@@ -135,16 +135,65 @@ fn unbind_deletes_the_grant_key_and_a_fresh_init_can_bind_another_mesh() {
 }
 
 #[test]
-fn the_service_signs_nothing_after_an_unbind() {
+fn an_unbind_applied_by_the_cli_takes_effect_without_a_restart() {
     let h = Harness::new(&[("fall-detect", "arm", b"\x7fELF x")]);
     assert_eq!(status(&h.checkout("fall-detect", "arm")), 200);
+    assert!(h.unsigned("GET", "/licence/v1/identity").json_body().unwrap()["grant_key_id"].is_string());
+    let ops = OperatorKeys::load(&h.cfg.state_dir, &h.cfg.operator_pubkeys).unwrap();
+    let cur = bind::load(&h.cfg.state_dir, &ops).unwrap();
+    let gpk = hex_encode(&h.grant_key());
+    // The CLI (another process) unbinds; the running service is not reopened.
+    bind::apply(&h.cfg.state_dir, "seed-test", &ops, &binding(2, BindState::Unbound, &gpk, &mesh()), cur.as_ref()).unwrap();
+    h.advance(61);
+    let r = h.call("POST", "/licence/v1/renew", b"");
+    assert_eq!((status(&r), code(&r).as_str()), (409, "seed_not_bound"));
+    let id = h.unsigned("GET", "/licence/v1/identity").json_body().unwrap();
+    assert_eq!(id["bound"], false);
+    assert!(id["grant_key_id"].is_null(), "the key left memory");
+    // Every checkout was released on disk.
+    let slots: serde_json::Value = serde_json::from_slice(&std::fs::read(h.cfg.state_dir.join("slots.json")).unwrap()).unwrap();
+    assert_eq!(slots["slots"]["fall-detect@1.0.0"]["status"], "released");
+}
+
+#[test]
+fn a_rebind_to_another_mesh_carries_nothing_over() {
+    let h = Harness::new(&[("fall-detect", "arm", b"\x7fELF x")]);
+    let g1 = grant_of(&h.checkout("fall-detect", "arm"));
+    let c1: weft_licence_wire::CheckoutGrant = serde_json::from_str(&g1.payload).unwrap();
+    let ops = OperatorKeys::load(&h.cfg.state_dir, &h.cfg.operator_pubkeys).unwrap();
+    let cur = bind::load(&h.cfg.state_dir, &ops).unwrap();
+    let gpk = hex_encode(&h.grant_key());
+    let u = bind::apply(&h.cfg.state_dir, "seed-test", &ops, &binding(2, BindState::Unbound, &gpk, &mesh()), cur.as_ref()).unwrap();
+    let r2 = keys::init(&h.cfg.state_dir).unwrap();
+    bind::apply(&h.cfg.state_dir, "seed-test", &ops, &binding(3, BindState::Bound, &r2.grant_pubkey, &other_mesh()), Some(&u)).unwrap();
+    h.advance(61);
+    // The old mesh's grants are not listed, renewed or served for the new mesh.
+    let list = h.call("GET", "/licence/v1/grants?since=0", b"").json_body().unwrap();
+    assert!(list["grants"].as_array().unwrap().is_empty());
+    let renew = h.call("POST", "/licence/v1/renew", b"").json_body().unwrap();
+    assert!(renew["grants"].as_array().unwrap().is_empty());
+    let b3 = hex_encode(blake3::hash(b"\x7fELF x").as_bytes());
+    assert_eq!(code(&h.call("GET", &format!("/licence/v1/artifact/{b3}"), b"")), "no_grant");
+    // A fresh checkout is a new grant for the new mesh and key; seq keeps rising.
+    let g2 = grant_of(&h.checkout("fall-detect", "arm"));
+    let c2: weft_licence_wire::CheckoutGrant = serde_json::from_str(&g2.payload).unwrap();
+    assert_eq!(c2.mesh_id, other_mesh().to_hex());
+    assert!(c2.seq > c1.seq);
+    assert_eq!(c2.arches().len(), 1);
+    weft_licence_wire::verify_grant(&g2, &h.grant_key(), &other_mesh()).unwrap();
+}
+
+#[test]
+fn a_service_restarted_after_an_unbind_releases_every_checkout() {
+    let h = Harness::new(&[("fall-detect", "arm", b"\x7fELF x")]);
+    h.checkout("fall-detect", "arm");
     let ops = OperatorKeys::load(&h.cfg.state_dir, &h.cfg.operator_pubkeys).unwrap();
     let cur = bind::load(&h.cfg.state_dir, &ops).unwrap();
     let gpk = hex_encode(&h.grant_key());
     bind::apply(&h.cfg.state_dir, "seed-test", &ops, &binding(2, BindState::Unbound, &gpk, &mesh()), cur.as_ref()).unwrap();
-    let h = h.reopen(); // starts without a key, in idle mode
-    let r = h.call("POST", "/licence/v1/renew", b"");
-    assert_eq!(code(&r), "seed_not_bound");
+    let h = h.reopen();
+    let slots: serde_json::Value = serde_json::from_slice(&std::fs::read(h.cfg.state_dir.join("slots.json")).unwrap()).unwrap();
+    assert_eq!(slots["slots"]["fall-detect@1.0.0"]["status"], "released");
 }
 
 #[test]
@@ -190,4 +239,55 @@ fn the_example_config_and_unit_in_dist_are_consistent() {
     let unit = include_str!("../dist/weft-licence.service");
     assert!(unit.contains("User=weft-licence") && unit.contains("StateDirectoryMode=0700"));
     assert!(!unit.contains("0.0.0.0"));
+}
+
+#[test]
+fn listen_must_be_a_link_local_tailnet_or_loopback_address_unless_opted_in() {
+    let mut c = Config::default();
+    for ok in ["127.0.0.1:1", "169.254.42.1:1", "100.64.0.9:1", "100.127.255.1:1", "[::1]:1", "[fe80::1]:1", "[fd7a:115c:a1e0::5]:1"] {
+        c.listen = vec![ok.parse().unwrap()];
+        assert!(c.validate().is_ok(), "{ok}");
+    }
+    for bad in ["192.168.1.5:1", "10.0.0.2:1", "100.128.0.1:1", "8.8.8.8:1", "[fd00::1]:1", "[2001:db8::1]:1"] {
+        c.listen = vec![bad.parse().unwrap()];
+        assert!(c.validate().is_err(), "{bad}");
+        c.allow_lan_listen = true;
+        assert!(c.validate().is_ok(), "{bad} with the opt-in");
+        c.allow_lan_listen = false;
+    }
+}
+
+#[test]
+fn device_id_and_limits_are_validated() {
+    let mut c = Config::default();
+    c.device_id = "bad id with spaces".into();
+    assert!(c.validate().is_err());
+    c.device_id = "seed-1".into();
+    assert!(c.validate().is_ok());
+    c.limits.rate_bytes_per_sec = 0;
+    assert!(c.validate().is_err());
+    c.limits.rate_bytes_per_sec = 1;
+    c.limits.cache_bytes = c.limits.max_artifact_bytes - 1;
+    assert!(c.validate().is_err());
+}
+
+#[test]
+fn a_symlinked_state_dir_or_key_is_refused_and_foreign_ownership_is_detected() {
+    use std::os::unix::fs::symlink;
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real");
+    keys::init(&real).unwrap();
+    let link = d.path().join("link");
+    symlink(&real, &link).unwrap();
+    assert!(matches!(keys::load(&link), Err(SvcError::KeyPerms(_))));
+    let other = d.path().join("other");
+    keys::init(&other).unwrap();
+    std::fs::remove_file(other.join("grant.key")).unwrap();
+    symlink(real.join("grant.key"), other.join("grant.key")).unwrap();
+    assert!(matches!(keys::load(&other), Err(SvcError::KeyPerms(_))));
+    // The CLI refuses a state dir it does not own (the root directory here).
+    if weft_licence::fsio::euid() != 0 {
+        assert!(weft_licence::fsio::require_owner(std::path::Path::new("/")).is_err());
+    }
+    assert!(weft_licence::fsio::require_owner(&real).is_ok());
 }

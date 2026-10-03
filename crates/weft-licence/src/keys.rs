@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
+use zeroize::Zeroizing;
 use weft_licence_wire::{hex_decode_exact, hex_encode, key_id};
 
 use crate::error::SvcError;
@@ -43,14 +44,15 @@ pub fn init(state_dir: &Path) -> Result<InitReport, SvcError> {
     if path.exists() {
         return Err(SvcError::KeyExists);
     }
-    let seed = fsio::random_bytes::<32>().map_err(|e| SvcError::Io(e.to_string()))?;
+    let seed = Zeroizing::new(fsio::random_bytes::<32>().map_err(|e| SvcError::Io(e.to_string()))?);
     let sk = SigningKey::from_bytes(&seed);
     use std::io::Write;
     let mut f = fsio::create_new_private(&path).map_err(|e| match e.kind() {
         std::io::ErrorKind::AlreadyExists => SvcError::KeyExists,
         _ => SvcError::Io(e.to_string()),
     })?;
-    f.write_all(format!("{}\n", hex_encode(&seed)).as_bytes())
+    let line = Zeroizing::new(format!("{}\n", hex_encode(&*seed)));
+    f.write_all(line.as_bytes())
         .and_then(|_| f.sync_all())
         .map_err(|e| SvcError::Io(e.to_string()))?;
     let pk = sk.verifying_key().to_bytes();
@@ -61,9 +63,22 @@ pub fn init(state_dir: &Path) -> Result<InitReport, SvcError> {
 /// user could read (any group or other permission bit).
 pub fn load(state_dir: &Path) -> Result<SigningKey, SvcError> {
     let path = key_path(state_dir);
+    if fsio::is_symlink(state_dir) || fsio::is_symlink(&path) {
+        return Err(SvcError::KeyPerms("the state dir and the key file must not be symlinks".into()));
+    }
     let dir_mode = fsio::mode_of(state_dir).map_err(|e| SvcError::Io(e.to_string()))?;
     if cfg!(unix) && dir_mode & 0o077 != 0 {
         return Err(SvcError::KeyPerms(format!("state dir mode {dir_mode:o}, want 0700")));
+    }
+    for p in [state_dir, path.as_path()] {
+        match fsio::owner_of(p) {
+            Ok(uid) if uid == fsio::euid() => {}
+            Ok(uid) => {
+                return Err(SvcError::KeyPerms(format!("{} is owned by uid {uid}, not this process (uid {})", p.display(), fsio::euid())));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && p == path.as_path() => return Err(SvcError::NoKey),
+            Err(e) => return Err(SvcError::Io(e.to_string())),
+        }
     }
     let file_mode = fsio::mode_of(&path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => SvcError::NoKey,
@@ -75,8 +90,9 @@ pub fn load(state_dir: &Path) -> Result<SigningKey, SvcError> {
     let raw = fsio::read_capped(&path, 256)
         .map_err(|e| SvcError::Io(e.to_string()))?
         .ok_or(SvcError::NoKey)?;
-    let text = String::from_utf8(raw).map_err(|_| SvcError::BadKey)?;
-    let seed = hex_decode_exact::<32>(text.trim()).ok_or(SvcError::BadKey)?;
+    let raw = Zeroizing::new(raw);
+    let text = Zeroizing::new(String::from_utf8(raw.to_vec()).map_err(|_| SvcError::BadKey)?);
+    let seed = Zeroizing::new(hex_decode_exact::<32>(text.trim()).ok_or(SvcError::BadKey)?);
     Ok(SigningKey::from_bytes(&seed))
 }
 

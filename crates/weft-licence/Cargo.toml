@@ -33,7 +33,9 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 blake3 = { workspace = true }
-ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
+zeroize = { workspace = true }
+libc = "0.2"
 weftos-cog-sources = { path = "../weftos-cog-sources", optional = true }
 weftos-cog-market = { path = "../weftos-cog-market", optional = true }
 chrono = { workspace = true, optional = true }

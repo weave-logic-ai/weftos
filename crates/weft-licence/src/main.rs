@@ -48,6 +48,8 @@ fn load_config(path: Option<String>, state_dir: Option<String>, must_exist: bool
     if let Some(d) = state_dir {
         cfg.state_dir = PathBuf::from(d);
     }
+    // Files this CLI writes must be readable by the service user.
+    weft_licence::fsio::require_owner(&cfg.state_dir).map_err(SvcError::Config)?;
     Ok(cfg)
 }
 

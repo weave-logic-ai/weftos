@@ -52,19 +52,29 @@ install -m 0644 weft-licence.service /etc/systemd/system/weft-licence.service
 Do not add `weft-licence` to the group of any cog uid, and do not run the cogs
 as `weft-licence`. The key's protection is that no other user can read it.
 
+After an unbind the key is deleted, so `ConditionPathExists` stops systemd from
+starting the unit again until `init` runs for the next mesh; the running service goes
+idle on its own. The unit's `RestrictAddressFamilies` includes `AF_UNIX` for name
+resolution: step 4 of the on-device check says to see whether it is needed.
+
 The unit assumes systemd. The Seed init system was not checked from this
 repository; if it differs, run the same command line under it with the same user
 and a 0700 state directory.
 
 ## `init` over USB
 
-Run over the USB link, with someone at the device. The key is never created or
+Run over the USB link, with someone at the device, **as the service user**. The key is never created or
 learned over the network, so it cannot be swapped in transit.
 
 ```sh
-su -s /bin/sh weft-licence -c \
-  'weft-licence --state-dir /var/lib/weft-licence init --operator-key <operator pubkey hex>'
+sudo -u weft-licence weft-licence --state-dir /var/lib/weft-licence init --operator-key <operator pubkey hex>
 ```
+
+Every command that writes state (`init`, `bind`, `override`) refuses to run unless
+its uid owns the state directory: a file written by root could not be read by the
+service. `sudo -u weft-licence weft-licence ...` is the form to use. As root, `init`
+also refuses to create a missing state directory (it would be root-owned); create it
+with the `install -d` line above.
 
 It prints:
 
@@ -87,14 +97,21 @@ directory (it can also be listed in `operator_pubkeys`).
 3. Apply it over USB:
 
    ```sh
-   weft-licence --config /etc/weft-licence/config.toml bind binding.json
+   sudo -u weft-licence weft-licence --config /etc/weft-licence/config.toml bind binding.json
    ```
+
+   A running service picks up the new binding (and an unbind) at its next request;
+   no restart is needed.
 
 The binding is checked against the pinned operator key, the Seed's `device_id`
 and its own grant key, and its `seq` must exceed the stored one. A `bound`
 record for another mesh while bound is refused with `seed_bound_elsewhere`.
 There is no bind endpoint on the network. After an operator-signed `unbound`
-record, the grant key is deleted and `init` runs again before the next bind.
+record, the grant key is deleted and `init` runs again before the next bind. A running
+service drops the key from memory and marks every checkout released at its next
+request. Checkouts are tied to the mesh they were made for, so nothing carries over to
+a later binding for another mesh (the next checkout is fetched again, and `seq` keeps
+rising).
 
 ## Declared licence
 
@@ -127,7 +144,11 @@ only: `checkout granted`, `byte transfer`, `renew`, `refused <code>`.
 
 The listener binds only the addresses in `listen`: the USB link-local interface
 and the tailnet interface. `0.0.0.0` and `::` are refused at startup and in
-`http::serve`. It serves plain HTTP; confidentiality comes from the link
+`http::serve`. Only these ranges are accepted: loopback, `169.254.0.0/16`,
+`fe80::/10`, `100.64.0.0/10` and `fd7a:115c:a1e0::/48`. Anything else (a LAN address)
+needs `allow_lan_listen = true`. A `Host` header, when sent, must be one of the listen
+addresses as `ip:port`, so address the service by IP. Each request has 10 s in total
+for its headers and body, and one source address holds at most 4 connections. It serves plain HTTP; confidentiality comes from the link
 (WireGuard on the tailnet, or the cable). Integrity does not depend on the
 link: requests and grants are signed and bytes are checked against signed hashes.
 
@@ -144,13 +165,16 @@ pinned SPKI is added (ADR-106 section 7, decision W4).
 
 Every endpoint except identity needs a steward signature. The request headers are
 `x-licence-node`, `x-licence-ts` (unix milliseconds), `x-licence-nonce` (16 to 64
-alphanumerics) and `x-licence-sig`. The signed string, one field per line:
+alphanumerics) and `x-licence-sig`. The signed string, one field per line (the
+`<seed_device_id>` line is the audience: a request signed for one Seed is refused by
+another):
 
 ```
 weft-licence-v1/request
 <METHOD>
 <path and query>
 <node>
+<seed_device_id>
 <ts, unix ms>
 <nonce>
 <sha256 of the body, hex>
@@ -203,7 +227,7 @@ highest `issued_at` it ever signed. The floor equals the bridge cog's
 `artifact_changed`, `verify_failed`, `fetch_failed`, `busy`, `rate_limited`,
 `rate_limited_unsigned`, `serve_limit`, `no_grant`, `gone`, `cache_full`,
 `clock_not_set`, `seed_not_bound`, `bad_signature`, `stale_request`, `replayed`,
-`wrong_node`, `malformed_auth`, `persist_failed`.
+`wrong_node`, `malformed_auth`, `persist_failed`, `grant_invalid`, `duplicate_artifact`, `no_key`.
 
 ### Serve override
 
@@ -226,7 +250,7 @@ scripts/build.sh licence-uid-check          # Linux: another user cannot read th
 
 `licence-cross` uses the cogs cross image `weavelogic-cogs-cross:1.97.1` (built by
 `scripts/cross-build.sh` in the private cogs repo), builds offline from the host
-cargo registry, and writes `target/licence-cross/<triple>/release/weft-licence`.
+cargo cache (mounted read-only after an offline `cargo fetch` check), and writes `target/licence-cross/<triple>/release/weft-licence`.
 It skips with a message when docker or the image is missing. The build enables
 `--features net`, which adds the https registry reader (rustls).
 
@@ -234,8 +258,8 @@ Recorded on 2026-10-02 (release profile, already stripped):
 
 | Target | Size |
 |---|---|
-| `armv7-unknown-linux-gnueabihf` | 2,825,356 bytes |
-| `aarch64-unknown-linux-gnu` | 3,019,520 bytes |
+| `armv7-unknown-linux-gnueabihf` | 2,874,508 bytes |
+| `aarch64-unknown-linux-gnu` | 3,085,056 bytes |
 
 `weftos-cog-sources` builds for `armv7-unknown-linux-gnueabihf` as part of this.
 
@@ -263,7 +287,9 @@ Not run from the repository. Steps, in order:
    and `registry_url` in the config.
 3. Run `init --operator-key <hex>` over USB. Compare the fingerprint with
    `weaver`. Sign and apply the binding. Place the signed `licence.json`.
-4. `systemctl enable --now weft-licence`, then from the steward host:
+4. `systemctl enable --now weft-licence`. If the unit fails to resolve the registry
+   host, check whether `AF_UNIX` in `RestrictAddressFamilies` is what it needs, and
+   drop it if the resolution works without. Then then from the steward host:
    `curl http://<seed tailnet address>:8700/licence/v1/identity` and confirm
    `"bound": true`, `"clock_ok": true` and the same `grant_key_id`.
 5. Check the isolation on the Seed itself: as the user a cog runs under,

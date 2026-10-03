@@ -95,7 +95,10 @@ fn only_one_checkout_is_in_flight() {
 #[test]
 fn the_cache_is_an_lru_that_never_evicts_an_active_checkout() {
     let (a, b, c) = (vec![1u8; 100], vec![2u8; 100], vec![3u8; 100]);
-    let h = Harness::with(&[("a", "arm", &a), ("b", "arm", &b), ("c", "arm", &c)], |cfg| cfg.limits.cache_bytes = 250);
+    let h = Harness::with(&[("a", "arm", &a), ("b", "arm", &b), ("c", "arm", &c)], |cfg| {
+        cfg.limits.cache_bytes = 250;
+        cfg.limits.max_artifact_bytes = 250;
+    });
     assert_eq!(status(&h.checkout("a", "arm")), 200);
     assert_eq!(status(&h.checkout("b", "arm")), 200);
     // Both are under active grants: nothing can be evicted for the third.

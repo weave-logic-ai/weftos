@@ -11,10 +11,10 @@ static N: AtomicU64 = AtomicU64::new(1_000_000);
 
 fn roundtrip(addr: std::net::SocketAddr, h: &Harness, method: &str, target: &str, body: &[u8], signed: bool) -> (u16, Vec<u8>) {
     let mut s = TcpStream::connect(addr).unwrap();
-    let mut head = format!("{method} {target} HTTP/1.1\r\nHost: seed\r\nContent-Length: {}\r\n", body.len());
+    let mut head = format!("{method} {target} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n", body.len());
     if signed {
         let nonce = format!("{:032x}", N.fetch_add(1, Ordering::SeqCst));
-        for (k, v) in weft_licence::request::sign_request(&steward(), NODE, method, target, body, h.now() * 1000, &nonce) {
+        for (k, v) in weft_licence::request::sign_request(&steward(), NODE, "seed-test", method, target, body, h.now() * 1000, &nonce) {
             head.push_str(&format!("{k}: {v}\r\n"));
         }
     }
@@ -56,5 +56,85 @@ fn checkout_and_transfer_over_loopback_with_the_signature_rules() {
     // Oversized body and a garbage request line are refused, not crashed on.
     let big = roundtrip(addr, &h, "POST", "/licence/v1/checkout", &vec![b'x'; 70_000], true);
     assert_eq!(big.0, 413, "{}", String::from_utf8_lossy(&big.1));
+    server.stop();
+}
+
+fn open_conn(addr: std::net::SocketAddr) -> TcpStream {
+    let s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    s
+}
+
+#[test]
+fn slow_loris_is_cut_off_by_the_total_deadline_and_the_per_source_cap() {
+    let h = Harness::new(&[]);
+    let opts = weft_licence::http::ServerOpts { read_deadline: std::time::Duration::from_millis(700), per_ip: 4 };
+    let server = weft_licence::http::serve_with(h.svc.clone(), &["127.0.0.1:0".parse().unwrap()], opts).unwrap();
+    let addr = server.addrs()[0];
+    // A client that drips one byte at a time never finishes inside the
+    // deadline: it is answered 408 and closed well before 10 drips.
+    let mut slow = open_conn(addr);
+    let start = std::time::Instant::now();
+    for b in b"GET /licence/v1/identity HTTP/1.1\r\nHost: x".iter() {
+        if slow.write_all(&[*b]).is_err() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if start.elapsed() > std::time::Duration::from_secs(4) {
+            break;
+        }
+    }
+    let mut out = Vec::new();
+    let _ = slow.read_to_end(&mut out);
+    assert!(start.elapsed() < std::time::Duration::from_secs(3), "held for {:?}", start.elapsed());
+    assert!(String::from_utf8_lossy(&out).contains(" 408 "), "{}", String::from_utf8_lossy(&out));
+    // Four idle connections from one address fill the cap; the fifth is refused.
+    let idle: Vec<TcpStream> = (0..4).map(|_| open_conn(addr)).collect();
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let mut fifth = open_conn(addr);
+    let mut out = Vec::new();
+    let _ = fifth.read_to_end(&mut out);
+    assert!(String::from_utf8_lossy(&out).contains(" 503 "), "{}", String::from_utf8_lossy(&out));
+    drop(idle);
+    // After they close (or time out), service resumes.
+    std::thread::sleep(std::time::Duration::from_millis(900));
+    assert_eq!(roundtrip(addr, &h, "GET", "/licence/v1/identity", b"", false).0, 200);
+    server.stop();
+}
+
+#[test]
+fn a_host_header_that_is_not_a_listen_address_is_refused() {
+    let h = Harness::new(&[]);
+    let server = weft_licence::http::serve(h.svc.clone(), &["127.0.0.1:0".parse().unwrap()]).unwrap();
+    let addr = server.addrs()[0];
+    let mut s = open_conn(addr);
+    s.write_all(b"GET /licence/v1/identity HTTP/1.1\r\nHost: evil.example\r\n\r\n").unwrap();
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out);
+    assert!(String::from_utf8_lossy(&out).contains(" 400 "));
+    server.stop();
+}
+
+#[test]
+fn the_http_layer_throttles_the_transfer() {
+    // 96 KiB at 48 KiB/s must take about two seconds on the wire.
+    let big = vec![7u8; 96 * 1024];
+    let h = Harness::with(&[("big", "arm", &big)], |c| {
+        c.limits.rate_bytes_per_sec = 48 * 1024;
+        c.limits.requests_per_min = 100;
+    });
+    let server = weft_licence::http::serve(h.svc.clone(), &["127.0.0.1:0".parse().unwrap()]).unwrap();
+    let addr = server.addrs()[0];
+    let req = br#"{"request_id":"r","cog_id":"big","version":"latest","arch":"arm"}"#;
+    let (st, body) = roundtrip(addr, &h, "POST", "/licence/v1/checkout", req, true);
+    assert_eq!(st, 200);
+    let j: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let path = j["artifacts"][0]["path"].as_str().unwrap().to_string();
+    let start = std::time::Instant::now();
+    let (st, bytes) = roundtrip(addr, &h, "GET", &path, b"", true);
+    let took = start.elapsed();
+    assert_eq!((st, bytes.len()), (200, big.len()));
+    assert!(took >= std::time::Duration::from_millis(1500), "took only {took:?}");
+    assert!(took < std::time::Duration::from_secs(6), "took {took:?}");
     server.stop();
 }

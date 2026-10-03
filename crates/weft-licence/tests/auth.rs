@@ -132,16 +132,25 @@ fn the_request_layout_and_clock_floor_match_the_bridge() {
     // COG-011 bridge: CLOCK_FLOOR_MS = 1_780_000_000_000 (2026-05-28), ms timestamps,
     // alphanumeric 16-64 nonces, one field per line.
     assert_eq!(weft_licence::CLOCK_FLOOR * 1000, 1_780_000_000_000);
-    let s = weft_licence::request::signing_string("POST", "/p", "n", 1_791_000_000_123, "abcdef0123456789", b"x");
+    let s = weft_licence::request::signing_string("POST", "/p", "n", "seed-1", 1_791_000_000_123, "abcdef0123456789", b"x");
     let lines: Vec<&str> = s.lines().collect();
-    assert_eq!(&lines[..6], ["weft-licence-v1/request", "POST", "/p", "n", "1791000000123", "abcdef0123456789"]);
-    assert_eq!(lines[6], weft_licence_wire::sha256_hex(b"x"));
+    assert_eq!(&lines[..7], ["weft-licence-v1/request", "POST", "/p", "n", "seed-1", "1791000000123", "abcdef0123456789"]);
+    assert_eq!(lines[7], weft_licence_wire::sha256_hex(b"x"));
     let h = Harness::new(&[]);
     // A non-hex alphanumeric nonce is accepted; a seconds timestamp is stale.
     let nonce = "ZZzz0123456789ab";
-    let hdr = weft_licence::request::sign_request(&steward(), NODE, "GET", "/licence/v1/grants?since=0", b"", h.now() * 1000, nonce);
+    let hdr = weft_licence::request::sign_request(&steward(), NODE, "seed-test", "GET", "/licence/v1/grants?since=0", b"", h.now() * 1000, nonce);
     let req = weft_licence::request::Request { method: "GET".into(), target: "/licence/v1/grants?since=0".into(), headers: hdr, body: vec![] };
     assert_eq!(status(&h.svc.handle(&req)), 200);
     let secs = h.signed_with(&steward(), "GET", "/licence/v1/grants?since=0", b"", h.now());
     assert_eq!(code(&h.svc.handle(&secs)), "stale_request");
+}
+
+#[test]
+fn a_request_signed_for_another_seed_is_refused() {
+    let h = Harness::new(&[]);
+    let target = "/licence/v1/grants?since=0";
+    let hdr = weft_licence::request::sign_request(&steward(), NODE, "some-other-seed", "GET", target, b"", h.now() * 1000, "aaaaaaaaaaaaaaaa");
+    let req = weft_licence::request::Request { method: "GET".into(), target: target.into(), headers: hdr, body: vec![] };
+    assert_eq!(code(&h.svc.handle(&req)), "bad_signature");
 }

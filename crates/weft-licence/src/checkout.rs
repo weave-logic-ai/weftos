@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use ed25519_dalek::SigningKey;
 use weft_licence_wire::{
     MAX_UNIX_TIME,
     CheckoutGrant, GrantArtifact, LicenceRef, MAX_GRANT_TTL_SECS, MeshId, SignedGrant, hex_encode,
@@ -79,17 +80,17 @@ pub(crate) fn grant_response(grant: &SignedGrant, g: &CheckoutGrant) -> Value {
 /// are already updated) and store it. `withdraw` makes `expires_at <= issued_at`.
 fn sign_slot(
     svc: &Service,
+    sk: &SigningKey,
     slots: &mut Slots,
     key: &str,
     mesh: &MeshId,
     now: u64,
     expires_at: u64,
 ) -> Result<SignedGrant, ApiError> {
-    let sk = svc.key.as_ref().ok_or_else(|| ApiError::new(503, "no_key", "no grant key"))?;
     if now < svc.cfg.clock_floor || now < slots.last_issued_at {
         return Err(ApiError::new(503, "clock_not_set", "refusing to sign before the clock floor"));
     }
-    slots.ctr += 1;
+    slots.ctr = slots.ctr.saturating_add(1);
     slots.last_issued_at = slots.last_issued_at.max(now);
     let ctr = slots.ctr;
     let slot = slots.slots.get_mut(key).expect("slot exists");
@@ -122,7 +123,7 @@ fn sign_slot(
 fn licence_ref(ent: &Entitlement, now: u64) -> LicenceRef {
     // No declared expiry: the licence side reads as "now + the 7 day maximum",
     // so a verifier's `max(now, floor) < licence.expires` check stays finite.
-    LicenceRef { ref_sha256: ent.ref_sha256.clone(), expires: ent.expires.filter(|e| *e <= MAX_UNIX_TIME).unwrap_or(now + MAX_GRANT_TTL_SECS) }
+    LicenceRef { ref_sha256: ent.ref_sha256.clone(), expires: ent.expires.filter(|e| *e <= MAX_UNIX_TIME).unwrap_or(now.saturating_add(MAX_GRANT_TTL_SECS)) }
 }
 
 fn mesh_of(inner: &Inner) -> Option<MeshId> {
@@ -139,10 +140,19 @@ fn pinned(slots: &Slots) -> HashSet<String> {
 }
 
 impl Service {
-    fn valid_grant(&self, slot: &Slot, now: u64) -> Option<(SignedGrant, CheckoutGrant)> {
-        let sk = self.key.as_ref()?;
+    /// The slot's grant, if it is live for `mesh` under `pk` at `now`. A slot
+    /// of another mesh (a binding that moved) is never live.
+    pub(crate) fn valid_grant(
+        slot: &Slot,
+        now: u64,
+        pk: &[u8; 32],
+        mesh: &str,
+    ) -> Option<(SignedGrant, CheckoutGrant)> {
+        if slot.mesh_id != mesh {
+            return None;
+        }
         let signed = slot.grant.clone()?;
-        let g = verify_grant_signature(&signed, &sk.verifying_key().to_bytes()).ok()?;
+        let g = verify_grant_signature(&signed, pk).ok()?;
         (slot.status == SlotStatus::Active && !g.is_withdrawal() && g.expires_at > now).then_some((signed, g))
     }
 
@@ -164,7 +174,13 @@ impl Service {
             .permits
             .try_acquire()
             .ok_or_else(|| ApiError::new(429, "busy", "a checkout is already in flight"))?;
-        let mesh = mesh_of(&self.lock()).ok_or_else(|| ApiError::new(409, "seed_not_bound", "no mesh binding"))?;
+        let (mesh, sk) = {
+            let inner = self.lock();
+            let mesh = mesh_of(&inner).ok_or_else(|| ApiError::new(409, "seed_not_bound", "no mesh binding"))?;
+            let sk = inner.key.clone().ok_or_else(|| ApiError::new(503, "no_key", "no grant key"))?;
+            (mesh, sk)
+        };
+        let (mesh_hex, pk) = (mesh.to_hex(), sk.verifying_key().to_bytes());
         let ent = self.licence.entitlement(&body.cog_id, &mesh.to_hex(), now).map_err(licence_error)?;
         let entry = self.fetcher.resolve(&body.cog_id, &body.version).map_err(fetch_error)?;
         let key = slot_key(&entry.cog_id, &entry.version);
@@ -176,12 +192,12 @@ impl Service {
             .ok_or_else(|| ApiError::new(404, "arch_unavailable", format!("no {} binary", body.arch)))?;
         {
             let inner = self.lock();
-            let held = inner.store.slots.slots.get(&key).cloned();
+            let held = inner.store.slots.slots.get(&key).filter(|s| s.mesh_id == mesh_hex).cloned();
             if let Some((slot, have)) = held.and_then(|s| s.arches.get(&body.arch).cloned().map(|h| (s, h))) {
                 if have.sha256 != art.sha256 {
                     return Err(ApiError::new(409, "artifact_changed", "the registry republished this version"));
                 }
-                let live = self.valid_grant(&slot, now);
+                let live = Self::valid_grant(&slot, now, &pk, &mesh_hex);
                 if let Some((signed, g)) = live.filter(|_| inner.cache.contains(&have.blake3)) {
                     return Ok(grant_response(&signed, &g)); // already checked out
                 }
@@ -209,6 +225,7 @@ impl Service {
         let mut inner = self.lock();
         let mut work = inner.store.slots.clone();
         let slot = work.slots.entry(key.clone()).or_insert_with(|| Slot {
+            mesh_id: mesh_hex.clone(),
             cog_id: entry.cog_id.clone(),
             version: entry.version.clone(),
             seq: 0,
@@ -220,6 +237,12 @@ impl Service {
             issue_ctr: 0,
             grant: None,
         });
+        if slot.mesh_id != mesh_hex {
+            // The Seed moved to another mesh: nothing carries over, only `seq`
+            // keeps rising so a key that was reused never repeats one.
+            slot.mesh_id = mesh_hex.clone();
+            slot.arches.clear();
+        }
         // The verifier refuses a grant whose arches share a hash.
         if slot.arches.iter().any(|(a, v)| *a != body.arch && (v.sha256 == sha || v.blake3 == blake3)) {
             return Err(ApiError::new(409, "duplicate_artifact", "another arch already has these bytes"));
@@ -229,7 +252,7 @@ impl Service {
             body.arch.clone(),
             GrantArtifact { arch: body.arch.clone(), size: bytes.len() as u64, sha256: sha, blake3: blake3.clone() },
         );
-        slot.seq += 1;
+        slot.seq = slot.seq.saturating_add(1);
         slot.status = SlotStatus::Active;
         slot.manifest_sha256 = entry.manifest_sha256.clone();
         slot.licence = licence_ref(&ent, now);
@@ -243,8 +266,8 @@ impl Service {
             CacheError::Full => ApiError::new(507, "cache_full", "the cache holds only active checkouts"),
             CacheError::Io(m) => ApiError::new(503, "cache_io", m),
         })?;
-        let expires_at = (now + self.cfg.grant_ttl_secs).min(work.slots[&key].licence.expires);
-        let signed = sign_slot(self, &mut work, &key, &mesh, now, expires_at)?;
+        let expires_at = now.saturating_add(self.cfg.grant_ttl_secs).min(work.slots[&key].licence.expires);
+        let signed = sign_slot(self, &sk, &mut work, &key, &mesh, now, expires_at)?;
         // Durable BEFORE release: on failure the grant is dropped and the
         // in-memory table is not advanced.
         let prev = std::mem::replace(&mut inner.store.slots, work);
@@ -258,7 +281,7 @@ impl Service {
             "checkout granted cog={} version={} arch={} seq={} bytes_fetched={}",
             body.cog_id, entry.version, body.arch, work_seq(&signed), bytes.len()
         ));
-        let g = weft_licence_wire::verify_grant_signature(&signed, &self.key.as_ref().expect("key").verifying_key().to_bytes())
+        let g = weft_licence_wire::verify_grant_signature(&signed, &pk)
             .map_err(|e| ApiError::new(500, "sign_failed", e.to_string()))?;
         Ok(grant_response(&signed, &g))
     }
@@ -278,12 +301,14 @@ impl Service {
         };
         let mut inner = self.lock();
         let mesh = mesh_of(&inner).ok_or_else(|| ApiError::new(409, "seed_not_bound", "no mesh binding"))?;
+        let sk = inner.key.clone().ok_or_else(|| ApiError::new(503, "no_key", "no grant key"))?;
+        let mesh_hex = mesh.to_hex();
         let mut work = inner.store.slots.clone();
         let release: HashSet<String> = body.release.iter().map(|r| slot_key(&r.cog_id, &r.version)).collect();
         let mut keys: Vec<(u64, String)> = work
             .slots
             .iter()
-            .filter(|(k, s)| s.status == SlotStatus::Active || release.contains(*k))
+            .filter(|(k, s)| s.mesh_id == mesh_hex && (s.status == SlotStatus::Active || release.contains(*k)))
             .map(|(k, s)| (s.issue_ctr, k.clone()))
             .collect();
         keys.sort();
@@ -297,7 +322,7 @@ impl Service {
                 match self.licence.entitlement(&slot.cog_id, &mesh.to_hex(), now) {
                     Ok(ent) => {
                         slot.licence = licence_ref(&ent, now);
-                        expires_at = (now + self.cfg.grant_ttl_secs).min(slot.licence.expires);
+                        expires_at = now.saturating_add(self.cfg.grant_ttl_secs).min(slot.licence.expires);
                     }
                     Err(LicenceCheckError::Unreadable(_)) => continue, // retried at the next pull
                     Err(_) => {
@@ -309,8 +334,8 @@ impl Service {
             if withdraw && slot.status == SlotStatus::Active {
                 slot.status = SlotStatus::Released;
             }
-            slot.seq += 1;
-            out.push(sign_slot(self, &mut work, &key, &mesh, now, expires_at)?);
+            slot.seq = slot.seq.saturating_add(1);
+            out.push(sign_slot(self, &sk, &mut work, &key, &mesh, now, expires_at)?);
         }
         let prev = std::mem::replace(&mut inner.store.slots, work);
         if let Err(e) = inner.store.persist_slots() {

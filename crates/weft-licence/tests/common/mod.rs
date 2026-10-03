@@ -217,7 +217,7 @@ impl Harness {
     pub fn signed_with(&self, key: &SigningKey, method: &str, target: &str, body: &[u8], ts: u64) -> Request {
         let n = NONCE.fetch_add(1, Ordering::SeqCst);
         let nonce = format!("{:032x}", n);
-        let headers = sign_request(key, NODE, method, target, body, ts, &nonce);
+        let headers = sign_request(key, NODE, "seed-test", method, target, body, ts, &nonce);
         Request { method: method.into(), target: target.into(), headers, body: body.to_vec() }
     }
 
