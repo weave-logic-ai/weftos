@@ -97,6 +97,87 @@ pub fn findings(status: &Value) -> Vec<Finding> {
     out
 }
 
+/// How close to its expiry a valid grant gets a warning (the steward renews
+/// every 12 h, so a grant this close has missed at least one renewal).
+pub const EXPIRY_HORIZON_SECS: u64 = 24 * 3600;
+
+/// Turn a `workload.cog.checkout.status` result into findings (ADR-106
+/// phase 3): a held grant with no approval, a grant expiring soon, orphaned
+/// approvals, and no steward reachable.
+pub fn checkout_findings(st: &Value) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let now = st["now"].as_u64().unwrap_or(0);
+    for g in st["grants"].as_array().into_iter().flatten() {
+        let r = &g["grant"];
+        if r["valid"].as_bool() != Some(true) {
+            continue;
+        }
+        let name = format!("{}@{}", r["cog_id"].as_str().unwrap_or("?"), r["version"].as_str().unwrap_or("?"));
+        let missing: Vec<&str> = g["run_gate"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|a| a["run_gate"]["verdict"] == "no_approval")
+            .filter_map(|a| a["arch"].as_str())
+            .collect();
+        if !missing.is_empty() {
+            out.push(
+                f("approval_missing", Severity::Warn, format!(
+                    "{name} has a valid checkout grant but no operator approval for {}: it cannot run on this node",
+                    missing.join(", ")
+                ))
+                .remedy(format!("weaver cog checkout approve {name} --operator-key <file> (check the hashes first)")),
+            );
+        }
+        let left = r["expires_at"].as_u64().unwrap_or(0).saturating_sub(now);
+        if left < EXPIRY_HORIZON_SECS {
+            out.push(
+                f("grant_expiring", Severity::Warn, format!(
+                    "the checkout grant for {name} expires in {} h; new starts stop when it lapses",
+                    left / 3600
+                ))
+                .remedy("the steward renews grants every 12 h: check that it is up and can reach weft-licence (weaver cog checkout status)"),
+            );
+        }
+    }
+    let orphaned = st["approvals"].as_array().into_iter().flatten().filter(|a| a["active"] == false).count();
+    if orphaned > 0 {
+        out.push(
+            f("approvals_orphaned", Severity::Warn, format!("{orphaned} operator approval(s) name an earlier mesh id (mesh_nonce changed)"))
+                .remedy("weaver cog checkout approve --reapprove-orphaned --operator-key <file>"),
+        );
+    }
+    if let Some(steward) = st["steward"].as_str() {
+        let started = st["relay"]["started"].as_bool() == Some(true);
+        match (st["is_steward"].as_bool() == Some(true), st["steward_reachable"].as_bool()) {
+            (true, _) if !started => {}
+            (true, Some(false)) => out.push(
+                f("no_steward", Severity::Warn, format!(
+                    "this node is the bound steward but runs no checkout relay{}",
+                    st["relay"]["error"].as_str().map(|e| format!(" ({e})")).unwrap_or_default()
+                ))
+                .remedy("configure licence-link.json in the runtime dir (url, and a pin or allow_unpinned_lab_link) and restart the daemon"),
+            ),
+            (false, Some(false)) => out.push(
+                f("no_steward", Severity::Warn, format!("the steward {} is not reachable as a licensed peer: new checkouts fail", short(steward)))
+                    .remedy("check the steward node is up and admitted (weaver mesh status)"),
+            ),
+            _ => out.push(f("steward", Severity::Ok, format!("steward {} reachable", short(steward)))),
+        }
+    }
+    out
+}
+
+/// Ask the daemon for its checkout status (`None`: no answer within 3 s).
+pub async fn gather_checkout() -> Option<Value> {
+    let ask = async {
+        let mut client = crate::client::DaemonClient::connect().await?;
+        let resp = client.simple_call("workload.cog.checkout.status").await.ok()?;
+        if resp.ok { resp.result } else { None }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(3), ask).await.ok().flatten()
+}
+
 fn short(id: &str) -> &str {
     id.get(..12).unwrap_or(id)
 }
@@ -149,6 +230,39 @@ mod tests {
         let out = findings(&st);
         assert_eq!(ids(&out), [("licence.binding_orphaned".into(), Severity::Fail)]);
         assert!(out[0].remedy.as_deref().unwrap().contains("unbind"));
+    }
+
+    #[test]
+    fn checkout_findings_name_a_missing_approval_an_expiry_and_an_unreachable_steward() {
+        let st = json!({
+            "now": 1000, "steward": "node-a", "is_steward": false, "steward_reachable": false,
+            "relay": {"started": true},
+            "grants": [{"grant": {"cog_id": "fall-detect", "version": "1.2.0", "valid": true, "expires_at": 1000 + 3600},
+                        "run_gate": [{"arch": "aarch64", "run_gate": {"verdict": "no_approval"}}]},
+                       {"grant": {"cog_id": "old", "version": "1", "valid": false, "expires_at": 0}, "run_gate": []}],
+            "approvals": [{"active": false}, {"active": true}],
+        });
+        let out = checkout_findings(&st);
+        let got = ids(&out);
+        for id in ["licence.approval_missing", "licence.grant_expiring", "licence.approvals_orphaned", "licence.no_steward"] {
+            assert!(got.contains(&(id.to_string(), Severity::Warn)), "{id} in {got:?}");
+        }
+        assert!(out[0].remedy.as_deref().unwrap().contains("checkout approve fall-detect@1.2.0"));
+        // A lapsed grant is not reported as missing an approval.
+        assert_eq!(got.len(), 4, "{got:?}");
+    }
+
+    #[test]
+    fn a_steward_without_a_relay_is_reported_only_once_placement_started() {
+        let base = |started: bool| json!({"now": 0, "steward": "me", "is_steward": true, "steward_reachable": false,
+            "relay": {"started": started, "error": "no governance gate"}, "grants": [], "approvals": []});
+        assert!(checkout_findings(&base(false)).is_empty());
+        let out = checkout_findings(&base(true));
+        assert_eq!(ids(&out), [("licence.no_steward".into(), Severity::Warn)]);
+        assert!(out[0].message.contains("no governance gate"));
+        let ok = json!({"now": 0, "steward": "node-a", "is_steward": false, "steward_reachable": true, "relay": {}, "grants": [], "approvals": []});
+        assert_eq!(ids(&checkout_findings(&ok)), [("licence.steward".into(), Severity::Ok)]);
+        assert!(checkout_findings(&json!({"grants": [], "approvals": []})).is_empty(), "no binding, nothing to say");
     }
 
     #[test]

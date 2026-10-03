@@ -88,6 +88,10 @@ pub enum CogCommand {
         #[arg(long)]
         confirm_project_source: bool,
     },
+    /// Check out a Cognitum cog through the mesh's Seed steward, approve its
+    /// hashes, or list grants and approvals (ADR-106; needs the daemon).
+    #[cfg(all(feature = "placement", unix))]
+    Checkout(super::cog_checkout_cmd::CheckoutArgs),
 }
 
 /// `weaver cog source` subcommands.
@@ -340,6 +344,10 @@ fn print_failures(failures: &[(String, weftos_cog_sources::SourceError)]) {
 
 /// Run `weaver cog ...`.
 pub async fn run(args: CogArgs) -> anyhow::Result<()> {
+    #[cfg(all(feature = "placement", unix))]
+    if let CogCommand::Checkout(a) = args.command {
+        return super::cog_checkout_cmd::run(a).await;
+    }
     // The HTTP reader is blocking; keep it off the async runtime threads.
     tokio::task::spawn_blocking(move || run_blocking(args)).await?.map_err(coded)
 }
@@ -389,6 +397,8 @@ fn run_blocking(args: CogArgs) -> anyhow::Result<()> {
     match args.command {
         CogCommand::Source { command } => source(&roots, command),
         CogCommand::Licence { command } => licence(&roots, command),
+        #[cfg(all(feature = "placement", unix))]
+        CogCommand::Checkout(_) => unreachable!("checkout is served by the daemon, before this"),
         CogCommand::Search { query, source, json } => {
             let eff = roots.effective()?;
             let loaded = load_all(&eff, &HttpReader::new());

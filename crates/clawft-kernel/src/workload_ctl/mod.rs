@@ -23,6 +23,7 @@
 pub mod cog_kind;
 pub mod facts;
 mod host_instances;
+pub mod host_licence;
 pub mod host_revoke;
 pub mod host_service;
 pub mod msg;
@@ -65,6 +66,8 @@ mod tests_state;
 mod tests_teardown;
 #[cfg(test)]
 mod tests_two_node;
+#[cfg(test)]
+mod tests_licence;
 
 pub use cog_kind::cog_workload_spec;
 pub use facts::{LiveNodeFacts, engine_tier, governance_tier, liveness_of, placement_view};

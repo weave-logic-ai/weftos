@@ -101,7 +101,7 @@ fn read_policy(path: &Path) -> Result<Option<String>, String> {
         .map_err(|e| e.to_string())
 }
 
-fn parse<T: serde::de::DeserializeOwned>(dir: &Path, file: &str) -> Result<Option<T>, String> {
+pub(crate) fn parse<T: serde::de::DeserializeOwned>(dir: &Path, file: &str) -> Result<Option<T>, String> {
     match read_policy(&dir.join(file))? {
         None => Ok(None),
         Some(t) => serde_json::from_str(&t)

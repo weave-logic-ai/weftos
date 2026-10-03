@@ -280,6 +280,7 @@ async fn build(
         let p = crate::licence_boot::posture(k.kernel_config().mesh.as_ref(), k.governance_gate().is_some());
         Arc::new(move || p) as clawft_kernel::licence::PostureFn
     };
+    let kgate = k.governance_gate().cloned();
     drop(k);
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
@@ -328,10 +329,15 @@ async fn build(
             .map(|x| LICENCE_EXCHANGE.get_or_init(|| x).clone()),
         (None, None) => None,
     };
-    if let Some(x) = licence {
-        crate::cog_swarm::set_grant_flood(x);
+    if let Some(x) = &licence {
+        crate::cog_swarm::set_grant_flood(x.clone());
     }
-    crate::cog_swarm::install(&ex, policy.store());
+    let cog_mesh = crate::cog_swarm::install(&ex, policy.store());
+    // ADR-106 phase 3: the steward relay, from `licence-link.json`.
+    crate::licence_steward::wire(crate::licence_steward::WireArgs {
+        dir, key: &boot.key, node_id: id.clone(), store: policy.store(), exchange: &ex,
+        chain: &chain, gate: kgate, mesh: &cog_mesh,
+    });
     // The revoker exists before the first notice can arrive: a notice that
     // beats the rest of this build is enforced by the sweep at its end.
     let revoker = revoker_for(revocations.clone());
@@ -385,6 +391,8 @@ async fn build(
         ingest: hooks,
         revocations: revocations.clone(),
     })?);
+    // ADR-106 phase 3: grant plus approval before a Cognitum-origin cog runs here.
+    local.set_licence_gate(crate::licence_steward::run_gate(policy.store(), licence.as_ref()));
     let _ = HOST.set(local.clone());
     let conn = Arc::new(MeshConnector::new(true));
     let local_addr = conn.register_local("local", local);
@@ -610,6 +618,12 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
         Ok(v) => Response::success(v),
         Err(e) => Response::error(e),
     }
+}
+
+/// Build the control plane if it is not built yet (the cog mesh, the licence
+/// exchange and the steward relay come with it).
+pub async fn ensure_started(kernel: Arc<RwLock<Kernel<NativePlatform>>>) -> Result<(), String> {
+    PLANE.get_or_try_init(|| build(&kernel)).await.map(|_| ())
 }
 
 /// Daemon entry: lazily builds the control plane, then serves `m`.

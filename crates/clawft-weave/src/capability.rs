@@ -85,6 +85,8 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-106: withdrawing a Seed binding is the same trust change.
         "workload.node.unbind" => Capability::Admin,
         "workload.node.reset-floor" => Capability::Admin,
+        // ADR-106 phase 3: an operator hash approval is a trust change.
+        "workload.cog.checkout.approve" => Capability::Admin,
 
         // ── Write: state-mutating verbs ─────────────────────────────
         "agent.register" => Capability::Write,
@@ -195,7 +197,9 @@ pub fn required_capability(method: &str) -> Capability {
         | "workload.inspect"
         // ADR-106: binding status (mesh id, held binding, orphaned or not);
         // public facts, and what `weaver doctor` reads.
-        | "workload.node.binding" => Capability::Read,
+        | "workload.node.binding"
+        // ADR-106 phase 3: grants, approvals and the run gate per artifact.
+        | "workload.cog.checkout.status" => Capability::Read,
 
         // ADR-099 default-deny posture: an unclassified `workload.*` verb
         // is treated as a mutation, never as anonymous-callable Read.
@@ -470,6 +474,7 @@ mod tests {
             "workload.list",
             "workload.inspect",
             "workload.node.binding",
+            "workload.cog.checkout.status",
         ] {
             assert_eq!(required_capability(m), Capability::Read, "{m}");
             assert!(anon.allows_method(m), "{m}");
@@ -489,13 +494,20 @@ mod tests {
             "workload.stop",
             "workload.unload",
             "workload.migrate",
+            "workload.cog.checkout",
             "workload.some_future_verb",
         ] {
             assert_eq!(required_capability(m), Capability::Write, "{m}");
             assert!(!anon.allows_method(m), "anonymous must not call {m}");
             assert!(write.allows_method(m), "{m}");
         }
-        for m in ["workload.revoke", "workload.node.bind", "workload.node.unbind", "workload.node.reset-floor"] {
+        for m in [
+            "workload.revoke",
+            "workload.node.bind",
+            "workload.node.unbind",
+            "workload.node.reset-floor",
+            "workload.cog.checkout.approve",
+        ] {
             assert_eq!(required_capability(m), Capability::Admin, "{m}");
             assert!(!write.allows_method(m), "{m}");
         }

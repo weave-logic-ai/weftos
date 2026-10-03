@@ -166,6 +166,49 @@ Recommended tailnet ACL: allow the `weft-licence` port only from the steward hos
 A LAN-only plain link needs the explicit per-Seed lab opt-in until TLS with a
 pinned SPKI is added (ADR-106 section 7, decision W4).
 
+## The steward side
+
+The steward is the mesh node the binding names (`steward_node_id` and
+`steward_pubkey`, its node key). To relay checkouts it needs the link to
+`weft-licence`, in `licence-link.json` in its runtime dir (same owner and mode
+rules as the other placement policy files):
+
+```json
+{"url": "http://100.64.0.10:8700", "allow_unpinned_lab_link": true}
+```
+
+| Field | What |
+|---|---|
+| `url` | `http(s)://<ip>[:port]`. Use the Seed's tailnet or USB address, by IP (the `Host` header is checked) |
+| `tls_spki_sha256` or `tls_sha256` | pin an `https://` link (`spki-sha256:<64 hex>` / `sha256:<64 hex>`) |
+| `allow_unpinned_lab_link` | the explicit opt-in for a plain `http://` link |
+| `max_artifact_bytes` | largest artifact accepted (default 64 MiB) |
+| `timeout_secs` | call timeout (default 30 s; artifacts get at least 120 s) |
+
+A link that is neither pinned nor opted in is refused and no relay is built.
+`weft-licence` serves plain HTTP until TLS is added (W4), so today every link
+needs `allow_unpinned_lab_link`; keep it on the tailnet or the USB cable, which
+give the confidentiality. Integrity does not depend on the link.
+
+The daemon builds the relay at placement start, with the node's governance
+gate (it asks `cog.checkout`) and the licence exchange as its grant flood.
+Every request is signed for the binding in effect, so a bind or a steward
+change needs no restart; while the binding does not name this node the relay
+sends nothing and answers `not_steward`. A node without the file answers
+`no_steward`. Responses are capped (256 KiB, or the artifact cap) and timed
+out, redirects and proxies are not used, and any failure is
+`licence_unreachable` for the member that asked.
+
+Check it with `weaver cog checkout status` (the steward, whether it is
+reachable, the relay) and `weaver doctor` (`licence.no_steward`,
+`licence.approval_missing`, `licence.grant_expiring`,
+`licence.approvals_orphaned`). The operator flow (checkout, approve, the run
+gate) is in [cog-sources.md](cog-sources.md), "In a mesh with a bound Seed".
+
+Not built yet: the steward's 12-hourly renewal pull (`POST /licence/v1/renew`)
+and `weaver cog checkout release | renew`. Until then a grant lapses at its
+TTL (72 h by default) unless it is checked out again.
+
 ## Protocol
 
 Every endpoint except identity needs a steward signature. The request headers are
@@ -303,8 +346,10 @@ Not run from the repository. Steps, in order:
 6. Check out `fall-detect` (the `arm` binary, since the registry has no aarch64
    until C7). `journalctl -u weft-licence` must show one `checkout granted` and
    one `byte transfer`.
-7. After the transport phase (1c) is in place: a second mesh node runs it from
-   peers, and the journal still shows exactly one `byte transfer`.
+7. With `licence-link.json` on the steward (above): `weaver cog checkout
+   fall-detect@<version> --arch arm` on a second node, then `weaver cog
+   checkout approve ... --confirm`; the second node runs it from peers, and the
+   journal still shows exactly one `byte transfer`.
 8. Switch the Seed off for longer than the grant lifetime (72 h by default) and
    confirm sharing stops when the grants lapse.
 9. Check the syscall filter: after step 4, `systemctl status weft-licence` must show

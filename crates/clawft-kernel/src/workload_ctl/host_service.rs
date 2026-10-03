@@ -114,6 +114,9 @@ pub(super) struct Placed {
     pub(super) ingest: Option<IngestLease>,
     /// `enabled`, `disabled` (bridge down, no token issued) or `none`.
     pub(super) ingest_state: &'static str,
+    /// A Cognitum-origin cog in a Seed-bound mesh: the run gate is asked
+    /// again on every start (ADR-106, phase 3).
+    pub(super) licence: Option<super::host_licence::LicensedRun>,
 }
 
 /// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
@@ -147,6 +150,8 @@ pub struct WorkloadHostService {
     /// The node's subject revocation list, for the placement race check and
     /// the forced unload (the gate holds its own handle to the same list).
     pub(super) revocations: std::sync::OnceLock<Arc<crate::revocation::RevocationList>>,
+    /// The ADR-106 run gate for Cognitum-origin cogs (unset: not consulted).
+    pub(super) licence_gate: std::sync::OnceLock<Arc<dyn crate::licence::CognitumRunGate>>,
 }
 
 fn now_ms() -> u64 {
@@ -196,6 +201,7 @@ impl WorkloadHostService {
             verify_budget: RefusalBudget::default(),
             ingest: None,
             revocations: std::sync::OnceLock::new(),
+            licence_gate: std::sync::OnceLock::new(),
         }
     }
 
@@ -314,7 +320,7 @@ impl WorkloadHostService {
         }
     }
 
-    fn record(&self, kind: &str, payload: Value) {
+    pub(super) fn record(&self, kind: &str, payload: Value) {
         if let Some(cm) = &self.chain {
             cm.append(HOST_CHAIN_SOURCE, kind, Some(payload));
         }
@@ -490,6 +496,8 @@ impl WorkloadHostService {
                 "package id differs from the placed name",
             ));
         }
+        // ADR-106 run gate: before anything of a Cognitum-origin cog is installed.
+        let licence = self.licence_check_place(&pkg.verified, &w, &b.variant, req)?;
         if let Some(p) = &b.project_id
             && !crate::cog_ingest::valid_project_id(p)
         {
@@ -564,6 +572,7 @@ impl WorkloadHostService {
                 last: None,
                 ingest: lease,
                 ingest_state,
+                licence,
             },
         );
         if let (Some(list), Some(g0)) = (self.revocations.get(), list_at_start)

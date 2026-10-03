@@ -52,6 +52,12 @@ pub fn arch() -> &'static str {
 
 /// A signed cog package whose binary (for this host's arch) is `script`.
 pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf {
+    package_from(root, id, script, arches, None)
+}
+
+/// [`package`] with a release URL (one naming `cognitum` gives the package
+/// Cognitum origin, ADR-106).
+pub fn package_from(root: &Path, id: &str, script: &str, arches: &[&str], release_url: Option<&str>) -> PathBuf {
     let src = root.join("src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(
@@ -75,7 +81,7 @@ pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf 
         source: PackageSource {
             repo: Some("cogs-fork".into()),
             commit: Some("0000000".into()),
-            release_url: None,
+            release_url: release_url.map(str::to_owned),
         },
         cognitum_record: None,
         redistributable: true,

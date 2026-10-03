@@ -87,6 +87,11 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
     if runtime_wanted && let Some(st) = crate::licence_doctor::gather().await {
         report.findings.extend(crate::licence_doctor::findings(&st));
     }
+    // ADR-106 phase 3: missing approvals, expiring grants, no steward reachable.
+    #[cfg(all(unix, feature = "placement"))]
+    if runtime_wanted && let Some(st) = crate::licence_doctor::gather_checkout().await {
+        report.findings.extend(crate::licence_doctor::checkout_findings(&st));
+    }
     let code = doctor::print_report(&report, "weaver doctor", args.json, args.strict);
     if code != 0 {
         std::process::exit(code);

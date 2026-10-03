@@ -55,6 +55,8 @@ pub mod workload_pack;
 pub mod workload_place_cmd;
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_node_cmd;
+#[cfg(all(feature = "placement", unix))]
+pub mod cog_checkout_cmd;
 
 use std::path::Path;
 
