@@ -117,6 +117,9 @@ impl Config {
         if self.grant_ttl_secs == 0 || self.grant_ttl_secs > weft_licence_wire::MAX_GRANT_TTL_SECS {
             return bad("grant_ttl_secs must be between 1 s and 7 days");
         }
+        if self.limits.max_artifact_bytes == 0 || self.limits.max_artifact_bytes > weft_licence_wire::MAX_ARTIFACT_BYTES {
+            return bad("limits.max_artifact_bytes must be between 1 byte and 1 GiB");
+        }
         if self.limits.in_flight == 0 || self.limits.requests_per_min == 0 {
             return bad("limits: in_flight and requests_per_min must be above 0");
         }

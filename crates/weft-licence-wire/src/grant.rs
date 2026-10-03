@@ -7,7 +7,8 @@ use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GRANT_DOMAIN, LicenceError, MAX_GRANT_TTL_SECS, MeshId, SignedEnvelope, envelope_key, key_id,
+    GRANT_DOMAIN, LicenceError, MAX_ARTIFACT_BYTES, MAX_GRANT_TTL_SECS, MAX_UNIX_TIME, MeshId,
+    SignedEnvelope, envelope_key, key_id,
     parse_canonical, sha256_hex, sign_envelope, valid_hex32, valid_token, verify_envelope,
 };
 
@@ -173,6 +174,41 @@ fn check_shape(g: &CheckoutGrant, pk: &[u8; 32]) -> Result<(), LicenceError> {
         .all(|a| valid_token(&a.arch) && valid_hex32(&a.sha256) && valid_hex32(&a.blake3));
     if !sorted_unique || !each_ok {
         return bad("artifacts");
+    }
+    let dup = |f: fn(&GrantArtifact) -> &String| {
+        let set: BTreeSet<&String> = g.artifacts.iter().map(f).collect();
+        set.len() != g.artifacts.len()
+    };
+    if dup(|a| &a.sha256) || dup(|a| &a.blake3) {
+        return bad("duplicate artifact hash");
+    }
+    if g.artifacts.iter().any(|a| a.size == 0 || a.size > MAX_ARTIFACT_BYTES) {
+        return bad("artifact size");
+    }
+    let printable = g.registry.bytes().all(|c| (0x20..=0x7e).contains(&c));
+    if !printable {
+        return bad("registry");
+    }
+    let times = [g.licence.expires, g.issued_at, g.expires_at];
+    if g.licence.expires == 0 || times.iter().any(|t| *t > MAX_UNIX_TIME) {
+        return bad("time");
+    }
+    let dup = |f: fn(&GrantArtifact) -> &String| {
+        let set: BTreeSet<&String> = g.artifacts.iter().map(f).collect();
+        set.len() != g.artifacts.len()
+    };
+    if dup(|a| &a.sha256) || dup(|a| &a.blake3) {
+        return bad("duplicate artifact hash");
+    }
+    if g.artifacts.iter().any(|a| a.size == 0 || a.size > MAX_ARTIFACT_BYTES) {
+        return bad("artifact size");
+    }
+    if !g.registry.bytes().all(|c| (0x20..=0x7e).contains(&c)) {
+        return bad("registry");
+    }
+    let times = [g.licence.expires, g.issued_at, g.expires_at];
+    if g.licence.expires == 0 || times.iter().any(|t| *t > MAX_UNIX_TIME) {
+        return bad("time");
     }
     if g.expires_at.saturating_sub(g.issued_at) > MAX_GRANT_TTL_SECS {
         return Err(LicenceError::TtlTooLong);

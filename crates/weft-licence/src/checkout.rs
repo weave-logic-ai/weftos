@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use weft_licence_wire::{
+    MAX_UNIX_TIME,
     CheckoutGrant, GrantArtifact, LicenceRef, MAX_GRANT_TTL_SECS, MeshId, SignedGrant, hex_encode,
     sha256_hex, sign_grant, verify_grant_signature,
 };
@@ -110,6 +111,9 @@ fn sign_slot(
         expires_at,
     };
     let signed = sign_grant(&grant, sk).map_err(|e| ApiError::new(500, "sign_failed", e.to_string()))?;
+    // Never issue what the verifier would refuse (shape, hashes, sizes, times).
+    verify_grant_signature(&signed, &sk.verifying_key().to_bytes())
+        .map_err(|e| ApiError::new(500, "grant_invalid", e.to_string()))?;
     slot.issue_ctr = ctr;
     slot.grant = Some(signed.clone());
     Ok(signed)
@@ -118,7 +122,7 @@ fn sign_slot(
 fn licence_ref(ent: &Entitlement, now: u64) -> LicenceRef {
     // No declared expiry: the licence side reads as "now + the 7 day maximum",
     // so a verifier's `max(now, floor) < licence.expires` check stays finite.
-    LicenceRef { ref_sha256: ent.ref_sha256.clone(), expires: ent.expires.unwrap_or(now + MAX_GRANT_TTL_SECS) }
+    LicenceRef { ref_sha256: ent.ref_sha256.clone(), expires: ent.expires.filter(|e| *e <= MAX_UNIX_TIME).unwrap_or(now + MAX_GRANT_TTL_SECS) }
 }
 
 fn mesh_of(inner: &Inner) -> Option<MeshId> {
@@ -194,6 +198,12 @@ impl Service {
         if sha != art.sha256 || (art.size != 0 && bytes.len() as u64 > art.size) {
             return Err(ApiError::new(502, "verify_failed", "sha256 does not match the registry"));
         }
+        if bytes.is_empty() {
+            return Err(ApiError::new(502, "verify_failed", "empty artifact"));
+        }
+        if !entry.registry.bytes().all(|c| (0x20..=0x7e).contains(&c)) || entry.registry.len() > 256 {
+            return Err(ApiError::new(502, "fetch_failed", "registry label is not printable ASCII"));
+        }
         let blake3 = hex_encode(blake3::hash(&bytes).as_bytes());
         let now = (self.clock)().max(now);
         let mut inner = self.lock();
@@ -210,6 +220,10 @@ impl Service {
             issue_ctr: 0,
             grant: None,
         });
+        // The verifier refuses a grant whose arches share a hash.
+        if slot.arches.iter().any(|(a, v)| *a != body.arch && (v.sha256 == sha || v.blake3 == blake3)) {
+            return Err(ApiError::new(409, "duplicate_artifact", "another arch already has these bytes"));
+        }
         // The union of arches applies across checkouts.
         slot.arches.insert(
             body.arch.clone(),

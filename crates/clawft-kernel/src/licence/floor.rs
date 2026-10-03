@@ -2,8 +2,10 @@
 //!
 //! Per grant key: `floor = max(highest accepted issued_at, persisted local
 //! now high-water mark)`. Expiry uses `max(now, floor)`, so a clock set back
-//! cannot revive a grant. A floor more than 30 days ahead of the newest
-//! accepted `issued_at` is far-future poisoning and is clamped.
+//! cannot revive a grant. The mark never goes down. Its growth is capped at
+//! 30 days past the newest accepted `issued_at`, so a forward clock jump
+//! cannot push the floor arbitrarily far; undoing a jump that did land is the
+//! Admin `reset_floor`.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +17,7 @@ use super::FAR_FUTURE_CLAMP_SECS;
 pub struct FloorState {
     /// Highest `issued_at` among accepted grants (0 = none yet).
     pub max_issued: u64,
-    /// Highest local `now` seen (the persisted high-water mark).
+    /// Highest capped local `now` seen (the persisted high-water mark).
     pub hw: u64,
 }
 
@@ -30,19 +32,14 @@ impl FloorState {
         now.max(self.floor())
     }
 
-    /// Record the local clock. Returns `Some((from, to))` when the stored
-    /// high-water mark was far-future poisoning and was clamped: more than
-    /// 30 days past the newest accepted `issued_at` *and* ahead of the clock
-    /// now (a mark the running clock has caught up with is genuine).
-    pub fn observe(&mut self, now: u64) -> Option<(u64, u64)> {
-        let mut clamped = None;
-        let limit = self.max_issued.saturating_add(FAR_FUTURE_CLAMP_SECS);
-        if self.max_issued > 0 && self.hw > limit && self.hw > now {
-            clamped = Some((self.hw, self.max_issued));
-            self.hw = self.max_issued;
+    /// Record the local clock: `hw = max(hw, min(now, max_issued + 30 d))`.
+    /// Nothing is recorded while no grant has been accepted. Never lowers `hw`.
+    pub fn observe(&mut self, now: u64) {
+        if self.max_issued == 0 {
+            return;
         }
-        self.hw = self.hw.max(now);
-        clamped
+        let cap = self.max_issued.saturating_add(FAR_FUTURE_CLAMP_SECS);
+        self.hw = self.hw.max(now.min(cap));
     }
 
     /// Record an accepted grant's `issued_at`.
@@ -50,8 +47,9 @@ impl FloorState {
         self.max_issued = self.max_issued.max(issued_at);
     }
 
-    /// Operator reset: forget the high-water mark and restart it at `now`.
+    /// Operator reset: forget the high-water mark and restart it from `now`.
     pub fn reset(&mut self, now: u64) {
-        self.hw = now;
+        self.hw = 0;
+        self.observe(now);
     }
 }

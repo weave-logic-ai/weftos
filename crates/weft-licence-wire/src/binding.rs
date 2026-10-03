@@ -4,7 +4,7 @@ use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BINDING_DOMAIN, LicenceError, SignedEnvelope, envelope_key, parse_canonical, sign_envelope,
+    BINDING_DOMAIN, LicenceError, MAX_UNIX_TIME, SignedEnvelope, envelope_key, parse_canonical, sign_envelope,
     valid_hex32, valid_token, verify_envelope,
 };
 
@@ -75,6 +75,9 @@ pub fn verify_binding_signature(
         .all(|s| valid_hex32(s));
     if !hex_ok || !valid_token(&rec.device_id) || !valid_token(&rec.steward_node_id) {
         return Err(LicenceError::Malformed("binding field".into()));
+    }
+    if rec.bound_at > MAX_UNIX_TIME {
+        return Err(LicenceError::Malformed("binding bounds".into()));
     }
     Ok(rec)
 }

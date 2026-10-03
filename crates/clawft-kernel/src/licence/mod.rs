@@ -29,12 +29,15 @@ mod gate;
 mod persist;
 mod policy;
 mod store;
+mod store_accept;
 mod store_load;
 
 #[cfg(test)]
 mod tests_common;
 #[cfg(test)]
 mod tests_policy;
+#[cfg(test)]
+mod tests_review;
 #[cfg(test)]
 mod tests_seed_service;
 #[cfg(test)]
@@ -63,7 +66,7 @@ pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
 pub use weft_licence_wire::{
     APPROVAL_DOMAIN, BINDING_DOMAIN, CheckoutGrant, FAR_FUTURE_CLAMP_SECS, GRANT_DOMAIN,
     GRANT_SKEW_SECS, GrantArtifact, LicenceError, LicenceRef, MAX_APPROVALS, MAX_GRANT_SLOTS,
-    MAX_GRANT_TTL_SECS, MAX_PAYLOAD_BYTES, MAX_STORE_BYTES, MESH_ID_DOMAIN, MeshId,
+    MAX_ARTIFACT_BYTES, MAX_FLOORS, MAX_GRANT_TTL_SECS, MAX_PAYLOAD_BYTES, MAX_STORE_BYTES, MAX_UNIX_TIME, MESH_ID_DOMAIN, MeshId,
     SignedEnvelope, SignedGrant, key_id, sha256_hex, sign_grant, verify_grant,
 };
 #[allow(unused_imports)]
@@ -149,13 +152,6 @@ pub enum LicenceEvent {
         /// The contested `seq`.
         seq: u64,
     },
-    /// The persisted floor was far in the future and was clamped.
-    FloorClamped {
-        /// Floor before.
-        from: u64,
-        /// Floor after.
-        to: u64,
-    },
     /// An operator reset the floor.
     FloorReset(u64),
 }
@@ -168,13 +164,13 @@ impl LicenceEvent {
             Self::BindingConflict(_) => "binding_conflict",
             Self::BindingOrphaned { .. } => "binding_orphaned",
             Self::GrantConflict { .. } => "grant_conflict",
-            Self::FloorClamped { .. } => "floor_clamped",
             Self::FloorReset(_) => "floor_reset",
         }
     }
 }
 
-/// Receives [`LicenceEvent`]s.
+/// Receives [`LicenceEvent`]s. Called after the store's lock is released, but
+/// a sink must still not call back into the store.
 pub trait LicenceEventSink: Send + Sync {
     /// Handle one event.
     fn emit(&self, event: LicenceEvent);

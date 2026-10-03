@@ -3,6 +3,7 @@
 pub use weft_licence_wire::{BindState, BindingRecord, SignedBinding, sign_binding};
 
 use super::{LicenceError, MeshId};
+use crate::workload_pkg::codec::hex_decode_exact;
 use crate::workload_pkg::{KeyOrigin, TrustAnchors};
 
 /// A key is acceptable only when pinned as an operator key.
@@ -35,9 +36,19 @@ pub(crate) fn verify_binding_signature(
     signed: &SignedBinding,
     anchors: &TrustAnchors,
 ) -> Result<BindingRecord, LicenceError> {
-    weft_licence_wire::verify_binding_signature(signed, &|pk| {
+    let rec = weft_licence_wire::verify_binding_signature(signed, &|pk| {
         require_operator(anchors, pk).is_ok()
-    })
+    })?;
+    // The grant and steward keys must not be a pinned trust-anchor key, or a
+    // binding could hand an operator or release key the role of a Seed key.
+    for hex in [&rec.grant_pubkey, &rec.steward_pubkey] {
+        let pk = hex_decode_exact::<32>(hex).unwrap_or_default();
+        let anchored = anchors.signers.iter().chain(&anchors.cognitum).any(|k| k.public_key == pk);
+        if anchored {
+            return Err(LicenceError::Malformed("binding key is a trust anchor".into()));
+        }
+    }
+    Ok(rec)
 }
 
 /// Where the STEWARD profile (phase 1d) plugs in: the 600 s age window, the

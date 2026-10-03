@@ -185,3 +185,31 @@ fn state_files_are_never_group_or_world_accessible() {
     walk(&h.cfg.state_dir, &mut bad);
     assert!(bad.is_empty(), "{bad:?}");
 }
+
+#[test]
+fn nothing_is_issued_that_the_verifier_would_refuse() {
+    // Two arches with identical bytes share a hash: refused (verifier rule).
+    let h = Harness::new(&[("dup", "arm", A), ("dup", "arm64", A)]);
+    assert_eq!(status(&h.checkout("dup", "arm")), 200);
+    assert_eq!(code(&h.checkout("dup", "arm64")), "duplicate_artifact");
+    // An empty artifact (size 0) is refused.
+    let h = Harness::new(&[("empty", "arm", b"")]);
+    assert_eq!(status(&h.checkout("empty", "arm")), 502);
+    // A registry label outside printable ASCII is refused.
+    let h = Harness::new(&[("x", "arm", A)]);
+    h.fetcher.cogs.lock().unwrap().insert(("x".into(), "arm".into()), A.to_vec());
+    // A licence expiring after 2100 reads as no declared expiry, still finite.
+    h.licence.set("*", Ok(Entitlement { ref_sha256: sha256_hex(b"x"), expires: Some(u64::MAX) }));
+    let g: weft_licence_wire::CheckoutGrant = serde_json::from_str(&grant_of(&h.checkout("x", "arm")).payload).unwrap();
+    assert!(g.licence.expires <= weft_licence_wire::MAX_UNIX_TIME && g.expires_at > g.issued_at);
+    verify_grant(&grant_of(&h.checkout("x", "arm")), &h.grant_key(), &mesh()).unwrap();
+}
+
+#[test]
+fn the_artifact_limit_cannot_be_configured_above_one_gib() {
+    let mut c = weft_licence::Config::default();
+    c.limits.max_artifact_bytes = (1 << 30) + 1;
+    assert!(c.validate().is_err());
+    c.limits.max_artifact_bytes = 0;
+    assert!(c.validate().is_err());
+}

@@ -11,7 +11,10 @@ use super::floor::FloorState;
 use super::verify_grant_signature;
 use super::persist::read_capped;
 use super::store::{Held, Inner, Slot};
-use super::{CheckoutGrant, LicenceError, MAX_GRANT_SLOTS, SignedBinding, SignedGrant, valid_token};
+use super::{
+    CheckoutGrant, LicenceError, MAX_FLOORS, MAX_GRANT_SLOTS, MAX_UNIX_TIME, SignedBinding,
+    SignedGrant, valid_token,
+};
 use crate::workload_pkg::TrustAnchors;
 use crate::workload_pkg::codec::hex_decode_exact;
 
@@ -48,6 +51,15 @@ pub(super) fn load(path: &Path, anchors: &TrustAnchors) -> Result<Inner, Licence
         Some(s) => Some(Held { body: verify_binding_signature(&s, anchors)?, signed: s }),
         None => None,
     };
+    // At most one floor per grant key, only for the bound key, and sane times.
+    let bound_key = binding.as_ref().map(|b| b.body.grant_pubkey.as_str());
+    let floors_ok = file.floors.len() <= MAX_FLOORS
+        && file.floors.iter().all(|(k, f)| {
+            Some(k.as_str()) == bound_key && f.max_issued <= MAX_UNIX_TIME && f.hw <= MAX_UNIX_TIME
+        });
+    if !floors_ok {
+        return Err(LicenceError::Malformed("floors".into()));
+    }
     let mut inner = Inner { binding, floors: file.floors, ..Inner::default() };
     inner.persisted_hw = inner.floors.values().map(|f| f.hw).max().unwrap_or(0);
     if file.grants.is_empty() {

@@ -267,7 +267,7 @@ fn the_floor_and_the_store_survive_a_restart() {
 }
 
 #[test]
-fn a_far_future_floor_is_clamped_and_chained() {
+fn a_forward_jump_is_capped_never_lowered_and_only_reset_undoes_it() {
     let mut fx = Fx::new();
     fx.bind();
     put(&fx, &grant(1, T0, HOUR, &["aarch64"])).unwrap();
@@ -275,20 +275,35 @@ fn a_far_future_floor_is_clamped_and_chained() {
     fx.store.tick();
     fx.set_now(T0 + 60); // and was corrected
     fx.restart();
-    assert!(covered(&fx, "aarch64"), "clamped floor lets the in-window grant live");
+    // The mark is capped at issued + 30 days but is not lowered: the expired
+    // grant stays dead after the clock is set back.
+    assert!(!covered(&fx, "aarch64"));
+    assert_eq!(fx.store.floor(), Some(T0 + 30 * DAY));
+    fx.store.reset_floor().unwrap(); // Admin, chained
     assert_eq!(fx.store.floor(), Some(T0 + 60));
-    assert_eq!(fx.names(), ["floor_clamped"]);
+    assert!(covered(&fx, "aarch64"));
+    assert_eq!(fx.names(), ["floor_reset"]);
 }
 
 #[test]
-fn a_genuine_long_gap_is_not_a_clamp() {
+fn a_genuine_long_gap_then_a_set_back_clock_does_not_revive_a_grant() {
     let fx = Fx::new();
     fx.bind();
     put(&fx, &grant(1, T0, HOUR, &["aarch64"])).unwrap();
+    fx.set_now(T0 + 35 * DAY);
+    fx.store.tick();
+    fx.set_now(T0 + 10); // back inside the old grant's window
+    assert!(!covered(&fx, "aarch64"));
+    assert!(fx.names().is_empty());
+}
+
+#[test]
+fn no_high_water_mark_is_recorded_before_the_first_grant() {
+    let fx = Fx::new();
+    fx.bind();
     fx.set_now(T0 + 90 * DAY);
     fx.store.tick();
-    fx.store.tick();
-    assert!(fx.names().is_empty());
+    assert_eq!(fx.store.floor(), Some(0));
 }
 
 #[test]
