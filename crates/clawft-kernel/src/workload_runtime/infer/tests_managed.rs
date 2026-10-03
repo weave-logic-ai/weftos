@@ -418,3 +418,157 @@ async fn through_the_host_a_managed_instance_is_chained_end_to_end() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_server_listening_beyond_loopback_is_stopped_and_chained_by_the_caller() {
+    if super::exposure::local_addrs().is_empty() {
+        eprintln!("no non-loopback interface address on this machine; skipping");
+        return;
+    }
+    let m = llama();
+    let port = free_port();
+    let h = load(&m.rt, llama_spec(port)).await;
+    m.rt.start(&h).await.unwrap();
+    let pid = script_pid(&m.script_dir).await;
+    // The "server" binds the wildcard address despite --host 127.0.0.1.
+    let _wild = std::net::TcpListener::bind(("0.0.0.0", port)).unwrap();
+    let st = m.rt.status(&h).await;
+    assert_eq!(st.state, InstanceState::Exited, "{st:?}");
+    assert!(
+        st.detail.as_deref().unwrap().contains("beyond loopback"),
+        "{st:?}"
+    );
+    assert!(!alive(pid), "the launcher was stopped");
+    assert!(matches!(
+        m.rt.reconcile(&h).await.unwrap(),
+        Reconcile::StoppedExposed { ref reachable_on } if !reachable_on.is_empty()
+    ));
+    let e = m.rt.start(&h).await.unwrap_err();
+    assert!(matches!(e, RuntimeError::InvalidState(_)), "{e:?}");
+    m.rt.unload(h).await.unwrap();
+}
+
+#[tokio::test]
+async fn reconcile_also_catches_an_exposed_server() {
+    if super::exposure::local_addrs().is_empty() {
+        return;
+    }
+    let m = llama();
+    let port = free_port();
+    let h = load(&m.rt, llama_spec(port)).await;
+    m.rt.start(&h).await.unwrap();
+    let pid = script_pid(&m.script_dir).await;
+    let _wild = std::net::TcpListener::bind(("0.0.0.0", port)).unwrap();
+    assert!(matches!(
+        m.rt.reconcile(&h).await.unwrap(),
+        Reconcile::StoppedExposed { .. }
+    ));
+    assert!(!alive(pid));
+    m.rt.unload(h).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_loopback_only_server_is_left_alone() {
+    let m = llama();
+    let port = free_port();
+    let h = load(&m.rt, llama_spec(port)).await;
+    m.rt.start(&h).await.unwrap();
+    let pid = script_pid(&m.script_dir).await;
+    let server = server_on(port).await; // bound to 127.0.0.1 only
+    mount_llama(&server, 200, NAME).await;
+    assert_eq!(m.rt.status(&h).await.state, InstanceState::Running);
+    assert_eq!(m.rt.reconcile(&h).await.unwrap(), Reconcile::Healthy);
+    assert!(alive(pid));
+    assert!(
+        super::exposure::reachable_beyond_loopback(port)
+            .await
+            .is_empty()
+    );
+    m.rt.unload(h).await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_and_reap_take_the_whole_process_group() {
+    let m = llama();
+    write_forking_script(&m.script_dir.join("fake-serve"));
+    let port = free_port();
+    let h = load(&m.rt, llama_spec(port)).await;
+    m.rt.start(&h).await.unwrap();
+    let pid = script_pid(&m.script_dir).await;
+    let gpid: i32 = std::fs::read_to_string(m.script_dir.join("gpid.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(alive(pid) && alive(gpid));
+    m.rt.stop(&h, Duration::from_secs(3)).await.unwrap();
+    assert!(!alive(pid) && !alive(gpid), "stop left a grandchild behind");
+
+    // A leader that dies on its own leaves no grandchild after the reap.
+    std::fs::remove_file(m.script_dir.join("pid.txt")).unwrap();
+    m.rt.start(&h).await.unwrap();
+    let pid = script_pid(&m.script_dir).await;
+    let gpid: i32 = std::fs::read_to_string(m.script_dir.join("gpid.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    crash(pid);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(m.rt.status(&h).await.state, InstanceState::Exited);
+    for _ in 0..40 {
+        if !alive(gpid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!alive(gpid), "the reap left a grandchild behind");
+
+    // Dropping the adapter with a server running takes the group too.
+    std::fs::remove_file(m.script_dir.join("pid.txt")).unwrap();
+    m.rt.start(&h).await.unwrap();
+    let pid = script_pid(&m.script_dir).await;
+    let gpid: i32 = std::fs::read_to_string(m.script_dir.join("gpid.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    drop(m.rt);
+    for _ in 0..40 {
+        if !alive(pid) && !alive(gpid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!alive(pid) && !alive(gpid), "drop left processes behind");
+}
+
+#[tokio::test]
+async fn the_callers_path_wins_over_the_supervisors_default() {
+    let default = managed(InferFlavor::LlamaCpp, fast());
+    adopt_model(&default.reg, default.tmp.path(), NAME, ModelFormat::Gguf);
+    let h = load(&default.rt, llama_spec(free_port())).await;
+    default.rt.start(&h).await.unwrap();
+    script_pid(&default.script_dir).await;
+    let p = std::fs::read_to_string(default.script_dir.join("path.txt")).unwrap();
+    assert_eq!(
+        p, "/usr/local/bin:/usr/bin:/bin",
+        "nothing forwarded: the default"
+    );
+    default.rt.unload(h).await.unwrap();
+
+    let custom = managed_with(InferFlavor::LlamaCpp, fast(), |c| {
+        c.env
+            .push(("PATH".into(), "/opt/custom/bin:/usr/bin:/bin".into()));
+    });
+    adopt_model(&custom.reg, custom.tmp.path(), NAME, ModelFormat::Gguf);
+    let h = load(&custom.rt, llama_spec(free_port())).await;
+    custom.rt.start(&h).await.unwrap();
+    script_pid(&custom.script_dir).await;
+    let p = std::fs::read_to_string(custom.script_dir.join("path.txt")).unwrap();
+    assert_eq!(
+        p, "/opt/custom/bin:/usr/bin:/bin",
+        "the configured PATH wins"
+    );
+    custom.rt.unload(h).await.unwrap();
+}

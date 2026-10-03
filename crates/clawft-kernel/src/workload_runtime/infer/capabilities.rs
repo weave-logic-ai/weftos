@@ -73,7 +73,9 @@ pub async fn probe(cfg: &InferConfig, probe_port: u16) -> Vec<Capability> {
             };
             let r = client.probe(cfg.flavor).await;
             version = r.version.clone();
-            !matches!(r.health, Health::Unreachable(_))
+            // Loading is a server that is there; a broken or absent one
+            // is not a capability.
+            matches!(r.health, Health::Up | Health::Loading)
         }
     };
     if !present {

@@ -41,27 +41,113 @@ fn a_wider_than_loopback_bind_is_refused() {
     s.validate().unwrap();
 }
 
+fn args(v: &[&str]) -> InferenceSpec {
+    let mut s = ok();
+    s.serve.extra_args = v.iter().map(|a| a.to_string()).collect();
+    s
+}
+
 #[test]
-fn extra_args_cannot_set_what_the_adapter_owns() {
-    for a in [
+fn extra_args_are_an_allowlist_with_arity() {
+    args(&[
+        "--threads",
+        "4",
+        "--flash-attn",
+        "-ngl",
+        "99",
+        "--temp",
+        "-0.5",
+    ])
+    .validate()
+    .unwrap();
+    args(&[]).validate().unwrap();
+    // Missing and surplus values.
+    assert!(args(&["--threads"]).validate().is_err());
+    assert!(args(&["--flash-attn", "on"]).validate().is_err());
+    // A value that reads as a flag.
+    assert!(args(&["--threads", "--host"]).validate().is_err());
+    // mlx has its own list; Ollama takes none.
+    let mut m = spec("r", InferFlavor::MlxLm, 49322);
+    m.serve.extra_args = vec!["--max-tokens".into(), "512".into()];
+    m.validate().unwrap();
+    m.serve.extra_args = vec!["--jinja".into()];
+    assert!(m.validate().is_err(), "a llama.cpp flag on mlx");
+    let mut o = spec("r", InferFlavor::Ollama, 49323);
+    o.serve.extra_args = vec!["--threads".into(), "2".into()];
+    assert!(o.validate().is_err());
+}
+
+#[test]
+fn flags_that_bypass_a_denylist_are_all_refused() {
+    let bad_flags = [
+        // owned by the adapter, in every spelling
         "--host",
-        "--host=0.0.0.0",
+        "--hos",
+        "--ho",
         "--port",
+        "--por",
         "-m",
-        "--model=x",
+        "-md",
+        "-hf",
+        "-mu",
+        "--model",
+        "--model-draft",
         "--draft",
         "--ctx",
+        "--ctx-size",
+        "-c",
         "--kv",
-    ] {
-        let mut s = ok();
-        s.serve.extra_args = vec![a.into()];
-        assert!(s.validate().is_err(), "{a} must be refused");
+        // other models, files and listeners
+        "--lora",
+        "--lora-scaled",
+        "--mmproj",
+        "--api-key",
+        "--api-key-file",
+        "--ssl-key-file",
+        "--ssl-cert-file",
+        "--path",
+        "--log-file",
+        "--slot-save-path",
+        "--chat-template-file",
+        "--grammar-file",
+        "--hf-repo",
+        "--model-url",
+    ];
+    for f in bad_flags {
+        assert!(args(&[f]).validate().is_err(), "{f} must be refused");
+        assert!(args(&[f, "x"]).validate().is_err(), "{f} x must be refused");
+        assert!(args(&["--threads", "2", f]).validate().is_err());
     }
+}
+
+#[test]
+fn smuggled_and_malformed_tokens_are_refused() {
+    for a in [
+        "--host 0.0.0.0",
+        "--host=0.0.0.0",
+        "--threads=4",
+        "--threads\t4",
+        "bad\nline",
+        "",
+        "stray",
+    ] {
+        assert!(args(&[a]).validate().is_err(), "{a:?} must be refused");
+    }
+    assert!(args(&["--threads", "4 --host 0.0.0.0"]).validate().is_err());
+    assert!(args(&["--threads", "$(id)"]).validate().is_err());
+}
+
+#[test]
+fn memory_figures_are_capped() {
     let mut s = ok();
-    s.serve.extra_args = vec!["--threads".into(), "4".into(), "--flash-attn".into()];
-    s.validate().unwrap();
-    s.serve.extra_args = vec!["bad\nline".into()];
+    s.memory.weights_bytes = u64::MAX;
     assert!(s.validate().is_err());
+    let mut s = ok();
+    s.memory.kv_budget_bytes = (1 << 42) + 1;
+    assert!(s.validate().is_err());
+    let mut s = ok();
+    s.memory.weights_bytes = 1 << 42;
+    s.validate().unwrap();
 }
 
 #[test]

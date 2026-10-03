@@ -28,7 +28,8 @@ use tokio::task::JoinHandle;
 
 use super::capabilities;
 use super::config::{InferConfig, InferMode, ManagedConfig};
-use super::launch::{Launch, build_launch, check_format, port_in_use};
+use super::exposure::port_in_use;
+use super::launch::{Launch, build_launch, check_format};
 use super::ollama::SharedLoad;
 use super::probe::{ServerClient, ServerReport};
 use super::spec::{InferFlavor, InferenceSpec};
@@ -61,6 +62,9 @@ pub(super) struct Managed {
     pub restarts: u32,
     pub exited_at: Option<Instant>,
     pub last: Option<RunEvidence>,
+    /// Set when the server was found listening beyond loopback and was
+    /// stopped for it; the instance will not start again until reloaded.
+    pub exposed: Option<Vec<std::net::IpAddr>>,
     pub load: Option<(SharedLoad, JoinHandle<()>)>,
 }
 
@@ -154,6 +158,14 @@ impl InferRuntime {
                 spec.runtime.id()
             )));
         }
+        if let Some((lo, hi)) = self.cfg.allowed_ports {
+            let p = spec.port()?;
+            if !(lo..=hi).contains(&p) {
+                return Err(refuse(format!(
+                    "port {p} is outside this adapter's allowed range {lo}-{hi}"
+                )));
+            }
+        }
         let client = self.client_for(&spec)?;
         let mut notes = vec![format!("endpoint {}", client.base())];
         let Some(m) = self.managed_cfg() else {
@@ -228,7 +240,7 @@ impl InferRuntime {
             )));
         }
         let (ip, port) = (spec.bind_ip()?, spec.port()?);
-        if port_in_use(ip, port) {
+        if port_in_use(ip, port).await {
             return Err(refuse(format!(
                 "something is already listening on {ip}:{port}; adopt it instead of managing over it"
             )));
@@ -330,6 +342,7 @@ impl WorkloadRuntime for InferRuntime {
                 restarts: 0,
                 exited_at: None,
                 last: None,
+                exposed: None,
                 load: None,
             });
         }
@@ -475,6 +488,7 @@ impl InferRuntime {
                 .or_else(|| i.spec.model.clone());
             (i.client.clone(), model, i.spec.runtime)
         };
+        let client = ServerClient::new(client.base().to_string(), self.cfg.deep_timeout)?;
         let report = client.probe(flavor).await;
         let model = model
             .or_else(|| report.models.first().cloned())

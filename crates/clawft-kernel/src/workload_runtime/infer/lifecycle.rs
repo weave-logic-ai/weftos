@@ -1,14 +1,22 @@
 //! Start, stop, unload, status, restart and reconcile for [`InferRuntime`].
+//!
+//! The instances lock is never held across a network call or a process
+//! termination: state is read or taken under the lock, the slow work runs
+//! with the lock dropped, and results are written back under a fresh lock.
 
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
+use super::exposure::{port_in_use, reachable_beyond_loopback};
 use super::ollama::{self, LoadState};
-use super::probe::{Health, ServerReport};
+use super::probe::{Health, ServerClient, ServerReport};
 use super::runtime::{InferRuntime, Instance, Managed, ManagedPlan};
 use super::spec::InferFlavor;
 use crate::workload_runtime::evidence::RunEvidence;
 use crate::workload_runtime::supervise::{LaunchSpec, ProcLimits, Supervised};
-use crate::workload_runtime::types::{InstanceHandle, InstanceState, InstanceStatus, RuntimeError};
+use crate::workload_runtime::types::{
+    InstanceHandle, InstanceState, InstanceStatus, RuntimeError, WorkloadRuntime,
+};
 
 /// Output kept per stream from a model server (bytes).
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -39,18 +47,16 @@ pub enum Reconcile {
         /// Restarts attempted.
         attempts: u32,
     },
+    /// The server was listening beyond loopback, so it was stopped. The
+    /// caller chains this; the instance stays down until reloaded.
+    StoppedExposed {
+        /// Local addresses the port answered on.
+        reachable_on: Vec<IpAddr>,
+    },
 }
 
 fn unknown(h: &InstanceHandle) -> RuntimeError {
     RuntimeError::UnknownInstance(h.instance_id.clone())
-}
-
-fn evidence(rt: &InferRuntime, h: &InstanceHandle) -> RunEvidence {
-    RunEvidence {
-        runtime: crate::workload_runtime::types::WorkloadRuntime::id(rt).to_string(),
-        instance_id: h.instance_id.clone(),
-        ..RunEvidence::default()
-    }
 }
 
 fn unlimited() -> ProcLimits {
@@ -72,15 +78,15 @@ fn spawn(rt: &InferRuntime, inst: &mut Instance) -> Result<(), RuntimeError> {
         proc,
         wanted,
         exited_at,
+        exposed,
         ..
     }) = inst.managed.as_mut()
     else {
         return Err(RuntimeError::Unsupported("not a supervised process".into()));
     };
-    let (ip, port) = (inst.spec.bind_ip()?, inst.spec.port()?);
-    if super::launch::port_in_use(ip, port) {
-        return Err(RuntimeError::Backend(format!(
-            "{ip}:{port} is already taken by something else; not starting over it"
+    if let Some(a) = exposed {
+        return Err(RuntimeError::InvalidState(format!(
+            "the server was stopped for listening beyond loopback ({a:?}); reload the instance"
         )));
     }
     *proc = Some(Supervised::spawn(LaunchSpec {
@@ -97,13 +103,12 @@ fn spawn(rt: &InferRuntime, inst: &mut Instance) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-/// Collect a process that exited on its own, once.
-async fn reap(mg: &mut Managed) -> Option<Option<i32>> {
-    let exited = mg.proc.as_mut()?.try_exit()?;
-    let ev = mg.proc.take()?.terminate(Duration::ZERO).await;
+/// Under the lock: if the process exited on its own, take it (and its exit
+/// code) so it can be collected after the lock is dropped.
+fn take_exited(mg: &mut Managed) -> Option<(Supervised, Option<i32>)> {
+    let code = mg.proc.as_mut()?.try_exit()?.code();
     mg.exited_at.get_or_insert_with(Instant::now);
-    mg.last = Some(ev);
-    Some(exited.code())
+    Some((mg.proc.take()?, code))
 }
 
 fn map_report(
@@ -118,6 +123,10 @@ fn map_report(
         state: InstanceState::Degraded,
         exit_code: None,
         detail: Some(d),
+    };
+    let running = |d: &str| InstanceStatus {
+        detail: Some(d.into()),
+        ..InstanceStatus::of(InstanceState::Running)
     };
     match &r.health {
         Health::Loading => degraded("loading model".into()),
@@ -137,19 +146,13 @@ fn map_report(
                 if !r.lists(m) {
                     degraded(format!("model {m} is not pulled"))
                 } else if r.resident(m) {
-                    InstanceStatus {
-                        detail: Some("model resident".into()),
-                        ..InstanceStatus::of(InstanceState::Running)
-                    }
+                    running("model resident")
                 } else if let Some(LoadState::Failed(e)) = load {
                     degraded(format!("load failed: {e}"))
                 } else if matches!(load, Some(LoadState::Loading)) {
                     degraded("loading model".into())
                 } else if adopted {
-                    InstanceStatus {
-                        detail: Some("server up; model not resident".into()),
-                        ..InstanceStatus::of(InstanceState::Running)
-                    }
+                    running("server up; model not resident")
                 } else {
                     InstanceStatus::of(InstanceState::Loaded)
                 }
@@ -163,19 +166,67 @@ fn map_report(
 }
 
 impl InferRuntime {
+    fn rt_id(&self) -> String {
+        WorkloadRuntime::id(self).to_string()
+    }
+
+    /// Write back the evidence of a process collected outside the lock.
+    async fn store_last(&self, h: &InstanceHandle, mut ev: RunEvidence) {
+        ev.runtime = self.rt_id();
+        ev.instance_id = h.instance_id.clone();
+        if let Some(mg) = self
+            .instances
+            .lock()
+            .await
+            .get_mut(&h.instance_id)
+            .and_then(|i| i.managed.as_mut())
+        {
+            mg.last = Some(ev);
+        }
+    }
+
     pub(super) async fn start_instance(&self, h: &InstanceHandle) -> Result<(), RuntimeError> {
+        // Phase 1: what to do, under the lock.
+        let (client, spec, supervised) = {
+            let g = self.instances.lock().await;
+            let inst = g.get(&h.instance_id).ok_or_else(|| unknown(h))?;
+            if let Some(a) = inst.managed.as_ref().and_then(|m| m.exposed.as_ref()) {
+                return Err(RuntimeError::InvalidState(format!(
+                    "the server was stopped for listening beyond loopback ({a:?}); reload the instance"
+                )));
+            }
+            let supervised = inst
+                .managed
+                .as_ref()
+                .map(|m| matches!(m.plan, ManagedPlan::Process(_)));
+            (inst.client.clone(), inst.spec.clone(), supervised)
+        };
+        match supervised {
+            None => {
+                // Adopted: nothing to start; confirm the server answers.
+                return match client.probe(spec.runtime).await.health {
+                    Health::Unreachable(w) => Err(RuntimeError::Backend(format!(
+                        "adopted server is not answering ({w}); WeftOS does not start adopted servers"
+                    ))),
+                    _ => Ok(()),
+                };
+            }
+            Some(true) => {
+                // Phase 2: never start over something already listening.
+                let (ip, port) = (spec.bind_ip()?, spec.port()?);
+                if port_in_use(ip, port).await {
+                    return Err(RuntimeError::Backend(format!(
+                        "{ip}:{port} is already taken by something else; not starting over it"
+                    )));
+                }
+            }
+            Some(false) => {}
+        }
+        // Phase 3: act, under the lock (no awaits).
         let mut g = self.instances.lock().await;
         let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
         let Some(mg) = inst.managed.as_mut() else {
-            // Adopted: nothing to start; confirm the server answers.
-            let (client, flavor) = (inst.client.clone(), inst.spec.runtime);
-            drop(g);
-            return match client.probe(flavor).await.health {
-                Health::Unreachable(w) => Err(RuntimeError::Backend(format!(
-                    "adopted server is not answering ({w}); WeftOS does not start adopted servers"
-                ))),
-                _ => Ok(()),
-            };
+            return Err(unknown(h));
         };
         match &mg.plan {
             ManagedPlan::Process(_) => {
@@ -186,17 +237,16 @@ impl InferRuntime {
                 spawn(self, inst)
             }
             ManagedPlan::Ollama { tag } => {
-                if matches!(&mg.load, Some((s, _)) if matches!(*s.lock().unwrap_or_else(|e| e.into_inner()), LoadState::Loading))
+                if matches!(&mg.load, Some((s, _))
+                    if matches!(*s.lock().unwrap_or_else(|e| e.into_inner()), LoadState::Loading))
                 {
                     return Err(RuntimeError::InvalidState("already loading".into()));
                 }
                 let keep = self
                     .managed_cfg()
                     .map_or("5m".to_string(), |m| m.keep_alive.clone());
-                let client = super::probe::ServerClient::new(
-                    inst.client.base().to_string(),
-                    OLLAMA_LOAD_TIMEOUT,
-                )?;
+                let client =
+                    ServerClient::new(inst.client.base().to_string(), OLLAMA_LOAD_TIMEOUT)?;
                 let state = std::sync::Arc::new(std::sync::Mutex::new(LoadState::Loading));
                 let (s2, tag) = (state.clone(), tag.clone());
                 let task = tokio::spawn(async move {
@@ -211,47 +261,76 @@ impl InferRuntime {
         }
     }
 
+    /// Stop the instance. For Ollama this unloads the model from Ollama's
+    /// memory, even when another client loaded it or is using it: Ollama
+    /// has no per-client ownership of a loaded model.
     pub(super) async fn stop_instance(
         &self,
         h: &InstanceHandle,
         grace: Duration,
     ) -> Result<RunEvidence, RuntimeError> {
-        let mut g = self.instances.lock().await;
-        let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
-        let Some(mg) = inst.managed.as_mut() else {
-            return Err(RuntimeError::Unsupported(format!(
-                "{} is adopted: WeftOS observes it and never stops it; unload forgets the registration",
-                h.instance_id
-            )));
+        enum Todo {
+            Proc(Supervised),
+            Ollama(ServerClient, String),
+        }
+        let todo = {
+            let mut g = self.instances.lock().await;
+            let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
+            let client = inst.client.clone();
+            let Some(mg) = inst.managed.as_mut() else {
+                return Err(RuntimeError::Unsupported(format!(
+                    "{} is adopted: WeftOS observes it and never stops it; unload forgets the registration",
+                    h.instance_id
+                )));
+            };
+            mg.wanted = false;
+            match &mg.plan {
+                ManagedPlan::Process(_) => Todo::Proc(
+                    mg.proc
+                        .take()
+                        .ok_or_else(|| RuntimeError::InvalidState("not running".into()))?,
+                ),
+                ManagedPlan::Ollama { tag } => {
+                    if let Some((_, t)) = mg.load.take() {
+                        t.abort();
+                    }
+                    Todo::Ollama(client, tag.clone())
+                }
+            }
         };
-        mg.wanted = false;
-        match &mg.plan {
-            ManagedPlan::Process(_) => {
-                let p = mg
-                    .proc
-                    .take()
-                    .ok_or_else(|| RuntimeError::InvalidState("not running".into()))?;
-                let mut ev = p.terminate(grace).await;
-                ev.runtime = crate::workload_runtime::types::WorkloadRuntime::id(self).to_string();
+        match todo {
+            Todo::Proc(p) => {
+                let ev = p.terminate(grace).await;
+                if let Some(mg) = self
+                    .instances
+                    .lock()
+                    .await
+                    .get_mut(&h.instance_id)
+                    .and_then(|i| i.managed.as_mut())
+                {
+                    mg.exited_at = Some(Instant::now());
+                }
+                self.store_last(h, ev.clone()).await;
+                let mut ev = ev;
+                ev.runtime = self.rt_id();
                 ev.instance_id = h.instance_id.clone();
-                mg.exited_at = Some(Instant::now());
-                mg.last = Some(ev.clone());
                 Ok(ev)
             }
-            ManagedPlan::Ollama { tag } => {
-                if let Some((_, t)) = mg.load.take() {
-                    t.abort();
-                }
-                let (client, tag) = (inst.client.clone(), tag.clone());
-                drop(g);
+            Todo::Ollama(client, tag) => {
                 ollama::unload(&client, &tag)
                     .await
                     .map_err(RuntimeError::Backend)?;
-                Ok(evidence(self, h))
+                Ok(RunEvidence {
+                    runtime: self.rt_id(),
+                    instance_id: h.instance_id.clone(),
+                    ..RunEvidence::default()
+                })
             }
         }
     }
 
+    /// Forget the instance. A managed process it spawned is stopped; for
+    /// Ollama the model is unloaded (even if another client loaded it).
     pub(super) async fn unload_instance(&self, h: &InstanceHandle) -> Result<(), RuntimeError> {
         let mut inst = self
             .instances
@@ -280,56 +359,112 @@ impl InferRuntime {
         Ok(())
     }
 
+    /// If the instance's server answers on a non-loopback address of this
+    /// machine, stop it (it is our process) and remember why.
+    async fn enforce_loopback(&self, h: &InstanceHandle) -> Option<Vec<IpAddr>> {
+        let port = {
+            let g = self.instances.lock().await;
+            let inst = g.get(&h.instance_id)?;
+            let mg = inst.managed.as_ref()?;
+            (matches!(mg.plan, ManagedPlan::Process(_)) && mg.proc.is_some())
+                .then(|| inst.spec.port().ok())
+                .flatten()?
+        };
+        let beyond = reachable_beyond_loopback(port).await;
+        if beyond.is_empty() {
+            return None;
+        }
+        let p = {
+            let mut g = self.instances.lock().await;
+            let mg = g.get_mut(&h.instance_id)?.managed.as_mut()?;
+            mg.wanted = false;
+            mg.exposed = Some(beyond.clone());
+            mg.exited_at = Some(Instant::now());
+            mg.proc.take()
+        };
+        if let Some(p) = p {
+            let ev = p.terminate(Duration::from_secs(3)).await;
+            self.store_last(h, ev).await;
+        }
+        tracing::warn!(instance = %h.instance_id, ?beyond, "model server listened beyond loopback; stopped");
+        Some(beyond)
+    }
+
     pub(super) async fn status_of(&self, h: &InstanceHandle) -> InstanceStatus {
-        let (client, spec, model, alive, load) = {
+        let (client, spec, model, alive, load, adopted) = {
             let mut g = self.instances.lock().await;
             let Some(inst) = g.get_mut(&h.instance_id) else {
                 return InstanceStatus::of(InstanceState::Unknown);
             };
             let (client, spec) = (inst.client.clone(), inst.spec.clone());
-            let Some(mg) = inst.managed.as_mut() else {
-                let m = spec.model.clone();
-                drop(g);
-                let r = client.probe(spec.runtime).await;
-                return map_report(spec.runtime, m.as_deref(), &r, false, true, None);
-            };
-            if let Some(code) = reap(mg).await {
-                return InstanceStatus {
-                    state: InstanceState::Exited,
-                    exit_code: code,
-                    detail: Some("server process exited".into()),
-                };
+            match inst.managed.as_mut() {
+                None => {
+                    let m = spec.model.clone();
+                    (client, spec, m, false, None, true)
+                }
+                Some(mg) => {
+                    if let Some(a) = &mg.exposed {
+                        return InstanceStatus {
+                            state: InstanceState::Exited,
+                            exit_code: None,
+                            detail: Some(format!(
+                                "stopped: the server listened beyond loopback (reachable on {a:?})"
+                            )),
+                        };
+                    }
+                    if let Some((p, code)) = take_exited(mg) {
+                        drop(g);
+                        let ev = p.terminate(Duration::ZERO).await;
+                        self.store_last(h, ev).await;
+                        return InstanceStatus {
+                            state: InstanceState::Exited,
+                            exit_code: code,
+                            detail: Some("server process exited".into()),
+                        };
+                    }
+                    let alive = mg.proc.is_some();
+                    if matches!(mg.plan, ManagedPlan::Process(_)) && !alive {
+                        let state = if mg.last.is_some() {
+                            InstanceState::Exited
+                        } else {
+                            InstanceState::Loaded
+                        };
+                        return InstanceStatus {
+                            state,
+                            exit_code: mg.last.as_ref().and_then(|e| e.exit_code),
+                            detail: None,
+                        };
+                    }
+                    let load = mg
+                        .load
+                        .as_ref()
+                        .map(|(s, _)| s.lock().unwrap_or_else(|e| e.into_inner()).clone());
+                    let model = match &mg.plan {
+                        ManagedPlan::Ollama { tag } => tag.clone(),
+                        ManagedPlan::Process(_) => mg.model_name.clone(),
+                    };
+                    (client, spec, Some(model), alive, load, false)
+                }
             }
-            let alive = mg.proc.is_some();
-            if matches!(mg.plan, ManagedPlan::Process(_)) && !alive {
-                let state = if mg.last.is_some() {
-                    InstanceState::Exited
-                } else {
-                    InstanceState::Loaded
-                };
-                return InstanceStatus {
-                    state,
-                    exit_code: mg.last.as_ref().and_then(|e| e.exit_code),
-                    detail: None,
-                };
-            }
-            let load = mg
-                .load
-                .as_ref()
-                .map(|(s, _)| s.lock().unwrap_or_else(|e| e.into_inner()).clone());
-            let model = match &mg.plan {
-                ManagedPlan::Ollama { tag } => tag.clone(),
-                ManagedPlan::Process(_) => mg.model_name.clone(),
-            };
-            (client, spec, Some(model), alive, load)
         };
+        // The binding is checked before the (slow) health probe: a server
+        // we started must not answer beyond loopback, whatever its health.
+        if alive && let Some(a) = self.enforce_loopback(h).await {
+            return InstanceStatus {
+                state: InstanceState::Exited,
+                exit_code: None,
+                detail: Some(format!(
+                    "stopped: the server listened beyond loopback (reachable on {a:?})"
+                )),
+            };
+        }
         let r = client.probe(spec.runtime).await;
         map_report(
             spec.runtime,
             model.as_deref(),
             &r,
             alive,
-            false,
+            adopted,
             load.as_ref(),
         )
     }
@@ -344,52 +479,102 @@ impl InferRuntime {
     }
 
     /// Restart a managed server that died while it should be running,
-    /// under the configured backoff and budget. Meant to be called on a
-    /// timer; each call does at most one restart.
+    /// under the configured backoff and budget, and stop one found
+    /// listening beyond loopback. Meant to be called on a timer; each call
+    /// does at most one restart.
     pub async fn reconcile(&self, h: &InstanceHandle) -> Result<Reconcile, RuntimeError> {
         let Some(policy) = self.managed_cfg().map(|m| m.restart) else {
             return Ok(Reconcile::NotManaged);
         };
-        let (client, flavor, healthy_check) = {
+        enum Next {
+            Done(Reconcile),
+            Restart {
+                ip: IpAddr,
+                port: u16,
+            },
+            Check {
+                client: ServerClient,
+                flavor: InferFlavor,
+            },
+        }
+        let reaped;
+        let next = {
             let mut g = self.instances.lock().await;
             let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
             let (client, flavor) = (inst.client.clone(), inst.spec.runtime);
+            let (ip, port) = (inst.spec.bind_ip()?, inst.spec.port()?);
             let Some(mg) = inst.managed.as_mut() else {
                 return Ok(Reconcile::NotManaged);
             };
             if !matches!(mg.plan, ManagedPlan::Process(_)) {
                 return Ok(Reconcile::NotManaged);
             }
+            if let Some(a) = &mg.exposed {
+                return Ok(Reconcile::StoppedExposed {
+                    reachable_on: a.clone(),
+                });
+            }
             if !mg.wanted {
                 return Ok(Reconcile::Healthy);
             }
-            reap(mg).await;
-            if mg.proc.is_none() {
-                if mg.restarts >= policy.max_restarts {
-                    return Ok(Reconcile::GaveUp {
-                        attempts: mg.restarts,
-                    });
-                }
+            reaped = take_exited(mg).map(|(p, _)| p);
+            if mg.proc.is_some() {
+                Next::Check { client, flavor }
+            } else if mg.restarts >= policy.max_restarts {
+                Next::Done(Reconcile::GaveUp {
+                    attempts: mg.restarts,
+                })
+            } else {
                 let wait = policy.delay(mg.restarts);
                 let since = mg.exited_at.map_or(wait, |t| t.elapsed());
                 if since < wait {
-                    return Ok(Reconcile::Backoff {
+                    Next::Done(Reconcile::Backoff {
                         retry_in: wait - since,
-                    });
+                    })
+                } else {
+                    Next::Restart { ip, port }
                 }
-                mg.restarts += 1;
-                let attempt = mg.restarts;
-                spawn(self, inst)?;
-                return Ok(Reconcile::Restarted { attempt });
             }
-            (client, flavor, true)
         };
-        if healthy_check && client.probe(flavor).await.health == Health::Up {
-            let mut g = self.instances.lock().await;
-            if let Some(mg) = g.get_mut(&h.instance_id).and_then(|i| i.managed.as_mut()) {
-                mg.restarts = 0;
+        if let Some(p) = reaped {
+            let ev = p.terminate(Duration::ZERO).await;
+            self.store_last(h, ev).await;
+        }
+        match next {
+            Next::Done(r) => Ok(r),
+            Next::Restart { ip, port } => {
+                if port_in_use(ip, port).await {
+                    return Err(RuntimeError::Backend(format!(
+                        "{ip}:{port} is already taken by something else; not restarting over it"
+                    )));
+                }
+                let mut g = self.instances.lock().await;
+                let inst = g.get_mut(&h.instance_id).ok_or_else(|| unknown(h))?;
+                let attempt = {
+                    let mg = inst.managed.as_mut().ok_or_else(|| unknown(h))?;
+                    mg.restarts += 1;
+                    mg.restarts
+                };
+                spawn(self, inst)?;
+                Ok(Reconcile::Restarted { attempt })
+            }
+            Next::Check { client, flavor } => {
+                if let Some(a) = self.enforce_loopback(h).await {
+                    return Ok(Reconcile::StoppedExposed { reachable_on: a });
+                }
+                let up = client.probe(flavor).await.health;
+                if up == Health::Up
+                    && let Some(mg) = self
+                        .instances
+                        .lock()
+                        .await
+                        .get_mut(&h.instance_id)
+                        .and_then(|i| i.managed.as_mut())
+                {
+                    mg.restarts = 0;
+                }
+                Ok(Reconcile::Healthy)
             }
         }
-        Ok(Reconcile::Healthy)
     }
 }

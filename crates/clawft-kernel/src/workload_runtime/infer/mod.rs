@@ -18,6 +18,7 @@
 
 pub mod capabilities;
 pub mod config;
+pub mod exposure;
 pub mod launch;
 pub mod lifecycle;
 pub mod ollama;

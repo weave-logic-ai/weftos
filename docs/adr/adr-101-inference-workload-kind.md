@@ -102,6 +102,14 @@ Follow ADR-099 section 6, plus:
 - **Ollama** is driven through its API only: load is an empty `/api/generate` with `keep_alive`, stop is `keep_alive: 0`, state is `/api/ps`. The adapter never starts Ollama, never pulls (a model not in `/api/tags` is an admission refusal) and never deletes.
 - `provides()` is empty until `probe_capabilities()` has checked the runtime (HTTP reachability, or an executable launcher plus an optional version command), then `runtime.infer.<x>`, `format.*` and, on Apple silicon, `accel.gpu.metal` at `probed` provenance.
 - The API card 19 (stable address and proxy) builds on: `endpoint(&handle)`, `health(&handle)` (`ServerReport`), `spec_of`, `status`, `reconcile`, `restart`, `deep_health`.
+- **Review round 1 hardening:**
+  - `extra_args` is an allowlist (exact flag spellings with arity, per runtime; Ollama takes none). Anything else, including `--hos`, `-md`, `--ctx-size`, `--lora*`, `--api-key`, `--ssl-*`, `--path`, `*-file`, `--k=v` forms and entries containing whitespace, is refused at validation.
+  - A managed server's binding is verified, not assumed: after start, `status` and `reconcile` connect to every non-loopback local address on the instance's port. If it answers, the process is stopped, the instance records why, `reconcile` returns `StoppedExposed` (the caller chains it) and the instance will not start again until reloaded.
+  - Adopted instances carry package trust `adopted_unverified` (new `PackageTrust` value, ordered just above `unsigned`, so no signed or attested minimum is satisfied by it). A permit for them must name it; a permit for attested model weights does not cover them. Adopted mode is observe-only.
+  - `admit` is a read-only self-check that the host calls before the gate, so a spec's loopback port is probed with GETs before any permit is consulted. `InferConfig::allowed_ports` bounds which ports that can be; capabilities count a server only when it is up or loading.
+  - The supervisor remembers the process group, kills it when the leader is reaped, and signals it on drop, so a launcher that forks leaves nothing behind. A caller-supplied `PATH` overrides the supervisor's default; `ManagedConfig` forwards the daemon's `PATH` and `HOME` by default.
+  - Ollama stop and unload unload the model from Ollama's memory even when another client loaded it; Ollama has no per-client ownership.
+  - The instances lock is not held across network calls or process termination; `deep_health` uses a 300 s timeout for cold models.
 - Not done here: wiring instances into the daemon's `weaver workload list`, a `WorkloadKind` that turns an `InferenceSpec` into placement requirements, and non-loopback binds (a chained Permit, section 7).
 
 ### 5. Stable mesh address and provider resolution

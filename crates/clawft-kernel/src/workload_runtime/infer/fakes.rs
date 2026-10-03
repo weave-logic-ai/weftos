@@ -86,11 +86,22 @@ pub fn write_script(dir: &Path) -> PathBuf {
     let p = dir.join("fake-serve");
     std::fs::write(
         &p,
-        "#!/bin/sh\nd=$(dirname \"$0\")\nprintf '%s\\n' \"$@\" > \"$d/argv.txt\"\necho $$ > \"$d/pid.txt\"\nexec sleep 600\n",
+        "#!/bin/sh\nd=$(dirname \"$0\")\nprintf '%s\\n' \"$@\" > \"$d/argv.txt\"\nprintf '%s' \"$PATH\" > \"$d/path.txt\"\necho $$ > \"$d/pid.txt\"\nexec sleep 600\n",
     )
     .unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     p
+}
+
+/// Replace the launcher with one that does not exec: it forks a grandchild
+/// (`gpid.txt`) and waits, so the leader and the grandchild are separate
+/// processes in one group.
+pub fn write_forking_script(script: &Path) {
+    std::fs::write(
+        script,
+        "#!/bin/sh\nd=$(dirname \"$0\")\nsleep 600 &\necho $! > \"$d/gpid.txt\"\necho $$ > \"$d/pid.txt\"\nwait\n",
+    )
+    .unwrap();
 }
 
 /// Wait for the script's pid file and return the pid.
@@ -219,18 +230,26 @@ pub struct Managed {
 }
 
 pub fn managed(flavor: InferFlavor, restart: RestartPolicy) -> Managed {
+    managed_with(flavor, restart, |_| {})
+}
+
+pub fn managed_with(
+    flavor: InferFlavor,
+    restart: RestartPolicy,
+    tweak: impl FnOnce(&mut ManagedConfig),
+) -> Managed {
     let tmp = tempfile::tempdir().unwrap();
     let script_dir = tmp.path().join("bin");
     std::fs::create_dir_all(&script_dir).unwrap();
     let script = write_script(&script_dir);
     let data = tmp.path().join("data");
     let reg = Arc::new(
-        ModelRegistry::in_memory()
-            .with_trust(crate::model_manifest::ModelTrust::new(operator().2)),
+        ModelRegistry::in_memory().with_trust(crate::model_manifest::ModelTrust::new(operator().2)),
     );
     let mut cfg = ManagedConfig::new(reg.clone(), data.clone()).with_serve_program(script);
     cfg.restart = restart;
     cfg.env_passthrough = vec![];
+    tweak(&mut cfg);
     let rt = Arc::new(InferRuntime::new(InferConfig::managed(flavor, cfg)));
     Managed {
         rt,
@@ -254,5 +273,13 @@ pub fn infer_permit() -> crate::workload_governance::WorkloadPermitRule {
         ["inference"],
     );
     r.min_package_trust = crate::workload_governance::PackageTrust::OperatorAttested;
+    r
+}
+
+/// A permit that admits adopted (observed, unverified) servers only.
+pub fn adopted_permit() -> crate::workload_governance::WorkloadPermitRule {
+    let mut r = infer_permit();
+    r.id = "permit-adopted".into();
+    r.min_package_trust = crate::workload_governance::PackageTrust::AdoptedUnverified;
     r
 }

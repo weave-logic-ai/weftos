@@ -156,11 +156,99 @@ fn bad(m: impl Into<String>) -> RuntimeError {
     RuntimeError::InvalidConfig(m.into())
 }
 
-/// Flags the adapter sets itself; a spec may not smuggle them in through
-/// `extra_args` (that would bypass the loopback rule).
-const RESERVED_FLAGS: &[&str] = &[
-    "--host", "--port", "--model", "-m", "--draft", "--ctx", "--kv",
-];
+/// Flags a spec may pass through, with how many value tokens each takes.
+/// An allowlist, exact spellings only: a denylist loses to argparse prefix
+/// abbreviations (`--hos`), short aliases (`-md`, `-hf`, `-mu`), synonyms
+/// (`--ctx-size`) and every flag that reads or writes files or opens a
+/// listener (`--lora*`, `--mmproj`, `--api-key`, `--ssl-*`, `--path`,
+/// `--log-file`, `--slot-save-path`). Host, port, model, draft, ctx and kv
+/// are owned by the adapter and are not on any list.
+fn allowed_flags(flavor: InferFlavor) -> &'static [(&'static str, usize)] {
+    match flavor {
+        InferFlavor::LlamaCpp => &[
+            ("--threads", 1),
+            ("-t", 1),
+            ("--threads-batch", 1),
+            ("--batch-size", 1),
+            ("-b", 1),
+            ("--ubatch-size", 1),
+            ("-ub", 1),
+            ("--parallel", 1),
+            ("-np", 1),
+            ("--n-gpu-layers", 1),
+            ("-ngl", 1),
+            ("--flash-attn", 0),
+            ("-fa", 0),
+            ("--cont-batching", 0),
+            ("--mlock", 0),
+            ("--no-mmap", 0),
+            ("--jinja", 0),
+            ("--metrics", 0),
+            ("--no-webui", 0),
+            ("--temp", 1),
+            ("--top-p", 1),
+            ("--top-k", 1),
+            ("--repeat-penalty", 1),
+            ("--seed", 1),
+        ],
+        InferFlavor::MlxLm => &[
+            ("--max-tokens", 1),
+            ("--temp", 1),
+            ("--top-p", 1),
+            ("--top-k", 1),
+            ("--log-level", 1),
+        ],
+        // Ollama is configured through its own environment, not argv.
+        InferFlavor::Ollama => &[],
+    }
+}
+
+/// A value token: a plain word, or a number (which may be negative). Never
+/// something that could be read as another flag, and no whitespace.
+fn valid_flag_value(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= MAX_ARG_LEN
+        && (!v.starts_with('-') || v.parse::<f64>().is_ok())
+        && v.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:+-/".contains(&b))
+}
+
+fn validate_extra_args(flavor: InferFlavor, args: &[String]) -> Result<(), RuntimeError> {
+    if args.len() > MAX_EXTRA_ARGS {
+        return Err(bad("too many extra_args"));
+    }
+    let allowed = allowed_flags(flavor);
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a.bytes().any(|b| b.is_ascii_whitespace() || b == 0) {
+            return Err(bad(format!(
+                "extra_args entries are single tokens without whitespace: {a:?}"
+            )));
+        }
+        let Some(&(_, arity)) = allowed.iter().find(|(f, _)| f == a) else {
+            return Err(bad(format!(
+                "extra_args {a:?} is not an allowed {} flag (exact spelling, value as a separate entry)",
+                flavor.id()
+            )));
+        };
+        for v in args.iter().skip(i + 1).take(arity) {
+            if !valid_flag_value(v) {
+                return Err(bad(format!(
+                    "extra_args value {v:?} for {a} is not a plain word or number"
+                )));
+            }
+        }
+        if i + arity >= args.len() && arity > 0 {
+            return Err(bad(format!("extra_args {a} needs {arity} value(s)")));
+        }
+        i += 1 + arity;
+    }
+    Ok(())
+}
+
+/// Largest memory figure accepted (4 TiB): keeps cost arithmetic honest.
+const MAX_MEMORY_BYTES: u64 = 1 << 42;
 
 impl InferenceSpec {
     /// A spec with defaults for everything but its identity.
@@ -236,19 +324,11 @@ impl InferenceSpec {
         if self.serve.draft_model.is_some() && self.runtime != InferFlavor::LlamaCpp {
             return Err(bad("draft models are supported by infer.llamacpp only"));
         }
-        if self.serve.extra_args.len() > MAX_EXTRA_ARGS {
-            return Err(bad("too many extra_args"));
-        }
-        for a in &self.serve.extra_args {
-            if a.is_empty() || a.len() > MAX_ARG_LEN || a.bytes().any(|b| b == 0 || b == b'\n') {
-                return Err(bad("extra_args must be short single-line strings"));
-            }
-            let flag = a.split('=').next().unwrap_or(a);
-            if RESERVED_FLAGS.contains(&flag) {
-                return Err(bad(format!(
-                    "extra_args may not set {flag}: the adapter owns it (use the serve fields)"
-                )));
-            }
+        validate_extra_args(self.runtime, &self.serve.extra_args)?;
+        if self.memory.weights_bytes > MAX_MEMORY_BYTES
+            || self.memory.kv_budget_bytes > MAX_MEMORY_BYTES
+        {
+            return Err(bad("memory figures must be at most 4 TiB"));
         }
         for x in &self.excludes {
             if !valid_token(x, 64) {

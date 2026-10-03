@@ -53,7 +53,10 @@ pub struct ManagedConfig {
     /// Extra environment for the server (the parent's is cleared).
     pub env: Vec<(String, String)>,
     /// Names of parent environment variables to forward (`HOME`,
-    /// `HF_HOME`, `PATH`).
+    /// `HF_HOME`, `PATH`). The default forwards the daemon's `PATH` and
+    /// `HOME` to the launcher: the server runs with the daemon's search
+    /// path and home directory. A forwarded or explicit `env` `PATH` wins
+    /// over the supervisor's default one.
     pub env_passthrough: Vec<String>,
     /// `(uid, gid)` to drop to when the host runs as root.
     pub run_as: Option<(u32, u32)>,
@@ -98,6 +101,13 @@ pub fn lab_serve_program(home: &Path, flavor: InferFlavor) -> Option<PathBuf> {
 }
 
 /// Observe-only, or launch and control.
+///
+/// Adopted mode is observe-only. Everything it does is a read against a
+/// loopback address taken from the spec, and that includes `admit`, which
+/// the host calls before the governance gate (an admission self-check is
+/// read-only by contract), so a spec's loopback port is probed with GETs
+/// before any permit is consulted. [`InferConfig::allowed_ports`] bounds
+/// which ports that can be.
 #[derive(Clone)]
 pub enum InferMode {
     /// Register and health-check a server already running; never start,
@@ -119,9 +129,21 @@ pub struct InferConfig {
     /// Port the capability probe asks (the flavor's conventional port when
     /// absent). Instances carry their own ports.
     pub probe_port: Option<u16>,
+    /// Inclusive port range instances may use. Checked before anything is
+    /// probed: a spec naming a port outside it never causes a connection.
+    pub allowed_ports: Option<(u16, u16)>,
+    /// Timeout of [`InferRuntime::deep_health`](super::InferRuntime::deep_health)
+    /// (a cold model can take minutes to answer its first token).
+    pub deep_timeout: Duration,
 }
 
 impl InferConfig {
+    /// Limit instances to ports in `lo..=hi`.
+    pub fn with_port_range(mut self, lo: u16, hi: u16) -> Self {
+        self.allowed_ports = Some((lo, hi));
+        self
+    }
+
     /// Probe a different port for capabilities.
     pub fn with_probe_port(mut self, port: u16) -> Self {
         self.probe_port = Some(port);
@@ -135,6 +157,8 @@ impl InferConfig {
             mode: InferMode::Adopted,
             probe_timeout: Duration::from_secs(2),
             probe_port: None,
+            allowed_ports: None,
+            deep_timeout: Duration::from_secs(300),
         }
     }
 
@@ -145,6 +169,8 @@ impl InferConfig {
             mode: InferMode::Managed(Box::new(cfg)),
             probe_timeout: Duration::from_secs(2),
             probe_port: None,
+            allowed_ports: None,
+            deep_timeout: Duration::from_secs(300),
         }
     }
 }

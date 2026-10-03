@@ -68,6 +68,9 @@ pub struct Supervised {
     err: Arc<Mutex<Capture>>,
     readers: Vec<JoinHandle<()>>,
     started: Instant,
+    /// Process group (the leader's pid) until the group has been dealt with;
+    /// kept so the group can be signalled after the leader is reaped.
+    pgid: Option<libc::pid_t>,
     args: Vec<String>,
     exited: Option<std::process::ExitStatus>,
 }
@@ -170,6 +173,7 @@ impl Supervised {
         let mut child = cmd
             .spawn()
             .map_err(|e| RuntimeError::Backend(format!("spawn {}: {e}", spec.program.display())))?;
+        let pgid = child.id().map(|p| p as libc::pid_t);
         let out = Arc::new(Mutex::new(Capture::new(spec.output_limit)));
         let err = Arc::new(Mutex::new(Capture::new(spec.output_limit)));
         let mut readers = Vec::new();
@@ -185,6 +189,7 @@ impl Supervised {
             err,
             readers,
             started: Instant::now(),
+            pgid,
             args: spec.args,
             exited: None,
         })
@@ -204,10 +209,10 @@ impl Supervised {
     }
 
     fn signal_group(&self, sig: libc::c_int) {
-        if let Some(pid) = self.child.id() {
-            // SAFETY: signalling our own child's process group.
+        if let Some(pgid) = self.pgid {
+            // SAFETY: signalling the process group this supervisor created.
             unsafe {
-                libc::kill(-(pid as libc::pid_t), sig);
+                libc::kill(-pgid, sig);
             }
         }
     }
@@ -248,6 +253,9 @@ impl Supervised {
             Some(s) => Some(s),
             None => self.child.wait().await.ok(),
         };
+        // The leader is gone: nothing it forked may outlive it.
+        self.signal_group(libc::SIGKILL);
+        self.pgid = None;
         // Readers finish at EOF; a grandchild holding the pipe open is
         // bounded by this wait.
         for r in self.readers.drain(..) {
@@ -272,5 +280,13 @@ impl Supervised {
             .map(|c| c.clone())
             .unwrap_or_else(|_| Capture::new(0));
         ev.with_output(&out, &err)
+    }
+}
+
+impl Drop for Supervised {
+    /// A supervisor dropped while its process still runs takes the whole
+    /// group with it (`kill_on_drop` alone only reaches the leader).
+    fn drop(&mut self) {
+        self.signal_group(libc::SIGKILL);
     }
 }

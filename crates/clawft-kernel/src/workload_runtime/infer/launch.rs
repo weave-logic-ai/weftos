@@ -3,9 +3,7 @@
 //! port" guard that keeps the adapter from ever starting over a server it
 //! does not own.
 
-use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::time::Duration;
 
 use super::config::ManagedConfig;
 use super::spec::{InferFlavor, InferenceSpec};
@@ -111,9 +109,4 @@ pub fn build_launch(
         dir: cfg.data_root.join(instance_id),
         env,
     })
-}
-
-/// Whether something already accepts connections on `ip:port`.
-pub fn port_in_use(ip: IpAddr, port: u16) -> bool {
-    TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_millis(300)).is_ok()
 }

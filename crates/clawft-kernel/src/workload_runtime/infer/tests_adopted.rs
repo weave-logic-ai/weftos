@@ -270,7 +270,7 @@ async fn through_the_host_every_transition_is_gated_and_chained() {
     let chain = Arc::new(ChainManager::new(0, 1000));
     let gate = WorkloadGate::exempt(0.8, false, "test")
         .with_chain(chain.clone())
-        .with_permit(infer_permit())
+        .with_permit(adopted_permit())
         .unwrap();
     let rt = Arc::new(adopted(InferFlavor::LlamaCpp));
     let host = WorkloadHost::new(rt, Arc::new(gate), "operator", NodeTrustTier::Paired)
@@ -319,4 +319,122 @@ async fn without_a_permit_the_host_denies_before_the_adapter_loads() {
     let e = host.load(&w, &wl_cfg()).await.unwrap_err();
     assert!(matches!(e, RuntimeError::Governance(_)), "{e:?}");
     assert!(rt.instances.lock().await.is_empty());
+}
+
+fn host_with(
+    rt: Arc<super::InferRuntime>,
+    permit: crate::workload_governance::WorkloadPermitRule,
+) -> WorkloadHost {
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let gate = WorkloadGate::exempt(0.8, false, "test")
+        .with_chain(chain.clone())
+        .with_permit(permit)
+        .unwrap();
+    WorkloadHost::new(rt, Arc::new(gate), "operator", NodeTrustTier::Paired).with_chain(chain)
+}
+
+#[tokio::test]
+async fn an_adopted_server_is_unverified_and_needs_a_permit_that_says_so() {
+    let server = MockServer::start().await;
+    mount_llama(&server, 200, MODEL).await;
+    let w = workload(spec("hermes", InferFlavor::LlamaCpp, port_of(&server)));
+
+    // A permit written for attested model weights does not cover it.
+    let rt = Arc::new(adopted(InferFlavor::LlamaCpp));
+    let e = host_with(rt.clone(), infer_permit())
+        .load(&w, &wl_cfg())
+        .await
+        .unwrap_err();
+    assert!(matches!(e, RuntimeError::Governance(_)), "{e:?}");
+    assert!(rt.instances.lock().await.is_empty());
+
+    // Nor does a permit for another kind.
+    let mut cog = adopted_permit();
+    cog.kinds = vec!["cog".into()];
+    let e = host_with(rt.clone(), cog)
+        .load(&w, &wl_cfg())
+        .await
+        .unwrap_err();
+    assert!(matches!(e, RuntimeError::Governance(_)), "{e:?}");
+
+    // One that names adopted_unverified does.
+    host_with(rt, adopted_permit())
+        .load(&w, &wl_cfg())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_managed_instance_is_not_covered_by_an_adopted_only_permit_or_wrong_kind() {
+    let m = managed(InferFlavor::LlamaCpp, super::RestartPolicy::default());
+    adopt_model(
+        &m.reg,
+        m.tmp.path(),
+        "Llama-3.2-1B",
+        crate::model_manifest::ModelFormat::Gguf,
+    );
+    let mut s = spec("small", InferFlavor::LlamaCpp, free_port());
+    s.model = Some("Llama-3.2-1B".into());
+    let w = workload(s);
+    let mut cog = infer_permit();
+    cog.kinds = vec!["cog".into()];
+    assert!(
+        host_with(m.rt.clone(), cog)
+            .load(&w, &wl_cfg())
+            .await
+            .is_err()
+    );
+    host_with(m.rt.clone(), infer_permit())
+        .load(&w, &wl_cfg())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn ports_outside_the_allowed_range_are_never_probed() {
+    let server = MockServer::start().await;
+    mount_llama(&server, 200, MODEL).await;
+    let p = port_of(&server);
+    let rt = super::InferRuntime::new(
+        super::InferConfig::adopted(InferFlavor::LlamaCpp)
+            .with_port_range(p.saturating_add(1), u16::MAX),
+    );
+    let e = rt
+        .admit(&workload(spec("hermes", InferFlavor::LlamaCpp, p)))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, RuntimeError::AdmissionRefused(ref m) if m.contains("allowed range")),
+        "{e:?}"
+    );
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "no connection was made"
+    );
+    let ok = super::InferRuntime::new(
+        super::InferConfig::adopted(InferFlavor::LlamaCpp).with_port_range(p, p),
+    );
+    ok.admit(&workload(spec("hermes", InferFlavor::LlamaCpp, p)))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_broken_server_is_not_a_capability() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let rt = super::InferRuntime::new(
+        super::InferConfig::adopted(InferFlavor::LlamaCpp).with_probe_port(port_of(&server)),
+    );
+    assert!(rt.probe_capabilities().await.is_empty());
+    server.reset().await;
+    mount_llama(&server, 503, MODEL).await;
+    assert!(
+        !rt.probe_capabilities().await.is_empty(),
+        "a loading server is present"
+    );
 }
