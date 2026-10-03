@@ -171,6 +171,21 @@ impl Renewer {
         Ok(report)
     }
 
+    /// Operator release of one checkout: the Seed withdraws it (and renews
+    /// the others, as every renewal does); everything it returns is
+    /// installed and flooded, the withdrawal first. A pass this node may not
+    /// make is `skipped`, nothing sent.
+    pub async fn release(&self, cog_id: &str, version: &str) -> Result<RenewalReport, LicenceClientError> {
+        let mut report = RenewalReport::default();
+        let page = match self.client.release(cog_id, version).await {
+            Ok(p) => p,
+            Err(e) if skip(&e) => return Ok(RenewalReport { skipped: true, ..report }),
+            Err(e) => return Err(e),
+        };
+        self.apply_all(page.grants, &mut report).await;
+        Ok(report)
+    }
+
     /// Withdrawals first, then the rest.
     async fn apply_all(&self, grants: Vec<SignedGrant>, report: &mut RenewalReport) {
         let parsed: Vec<(SignedGrant, Option<CheckoutGrant>)> =

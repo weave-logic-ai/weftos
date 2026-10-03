@@ -68,6 +68,9 @@ const NEEDS_PLACEMENT: &[&str] =
     "workload.cog.checkout",
     "workload.cog.checkout.approve",
     "workload.cog.checkout.status",
+    "workload.cog.checkout.release",
+    "workload.cog.checkout.renew",
+    "workload.cog.checkout.list",
 ];
 
 /// The gate context for a catalog action. The catalog records what the

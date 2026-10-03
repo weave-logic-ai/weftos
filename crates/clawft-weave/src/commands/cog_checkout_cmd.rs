@@ -57,6 +57,37 @@ pub enum CheckoutCmd {
         #[arg(long)]
         json: bool,
     },
+    /// End a checkout: the steward asks the Seed for a withdrawal, which is
+    /// flooded (operator, Admin; run on the steward).
+    Release {
+        /// `<cog>@<version>` (an exact version).
+        reference: String,
+        /// Print raw JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Renew now instead of at the next 12-hourly pass (Admin; run on the
+    /// steward). The Seed renews every active checkout in one call.
+    Renew {
+        /// `<cog>@<version>` (an exact version) to report on.
+        reference: String,
+        /// Print raw JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Held grants, approvals and expiry (read-only).
+    List {
+        /// Print raw JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Forget the grant clock high-water mark (alias of `weaver workload
+    /// node reset-floor`); changes nothing without `--confirm`.
+    ResetFloor {
+        /// Apply the reset (chained).
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 /// `weaver cog checkout approve`.
@@ -109,7 +140,7 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-async fn call(client: &mut DaemonClient, method: &str, params: Value) -> anyhow::Result<Value> {
+pub(crate) async fn call(client: &mut DaemonClient, method: &str, params: Value) -> anyhow::Result<Value> {
     let resp = client.call(Request::with_params(method, params)).await?;
     if !resp.ok {
         anyhow::bail!("{}", resp.error.unwrap_or_default());
@@ -135,6 +166,7 @@ pub async fn run(a: CheckoutArgs) -> anyhow::Result<()> {
             }
         }
         Some(CheckoutCmd::Approve(p)) => approve(&mut client, p).await?,
+        Some(cmd) => super::cog_checkout_verbs::run(cmd, &mut client).await?,
         None => {
             let r = a.reference.ok_or_else(|| anyhow::anyhow!("give <cog>@<version>, or approve | status"))?;
             let (cog, version) = parse_ref(&r).map_err(anyhow::Error::msg)?;

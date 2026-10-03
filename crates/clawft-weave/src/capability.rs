@@ -92,6 +92,9 @@ pub fn required_capability(method: &str) -> Capability {
         // checkout spends the Seed's licence and transfer budget.
         "workload.cog.checkout.approve" => Capability::Admin,
         "workload.cog.checkout" => Capability::Admin,
+        // ADR-106: ending a checkout and renewing on demand spend the Seed's budget.
+        "workload.cog.checkout.release" => Capability::Admin,
+        "workload.cog.checkout.renew" => Capability::Admin,
 
         // ── Write: state-mutating verbs ─────────────────────────────
         "agent.register" => Capability::Write,
@@ -205,6 +208,7 @@ pub fn required_capability(method: &str) -> Capability {
         | "workload.node.binding"
         // ADR-106 phase 3: grants, approvals and the run gate per artifact.
         | "workload.cog.checkout.status"
+        | "workload.cog.checkout.list"
         | "infer.status" => Capability::Read,
 
         // An unclassified `infer.*` verb is a mutation, never anonymous Read.
@@ -499,6 +503,7 @@ mod tests {
             "workload.inspect",
             "workload.node.binding",
             "workload.cog.checkout.status",
+            "workload.cog.checkout.list",
         ] {
             assert_eq!(required_capability(m), Capability::Read, "{m}");
             assert!(anon.allows_method(m), "{m}");
@@ -531,6 +536,8 @@ mod tests {
             "workload.node.reset-floor",
             "workload.cog.checkout.approve",
             "workload.cog.checkout",
+            "workload.cog.checkout.release",
+            "workload.cog.checkout.renew",
         ] {
             assert_eq!(required_capability(m), Capability::Admin, "{m}");
             assert!(!write.allows_method(m), "{m}");

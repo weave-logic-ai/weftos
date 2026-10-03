@@ -121,6 +121,7 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     // project; `weaver doctor` reads both for its `licence.*` findings.
     "workload.node.binding",
     "workload.cog.checkout.status",
+    "workload.cog.checkout.list",
 ];
 
 /// User-level operations: callable outside a project, but only by a caller
@@ -166,6 +167,10 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     // of any one project.
     "workload.cog.checkout",
     "workload.cog.checkout.approve",
+    "workload.cog.checkout.release",
+    "workload.cog.checkout.renew",
+    // `weaver cog checkout reset-floor` is this RPC (the licence clock floor).
+    "workload.node.reset-floor",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.

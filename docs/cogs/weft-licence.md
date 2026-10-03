@@ -230,7 +230,14 @@ file. Deleting the whole `licence/` directory resets that, and the node then
 reads as never bound until a peer re-syncs the binding. That is a known limit:
 anyone who can delete that directory can already tamper with the daemon.
 
-Not built yet: `weaver cog checkout release | renew`.
+The operator can do both by hand, on the steward: `weaver cog checkout renew
+<cog>@<version>` makes a renewal pass now, and `weaver cog checkout release
+<cog>@<version>` sends `POST /licence/v1/renew` with `{"release":
+[{"cog_id": ..., "version": ...}]}`, so the Seed signs a withdrawal for that
+checkout (and renews the others, as every renewal does). Both install and
+flood what comes back, and are chained as `cog.checkout.release` /
+`cog.checkout.renew`. `weaver cog checkout list` shows the held grants, their
+expiry and which artifacts are approved.
 
 ## Protocol
 

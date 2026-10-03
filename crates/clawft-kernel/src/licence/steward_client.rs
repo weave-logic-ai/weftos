@@ -94,4 +94,8 @@ impl LicenceClient for StewardLicenceClient {
     async fn renew(&self) -> Result<GrantsPage, LicenceClientError> {
         self.signed()?.renew().await
     }
+
+    async fn release(&self, cog_id: &str, version: &str) -> Result<GrantsPage, LicenceClientError> {
+        self.signed()?.release(cog_id, version).await
+    }
 }

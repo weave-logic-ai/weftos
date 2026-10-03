@@ -153,7 +153,7 @@ async fn call(
     m: &str,
     params: Value,
 ) -> Response {
-    let ctx = Ctx { rt, mesh, exchange: ex, relay: None, reachable: &never, arch: Some("aarch64"), now: now(), principal: "operator" };
+    let ctx = Ctx { rt, mesh, exchange: ex, relay: None, reachable: &never, arch: Some("aarch64"), now: now(), principal: "operator", renewer: None };
     route(&ctx, m, params).await
 }
 
