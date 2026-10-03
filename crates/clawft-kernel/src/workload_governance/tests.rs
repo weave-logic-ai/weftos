@@ -462,3 +462,26 @@ fn teardown_never_waives_a_revocation_or_a_default_deny() {
             .is_deny()
     );
 }
+
+#[test]
+fn check_teardown_refuses_any_action_that_is_not_a_teardown() {
+    // The guard itself: start, place and install are not teardown actions.
+    for a in ["workload.start", "workload.place", "workload.install", "workload.migrate"] {
+        assert!(WorkloadGate::not_teardown(a).unwrap().is_deny(), "{a}");
+    }
+    for a in ["workload.stop", "workload.unload", "workload.load"] {
+        assert!(WorkloadGate::not_teardown(a).is_none(), "{a}");
+    }
+    // Through the trait method: denied in release builds; in debug builds
+    // the debug_assert fires first.
+    let r = std::panic::catch_unwind(|| {
+        let g = WorkloadGate::new(0.8, false)
+            .with_permit(WorkloadPermitRule::new("all", ["workload.*"], ["cog"]))
+            .unwrap();
+        g.check_teardown("a", "workload.start", &cog_ctx())
+    });
+    match r {
+        Ok(d) => assert!(d.is_deny()),
+        Err(_) => assert!(cfg!(debug_assertions)),
+    }
+}

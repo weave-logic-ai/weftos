@@ -44,6 +44,8 @@ pub const BIND_DOMAIN: &[u8] = b"weftos.workload.node.bind.v1\0";
 /// Default age after which a bind record is no longer accepted.
 pub const DEFAULT_MAX_BIND_AGE_SECS: u64 = 600;
 /// File name of the persisted bind state, beside `workload-placements.json`.
+// not yet wired: no daemon or RPC path reaches `SeedBinder`; when wired it
+// must use `dir.join(BIND_STATE_FILE)` (the runtime dir).
 pub const BIND_STATE_FILE: &str = "workload-seed-binds.json";
 const MAX_STATE_BYTES: u64 = 256 * 1024;
 const MAX_BOUND_DEVICES: usize = 1000;

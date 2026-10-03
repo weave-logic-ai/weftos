@@ -152,6 +152,16 @@ impl WorkloadGate {
         &self.permits
     }
 
+    /// The denial for an action that is not a teardown action.
+    pub(crate) fn not_teardown(action: &str) -> Option<GateDecision> {
+        (!TEARDOWN_ACTIONS.contains(&action)).then(|| {
+            Self::deny(format!(
+                "'{action}' is not a teardown action ({})",
+                TEARDOWN_ACTIONS.join(", ")
+            ))
+        })
+    }
+
     fn deny(reason: impl Into<String>) -> GateDecision {
         GateDecision::Deny {
             reason: reason.into(),
@@ -248,6 +258,10 @@ impl WorkloadGate {
     }
 }
 
+/// Actions [`GateBackend::check_teardown`] accepts: stop, unload, and
+/// re-adoption of a placed instance (gated as `workload.load`).
+const TEARDOWN_ACTIONS: &[&str] = &["workload.stop", "workload.unload", "workload.load"];
+
 /// Intermediate result, turned into the chain payload.
 struct Outcome {
     decision: GateDecision,
@@ -337,6 +351,13 @@ impl GateBackend for WorkloadGate {
         action: &str,
         context: &serde_json::Value,
     ) -> GateDecision {
+        // Only taking something down (or re-attaching what is already
+        // placed, gated as a load) may use this path; anything else could
+        // be used to dodge the node-tier rules.
+        if let Some(d) = Self::not_teardown(action) {
+            debug_assert!(false, "check_teardown called with {action}");
+            return d;
+        }
         let first = self.check(agent_id, action, context);
         let GateDecision::Deny { reason, .. } = &first else {
             return first;
