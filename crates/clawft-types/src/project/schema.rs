@@ -169,6 +169,13 @@ pub struct ServeSection {
     /// read it through [`ServeSection::restart_window_secs`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart_window_secs: Option<u64>,
+    /// How long a child whose last heartbeat said it was busy may stay
+    /// silent before the supervisor restarts it, in seconds. `None` uses the
+    /// daemon default (10 x the plain grace); it never goes below the plain
+    /// grace. A very large value effectively disables the restart for a
+    /// child that stalls while busy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_heartbeat_busy_ceiling_secs: Option<u64>,
     /// Kernel version last started for this project (written by the
     /// supervisor, never by the owner).
     #[serde(default, skip_serializing_if = "Option::is_none")]

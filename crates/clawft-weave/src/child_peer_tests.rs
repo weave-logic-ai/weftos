@@ -73,3 +73,21 @@ fn an_orphaned_grandchild_keeps_its_group_supervised_until_the_group_is_gone() {
     }
     panic!("group never left the set after it died");
 }
+
+/// When the leader exits and its group is empty, the number leaves the set at
+/// once (not at the next accept), so a recycled pgid is never a stale child.
+#[cfg(all(unix, feature = "exochain", feature = "placement"))]
+#[test]
+fn an_empty_group_is_pruned_when_the_leader_exit_is_seen() {
+    use crate::project_supervisor::child::{group_noted, note_group, prune_if_gone};
+    use std::os::unix::process::CommandExt;
+    let mut leader = std::process::Command::new("sleep").arg("30").process_group(0).spawn().unwrap();
+    let pgid = leader.id();
+    note_group(pgid);
+    prune_if_gone(pgid);
+    assert!(group_noted(pgid), "a live group is kept");
+    leader.kill().unwrap();
+    leader.wait().unwrap();
+    prune_if_gone(pgid);
+    assert!(!group_noted(pgid), "an empty group is dropped without waiting for an accept");
+}

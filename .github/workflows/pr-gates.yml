@@ -111,6 +111,14 @@ jobs:
             ${{ runner.os }}-cargo-test-${{ matrix.suite }}-
             ${{ runner.os }}-cargo-test-
 
+      # Test binaries refuse to resolve a real runtime root (the guard in
+      # clawft-types); pin one under the runner's temp dir.
+      - name: Pin test runtime dir
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/weftos-test-runtime"
+          echo "WEFTOS_RUNTIME_DIR=$RUNNER_TEMP/weftos-test-runtime" >> "$GITHUB_ENV"
+
       # bash is available on windows-latest (Git Bash) and keeps the
       # matrix step identical across OSes.
       - name: Run tests (full workspace)
@@ -290,6 +298,14 @@ jobs:
           key: ${{ runner.os }}-cargo-wasm-host-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-wasm-host-
+
+      # Test binaries refuse to resolve a real runtime root (the guard in
+      # clawft-types); pin one under the runner's temp dir.
+      - name: Pin test runtime dir
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/weftos-test-runtime"
+          echo "WEFTOS_RUNTIME_DIR=$RUNNER_TEMP/weftos-test-runtime" >> "$GITHUB_ENV"
 
       - name: Test clawft-wasm-host
         run: cargo test -p clawft-wasm-host
@@ -568,6 +584,14 @@ jobs:
       - name: Check attention_compare example
         run: cargo check -p eml-core --example attention_compare --features experimental-attention
 
+      # Test binaries refuse to resolve a real runtime root (the guard in
+      # clawft-types); pin one under the runner's temp dir.
+      - name: Pin test runtime dir
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/weftos-test-runtime"
+          echo "WEFTOS_RUNTIME_DIR=$RUNNER_TEMP/weftos-test-runtime" >> "$GITHUB_ENV"
+
       - name: Unit-test attention modules (feature-gated smoke)
         # Filter "attention" matches attention::* and baseline_attention::*.
         run: cargo test -p eml-core --features experimental-attention --lib attention
@@ -608,6 +632,14 @@ jobs:
 
       - name: Check clawft-graphify with vision-extract
         run: cargo check -p clawft-graphify --features vision-extract
+
+      # Test binaries refuse to resolve a real runtime root (the guard in
+      # clawft-types); pin one under the runner's temp dir.
+      - name: Pin test runtime dir
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/weftos-test-runtime"
+          echo "WEFTOS_RUNTIME_DIR=$RUNNER_TEMP/weftos-test-runtime" >> "$GITHUB_ENV"
 
       - name: Test vision_extract path (unit + e2e fixture, mock vision)
         run: cargo test -p clawft-graphify --features vision-extract

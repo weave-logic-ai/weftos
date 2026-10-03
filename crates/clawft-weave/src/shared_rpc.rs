@@ -470,3 +470,7 @@ async fn models(call: &ExtCall, project: &str, limits: &SharedLimits) -> Respons
         Err(e) => upstream_error(&e),
     }
 }
+
+#[cfg(test)]
+#[path = "shared_rpc_limits_tests.rs"]
+mod limits_tests;

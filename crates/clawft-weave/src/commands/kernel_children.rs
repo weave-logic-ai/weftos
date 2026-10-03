@@ -137,8 +137,19 @@ fn child_note(c: &Value) -> String {
             c["project_id"].as_str().unwrap_or("<id>")
         );
     }
+    if let Some(secs) = c["unregistered_secs"].as_u64().filter(|s| *s >= UNREGISTERED_NOTE_SECS) {
+        return format!(
+            "adopted, not registered for {secs}s (never restarted for a lost heartbeat); \
+             `weaver kernel restart --project {}`",
+            c["project_id"].as_str().unwrap_or("<id>")
+        );
+    }
     String::new()
 }
+
+/// Show an unregistered adopted child once it has been silent this long
+/// (a few missed heartbeats' worth; shorter is just the re-register window).
+const UNREGISTERED_NOTE_SECS: u64 = 120;
 
 /// The children table for `weaver kernel status --profile user`.
 pub async fn print_children() {

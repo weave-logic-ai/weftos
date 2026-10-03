@@ -46,7 +46,13 @@ pub struct ChildView {
     pub stale_build: bool,
     /// Build stamp the kernel reported, when it did.
     pub kernel_sha: Option<String>,
+    /// Seconds an adopted child has not registered with the daemon.
+    pub unregistered_secs: Option<u64>,
 }
+
+/// An adopted child silent this long (no registered session) is reported:
+/// the supervisor never restarts it for a lost heartbeat.
+const UNREGISTERED_WARN_SECS: u64 = 120;
 
 /// The raw probe request. It bypasses `stamp_request`, so it carries `proto`
 /// itself: the daemon refuses a no-proto request for anything not read-only.
@@ -82,6 +88,7 @@ pub fn supervisor_view(run_root: &Path) -> Option<std::collections::HashMap<Stri
                         pid: k.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32),
                         stale_build: k.get("stale_build").and_then(|b| b.as_bool()).unwrap_or(false),
                         kernel_sha: k.get("kernel_sha").and_then(|b| b.as_str()).map(str::to_owned),
+                        unregistered_secs: k.get("unregistered_secs").and_then(|b| b.as_u64()),
                     },
                 ))
             })
@@ -151,6 +158,21 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
                         (Some(_), Some(cv)) => {
                             if cv.state == "running" {
                                 children += 1;
+                            }
+                            if let Some(secs) = cv.unregistered_secs.filter(|s| *s >= UNREGISTERED_WARN_SECS) {
+                                out.push(
+                                    Finding::new(
+                                        c,
+                                        format!("child:{id}:unregistered"),
+                                        Severity::Warn,
+                                        format!(
+                                            "project {id}: kernel pid {pid} was adopted but has not registered with the \
+                                             user daemon for {secs}s; it shows as running but is never restarted \
+                                             for a lost heartbeat (an older build may not re-register)"
+                                        ),
+                                    )
+                                    .remedy(format!("`weaver kernel restart --project {id}` starts it on the current build")),
+                                );
                             }
                             if cv.stale_build {
                                 out.push(
@@ -429,6 +451,24 @@ mod tests {
             {"project_id": ID, "state": "starting", "pid": 4242}], "unverifiable": []}}));
         // An automatic restart is in flight: no false WARN, and not counted as running.
         assert!(check(&env, &procs).is_empty(), "{:?}", ids(&check(&env, &procs)));
+    }
+
+    #[test]
+    fn an_adopted_child_that_never_registered_is_reported() {
+        let (_t, env) = setup();
+        let root = user_runtime_root(&env.home);
+        let (env, procs) = live_user_daemon(&env, &root);
+        serve_status(&root, serde_json::json!({"ok": true, "result": {"children": [
+            {"project_id": ID, "state": "running", "pid": 4242, "unregistered_secs": 600}], "unverifiable": []}}));
+        let f = check(&env, &procs);
+        assert_eq!(ids(&f), [format!("child:{ID}:unregistered"), "children".to_owned()]);
+        assert!(f[0].message.contains("600s") && f[0].message.contains("never restarted"));
+        // A short silence is the normal re-register window: no finding.
+        let root2 = user_runtime_root(&env.home);
+        std::fs::remove_file(root2.join("kernel.sock")).unwrap();
+        serve_status(&root2, serde_json::json!({"ok": true, "result": {"children": [
+            {"project_id": ID, "state": "running", "pid": 4242, "unregistered_secs": 10}], "unverifiable": []}}));
+        assert_eq!(ids(&check(&env, &procs)), ["children"]);
     }
 
     #[test]

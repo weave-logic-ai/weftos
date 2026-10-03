@@ -60,6 +60,10 @@ pub struct SupervisorConfig {
     /// (three missed heartbeats and no re-registration) before the
     /// supervisor treats the child as crashed and restarts it.
     pub lost_heartbeat_grace: Duration,
+    /// The same for a child whose last heartbeat said it was busy: spared a
+    /// stalled heartbeat handler for this much longer, then treated as lost
+    /// (10 x [`lost_heartbeat_grace`](Self::lost_heartbeat_grace) by default).
+    pub lost_heartbeat_busy_ceiling: Duration,
 }
 
 impl SupervisorConfig {
@@ -83,6 +87,7 @@ impl SupervisorConfig {
             exit_poll: Duration::from_millis(500),
             build_sha: env!("BUILD_GIT_HASH").to_owned(),
             lost_heartbeat_grace: Duration::from_secs(2 * crate::mesh_local_registry::HEARTBEAT_SECS),
+            lost_heartbeat_busy_ceiling: Duration::from_secs(20 * crate::mesh_local_registry::HEARTBEAT_SECS),
         }
     }
 }
@@ -256,6 +261,11 @@ pub struct Status {
     /// The kernel runs another build than this daemon (typically after
     /// `weaver update`, which keeps children running).
     pub stale_build: bool,
+    /// Seconds an adopted child has gone without registering with this
+    /// daemon, as of the last liveness pass (`None`: it registered, or the
+    /// project was not adopted). Such a child is never restarted for a lost
+    /// heartbeat, so this is how it is reported.
+    pub unregistered_secs: Option<u64>,
 }
 
 impl Status {

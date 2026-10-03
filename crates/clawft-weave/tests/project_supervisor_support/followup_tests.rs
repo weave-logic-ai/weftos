@@ -219,6 +219,79 @@ pub fn a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_bud
     });
 }
 
+/// A child whose last beat said it was busy is spared the short grace but not
+/// for ever: it is restarted after `lost_heartbeat_busy_ceiling`.
+pub fn a_child_wedged_while_busy_is_restarted_after_the_ceiling() {
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    fx.set_serve(|s| s.lost_heartbeat_busy_ceiling_secs = Some(10));
+    rt().block_on(async {
+        let mut cfg = fx.cfg();
+        cfg.lost_heartbeat_grace = Duration::from_millis(100);
+        // The daemon default is far away; the project's own knob wins.
+        cfg.lost_heartbeat_busy_ceiling = Duration::from_secs(3600);
+        let sup = Supervisor::new(cfg, fx.deps());
+        let first = sup.ensure_running(&fx.id).await.unwrap();
+        let t0 = Instant::now();
+        fx.activity.set_lost_busy(true);
+        assert!(sup.liveness_pass(t0).await.is_empty(), "the first sighting starts the clock");
+        assert!(
+            sup.liveness_pass(t0 + Duration::from_secs(5)).await.is_empty(),
+            "far beyond the plain grace, inside the busy ceiling: spared"
+        );
+        assert_eq!(sup.status(&fx.id).await.pid, Some(first.pid));
+        assert_eq!(sup.liveness_pass(t0 + Duration::from_secs(11)).await, vec![fx.id.clone()]);
+        let st = sup.status(&fx.id).await;
+        assert!(st.pid.is_some_and(|p| p != first.pid) && !pid_alive(first.pid), "the wedged child was replaced");
+        assert!(fx.events("project.kernel.exited").iter().any(|e| e.payload.as_ref().unwrap()["reason"] == "heartbeat lost"));
+        sup.stop_all().await;
+    });
+}
+
+/// The plain (non-busy) lost path still restarts at the short grace, with the
+/// busy ceiling far away.
+pub fn a_plain_lost_child_is_restarted_at_the_short_grace_not_the_busy_ceiling() {
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    rt().block_on(async {
+        let mut cfg = fx.cfg();
+        cfg.lost_heartbeat_grace = Duration::from_millis(100);
+        cfg.lost_heartbeat_busy_ceiling = Duration::from_secs(3600);
+        let sup = Supervisor::new(cfg, fx.deps());
+        let first = sup.ensure_running(&fx.id).await.unwrap();
+        let t0 = Instant::now();
+        fx.activity.set_lost(true);
+        assert!(sup.liveness_pass(t0).await.is_empty(), "first sighting");
+        assert_eq!(sup.liveness_pass(t0 + Duration::from_millis(200)).await, vec![fx.id.clone()]);
+        assert!(sup.status(&fx.id).await.pid.is_some_and(|p| p != first.pid));
+        sup.stop_all().await;
+    });
+}
+
+/// An adopted child that never re-registers is not restarted, but it is
+/// reported in `status` (and so by doctor), and the report clears when it
+/// registers.
+pub fn an_adopted_child_that_never_registers_is_reported_in_status() {
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    rt().block_on(async {
+        let sup = fx.supervisor();
+        sup.ensure_running(&fx.id).await.unwrap();
+        assert_eq!(sup.status(&fx.id).await.unregistered_secs, None);
+        let t0 = Instant::now();
+        fx.activity.set_unregistered(true);
+        assert!(sup.liveness_pass(t0).await.is_empty(), "never restarted for being unregistered");
+        let st = sup.status(&fx.id).await;
+        assert!(st.unregistered_secs.is_some(), "{st:?}");
+        assert!(st.to_json()["unregistered_secs"].is_u64());
+        assert_eq!(st.state, ChildState::Running);
+        fx.activity.set_unregistered(false);
+        sup.liveness_pass(t0 + Duration::from_secs(1)).await;
+        assert_eq!(sup.status(&fx.id).await.unregistered_secs, None, "it registered");
+        sup.stop_all().await;
+    });
+}
+
 /// Note (b) of card 7e8d7350: a revoked project whose marker is missing (a
 /// full disk, a hand-removed file) is refused from the journal before
 /// anything is spawned, instead of spawning to die on `project_revoked`.

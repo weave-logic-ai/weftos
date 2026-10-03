@@ -407,7 +407,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                     println!("{hint}");
                     return Ok(());
                 }
-                eprintln!("(no daemon running — booting ephemeral kernel)\n");
+                eprintln!("{INSPECTION_NOTICE}\n");
                 let platform = NativePlatform::new();
                 let config = super::load_config(&platform, args.config.as_deref()).await?;
                 let kernel = boot_or_exit(config.clone(), config.kernel.clone(), platform).await;
@@ -426,7 +426,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                     eprintln!("daemon error: {msg}");
                 }
             } else {
-                eprintln!("(no daemon running — booting ephemeral kernel)\n");
+                eprintln!("{INSPECTION_NOTICE}\n");
                 let platform = NativePlatform::new();
                 let config = super::load_config(&platform, args.config.as_deref()).await?;
                 let kernel = boot_or_exit(config.clone(), config.kernel.clone(), platform).await;
@@ -445,7 +445,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                     eprintln!("daemon error: {msg}");
                 }
             } else {
-                eprintln!("(no daemon running — booting ephemeral kernel)\n");
+                eprintln!("{INSPECTION_NOTICE}\n");
                 let platform = NativePlatform::new();
                 let config = super::load_config(&platform, args.config.as_deref()).await?;
                 let kernel = boot_or_exit(config.clone(), config.kernel.clone(), platform).await;
@@ -560,7 +560,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                     eprintln!("daemon error: {msg}");
                 }
             } else {
-                eprintln!("(no daemon running — booting ephemeral kernel)\n");
+                eprintln!("{INSPECTION_NOTICE}\n");
                 let platform = NativePlatform::new();
                 let config = super::load_config(&platform, args.config.as_deref()).await?;
                 let kernel = boot_or_exit(config.clone(), config.kernel.clone(), platform).await;
@@ -825,6 +825,18 @@ fn print_daemon_logs(entries: &[protocol::LogEntry]) {
 
 // ── Ephemeral-mode display (from Kernel<P>) ───────────────────────
 
+/// Printed (stderr) before any inspection-boot output. The inspection kernel
+/// is a throwaway built from config: mesh and chain are off, it binds
+/// nothing, and any node id or log line in it belongs to it, not the daemon.
+const INSPECTION_NOTICE: &str = "(no daemon running - booting an ephemeral inspection kernel: \
+mesh and chain off, nothing bound; this is NOT the daemon, and ids below are not its identity)";
+
+/// First stdout line of every inspection-boot view, so a captured or piped
+/// output still says what produced it.
+fn inspection_header(view: &str) -> String {
+    format!("[ephemeral inspection kernel, not the daemon: {view}]")
+}
+
 /// Boot the kernel or exit with an error message.
 async fn boot_or_exit(
     config: clawft_types::config::Config,
@@ -853,6 +865,7 @@ fn print_status<P: clawft_platform::Platform>(kernel: &Kernel<P>) {
 
     let uptime_str = format_uptime(kernel.uptime().as_secs_f64());
 
+    println!("{}", inspection_header("status"));
     println!("WeftOS Kernel Status (ephemeral)");
     println!("--------------------------------");
     println!("State:      {state_str}");
@@ -876,6 +889,7 @@ fn print_status<P: clawft_platform::Platform>(kernel: &Kernel<P>) {
 
 /// Print services table from an ephemeral kernel.
 async fn print_services<P: clawft_platform::Platform>(kernel: &Kernel<P>) {
+    println!("{}", inspection_header("services"));
     let services = kernel.services().list();
     if services.is_empty() {
         println!("No services registered.");
@@ -903,6 +917,7 @@ async fn print_services<P: clawft_platform::Platform>(kernel: &Kernel<P>) {
 
 /// Print process table from an ephemeral kernel.
 fn print_ps<P: clawft_platform::Platform>(kernel: &Kernel<P>) {
+    println!("{}", inspection_header("processes"));
     let entries = kernel.process_table().list();
     if entries.is_empty() {
         println!("No agents running.");
@@ -943,6 +958,7 @@ fn print_event_log<P: clawft_platform::Platform>(
     count: usize,
     level: Option<&str>,
 ) {
+    println!("{}", inspection_header("boot log"));
     let event_log = kernel.event_log();
 
     let events = if let Some(level_str) = level {

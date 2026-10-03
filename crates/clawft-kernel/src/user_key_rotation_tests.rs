@@ -101,6 +101,27 @@ fn a_certificate_across_a_rotation_verifies_only_up_to_the_rotation_point() {
 }
 
 #[test]
+fn a_rejected_retired_key_certificate_names_its_cause() {
+    let (old, new) = (key(1), key(2));
+    let rec = RotationRecord::sign(&old, &new, None, t(100));
+    let h = UserKeyHistory::from_records(&pk(&new), &[rec.clone()]).unwrap();
+    let before = cert(&old, t(50), 1);
+    let after = cert(&old, t(101), 3);
+    let chain = crate::chain::ChainManager::new(0, 1000);
+    chain.append(ident::SOURCE, ident::KIND_REGISTER, Some(serde_json::json!({ "cert": before })));
+    chain.append(ident::SOURCE, ident::KIND_ROTATED, Some(serde_json::json!({ "record": rec })));
+    let corroborated = RevocationView::build_with(&h, &chain.tail_from(0), &[], &[]);
+    assert_eq!(corroborated.rejection_cause(&before), None);
+    let cause = corroborated.rejection_cause(&after).expect("after the rotation point");
+    assert!(cause.contains("does not verify"), "{cause}");
+    // The same certificate without chain evidence: the warn names why.
+    let bare = RevocationView::build_with(&h, &[], &[], &[]);
+    let cause = bare.rejection_cause(&before).expect("uncorroborated");
+    assert!(cause.contains("retired user key") && cause.contains("does not corroborate"), "{cause}");
+    assert!(cause.contains("None"), "{cause}");
+}
+
+#[test]
 fn the_log_is_append_only_and_fails_closed() {
     let dir = tempfile::tempdir().unwrap();
     let log = RotationLog::new(dir.path());
