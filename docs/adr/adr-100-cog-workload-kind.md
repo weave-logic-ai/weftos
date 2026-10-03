@@ -105,6 +105,12 @@ the placing controller's store. A placement whose project has no known store
 owner is refused; it is never redirected to the controller's store, because
 that would put one project's data in another's store.
 
+**Where the vectors live (amended 2026-10-02).** On the owner daemon the
+store is a `VectorDirectory`: one in-memory HNSW index per project (plus one
+for the controller fallback), created on first use. The sentence above means
+that store, not a project kernel's durable store; at this point in the
+history a daemon restart empties it.
+
 Acceptance runs for the real-hardware card use a **replayed ESP32 feed**
 (recorded or synthetic packets). A live feed is optional and documented
 where it is used. Mechanics and limits: `docs/cogs/ingest-bridge.md`.
