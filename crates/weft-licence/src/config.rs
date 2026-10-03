@@ -7,12 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::SvcError;
 
-/// The same build-time clock floor the COG-011 bridge uses: before this unix
-/// time the Seed's clock (no RTC) is treated as not set. 2026-09-21 UTC.
-/// ASSUMPTION: the COG-011 text is not in this repository, so the value is
-/// copied from the ADR-106 wording ("same floor as the bridge") and must be
-/// kept equal to the bridge's constant when COG-011 lands in tree.
-pub const CLOCK_FLOOR: u64 = 1_790_000_000;
+/// The build-time clock floor of the COG-011 bridge (`CLOCK_FLOOR_MS` in the
+/// bridge cog's `auth.rs`, 1_780_000_000_000 ms, 2026-05-28 UTC), in seconds:
+/// before this the Seed's clock (no RTC) is treated as not set. Keep equal to
+/// the bridge's constant.
+pub const CLOCK_FLOOR: u64 = 1_780_000_000;
 
 /// Load limits (ADR-106 section 6, 7). Every field is configurable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

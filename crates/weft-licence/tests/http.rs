@@ -14,7 +14,7 @@ fn roundtrip(addr: std::net::SocketAddr, h: &Harness, method: &str, target: &str
     let mut head = format!("{method} {target} HTTP/1.1\r\nHost: seed\r\nContent-Length: {}\r\n", body.len());
     if signed {
         let nonce = format!("{:032x}", N.fetch_add(1, Ordering::SeqCst));
-        for (k, v) in weft_licence::request::sign_request(&steward(), NODE, method, target, body, h.now(), &nonce) {
+        for (k, v) in weft_licence::request::sign_request(&steward(), NODE, method, target, body, h.now() * 1000, &nonce) {
             head.push_str(&format!("{k}: {v}\r\n"));
         }
     }

@@ -143,19 +143,20 @@ pinned SPKI is added (ADR-106 section 7, decision W4).
 ## Protocol
 
 Every endpoint except identity needs a steward signature. The request headers are
-`x-licence-node`, `x-licence-ts`, `x-licence-nonce` (16 to 64 hex) and
-`x-licence-sig`. The signed string, one field per line:
+`x-licence-node`, `x-licence-ts` (unix milliseconds), `x-licence-nonce` (16 to 64
+alphanumerics) and `x-licence-sig`. The signed string, one field per line:
 
 ```
 weft-licence-v1/request
 <METHOD>
 <path and query>
 <node>
-<ts>
+<ts, unix ms>
 <nonce>
 <sha256 of the body, hex>
 ```
 
+The layout is the COG-011 bridge's (`auth.rs` in the bridge cog) under its own domain.
 The signature is Ed25519 (`verify_strict`) under the bound `steward_pubkey`. The
 timestamp must be within 120 s of the Seed clock, and a nonce is refused a second
 time, including across a restart.
@@ -190,11 +191,10 @@ budget.
 
 ### Clock
 
-The Seed has no RTC. Below the build-time floor (`CLOCK_FLOOR`, 2026-09-21), or
-below the highest `issued_at` it ever signed, the service answers
-`clock_not_set` and neither verifies requests nor signs. The floor is meant to
-equal the COG-011 bridge's; the COG-011 text is not in this repository, so the
-constant is taken from the ADR wording and must be matched to the bridge's.
+The Seed has no RTC. Below the build-time floor (`CLOCK_FLOOR`, 2026-05-28) it answers
+`clock_not_set` and neither verifies requests nor signs; the same applies below the
+highest `issued_at` it ever signed. The floor equals the bridge cog's
+`CLOCK_FLOOR_MS` (1,780,000,000,000 ms); keep them equal.
 
 ### Error codes
 

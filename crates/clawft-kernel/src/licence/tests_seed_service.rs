@@ -44,7 +44,7 @@ impl CogFetcher for Reg {
 fn call(svc: &Service, n: &mut u64, m: &str, target: &str, body: &[u8]) -> serde_json::Value {
     *n += 1;
     let steward = sk(21);
-    let headers = sign_request(&steward, "node-steward", m, target, body, T0, &format!("{:032x}", *n));
+    let headers = sign_request(&steward, "node-steward", m, target, body, T0 * 1000, &format!("{:032x}", *n));
     let r = svc.handle(&Request { method: m.into(), target: target.into(), headers, body: body.to_vec() });
     assert_eq!(r.status, 200, "{:?}", r.json_body());
     r.json_body().unwrap()

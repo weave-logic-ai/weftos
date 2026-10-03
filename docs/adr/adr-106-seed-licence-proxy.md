@@ -504,7 +504,7 @@ Choices made while building `weft-licence` that the text above leaves open. None
 - **Replay memory is persisted.** The nonce list is written on each verified request, so a restart does not reopen the replay window.
 - **No expiry on the licence** is written into the grant as `issued_at + 7 days`, so the verifier's `licence.expires` comparison stays finite. A grant never outlives a declared licence expiry.
 - **Registry coverage.** The Cognitum registry lists one `arm` binary per cog (C7), and `aarch64` answers `arch_unavailable` until it does.
-- **Clock floor.** `CLOCK_FLOOR` is 2026-09-21. The COG-011 text is not in this repository, so the value follows the ADR wording and must be matched to the bridge's constant.
+- **Clock floor and request layout.** `CLOCK_FLOOR` is 1,780,000,000 s (2026-05-28), equal to the COG-011 bridge's `CLOCK_FLOOR_MS`. The signed request uses the bridge's layout (domain, method, path, node, timestamp in unix milliseconds, nonce of 16 to 64 alphanumerics, body sha256, one per line) under the domain `weft-licence-v1/request`. Unlike the bridge, replay memory is persisted, so no process-start rule is needed.
 
 ## Open questions
 

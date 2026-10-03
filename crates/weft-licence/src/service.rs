@@ -255,8 +255,8 @@ impl Service {
             return Err(self.refuse(&mut inner, now, ApiError::new(409, "seed_not_bound", "no mesh binding")));
         };
         let (pk, node) = (b.steward_key(), b.record.steward_node_id.clone());
-        let window = self.cfg.request_window_secs;
-        let verified = match request::verify(req, &pk, &node, now, window) {
+        let (now_ms, window) = (now.saturating_mul(1000), self.cfg.request_window_secs.saturating_mul(1000));
+        let verified = match request::verify(req, &pk, &node, now_ms, window) {
             Ok(v) => v,
             Err(e) => {
                 let (status, code) = match e {
@@ -268,7 +268,7 @@ impl Service {
                 return Err(self.refuse(&mut inner, now, ApiError::new(status, code, "request signature refused")));
             }
         };
-        if !request::remember_nonce(&mut inner.store.nonces, &verified.nonce, verified.ts, now, window) {
+        if !request::remember_nonce(&mut inner.store.nonces, &verified.nonce, verified.ts, now_ms, window) {
             return Err(self.refuse(&mut inner, now, ApiError::new(401, "replayed", "nonce already used")));
         }
         if !inner.steward_rate.try_acquire(now, self.cfg.limits.requests_per_min) {

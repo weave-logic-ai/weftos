@@ -3,7 +3,8 @@
 //! Signed string, one field per line, COG-011 field layout under its own
 //! domain: `weft-licence-v1/request`, method, target (path and query), node,
 //! timestamp, nonce, sha256 of the body. Headers: `x-licence-node`,
-//! `x-licence-ts`, `x-licence-nonce`, `x-licence-sig`.
+//! `x-licence-ts` (unix MILLISECONDS, as the bridge's `x-bridge-timestamp`),
+//! `x-licence-nonce` (16 to 64 alphanumerics), `x-licence-sig`.
 
 use std::collections::BTreeMap;
 
@@ -15,6 +16,8 @@ use weft_licence_wire::{hex_decode_exact, hex_encode};
 pub const REQUEST_DOMAIN: &str = "weft-licence-v1/request";
 /// Most nonces remembered inside the replay window.
 pub const MAX_NONCES: usize = 4096;
+/// Largest accepted timestamp (year 2100, in ms), as the bridge.
+pub const MAX_TS_MS: u64 = 4_102_444_800_000;
 
 /// A parsed HTTP request (headers lower-cased).
 #[derive(Debug, Clone, Default)]
@@ -43,9 +46,9 @@ impl Request {
 }
 
 /// The bytes that are signed.
-pub fn signing_string(method: &str, target: &str, node: &str, ts: u64, nonce: &str, body: &[u8]) -> String {
+pub fn signing_string(method: &str, target: &str, node: &str, ts_ms: u64, nonce: &str, body: &[u8]) -> String {
     format!(
-        "{REQUEST_DOMAIN}\n{method}\n{target}\n{node}\n{ts}\n{nonce}\n{}",
+        "{REQUEST_DOMAIN}\n{method}\n{target}\n{node}\n{ts_ms}\n{nonce}\n{}",
         hex_encode(&Sha256::digest(body))
     )
 }
@@ -57,13 +60,13 @@ pub fn sign_request(
     method: &str,
     target: &str,
     body: &[u8],
-    ts: u64,
+    ts_ms: u64,
     nonce: &str,
 ) -> BTreeMap<String, String> {
-    let sig = key.sign(signing_string(method, target, node, ts, nonce, body).as_bytes());
+    let sig = key.sign(signing_string(method, target, node, ts_ms, nonce, body).as_bytes());
     BTreeMap::from([
         ("x-licence-node".to_string(), node.to_string()),
-        ("x-licence-ts".to_string(), ts.to_string()),
+        ("x-licence-ts".to_string(), ts_ms.to_string()),
         ("x-licence-nonce".to_string(), nonce.to_string()),
         ("x-licence-sig".to_string(), hex_encode(&sig.to_bytes())),
     ])
@@ -87,7 +90,7 @@ pub enum AuthError {
 pub struct Verified {
     /// The nonce, to be remembered against replay.
     pub nonce: String,
-    /// The signed timestamp.
+    /// The signed timestamp, unix milliseconds.
     pub ts: u64,
 }
 
@@ -97,21 +100,28 @@ pub fn verify(
     req: &Request,
     steward_pubkey: &[u8; 32],
     steward_node: &str,
-    now: u64,
-    window: u64,
+    now_ms: u64,
+    window_ms: u64,
 ) -> Result<Verified, AuthError> {
     let h = |k: &str| req.headers.get(k).map(String::as_str).ok_or(AuthError::Malformed);
     let node = h("x-licence-node")?;
-    let ts: u64 = h("x-licence-ts")?.parse().map_err(|_| AuthError::Malformed)?;
+    let ts_raw = h("x-licence-ts")?;
+    if ts_raw.is_empty() || ts_raw.len() > 16 || !ts_raw.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(AuthError::Malformed);
+    }
+    let ts: u64 = ts_raw.parse().map_err(|_| AuthError::Malformed)?;
+    if ts > MAX_TS_MS {
+        return Err(AuthError::Malformed);
+    }
     let nonce = h("x-licence-nonce")?;
     let sig = hex_decode_exact::<64>(h("x-licence-sig")?).ok_or(AuthError::Malformed)?;
-    if nonce.len() < 16 || nonce.len() > 64 || !nonce.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if nonce.len() < 16 || nonce.len() > 64 || !nonce.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Err(AuthError::Malformed);
     }
     if node != steward_node {
         return Err(AuthError::WrongNode);
     }
-    if ts + window < now || ts > now + window {
+    if ts.abs_diff(now_ms) > window_ms {
         return Err(AuthError::Stale);
     }
     let vk = VerifyingKey::from_bytes(steward_pubkey).map_err(|_| AuthError::BadSignature)?;
@@ -123,10 +133,10 @@ pub fn verify(
     Ok(Verified { nonce: nonce.to_string(), ts })
 }
 
-/// Remember `nonce` in `seen` (nonce, ts). `false` when it was already seen
+/// Remember `nonce` in `seen` (nonce, ts in ms). `false` when it was already seen
 /// (a replay) or the list is full of live entries. Old entries are pruned.
-pub fn remember_nonce(seen: &mut Vec<(String, u64)>, nonce: &str, ts: u64, now: u64, window: u64) -> bool {
-    seen.retain(|(_, t)| *t + window >= now);
+pub fn remember_nonce(seen: &mut Vec<(String, u64)>, nonce: &str, ts: u64, now_ms: u64, window_ms: u64) -> bool {
+    seen.retain(|(_, t)| t.saturating_add(window_ms) >= now_ms);
     if seen.iter().any(|(n, _)| n == nonce) || seen.len() >= MAX_NONCES {
         return false;
     }

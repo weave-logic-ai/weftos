@@ -23,7 +23,7 @@ fn identity_is_unsigned_and_everything_else_needs_a_steward_signature() {
         assert!(matches!(status(&r), 400 | 401), "{m} {t} -> {}", status(&r));
     }
     // A signature by any other key is refused before any work is done.
-    let forged = h.signed_with(&sk(99), "GET", "/licence/v1/grants?since=0", b"", h.now());
+    let forged = h.signed_with(&sk(99), "GET", "/licence/v1/grants?since=0", b"", h.now() * 1000);
     let r = h.svc.handle(&forged);
     assert_eq!((status(&r), code(&r).as_str()), (401, "bad_signature"));
     assert_eq!(h.fetcher.fetch_count(), 0);
@@ -43,7 +43,7 @@ fn replays_stale_and_tampered_requests_are_refused() {
     let r = h.svc.handle(&req);
     assert_eq!(code(&r), "replayed");
     // Stale timestamp.
-    let old = h.signed_with(&steward(), "GET", "/licence/v1/grants?since=0", b"", h.now() - 1000);
+    let old = h.signed_with(&steward(), "GET", "/licence/v1/grants?since=0", b"", (h.now() - 1000) * 1000);
     assert_eq!(code(&h.svc.handle(&old)), "stale_request");
     // The target is signed: changing the query breaks the signature.
     let mut t = h.signed("GET", "/licence/v1/grants?since=0", b"");
@@ -66,7 +66,7 @@ fn forged_traffic_cannot_use_up_the_stewards_budget() {
     // bad_signature, the rest hit the shared unsigned pool.
     let mut pool_hit = 0;
     for _ in 0..60 {
-        let f = h.signed_with(&sk(99), "GET", "/licence/v1/grants?since=0", b"", h.now());
+        let f = h.signed_with(&sk(99), "GET", "/licence/v1/grants?since=0", b"", h.now() * 1000);
         if code(&h.svc.handle(&f)) == "rate_limited_unsigned" {
             pool_hit += 1;
         }
@@ -125,4 +125,23 @@ fn a_signing_attempt_before_the_floor_is_refused_even_after_verification() {
     assert_eq!(status(&h.checkout("fall-detect", "arm")), 200);
     h.clock.store(T0 + 50, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(code(&h.checkout("fall-detect", "arm")), "clock_not_set");
+}
+
+#[test]
+fn the_request_layout_and_clock_floor_match_the_bridge() {
+    // COG-011 bridge: CLOCK_FLOOR_MS = 1_780_000_000_000 (2026-05-28), ms timestamps,
+    // alphanumeric 16-64 nonces, one field per line.
+    assert_eq!(weft_licence::CLOCK_FLOOR * 1000, 1_780_000_000_000);
+    let s = weft_licence::request::signing_string("POST", "/p", "n", 1_791_000_000_123, "abcdef0123456789", b"x");
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(&lines[..6], ["weft-licence-v1/request", "POST", "/p", "n", "1791000000123", "abcdef0123456789"]);
+    assert_eq!(lines[6], weft_licence_wire::sha256_hex(b"x"));
+    let h = Harness::new(&[]);
+    // A non-hex alphanumeric nonce is accepted; a seconds timestamp is stale.
+    let nonce = "ZZzz0123456789ab";
+    let hdr = weft_licence::request::sign_request(&steward(), NODE, "GET", "/licence/v1/grants?since=0", b"", h.now() * 1000, nonce);
+    let req = weft_licence::request::Request { method: "GET".into(), target: "/licence/v1/grants?since=0".into(), headers: hdr, body: vec![] };
+    assert_eq!(status(&h.svc.handle(&req)), 200);
+    let secs = h.signed_with(&steward(), "GET", "/licence/v1/grants?since=0", b"", h.now());
+    assert_eq!(code(&h.svc.handle(&secs)), "stale_request");
 }

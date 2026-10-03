@@ -211,7 +211,7 @@ impl Harness {
 
     /// A request signed by the steward with a fresh nonce.
     pub fn signed(&self, method: &str, target: &str, body: &[u8]) -> Request {
-        self.signed_with(&steward(), method, target, body, self.now())
+        self.signed_with(&steward(), method, target, body, self.now() * 1000)
     }
 
     pub fn signed_with(&self, key: &SigningKey, method: &str, target: &str, body: &[u8], ts: u64) -> Request {
