@@ -127,6 +127,11 @@ fn config_is_validated_and_defaults_to_off() {
     bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 2}));
     bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 30}));
     bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 11, "advert_secs": 10}));
+    // sync 29 with advert 30 really announces every 58 s: rejected.
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 29}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 7}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 6}));
+    assert!(load_config(dir.path()).is_ok(), "30 is a multiple of 6");
     write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 30}));
     assert!(load_config(dir.path()).is_ok());
     write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 5}));

@@ -523,7 +523,8 @@ off unless `<runtime>/inference.json` exists.
   recorded on the chain. The file holds the persistent settings. Optional
   `sync_secs` (1 to 60, default 5) and `advert_secs` (1 to 30, default 20)
   tune the local re-check and the mesh announcement (`sync_secs` may not
-  exceed `advert_secs`, since the announcement rides the sync tick); adverts expire after 60 s
+  exceed `advert_secs`, since the announcement rides the sync tick, and the real period,
+  `advert_secs` rounded up to a multiple of `sync_secs`, must stay within 30); adverts expire after 60 s
   without a refresh.
 - In service mode (ADR-103) the machine mesh service owns the mesh and hands
   the daemon deliveries as an unverified peer, so local placement and the

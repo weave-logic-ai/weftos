@@ -158,6 +158,15 @@ impl FileCfg {
         if sync > advert {
             return bad(format!("sync_secs ({sync}) must not exceed advert_secs ({advert})"));
         }
+        // The announcement fires on the first tick at or after advert_secs,
+        // so its real period is ceil(advert / sync) * sync, and that must
+        // still sit inside the half-TTL bound.
+        let real = advert.div_ceil(sync) * sync;
+        if real > max_advert {
+            return bad(format!(
+                "advert_secs ({advert}) on a {sync} s sync tick announces every {real} s; keep it at most {max_advert} s"
+            ));
+        }
         let known = |role: &String| self.roles.iter().any(|r| &r.role == role);
         let nodes_ok = |v: &Vec<String>| v.len() <= MAX_LIST && v.iter().all(|n| valid_token(n, 128));
         if self.mesh.expose.iter().any(|r| !known(r))
