@@ -93,11 +93,11 @@ async fn three_nodes_one_checkout_one_transfer_then_peers_share() {
     assert_eq!(r.stub.byte_transfers.load(Ordering::SeqCst), 1);
 
     // A grant alone does not make the bytes runnable.
-    let sha = sha_of("aarch64");
+    let (sha, b3) = (sha_of("aarch64"), b3_of("aarch64"));
     let denied = may_run(
         &b.fx.store,
         &b.fx.approvals,
-        &RunRequest { cog_id: "fall-detect", version: "1.2.0", sha256: &sha },
+        &RunRequest { cog_id: "fall-detect", version: "1.2.0", sha256: &sha, blake3: &b3 },
     );
     assert_eq!(denied.unwrap_err(), RunDenied::NoApproval);
 }
