@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use clawft_types::placement::engine::{
     Affinity, ClusterState, Decision, Execution, GateInput, GateVerdict, InstanceRecord,
-    PlacementFacts, PlacementRequest, Tier, WorkloadRef, WorkloadSpec, explain, place,
+    PlacementFacts, PlacementRequest, Tier, WorkloadRef, explain, place,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
