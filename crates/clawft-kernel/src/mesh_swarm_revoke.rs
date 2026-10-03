@@ -171,6 +171,11 @@ pub struct RevocationExchange {
     seen: std::sync::Mutex<Seen>,
     /// Run after a notice that was new here has been applied.
     on_applied: std::sync::OnceLock<AppliedHook>,
+    /// Verified notices kept for replay to peers that rejoin.
+    log: std::sync::Mutex<log::NoticeLog>,
+    /// Replay bookkeeping per peer (in flight, cooldown, cancel).
+    replays: std::sync::Mutex<log::Replays>,
+    replays_started: std::sync::atomic::AtomicU64,
 }
 
 /// Called with each notice that was new here, after it was recorded and the
@@ -211,8 +216,12 @@ impl RevocationExchange {
             buckets: dashmap::DashMap::new(),
             seen: Default::default(),
             on_applied: std::sync::OnceLock::new(),
+            log: Default::default(),
+            replays: Default::default(),
+            replays_started: Default::default(),
         });
         runtime.set_control_sink(REVOKE_TOPIC, me.clone());
+        Self::spawn_rejoin_replay(&me);
         me
     }
 
@@ -336,6 +345,7 @@ impl RevocationExchange {
                 }
             }
         }
+        self.log_notice(signed);
         if new {
             self.ex.apply_revocations();
             if let Some(hook) = self.on_applied.get() {
@@ -406,6 +416,10 @@ impl PeerControlSink for RevocationExchange {
         Vec::new()
     }
 }
+
+#[path = "mesh_swarm_revoke_log.rs"]
+mod log;
+pub use log::{MAX_LOGGED, REPLAY_COOLDOWN};
 
 #[cfg(test)]
 #[path = "mesh_swarm_revoke_tests.rs"]

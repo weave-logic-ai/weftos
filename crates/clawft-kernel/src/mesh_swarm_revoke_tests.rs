@@ -308,3 +308,23 @@ async fn a_notice_whose_write_fails_is_still_applied_chained_and_forwarded() {
     assert_eq!(ev.len(), 1);
     assert_eq!(ev[0]["persisted"], false);
 }
+
+#[test]
+fn the_replay_log_is_bounded_and_evicts_the_oldest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let (p, _) = peer("node-a", &signed_package(tmp.path(), 1024, &k), &anchors_for(&k));
+    let notice = |i: usize| {
+        let id = hex_encode(&blake3::hash(&i.to_le_bytes()).as_bytes()[..]);
+        sign_revocation(RevocationKind::ArtifactHash, &id, "t", 1, &k).unwrap()
+    };
+    let first = notice(0);
+    p.rev.log_notice(&first);
+    for i in 1..MAX_LOGGED + 5 {
+        p.rev.log_notice(&notice(i));
+    }
+    let log = p.rev.log.lock().unwrap();
+    assert_eq!(log.entries.len(), MAX_LOGGED);
+    assert!(!log.entries.contains(&first), "the oldest went first");
+    assert!(log.entries.contains(&notice(MAX_LOGGED + 4)), "the newest is kept");
+}

@@ -54,6 +54,14 @@ pub struct HostConfig {
     /// Address advertised in the `workload-host` advertisement.
     #[serde(default)]
     pub advertise: Option<String>,
+    /// Opt-in lease, in seconds: continuous workloads on this node stop
+    /// once no remote controller has been heard from for this long, so a
+    /// partitioned node does not keep running a copy the controller is
+    /// about to replace. Set it at or below the controller's `dead_after`
+    /// (default 30 s). At least 30 (three controller ticks of 10 s): a
+    /// shorter lease would stop work for ordinary jitter. Absent: off.
+    #[serde(default)]
+    pub lease_secs: Option<u64>,
 }
 
 fn yes() -> bool {
@@ -70,6 +78,11 @@ impl HostConfig {
             return Err(format!(
                 "{HOST_FILE}: controllers must list 1..={MAX_CONTROLLERS} keys"
             ));
+        }
+        if let Some(l) = self.lease_secs
+            && !(30..=86_400).contains(&l)
+        {
+            return Err(format!("{HOST_FILE}: lease_secs must be 30..=86400 (at least three controller ticks)"));
         }
         if let Some(a) = &self.advertise
             && (a.is_empty()
@@ -182,6 +195,9 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
     }
     if let Some(cfg) = p.serving {
         svc = svc.with_address(cfg.advertised());
+        if let Some(l) = cfg.lease_secs {
+            svc = svc.with_lease(std::time::Duration::from_secs(l));
+        }
     }
     Ok(svc)
 }

@@ -31,6 +31,7 @@ use crate::workload_pkg::codec::hex_encode;
 use crate::workload_runtime::VerifiedWorkload;
 
 use super::facts::governance_tier;
+use super::lifecycle::LifecyclePolicy;
 use super::host_service::{CtlConfig, InstanceBody, PlaceBody};
 use super::msg::method;
 use super::plane::{
@@ -112,6 +113,10 @@ pub struct PlaceReport {
     pub attempts: Vec<Attempt>,
     /// The placement, if any target accepted.
     pub placed: Option<PlacementRecord>,
+    /// The workload needs something attached to its node (a sensor, a
+    /// device, an accelerator), so the lifecycle never moves it by itself.
+    #[serde(default)]
+    pub hardware_bound: bool,
 }
 
 impl PlacementControlPlane {
@@ -177,8 +182,41 @@ impl PlacementControlPlane {
         )
     }
 
-    /// Decide (and unless `dry_run`, dispatch) one placement.
+    /// Decide (and unless `dry_run`, dispatch) one placement, with the
+    /// default lifecycle policy (see [`Self::place_with`]).
     pub async fn place(&self, order: &PlaceOrder) -> Result<PlaceReport, PlaneError> {
+        self.place_with(order, LifecyclePolicy::default()).await
+    }
+
+    /// [`Self::place`], recording what the lifecycle needs to reschedule the
+    /// instance if its node is lost: the order, and `policy` (whether it may
+    /// move at all).
+    pub async fn place_with(
+        &self,
+        order: &PlaceOrder,
+        policy: LifecyclePolicy,
+    ) -> Result<PlaceReport, PlaneError> {
+        let report = self.place_unregistered(order).await?;
+        if let Some(rec) = &report.placed {
+            let policy = LifecyclePolicy {
+                migratable: policy.migratable && !report.hardware_bound,
+                ..policy
+            };
+            self.register_life(rec, order, policy);
+        }
+        Ok(report)
+    }
+
+    pub(super) async fn place_unregistered(&self, order: &PlaceOrder) -> Result<PlaceReport, PlaneError> {
+        self.place_timed(order, None).await
+    }
+
+    /// [`Self::place_unregistered`] with a shorter `place` timeout.
+    pub(super) async fn place_timed(
+        &self,
+        order: &PlaceOrder,
+        place_timeout: Option<std::time::Duration>,
+    ) -> Result<PlaceReport, PlaneError> {
         order.check()?;
         let (w, spec, manifest_hash) = match self.prepare(order) {
             Ok(p) => p,
@@ -191,6 +229,7 @@ impl PlacementControlPlane {
             }
             Err(e) => return Err(e),
         };
+        let hardware_bound = super::lifecycle::needs_attached_hardware(&spec);
         let view = self.view();
         let verdicts = view
             .iter()
@@ -233,9 +272,10 @@ impl PlacementControlPlane {
             decision_id,
             attempts: Vec::new(),
             placed: None,
+            hardware_bound,
         };
         if !order.dry_run && report.decision.placement.is_some() {
-            self.dispatch(order, &w, &manifest_hash, &mut report).await;
+            self.dispatch(place_timeout, order, &w, &manifest_hash, &mut report).await;
         }
         report.explain = render(&report);
         Ok(report)
@@ -267,6 +307,7 @@ impl PlacementControlPlane {
 
     async fn dispatch(
         &self,
+        place_timeout: Option<std::time::Duration>,
         order: &PlaceOrder,
         w: &VerifiedWorkload,
         manifest: &str,
@@ -317,6 +358,7 @@ impl PlacementControlPlane {
                     decision_id: Some(report.decision_id.clone()),
                     body,
                     serve: true,
+                    timeout: place_timeout,
                 })
                 .await;
             let template = PlacementRecord {
@@ -465,6 +507,7 @@ impl PlacementControlPlane {
         let body = serde_json::to_value(InstanceBody {
             instance_id: Some(instance_id.to_string()),
             grace_ms: None,
+            include_departed: false,
         })
         .unwrap_or_default();
         let out = self.call(&rec.node_id, m, decision_id, body).await?;
@@ -474,6 +517,7 @@ impl PlacementControlPlane {
             p.remove(instance_id);
         }
         if m == method::UNLOAD {
+            self.drop_life(instance_id);
             self.persist();
         }
         Ok(out)

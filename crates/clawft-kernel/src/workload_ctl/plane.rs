@@ -48,6 +48,17 @@ pub struct PlaneConfig {
     pub request_ttl_ms: u64,
     /// Scoring weights (governance config).
     pub weights: ScoringWeights,
+    /// A target unreachable for this long counts as `Dead` (membership
+    /// peer state, when known, decides first). Its instances become `Lost`
+    /// and are rescheduled by [`PlacementControlPlane::lifecycle_tick`].
+    pub dead_after: Duration,
+    /// Timeout for the `place` of a reschedule (shorter than
+    /// `place_timeout`: a replacement that cannot be fetched in this time
+    /// is retried on a later tick rather than holding this one).
+    pub reschedule_timeout: Duration,
+    /// First wait before retrying a reschedule that found no node, or an
+    /// orphan unload that failed; doubles per attempt up to five minutes.
+    pub retry_backoff: Duration,
 }
 
 impl Default for PlaneConfig {
@@ -57,6 +68,9 @@ impl Default for PlaneConfig {
             place_timeout: Duration::from_secs(280),
             request_ttl_ms: 290_000,
             weights: ScoringWeights::default(),
+            dead_after: Duration::from_secs(30),
+            reschedule_timeout: Duration::from_secs(60),
+            retry_backoff: Duration::from_secs(10),
         }
     }
 }
@@ -183,6 +197,9 @@ pub(super) struct Call<'a> {
     pub body: Value,
     /// Serve the payload to the target during the call.
     pub serve: bool,
+    /// Replace the method's default timeout (a reschedule must not hold
+    /// the lifecycle tick for the full `place_timeout`).
+    pub timeout: Option<Duration>,
 }
 
 /// The controller.
@@ -210,6 +227,11 @@ pub struct PlacementControlPlane {
     /// Handles of instances placed on Seeds.
     pub(super) seed_handles: Mutex<BTreeMap<String, super::plane_seed::SeedEntry>>,
     pub(super) cfg: PlaneConfig,
+    /// Lifecycle of each placed instance (state machine, stored order and
+    /// policy for rescheduling), by instance id. See `plane_lifecycle`.
+    pub(super) lives: Mutex<BTreeMap<String, super::plane_lifecycle::ControllerLife>>,
+    /// When each target was first seen unreachable (ms), cleared on contact.
+    pub(super) down_since: Mutex<BTreeMap<String, u64>>,
     /// Where targets and placements are persisted (see `plane_state`).
     pub(super) state_file: Option<std::path::PathBuf>,
     pub(super) state_lock: Mutex<()>,
@@ -253,6 +275,8 @@ impl PlacementControlPlane {
             seeds: RwLock::new(BTreeMap::new()),
             seed_handles: Mutex::new(BTreeMap::new()),
             cfg: PlaneConfig::default(),
+            lives: Mutex::new(BTreeMap::new()),
+            down_since: Mutex::new(BTreeMap::new()),
             state_file: None,
             state_lock: Mutex::new(()),
         }
@@ -364,12 +388,13 @@ impl PlacementControlPlane {
             decision_id,
             body,
             serve,
+            timeout: timeout_override,
         } = c;
-        let timeout = if m == method::PLACE || m == method::LOAD {
+        let timeout = timeout_override.unwrap_or(if m == method::PLACE || m == method::LOAD {
             self.cfg.place_timeout
         } else {
             self.cfg.call_timeout
-        };
+        });
         let req = CtlRequest::new(
             &self.key,
             m,
@@ -433,6 +458,7 @@ impl PlacementControlPlane {
                 decision_id: None,
                 body: json!({}),
                 serve: false,
+                timeout: None,
             })
             .await?;
         let node_id = node_id_from_pubkey(&pk);
@@ -526,6 +552,7 @@ impl PlacementControlPlane {
                 decision_id,
                 body,
                 serve: false,
+                timeout: None,
             })
             .await?
             .0)

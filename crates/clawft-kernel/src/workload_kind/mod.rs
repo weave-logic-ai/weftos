@@ -26,6 +26,7 @@ use crate::workload_pkg::{ManifestEnvelope, ManifestError};
 use crate::workload_runtime::VerifiedWorkload;
 
 mod cog;
+mod health;
 mod project;
 
 #[cfg(test)]
@@ -34,6 +35,7 @@ mod tests;
 mod project_tests;
 
 pub use cog::CogKind;
+pub use health::{Health, HealthSample, HealthSpec, SampleState, judge_process};
 #[cfg(all(feature = "workload-runtime", feature = "mesh", unix, feature = "native"))]
 pub use project::{ProjectFacts, ProjectPrepareError, prepare_project};
 pub use project::{KIND_PROJECT, ProjectKind, project_healthy};
@@ -63,6 +65,26 @@ pub trait WorkloadKind: Send + Sync {
     /// Validate the envelope's kind-specific body (shape and limits; not
     /// signatures or file contents, which are kind-agnostic).
     fn validate(&self, envelope: &ManifestEnvelope) -> Result<(), ManifestError>;
+
+    /// How often instances of this kind are polled and how many bad polls
+    /// in a row make one unhealthy (ADR-099 section 7).
+    fn health(&self) -> HealthSpec {
+        HealthSpec::default()
+    }
+
+    /// Judge one poll of an instance of this kind. The default is the
+    /// process-backed judgment ([`judge_process`]).
+    fn judge(&self, sample: &HealthSample) -> Health {
+        judge_process(sample)
+    }
+
+    /// Whether the placer may move an instance of this kind to another
+    /// node when its node is lost. A kind with state that cannot move (warm
+    /// inference caches, hardware-bound work) says `false`: the loss is
+    /// raised as an alert instead of being rescheduled.
+    fn migratable(&self) -> bool {
+        true
+    }
 
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
     /// Verify the signed package in `package_dir` against `anchors` (with

@@ -26,6 +26,7 @@ fn cfg(controllers: Vec<String>) -> HostConfig {
         noise: true,
         controllers,
         advertise: Some("board.test:9471".into()),
+        lease_secs: None,
     }
 }
 
