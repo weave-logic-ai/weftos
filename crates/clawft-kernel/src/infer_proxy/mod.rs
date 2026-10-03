@@ -48,7 +48,7 @@ pub use types::ChainAudit;
 pub use hub::InferHub;
 pub use listener::{InferProxy, OccupiedPolicy, ProxyStats, Started};
 pub use mesh_forward::{InferPeer, ServeGate, ServePolicy, Served, forward_remote, serve_infer};
-pub use table::{MeshLocal, PlacementTable, SERVICE_PREFIX, SyncOutcome};
+pub use table::{DEFAULT_ADVERT_TTL, MeshLocal, PlacementTable, SERVICE_PREFIX, SyncOutcome};
 pub use types::{
     MeshDialer, Method, ProxyAudit, ProxyError, ProxyLimits, ProxyRequest, ResponseSink, Target,
 };

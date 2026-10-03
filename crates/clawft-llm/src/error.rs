@@ -27,6 +27,12 @@ pub enum ProviderError {
     #[error("model not found: {0}")]
     ModelNotFound(String),
 
+    /// The server could not be reached (connection refused, DNS, reset
+    /// before any response). Distinct from [`RequestFailed`](Self::RequestFailed)
+    /// so callers can tell "nothing answered" from "the server said no".
+    #[error("connection failed: {0}")]
+    Connect(String),
+
     /// The provider has not been configured (e.g. missing API key).
     #[error("provider not configured: {0}")]
     NotConfigured(String),

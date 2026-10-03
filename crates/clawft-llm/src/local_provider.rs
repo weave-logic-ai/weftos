@@ -159,6 +159,25 @@ impl LocalProvider {
         provider
     }
 
+    /// Classify a failed send: a timeout and a failed connection are typed
+    /// (callers fall back on them); anything else is a plain request failure.
+    fn send_error(&self, e: reqwest::Error) -> ProviderError {
+        if e.is_timeout() {
+            return ProviderError::Timeout;
+        }
+        let connect = e.is_connect();
+        let msg = format!(
+            "failed to connect to local LLM server at {}: {}",
+            self.config.base_url,
+            e.without_url()
+        );
+        if connect {
+            ProviderError::Connect(msg)
+        } else {
+            ProviderError::RequestFailed(msg)
+        }
+    }
+
     /// Set the explicit context window injected as `options.num_ctx`.
     pub fn with_num_ctx(mut self, num_ctx: u32) -> Self {
         self.num_ctx = Some(num_ctx);
@@ -228,12 +247,7 @@ impl LocalProvider {
             req = req.header(k.as_str(), v.as_str());
         }
 
-        let response = req.json(&body).send().await.map_err(|e| {
-            ProviderError::RequestFailed(format!(
-                "failed to connect to local LLM server at {}: {e}",
-                self.config.base_url
-            ))
-        })?;
+        let response = req.json(&body).send().await.map_err(|e| self.send_error(e))?;
 
         let status = response.status();
 
@@ -367,12 +381,7 @@ impl LocalProvider {
             req = req.header(k.as_str(), v.as_str());
         }
 
-        let response = req.send().await.map_err(|e| {
-            ProviderError::RequestFailed(format!(
-                "failed to connect to local LLM server at {}: {e}",
-                self.config.base_url
-            ))
-        })?;
+        let response = req.send().await.map_err(|e| self.send_error(e))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -459,12 +468,7 @@ impl Provider for LocalProvider {
             req = req.header(k.as_str(), v.as_str());
         }
 
-        let response = req.json(&stream_request).send().await.map_err(|e| {
-            ProviderError::RequestFailed(format!(
-                "failed to connect to local LLM server at {}: {e}",
-                self.config.base_url
-            ))
-        })?;
+        let response = req.json(&stream_request).send().await.map_err(|e| self.send_error(e))?;
 
         let status = response.status();
         if !status.is_success() {

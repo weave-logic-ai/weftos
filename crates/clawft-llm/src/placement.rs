@@ -188,7 +188,7 @@ impl PlacedProvider {
     /// answer and is never replayed elsewhere.
     fn should_retry(err: &ProviderError) -> bool {
         match err {
-            ProviderError::Timeout => true,
+            ProviderError::Timeout | ProviderError::Connect(_) => true,
             ProviderError::ServerError { status, .. } => matches!(status, 502..=504),
             ProviderError::Http(e) => e.is_connect() || e.is_timeout(),
             _ => false,

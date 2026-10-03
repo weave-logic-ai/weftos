@@ -17,7 +17,8 @@
 //! over in-memory streams.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
@@ -41,6 +42,11 @@ use crate::mesh_service_adv::ServiceAdvertisement;
 const RESP_BUFFER: usize = 64;
 /// Requests being taken in at once, over all peers.
 const INTAKE: usize = 32;
+/// Exchanges in flight at once, over all peers.
+const MAX_PENDING: usize = 256;
+/// Refusals answered per peer per window; the rest are dropped silently.
+const REFUSALS: u32 = 8;
+const REFUSAL_WINDOW: Duration = Duration::from_secs(10);
 
 type Pending = Arc<DashMap<(String, u64), mpsc::Sender<Vec<u8>>>>;
 
@@ -51,7 +57,10 @@ pub struct InferHub {
     upstream: Arc<Upstream>,
     gate: Arc<ServeGate>,
     audit: Option<Arc<dyn ProxyAudit>>,
-    grants: DashMap<String, Grant>,
+    /// Per peer: the connection a grant was seen on, and the grant.
+    grants: DashMap<String, (u64, Grant)>,
+    max_pending: AtomicUsize,
+    refusals: DashMap<String, (Instant, u32)>,
     pending: Pending,
     next_id: AtomicU64,
     intake: Arc<Semaphore>,
@@ -96,6 +105,8 @@ impl InferHub {
             gate,
             audit,
             grants: DashMap::new(),
+            max_pending: AtomicUsize::new(MAX_PENDING),
+            refusals: DashMap::new(),
             pending: Arc::new(DashMap::new()),
             next_id: AtomicU64::new(1),
             intake: Arc::new(Semaphore::new(INTAKE)),
@@ -111,9 +122,55 @@ impl InferHub {
         let _ = self.table.set(table);
     }
 
-    /// Register as the runtime's control sink for [`INFER_TOPIC`].
+    /// Register as the runtime's control sink for [`INFER_TOPIC`], and
+    /// forget a peer's standing when it leaves.
     pub fn install(self: &Arc<Self>) {
         self.rt.set_control_sink(INFER_TOPIC, self.clone());
+        let hub = self.clone();
+        let mut rx = self.rt.subscribe_peer_events();
+        tokio::spawn(async move {
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                match rx.recv().await {
+                    Ok(crate::mesh_discovery::MeshPeerEvent::Left { node_id }) => {
+                        hub.grants.remove(&node_id);
+                    }
+                    Ok(_) => {}
+                    // Missed events: forget everything, standing is relearned.
+                    Err(RecvError::Lagged(_)) => hub.grants.clear(),
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
+    /// Cap on exchanges in flight (default 256).
+    pub fn set_max_pending(&self, n: usize) {
+        self.max_pending.store(n, Ordering::Relaxed);
+    }
+
+    /// The standing of `node` on the connection in use now: the grant seen on
+    /// that very connection, and only while the route to it is verified. A
+    /// peer that reconnected (a new connection, maybe as a Leaf) has no
+    /// standing until it is heard from again.
+    fn grant_of(&self, node: &str) -> Option<Grant> {
+        let (conn, verified) = self.rt.peer_route(node)?;
+        let entry = self.grants.get(node).map(|e| e.clone())?;
+        if !verified || entry.0 != conn {
+            self.grants.remove(node);
+            return None;
+        }
+        Some(entry.1)
+    }
+
+    /// Whether a refusal may be sent to `peer` now (a few per window).
+    fn refusal_allowed(&self, peer: &str) -> bool {
+        let mut e = self.refusals.entry(peer.to_string()).or_insert((Instant::now(), 0));
+        if e.0.elapsed() > REFUSAL_WINDOW {
+            *e = (Instant::now(), 0);
+        }
+        e.1 += 1;
+        e.1 <= REFUSALS
     }
 
     fn table(&self) -> Option<&Arc<PlacementTable>> {
@@ -142,7 +199,7 @@ impl InferHub {
             };
             for peer in self.rt.peer_ids() {
                 let ok = table.mesh_peer_allowed(role, &peer)
-                    && self.grants.get(&peer).is_some_and(|g| qualifies(&g));
+                    && self.grant_of(&peer).is_some_and(|g| qualifies(&g));
                 if !ok {
                     continue;
                 }
@@ -156,12 +213,11 @@ impl InferHub {
 
     /// Peers this node currently holds a qualifying grant for.
     pub fn qualifying_peers(&self) -> Vec<String> {
-        let live = self.rt.peer_ids();
         let mut v: Vec<String> = self
-            .grants
-            .iter()
-            .filter(|e| qualifies(e.value()) && live.contains(e.key()))
-            .map(|e| e.key().clone())
+            .rt
+            .peer_ids()
+            .into_iter()
+            .filter(|p| self.grant_of(p).is_some_and(|g| qualifies(&g)))
             .collect();
         v.sort();
         v
@@ -169,22 +225,32 @@ impl InferHub {
 
     fn serve(self: &Arc<Self>, ctx: &PeerCtx, id: u64, data: &str) {
         let Some(table) = self.table().cloned() else { return };
-        // Cheap standing checks before any work or memory is committed.
+        // Cheap standing checks before any work or memory is committed. A
+        // peer that does not qualify is dropped without a word: it gets no
+        // reply task and no audit line from a flood. A qualifying peer that
+        // is simply not listed (or over the intake) is told, a few times per
+        // window.
         let grant = ctx.grant();
-        if !grant.as_ref().is_some_and(qualifies) || !table.peer_listed_any(&ctx.peer_id) {
-            self.note(
-                "infer.mesh.failed",
-                json!({"peer": ctx.peer_id, "why": "standing", "standing": grant.as_ref().map(qualifies)}),
-            );
-            self.spawn_refusal(ctx.peer_id.clone(), id);
+        if !grant.as_ref().is_some_and(qualifies) {
+            return;
+        }
+        if !table.peer_listed_any(&ctx.peer_id) {
+            if self.refusal_allowed(&ctx.peer_id) {
+                self.note(
+                    "infer.mesh.failed",
+                    json!({"peer": ctx.peer_id, "why": "peer is on no serve allowlist"}),
+                );
+                self.spawn_refusal(ctx.peer_id.clone(), id);
+            }
             return;
         }
         let Ok(permit) = self.intake.clone().try_acquire_owned() else {
-            self.spawn_refusal(ctx.peer_id.clone(), id);
+            if self.refusal_allowed(&ctx.peer_id) {
+                self.spawn_refusal(ctx.peer_id.clone(), id);
+            }
             return;
         };
         let Some(payload) = hex_decode(data) else {
-            self.spawn_refusal(ctx.peer_id.clone(), id);
             return;
         };
         let frame = MeshFrame {
@@ -228,10 +294,13 @@ impl InferHub {
 }
 
 impl PeerControlSink for InferHub {
-    fn on_peer_control(&self, ctx: &PeerCtx, _conn: u64, payload: &Value) -> Vec<Value> {
+    fn on_peer_control(&self, ctx: &PeerCtx, conn: u64, payload: &Value) -> Vec<Value> {
         // The standing this connection holds, as of this message.
         let first_contact = match ctx.grant() {
-            Some(g) => self.grants.insert(ctx.peer_id.clone(), g).is_none(),
+            Some(g) => self
+                .grants
+                .insert(ctx.peer_id.clone(), (conn, g))
+                .is_none_or(|old| old.0 != conn),
             None => {
                 self.grants.remove(&ctx.peer_id);
                 false
@@ -297,15 +366,15 @@ impl InferHub {
 #[async_trait]
 impl MeshDialer for InferHub {
     fn standing(&self, node_id: &str) -> Option<Grant> {
-        if !self.rt.peer_ids().iter().any(|p| p == node_id) {
-            return None;
-        }
-        self.grants.get(node_id).map(|g| g.clone())
+        self.grant_of(node_id)
     }
 
     async fn dial(&self, node_id: &str) -> Result<Box<dyn MeshStream>, ProxyError> {
         if !self.is_admitted(node_id) {
             return Err(ProxyError::Refused(format!("peer {node_id} is not admitted")));
+        }
+        if self.pending.len() >= self.max_pending.load(Ordering::Relaxed) {
+            return Err(ProxyError::NoInstance("too many exchanges in flight".into()));
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(RESP_BUFFER);
@@ -395,6 +464,13 @@ impl MeshStream for ClientStream {
 impl Drop for ClientStream {
     fn drop(&mut self) {
         self.pending.remove(&(self.peer.clone(), self.id));
+    }
+}
+
+#[cfg(test)]
+impl InferHub {
+    pub(super) fn grants_len(&self) -> usize {
+        self.grants.len()
     }
 }
 

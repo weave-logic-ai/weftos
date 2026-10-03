@@ -40,9 +40,9 @@ fn off() -> Response {
     Response::error("inference placement is off (no inference.json in the runtime directory)".to_string())
 }
 
-fn require_mesh(st: &InferState) -> Result<(), Response> {
+fn require_mesh(st: &InferState) -> Result<(), String> {
     if st.hub.is_none() {
-        return Err(Response::error(format!("mesh serving is {}", st.mesh_note)));
+        return Err(format!("mesh serving is {}", st.mesh_note));
     }
     Ok(())
 }
@@ -61,8 +61,8 @@ pub async fn handle(method: &str, params: Value) -> Response {
                 Ok(p) => p,
                 Err(e) => return Response::error(format!("invalid params: {e}")),
             };
-            if let Err(r) = require_mesh(st) {
-                return r;
+            if let Err(why) = require_mesh(st) {
+                return Response::error(why);
             }
             if !role_known(st, &p.role) {
                 return Response::error(format!("unknown role {:?}", p.role));
@@ -75,8 +75,8 @@ pub async fn handle(method: &str, params: Value) -> Response {
                 Ok(p) => p,
                 Err(e) => return Response::error(format!("invalid params: {e}")),
             };
-            if let Err(r) = require_mesh(st) {
-                return r;
+            if let Err(why) = require_mesh(st) {
+                return Response::error(why);
             }
             if !role_known(st, &p.role) || !valid_token(&p.node, 128) {
                 return Response::error("unknown role or malformed node id".to_string());

@@ -17,7 +17,7 @@ use super::types::*;
 use super::upstream::Upstream;
 use crate::mesh_admit::PeerClass;
 use crate::mesh_delivery::PeerCtx;
-use crate::mesh_runtime::MeshRuntime;
+use crate::mesh_runtime::{MeshRuntime, PeerControlSink};
 
 struct Side {
     rt: Arc<MeshRuntime>,
@@ -50,8 +50,11 @@ fn side(node: &str, audit: Arc<Audit>) -> Side {
 fn join(a: &Side, b: &Side, ctx_of_a: PeerCtx, ctx_of_b: PeerCtx) {
     let (a2b_tx, mut a2b_rx) = mpsc::channel::<Vec<u8>>(256);
     let (b2a_tx, mut b2a_rx) = mpsc::channel::<Vec<u8>>(256);
-    a.rt.add_peer(ctx_of_b.peer_id.clone(), a2b_tx.clone());
-    b.rt.add_peer(ctx_of_a.peer_id.clone(), b2a_tx.clone());
+    // Routes are registered the way the accept loop does for an admitted
+    // peer, so each carries the verified flag the connection earned.
+    let tally = crate::mesh_runtime::RouteTally::default();
+    a.rt.register_authenticated(ctx_of_b.peer_id.clone(), a2b_tx.clone(), ctx_of_b.node_verified, &tally);
+    b.rt.register_authenticated(ctx_of_a.peer_id.clone(), b2a_tx.clone(), ctx_of_a.node_verified, &tally);
     let (rb, ra) = (b.rt.clone(), a.rt.clone());
     let (b2a, a2b) = (b2a_tx, a2b_tx);
     tokio::spawn(async move {
@@ -177,7 +180,9 @@ async fn the_serving_hub_refuses_peers_that_do_not_qualify() {
         w.a.table.ingest_advertisement("node-b", &ad);
         let p = proxy(&w.a.table).await;
         let resp = raw(p.addr(), &get(p.addr(), "/v1/models")).await;
-        assert_eq!(status(&resp), 502, "{name}: {resp}");
+        // A peer that does not qualify is dropped silently, so the consumer
+        // sees its stall timeout (504) rather than a refusal (502).
+        assert!(matches!(status(&resp), 502 | 504), "{name}: {resp}");
         assert_eq!(w.up.count(), 0, "{name}: the model server was reached");
         let _ = (&w.audit_a, &w.audit_b);
     }
@@ -204,7 +209,6 @@ async fn an_advert_for_another_node_is_not_taken_from_a_peers_connection() {
 
 #[tokio::test]
 async fn a_response_is_accepted_only_from_the_peer_the_request_went_to() {
-    use crate::mesh_runtime::PeerControlSink;
     let w = world(node("node-a"), node("node-b")).await;
     meet(&w).await;
     let d = w.a.hub.clone();
@@ -215,4 +219,113 @@ async fn a_response_is_accepted_only_from_the_peer_the_request_went_to() {
     assert_eq!(stream.pending_len(), 1, "exchange untouched by a stranger");
     d.on_peer_control(&node("node-b"), 0, &forged);
     drop(stream);
+}
+
+async fn dial_refused(hub: &Arc<InferHub>, node: &str) -> bool {
+    matches!(hub.dial(node).await, Err(ProxyError::Refused(_)))
+}
+
+#[tokio::test]
+async fn a_standing_is_tied_to_the_connection_it_was_seen_on() {
+    let w = world(node("node-a"), node("node-b")).await;
+    meet(&w).await;
+    assert!(w.a.hub.standing("node-b").is_some());
+    // node-b reconnects (a new connection) and sends nothing on it: the old
+    // grant describes a connection that is gone.
+    w.a.rt.disconnect_peer("node-b");
+    let (tx, _rx) = mpsc::channel::<Vec<u8>>(8);
+    let tally = crate::mesh_runtime::RouteTally::default();
+    w.a.rt.register_authenticated("node-b".into(), tx, true, &tally);
+    assert!(w.a.hub.standing("node-b").is_none(), "grant from the old connection");
+    assert!(dial_refused(&w.a.hub, "node-b").await);
+    assert!(!w.a.hub.is_admitted("node-b"));
+    // It then speaks as a Leaf: standing exists but does not qualify.
+    w.a.hub.on_peer_control(&ctx("node-b", true, PeerClass::Leaf), w.a.rt.peer_route("node-b").unwrap().0, &serde_json::json!({"t": "hello"}));
+    assert!(w.a.hub.standing("node-b").is_some());
+    assert!(dial_refused(&w.a.hub, "node-b").await, "a Leaf is not served by dialing");
+}
+
+#[tokio::test]
+async fn relaxed_admission_never_leaves_a_standing_behind() {
+    let w = world(node("node-a"), node("node-b")).await;
+    meet(&w).await;
+    assert!(w.a.hub.standing("node-b").is_some());
+    let conn = w.a.rt.peer_route("node-b").unwrap().0;
+    // The same connection is heard again, now without a verified id (admission
+    // relaxed or the peer is no longer a member): the grant is dropped.
+    w.a.hub.on_peer_control(&ctx("node-b", false, PeerClass::Node), conn, &serde_json::json!({"t": "hello"}));
+    assert!(w.a.hub.standing("node-b").is_none());
+    assert!(dial_refused(&w.a.hub, "node-b").await);
+    // A route that is not verified (the first-envelope path under observe)
+    // has no standing even if a grant was somehow recorded for it.
+    w.a.rt.disconnect_peer("node-b");
+    let (tx, _rx) = mpsc::channel::<Vec<u8>>(8);
+    let tally = crate::mesh_runtime::RouteTally::default();
+    w.a.rt.register_authenticated("node-b".into(), tx, false, &tally);
+    let conn = w.a.rt.peer_route("node-b").unwrap().0;
+    w.a.hub.on_peer_control(&node("node-b"), conn, &serde_json::json!({"t": "hello"}));
+    assert!(w.a.hub.standing("node-b").is_none(), "unverified route");
+}
+
+#[tokio::test]
+async fn a_peer_leaving_clears_its_standing() {
+    let w = world(node("node-a"), node("node-b")).await;
+    meet(&w).await;
+    assert_eq!(w.a.hub.grants_len(), 1);
+    w.a.rt.disconnect_peer("node-b");
+    settle().await;
+    assert_eq!(w.a.hub.grants_len(), 0, "the Left event cleared it");
+}
+
+#[tokio::test]
+async fn exchanges_in_flight_are_capped() {
+    let w = world(node("node-a"), node("node-b")).await;
+    meet(&w).await;
+    w.a.hub.set_max_pending(2);
+    let (a, b) = (w.a.hub.dial("node-b").await.ok().unwrap(), w.a.hub.dial("node-b").await.ok().unwrap());
+    let third = w.a.hub.dial("node-b").await;
+    assert!(matches!(third, Err(ProxyError::NoInstance(_))));
+    drop(a);
+    assert!(w.a.hub.dial("node-b").await.is_ok(), "a finished exchange frees a slot");
+    drop(b);
+}
+
+fn req_msg(i: u64) -> serde_json::Value {
+    serde_json::json!({"t": "req", "id": i, "data": "00"})
+}
+
+#[tokio::test]
+async fn a_flood_of_refused_requests_spawns_nothing() {
+    let audit = Arc::new(Audit::default());
+    let b = side("node-b", audit.clone());
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(1024);
+    b.rt.add_peer("node-a".into(), tx);
+    let drained = |rx: &mut mpsc::Receiver<Vec<u8>>| {
+        let mut n = 0;
+        while rx.try_recv().is_ok() {
+            n += 1;
+        }
+        n
+    };
+    // A peer that does not qualify: no reply, no audit line, nothing.
+    for (name, c) in [
+        ("unverified", ctx("node-a", false, PeerClass::Node)),
+        ("leaf", ctx("node-a", true, PeerClass::Leaf)),
+    ] {
+        for i in 0..200 {
+            b.hub.on_peer_control(&c, 1, &req_msg(i));
+        }
+        settle().await;
+        assert_eq!(drained(&mut rx), 0, "{name}: replied to a peer that does not qualify");
+    }
+    assert!(audit.kinds().is_empty(), "{:?}", audit.kinds());
+    // A qualifying peer that is on no allowlist: refused a few times, then silence.
+    let good = node("node-a");
+    for i in 0..200 {
+        b.hub.on_peer_control(&good, 1, &req_msg(i));
+    }
+    settle().await;
+    let n = drained(&mut rx);
+    assert!((1..=8).contains(&n), "{n} refusals sent");
+    assert!(audit.kinds().len() <= 8);
 }

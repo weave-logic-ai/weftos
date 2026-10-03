@@ -118,6 +118,12 @@ fn config_is_validated_and_defaults_to_off() {
     bad(serde_json::json!({"roles": [role(5, Some(6))], "unknown": 1}));
     bad(serde_json::json!({"roles": [role(5, None)], "mesh": {"expose": ["nope"]}}));
     bad(serde_json::json!({"roles": [role(5, None)], "mesh": {"serve_peers": {"hermes": ["bad node!"]}}}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 31}));
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 0}));
+    bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 0}));
+    bad(serde_json::json!({"roles": [role(5, None)], "sync_secs": 61}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 30, "sync_secs": 60}));
+    assert!(load_config(dir.path()).is_ok());
     let mut r = role(5, Some(6));
     r["on_occupied"] = "bind-anyway".into();
     bad(serde_json::json!({"roles": [r]}));

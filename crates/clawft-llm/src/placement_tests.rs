@@ -273,3 +273,45 @@ fn a_placed_endpoint_that_redirects_is_not_followed() {
         assert_eq!(other.received_requests().await.unwrap().len(), 0, "the redirect was followed");
     });
 }
+
+fn local_factory() -> ProviderFactory {
+    Arc::new(|cfg| Arc::new(crate::local_provider::LocalProvider::from_config(cfg, None)))
+}
+
+#[test]
+fn a_dead_port_through_the_real_local_provider_falls_back_and_invalidates() {
+    run(async {
+        let fallback = server("fallback").await;
+        let dead = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        // The local provider itself reports a refused connection as typed.
+        let direct = crate::local_provider::LocalProvider::from_config(cfg(&format!("http://127.0.0.1:{dead}/v1")), None);
+        let e = direct.complete(&req()).await.unwrap_err();
+        assert!(matches!(e, ProviderError::Connect(_)), "{e:?}");
+
+        let r = Fixed::new(Some(&format!("http://127.0.0.1:{dead}/v1")));
+        let cache = Arc::new(CachedResolver::new(r.clone(), Duration::from_secs(60)));
+        let p = PlacedProvider::with_factory("hermes".into(), cfg(&format!("{}/v1", fallback.uri())), cache, local_factory());
+        let resp = p.complete(&req()).await.unwrap();
+        assert_eq!(resp.id, "fallback");
+        r.set(None);
+        p.complete(&req()).await.unwrap();
+        assert_eq!(r.calls.load(Ordering::SeqCst), 2, "the failure dropped the cached answer");
+    });
+}
+
+#[test]
+fn the_local_provider_never_replays_a_server_answer() {
+    run(async {
+        for code in [400u16, 404, 429, 500] {
+            let (fallback, placed) = (server("fallback").await, status_server(code).await);
+            let r = Fixed::new(Some(&format!("{}/v1", placed.uri())));
+            let cache = Arc::new(CachedResolver::new(r, Duration::from_secs(60)));
+            let p = PlacedProvider::with_factory("hermes".into(), cfg(&format!("{}/v1", fallback.uri())), cache, local_factory());
+            assert!(p.complete(&req()).await.is_err(), "{code}");
+            assert_eq!(fallback.received_requests().await.unwrap().len(), 0, "{code}: replayed");
+        }
+    });
+}

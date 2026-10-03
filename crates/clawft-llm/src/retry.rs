@@ -49,6 +49,8 @@ pub fn is_retryable(err: &ProviderError) -> bool {
         ProviderError::Http(_) => true,
         ProviderError::ServerError { status, .. } => (500..=599).contains(status),
         ProviderError::RequestFailed(_) => false,
+        // Preserves the old behaviour for a down local server: fail fast.
+        ProviderError::Connect(_) => false,
         ProviderError::AuthFailed(_)
         | ProviderError::ModelNotFound(_)
         | ProviderError::NotConfigured(_)

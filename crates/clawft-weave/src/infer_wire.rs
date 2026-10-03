@@ -142,6 +142,14 @@ impl FileCfg {
                 return bad(format!("role {}: bad provider", r.role));
             }
         }
+        // An advert must be repeated well inside the receivers' TTL.
+        let max_advert = clawft_kernel::infer_proxy::DEFAULT_ADVERT_TTL.as_secs() / 2;
+        if self.advert_secs.is_some_and(|a| a == 0 || a > max_advert) {
+            return bad(format!("advert_secs must be 1..={max_advert} (half the advert TTL)"));
+        }
+        if self.sync_secs.is_some_and(|s| s == 0 || s > 60) {
+            return bad("sync_secs must be 1..=60".into());
+        }
         let known = |role: &String| self.roles.iter().any(|r| &r.role == role);
         let nodes_ok = |v: &Vec<String>| v.len() <= MAX_LIST && v.iter().all(|n| valid_token(n, 128));
         if self.mesh.expose.iter().any(|r| !known(r))

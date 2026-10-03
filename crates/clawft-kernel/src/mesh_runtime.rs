@@ -853,6 +853,14 @@ impl MeshRuntime {
         router.deliver(ctx, dest_scope.as_ref(), message).await
     }
 
+    /// The connection id and verified flag of the current route to `node_id`
+    /// (None when not connected). Lets a cache of per-connection facts check
+    /// it still describes the connection in use.
+    pub fn peer_route(&self, node_id: &str) -> Option<(u64, bool)> {
+        let p = self.peers.get(node_id)?;
+        Some((self.conn_id(&p.sender), p.verified))
+    }
+
     /// Number of currently connected peers.
     pub fn peer_count(&self) -> usize {
         self.peers.len()
