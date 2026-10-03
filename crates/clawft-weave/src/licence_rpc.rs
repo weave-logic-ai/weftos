@@ -6,6 +6,7 @@
 //! | `workload.node.binding` | Read       | status: mesh id, held binding, orphaned or not |
 //! | `workload.node.bind`    | Admin      | `{seed_node_id, prepare: true}`: the Seed's identity and what the operator signs; `{seed_node_id, signed, grant_fingerprint}`: the steward bind |
 //! | `workload.node.unbind`  | Admin      | `{signed}`: an operator-signed `unbound` record |
+//! | `workload.node.reset-floor` | Admin  | forget the grant clock high-water mark, restart from now (chained as `floor_reset`) |
 //!
 //! The daemon never holds an operator key. The operator signs the v2 record
 //! with their own key (`weaver workload node bind`); the daemon verifies it
@@ -28,7 +29,12 @@ use tokio::sync::RwLock;
 use crate::licence_boot::{self, LicenceRuntime};
 
 /// Methods served here.
-pub const METHODS: &[&str] = &["workload.node.bind", "workload.node.unbind", "workload.node.binding"];
+pub const METHODS: &[&str] = &[
+    "workload.node.bind",
+    "workload.node.unbind",
+    "workload.node.binding",
+    "workload.node.reset-floor",
+];
 
 /// True for the methods this module serves.
 pub fn handles(m: &str) -> bool {
@@ -87,6 +93,13 @@ pub async fn route(ctx: &Ctx<'_>, method: &str, params: Value) -> Response {
         "workload.node.unbind" => match parse::<UnbindParams>(method, params) {
             Ok(p) => unbind(ctx, &p.signed),
             Err(e) => Response::error(e),
+        },
+        // Admin: forget the clock high-water mark of the bound grant key and
+        // restart it from now (the only way to undo a forward clock jump).
+        // The store chains `floor_reset` through the licence event sink.
+        "workload.node.reset-floor" => match ctx.rt.policy.store().reset_floor() {
+            Ok(()) => Response::success(json!({ "floor_reset": true })),
+            Err(e) => Response::error(e.to_string()),
         },
         other => Response::error(format!("{other} is not a licence method")),
     }

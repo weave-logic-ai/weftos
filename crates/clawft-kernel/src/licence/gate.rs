@@ -13,14 +13,18 @@ pub struct RunRequest<'a> {
     pub cog_id: &'a str,
     /// Cog version.
     pub version: &'a str,
-    /// sha256 of the binary, lower-case hex (computed from the bytes).
+    /// sha256 of the binary, lower-case hex, computed from the bytes.
     pub sha256: &'a str,
+    /// BLAKE3 of the binary, lower-case hex, computed from the bytes (never
+    /// copied from a grant: the revocation check is made on this value).
+    pub blake3: &'a str,
 }
 
 /// Why the gate refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RunDenied {
-    /// No valid grant for this mesh lists a binary with this sha256.
+    /// No valid grant for this mesh lists a binary with exactly this
+    /// (sha256, blake3) pair.
     #[error("no valid checkout grant covers this binary")]
     NoValidGrant,
     /// No operator approval for this cog version covers this sha256.
@@ -50,9 +54,9 @@ pub fn may_run(
     req: &RunRequest<'_>,
 ) -> Result<RunPermit, RunDenied> {
     let (grant, art) = grants
-        .valid_grant_for_sha256(req.cog_id, req.version, req.sha256)
+        .valid_grant_for_artifact(req.cog_id, req.version, req.sha256, req.blake3)
         .ok_or(RunDenied::NoValidGrant)?;
-    if grants.is_hash_revoked(&art.blake3) {
+    if grants.is_hash_revoked(req.blake3) {
         return Err(RunDenied::HashRevoked);
     }
     let approval_id = approvals

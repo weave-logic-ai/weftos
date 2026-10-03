@@ -84,6 +84,7 @@ pub fn required_capability(method: &str) -> Capability {
         "workload.node.bind" => Capability::Admin,
         // ADR-106: withdrawing a Seed binding is the same trust change.
         "workload.node.unbind" => Capability::Admin,
+        "workload.node.reset-floor" => Capability::Admin,
 
         // ── Write: state-mutating verbs ─────────────────────────────
         "agent.register" => Capability::Write,
@@ -494,7 +495,7 @@ mod tests {
             assert!(!anon.allows_method(m), "anonymous must not call {m}");
             assert!(write.allows_method(m), "{m}");
         }
-        for m in ["workload.revoke", "workload.node.bind", "workload.node.unbind"] {
+        for m in ["workload.revoke", "workload.node.bind", "workload.node.unbind", "workload.node.reset-floor"] {
             assert_eq!(required_capability(m), Capability::Admin, "{m}");
             assert!(!write.allows_method(m), "{m}");
         }

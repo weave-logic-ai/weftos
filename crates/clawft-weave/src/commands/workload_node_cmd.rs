@@ -27,6 +27,8 @@ pub enum NodeCmd {
     Bind(BindArgs),
     /// Withdraw the Seed binding (operator-signed; needs no Seed).
     Unbind(UnbindArgs),
+    /// Forget the grant clock high-water mark and restart it from now (undoes a forward clock jump).
+    ResetFloor,
     /// Mesh id and the held binding.
     Status {
         /// Print raw JSON.
@@ -139,6 +141,10 @@ pub async fn run(cmd: NodeCmd, client: &mut DaemonClient) -> anyhow::Result<()> 
             } else {
                 print!("{}", render_status(&st));
             }
+        }
+        NodeCmd::ResetFloor => {
+            call(client, "workload.node.reset-floor", json!({})).await?;
+            println!("clock floor reset (chained as floor_reset)");
         }
         NodeCmd::Bind(a) => {
             let key = load_key(&a.operator_key).map_err(anyhow::Error::msg)?;

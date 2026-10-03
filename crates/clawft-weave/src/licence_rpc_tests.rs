@@ -296,6 +296,18 @@ async fn a_wrong_fingerprint_or_bad_params_bind_nothing() {
     assert!(rt.policy.store().held_binding().is_none());
 }
 
+#[tokio::test]
+async fn reset_floor_is_chained_and_needs_a_binding_in_effect() {
+    let dir = tempfile::tempdir().unwrap();
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
+    assert!(!call(&rt, posture(), "workload.node.reset-floor", json!({})).await.ok, "no binding yet");
+    assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await.ok);
+    let r = call(&rt, posture(), "workload.node.reset-floor", json!({})).await;
+    assert!(r.ok, "{:?}", r.error);
+    assert!(chain_kinds(&chain).contains(&"floor_reset".to_owned()));
+}
+
 #[test]
 fn the_three_methods_are_served_here_and_bind_and_unbind_are_admin_only() {
     for m in METHODS {
@@ -306,7 +318,7 @@ fn the_three_methods_are_served_here_and_bind_and_unbind_are_admin_only() {
         CallerCapabilities::from_scopes(["write"]),
         CallerCapabilities::from_scopes(["admin"]),
     );
-    for m in ["workload.node.bind", "workload.node.unbind"] {
+    for m in ["workload.node.bind", "workload.node.unbind", "workload.node.reset-floor"] {
         assert_eq!(required_capability(m), Capability::Admin, "{m}");
         assert!(!anon.allows_method(m) && !write.allows_method(m), "{m} must need admin");
         assert!(admin.allows_method(m), "{m}");

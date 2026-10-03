@@ -55,7 +55,12 @@ const NOT_YET: &[&str] = &[
 /// ADR-106 phase 1d verbs. Served by `licence_rpc` on a placement build;
 /// without placement there are no Seeds to bind.
 const NEEDS_PLACEMENT: &[&str] =
-    &["workload.node.bind", "workload.node.unbind", "workload.node.binding"];
+    &[
+    "workload.node.bind",
+    "workload.node.unbind",
+    "workload.node.binding",
+    "workload.node.reset-floor",
+];
 
 static REGISTRY: OnceLock<Arc<WorkloadRegistry>> = OnceLock::new();
 
