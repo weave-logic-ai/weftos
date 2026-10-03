@@ -298,26 +298,32 @@ impl Report {
     }
 }
 
-/// Restart the user daemon with the real host. Never panics, never errors:
-/// the result says what was and was not done.
-pub fn restart_user_daemon() -> Report {
-    let Some(home) = home_dir() else {
-        return Report {
-            outcome: Outcome::NotRunning("cannot determine the home directory".into()),
-            legacy: Vec::new(),
-        };
-    };
+/// Inputs for the real per-user daemon, or `None` without a home directory.
+/// `installed_exe` is the just-installed `weaver` (not `current_exe`, which a
+/// swap may have turned into a ` (deleted)` path).
+pub fn user_inputs(installed_exe: PathBuf) -> Option<Inputs> {
+    let home = home_dir()?;
     let root = user_runtime_root(&home);
-    let installed = std::env::current_exe().unwrap_or_default();
-    let inputs = Inputs {
+    Some(Inputs {
         pid_file: root.join("kernel.pid"),
         socket: root.join("kernel.sock"),
-        installed_exe: installed,
+        installed_exe,
         uid: local_uid(),
         manifests_dir: Some(clawft_rpc::resolve::manifests_dir(&home)),
         polls: 30,
-    };
-    restart_with(&inputs, &RealHost)
+    })
+}
+
+/// Restart the user daemon with the real host. Never panics, never errors:
+/// the result says what was and was not done.
+pub fn restart_user_daemon() -> Report {
+    match user_inputs(std::env::current_exe().unwrap_or_default()) {
+        Some(inputs) => restart_with(&inputs, &RealHost),
+        None => Report {
+            outcome: Outcome::NotRunning("cannot determine the home directory".into()),
+            legacy: Vec::new(),
+        },
+    }
 }
 
 fn local_uid() -> u32 {

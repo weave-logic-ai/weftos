@@ -323,13 +323,13 @@ that pinned this machine will no longer recognise it). Account removal is listed
 commented out; before deleting the account run `weaver mesh bind revoke <uid>` for
 every bound uid, because a later account that reuses the uid would inherit its bind.
 
-Updating: `weaver update` replaces the user binary and restarts the user daemon. For
+Updating: `weaver update` replaces the user binaries (verified, all together) and restarts the user daemon when asked (`--restart`) or on a terminal prompt. For
 the service it only prints the `sudo install ... /usr/local/libexec/weftos/weaver`
 and the restart line (`sudo launchctl kickstart -k system/ai.weftos.mesh` or
 `sudo systemctl restart weftos-mesh`) when the packaged build differs from the one
-`service.json` reports; it never calls `sudo` for the service. (For the user binary,
-when copying into a root-owned install directory fails, it still falls back to
-`sudo cp`.) `weaver doctor` reports the `mesh.*`
+`service.json` reports; it never calls `sudo` for the service. (For the user binaries,
+when the install directory is root-owned it stops before changing anything and tells
+you to re-run with `sudo`; it no longer falls back to `sudo cp`.) `weaver doctor` reports the `mesh.*`
 checks (reachability, proto window, pin, journal, box key mode, a leftover
 `~/.weftos/run/node.key`, two listeners on 9489, force-revoked users) and the service
 tier skew.

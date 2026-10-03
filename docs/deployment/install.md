@@ -72,16 +72,54 @@ created.
 
 ## Updating
 
-Re-run the installer or, if `weaver` is already on `$PATH`:
-
 ```bash
-weaver update
+weaver update              # verify, install all binaries, offer a daemon restart
+weaver update --check      # report only; install nothing
+weaver update --dry-run    # show which files would be replaced
+weaver update --restart    # restart the per-user daemon without asking
+weaver update --no-restart # never ask; print the restart command
+weaver update --force      # reinstall even when already on the latest release
 ```
 
-Both flows download the latest release, run the same verification
-step, and replace the binaries in place. If `weaver kernel status`
-reports a running daemon, the installer stops it before swapping the
-binary and starts it again afterwards.
+`weaver update` reads `dist-manifest.json` from the latest GitHub Release,
+downloads the archive for this platform, and checks each archive against its
+published `.sha256` (and `sha256.sum`, when the release has one) before
+anything is installed. A missing, malformed or mismatching checksum aborts the
+update with nothing changed. Each extracted binary is also run once with
+`--version` to confirm it matches the release.
+
+All binaries in the release (`weft`, `weaver`, `weftos`) are replaced
+together. Each file is swapped with an atomic same-directory rename, and if
+any swap fails every binary is restored to the version it had before.
+
+It only updates installs it owns:
+
+| Install | What `weaver update` does |
+|---|---|
+| Release installer (cargo-dist receipt at `~/.config/weftos/weftos-receipt.json`) | Updates all binaries in the receipt's install directory and records the new version in the receipt. |
+| No receipt (for example a hand-copied release tarball) | Updates the binaries next to the running `weaver`; any that are missing there are skipped. |
+| Homebrew | Refuses and prints `brew upgrade weave-logic-ai/tap/<formula>`. |
+| `cargo install` | Refuses and prints the matching command. |
+| Source build (`scripts/build.sh install`, a `-dirty` build) | Refuses and prints `scripts/build.sh install`. |
+
+A refused update exits non-zero. A refusal also happens when any binary in the
+install directory belongs to one of the channels above, or when the running
+`weaver` is not the copy the receipt manages. When `/usr/local/bin` or
+another install directory is not writable, the update stops before changing
+anything and tells you to fix the permissions or re-run with `sudo`.
+
+After installing, `weaver update` looks for the per-user daemon. On a
+terminal it asks whether to restart it; in a script it prints the command
+instead, unless you pass `--restart`. When the daemon runs under launchd or a
+systemd user unit, the restart goes through that service manager and the
+printed command is the matching `launchctl kickstart -k` or
+`systemctl --user restart`. A daemon started from a different binary path is
+reported, not restarted. The machine mesh service is never touched; the
+command to refresh it is printed. Finally, any other copies of the binaries
+found on this machine are listed with the command that updates them.
+
+`weaver update --check` always exits 0, so read its output rather than its exit
+code.
 
 ## Checking what is installed
 

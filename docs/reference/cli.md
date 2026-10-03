@@ -297,6 +297,32 @@ The daemon side is `kernel.mesh.service = "auto" | "required" | "off"` in
 
 ---
 
+## weaver update
+
+Verified self-update from GitHub Releases. Replaces `weft`, `weaver` and
+`weftos` together with rollback, honours the install method, and handles the
+per-user daemon restart. Full behaviour: [Updating](../deployment/install.md#updating).
+
+### Usage
+
+```
+weaver update [--check] [--dry-run] [--force] [--restart | --no-restart]
+```
+
+### Options
+
+| Flag | Description |
+|---|---|
+| `--check` | Report the latest version and how it would be applied; install nothing. |
+| `--dry-run` | Print the binaries that would be replaced; download and install nothing. |
+| `--force` | Reinstall even when already on the latest release. |
+| `--restart` | Restart the per-user daemon after installing, without asking. |
+| `--no-restart` | Never ask; print the restart command. |
+
+Homebrew, `cargo install` and source-build installs are refused with their own
+update command (exit code non-zero). The older `weaver update check` and
+`weaver update install` forms still work.
+
 ## weaver migrate
 
 One-way copies into `~/.weftos` that never modify the source.

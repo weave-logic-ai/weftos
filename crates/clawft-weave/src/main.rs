@@ -116,11 +116,8 @@ enum Commands {
     /// Initialize development environment (install skills, verify tools).
     Init(commands::init_cmd::InitArgs),
 
-    /// Update both weft and weaver binaries to latest release.
-    Update {
-        #[command(subcommand)]
-        cmd: Option<commands::update_cmd::UpdateCmd>,
-    },
+    /// Update weft, weaver and weftos to the latest verified release.
+    Update(commands::update_cmd::UpdateArgs),
 
     /// Check install, daemon, runtime and MCP health (read-only; `--fix` for stale files).
     Doctor(commands::doctor_cmd::DoctorArgs),
@@ -187,10 +184,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Topology(args) => commands::topology_cmd::run(args).await?,
         Commands::Leaf(args) => commands::leaf_cmd::run(args).await?,
         Commands::Benchmark { cmd } => commands::bench_cmd::run(cmd).await?,
-        Commands::Update { cmd } => match cmd {
-            Some(c) => commands::update_cmd::run(c).await?,
-            None => commands::update_cmd::run_default().await?,
-        },
+        Commands::Update(args) => commands::update_cmd::run(args).await?,
         #[cfg(all(unix, feature = "mesh"))]
         Commands::Mesh(args) => commands::mesh_cmd::run(args).await?,
         Commands::Service(args) => commands::service_cmd::run(args).await?,
