@@ -661,6 +661,17 @@ isolate_test_runtime() {
     export "$var=$ROOT/scripts/test-runtime-wrap.sh"
 }
 
+# Doctests run through rustdoc, which ignores the cargo runner: give them one
+# throwaway dir too (a caller-chosen WEFTOS_RUNTIME_DIR still wins).
+doctest_runtime() {
+    if [ -z "${WEFTOS_RUNTIME_DIR:-}" ] && [ -n "${WEFTOS_TEST_RUNTIME_ROOT:-}" ]; then
+        mkdir -p "$WEFTOS_TEST_RUNTIME_ROOT/doctests"
+        WEFTOS_RUNTIME_DIR="$WEFTOS_TEST_RUNTIME_ROOT/doctests" "$@"
+    else
+        "$@"
+    fi
+}
+
 # nextest config: per-test runtime dirs (see config/nextest.toml).
 NEXTEST_CONFIG=(--config-file "$ROOT/config/nextest.toml")
 
@@ -691,7 +702,7 @@ workspace_test() {
     # empty array without it.
     if command -v cargo-nextest >/dev/null 2>&1; then
         cargo nextest run "${NEXTEST_CONFIG[@]}" "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
-            && { [ ${#filter[@]} -gt 0 ] || cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}; }
+            && { [ ${#filter[@]} -gt 0 ] || doctest_runtime cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}; }
     else
         cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
     fi

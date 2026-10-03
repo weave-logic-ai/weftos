@@ -271,11 +271,48 @@ impl RuntimePaths {
         let user = USER_PROFILE.read().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(captured) = user {
             let captured = captured.as_ref().and_then(|p| p.to_str());
-            return Self::user_with(captured, home_dir().as_deref());
+            let paths = Self::user_with(captured, home_dir().as_deref());
+            paths.refuse_real_home_in_tests(captured.is_some());
+            return paths;
         }
         let cwd = std::env::current_dir().ok();
         let home = home_dir();
-        Self::resolve_with(env.as_deref(), cwd.as_deref(), home.as_deref())
+        let paths = Self::resolve_with(env.as_deref(), cwd.as_deref(), home.as_deref());
+        paths.refuse_real_home_in_tests(env.as_deref().is_some_and(|e| !e.trim().is_empty()));
+        paths
+    }
+
+    /// Test guard: a test binary (it lives in a cargo `deps` dir) that
+    /// resolves a root with no `WEFTOS_RUNTIME_DIR` override must land under
+    /// the temp dir (a test that points `HOME` at a tempdir does). Resolving
+    /// the real `~/.weftos/run` or `~/.clawft` from a test would write the
+    /// developer's live runtime files (`cluster_peers.json`, `node.key`, ...),
+    /// so it panics instead. `WEFTOS_ALLOW_REAL_HOME_IN_TESTS=1` opts out.
+    fn refuse_real_home_in_tests(&self, overridden: bool) {
+        if overridden || std::env::var_os("WEFTOS_ALLOW_REAL_HOME_IN_TESTS").is_some() {
+            return;
+        }
+        let in_test_binary = std::env::current_exe()
+            .ok()
+            .is_some_and(|e| e.parent().and_then(|p| p.file_name()).is_some_and(|d| d == "deps"));
+        if !in_test_binary {
+            return;
+        }
+        let tmp = std::env::temp_dir();
+        let under = |base: &Path| {
+            self.root.starts_with(base)
+                || std::fs::canonicalize(base).is_ok_and(|b| {
+                    std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone()).starts_with(b)
+                })
+        };
+        if !under(&tmp) {
+            panic!(
+                "a test resolved the runtime root {} without a WEFTOS_RUNTIME_DIR override; \
+                 that is a real runtime dir. Pin the root (WEFTOS_RUNTIME_DIR, \
+                 set_user_profile_at, or an explicit RuntimePaths) or point HOME at a tempdir",
+                self.root.display()
+            );
+        }
     }
 
     /// The runtime root directory.
@@ -438,6 +475,27 @@ pub fn legacy_chain_left_behind(paths: &RuntimePaths, home: Option<&Path>) -> Op
 
 #[cfg(test)]
 mod tests {
+
+    fn at(root: &str) -> RuntimePaths {
+        RuntimePaths { root: PathBuf::from(root), source: RootSource::User }
+    }
+
+    /// A test that resolves a real (non-temp) root with no override panics
+    /// instead of writing the developer's live runtime files.
+    #[test]
+    #[should_panic(expected = "a test resolved the runtime root")]
+    fn a_test_resolving_a_real_home_root_panics() {
+        at("/definitely-not-temp/home/.weftos/run").refuse_real_home_in_tests(false);
+    }
+
+    #[test]
+    fn temp_roots_and_overrides_are_allowed_in_tests() {
+        let t = tempfile::tempdir().unwrap();
+        at(&t.path().join("home/.weftos/run").display().to_string()).refuse_real_home_in_tests(false);
+        at(&std::env::temp_dir().join("x").display().to_string()).refuse_real_home_in_tests(false);
+        // An explicit override is the caller's choice, wherever it points.
+        at("/definitely-not-temp/run").refuse_real_home_in_tests(true);
+    }
     use super::*;
     use std::fs;
 
