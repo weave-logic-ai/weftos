@@ -248,3 +248,29 @@ async fn a_first_use_replay_and_an_append_run_on_a_multi_thread_runtime() {
     let d2 = dir_over(tmp.path());
     assert_eq!(d2.store_for(Some(A)).unwrap().len(), 2);
 }
+
+#[test]
+fn a_large_dropped_tail_is_kept_even_when_it_reads_as_torn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("p.vec");
+    {
+        let (mut log, _) = VectorLog::open(&path, 1 << 20).unwrap();
+        for i in 0..40 {
+            log.append(&[rec(i)]).unwrap();
+        }
+    }
+    let one = super::store_log::frame_len(&[rec(0)]) as usize;
+    let mut bytes = std::fs::read(&path).unwrap();
+    // Blow up the second frame's length prefix: it now claims to run past the end of the file.
+    bytes[8 + one + 3] = 0x7f;
+    std::fs::write(&path, &bytes).unwrap();
+    let (_, records) = VectorLog::open(&path, 1 << 20).unwrap();
+    assert_eq!(records.len(), 1);
+    let kept: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains(".corrupt."))
+        .collect();
+    assert_eq!(kept.len(), 1, "a big dropped tail is copied aside");
+    assert_eq!(std::fs::read(kept[0].path()).unwrap().len(), bytes.len() - 8 - one);
+}

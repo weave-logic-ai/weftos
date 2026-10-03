@@ -256,24 +256,29 @@ impl VectorLog {
             let (records, good, tail) = decode_frames(body);
             let size = (MAGIC.len() + good) as u64;
             let dropped = body.len() - good;
+            // A length-prefix bit flip reads as "torn" yet can hide a lot of good data, so any
+            // dropped tail over this size is kept, whatever it was classified as.
+            const KEEP_OVER: usize = 512;
             match tail {
                 Tail::Clean => {}
                 Tail::Torn => {
                     tracing::warn!(path = %path.display(), dropped, "vector log ends in a torn frame; dropping it");
                 }
                 Tail::Corrupt => {
-                    let aside = path.with_extension(format!(
-                        "{}.corrupt.{}",
-                        path.extension().and_then(|e| e.to_str()).unwrap_or("vec"),
-                        now_secs()
-                    ));
                     tracing::warn!(
-                        path = %path.display(), dropped, kept = %aside.display(),
-                        "vector log has a corrupt frame; dropping it and everything after it (copy kept)"
+                        path = %path.display(), dropped,
+                        "vector log has a corrupt frame; dropping it and everything after it"
                     );
-                    // Keep the bytes before cutting them: they may hold good frames.
-                    std::fs::write(&aside, &body[good..]).map_err(io)?;
                 }
+            }
+            if tail == Tail::Corrupt || dropped > KEEP_OVER {
+                let aside = path.with_extension(format!(
+                    "{}.corrupt.{}",
+                    path.extension().and_then(|e| e.to_str()).unwrap_or("vec"),
+                    now_secs()
+                ));
+                tracing::warn!(path = %path.display(), dropped, kept = %aside.display(), "keeping a copy of the dropped vector log tail");
+                std::fs::write(&aside, &body[good..]).map_err(io)?;
             }
             if tail != Tail::Clean {
                 file.set_len(size).map_err(io)?;

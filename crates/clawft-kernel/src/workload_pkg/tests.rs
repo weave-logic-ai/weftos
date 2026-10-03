@@ -749,7 +749,7 @@ fn a_matching_signed_provenance_allows_redistributable_and_a_mismatch_does_not()
     // The provenance describes some other binary: refused, even with --no-provenance-ok.
     let fx = fixture(None);
     let err = pack_with(&fx, Prov::CogDir(&signed_prov(&"ab".repeat(32))), true, true).unwrap_err();
-    assert!(err.to_string().contains("does not match the binary"), "{err}");
+    assert!(err.to_string().contains("covers the aarch64 binary"), "{err}");
     // Beside the binary, the same check applies to that binary.
     let fx = fixture(None);
     assert!(pack_with(&fx, Prov::BesideBin(&signed_prov(&"ab".repeat(32))), true, false).is_err());
@@ -762,4 +762,70 @@ fn a_matching_signed_provenance_allows_redistributable_and_a_mismatch_does_not()
 fn a_malformed_provenance_fails_the_pack_even_without_redistributable() {
     let fx = fixture(None);
     assert!(pack_with(&fx, Prov::CogDir("not json"), false, false).is_err());
+}
+
+fn pack_both_arches(fx: &Fixture, cog_dir_prov: &str) -> Result<(ManifestEnvelope, PathBuf), PackError> {
+    let cog_dir = fx.root.join("vendor/cogs/src/cogs/anomaly-detect");
+    std::fs::write(cog_dir.join("provenance.json"), cog_dir_prov).unwrap();
+    let input = CogPackInput {
+        cog_dir,
+        binaries: vec![("aarch64".into(), fx.root.join("a64")), ("armv7".into(), fx.root.join("a32"))],
+        source: PackageSource { repo: None, commit: Some("8970f99".into()), release_url: None },
+        cognitum_record: None,
+        redistributable: true,
+        provenance: None,
+        allow_no_provenance: false,
+    };
+    let out = fx.root.join("pkg-multi");
+    pack_cog(&input, &out).map(|e| (e, out))
+}
+
+#[test]
+fn every_binary_must_be_covered_by_a_matching_provenance() {
+    // The provenance matches the aarch64 binary only; the armv7 one is uncovered.
+    let fx = fixture(None);
+    let err = pack_both_arches(&fx, &signed_prov(&a64_sha())).unwrap_err();
+    assert!(err.to_string().contains("covers the armv7 binary"), "{err}");
+
+    // A provenance beside each binary is not needed when one entry per binary exists:
+    // a second entry (explicit) covering armv7 completes the set.
+    let fx = fixture(None);
+    let a32_sha = hex_encode(&Sha256::digest(b"\x7fELF armv7 anomaly-detect"));
+    std::fs::write(fx.root.join("prov32.json"), signed_prov(&a32_sha)).unwrap();
+    let cog_dir = fx.root.join("vendor/cogs/src/cogs/anomaly-detect");
+    std::fs::write(cog_dir.join("provenance.json"), signed_prov(&a64_sha())).unwrap();
+    let input = CogPackInput {
+        cog_dir,
+        binaries: vec![("aarch64".into(), fx.root.join("a64")), ("armv7".into(), fx.root.join("a32"))],
+        source: PackageSource { repo: None, commit: Some("8970f99".into()), release_url: None },
+        cognitum_record: None,
+        redistributable: true,
+        provenance: Some(fx.root.join("prov32.json")),
+        allow_no_provenance: false,
+    };
+    assert!(pack_cog(&input, &fx.root.join("pkg-both")).is_ok());
+}
+
+#[test]
+fn unknown_trust_values_are_refused_for_redistributable() {
+    let fx = fixture(None);
+    let j = format!(r#"{{"trust":"trust-me","sha256":"{}"}}"#, a64_sha());
+    let err = pack_with(&fx, Prov::CogDir(&j), true, true).unwrap_err();
+    assert!(err.to_string().contains("not one of"), "{err}");
+    let fx = fixture(None);
+    let j = format!(r#"{{"trust":"source-build","sha256":"{}"}}"#, a64_sha());
+    assert!(pack_with(&fx, Prov::CogDir(&j), true, false).is_ok());
+}
+
+#[test]
+fn no_provenance_ok_is_recorded_in_the_signed_manifest() {
+    let fx = fixture(None);
+    let (env, out) = pack_with(&fx, Prov::None, true, true).unwrap();
+    let body = env.cog_body().unwrap();
+    let att = body.attestations.iter().find(|a| a.kind == pack::NO_PROVENANCE_KIND).expect("recorded");
+    assert!(std::fs::read_to_string(out.join(&att.file.path)).unwrap().contains("--no-provenance-ok"));
+    // Not recorded when it was not relied on.
+    let fx = fixture(None);
+    let (env, _) = pack_with(&fx, Prov::CogDir(&signed_prov(&a64_sha())), true, true).unwrap();
+    assert!(env.cog_body().unwrap().attestations.is_empty());
 }

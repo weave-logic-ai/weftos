@@ -69,6 +69,7 @@ pub(crate) fn package(dir: &std::path::Path, k: &SigningKey) -> std::path::PathB
     )
     .unwrap();
     std::fs::write(dir.join("bin"), "#!/bin/sh\necho rpc-ok\nexec sleep 30\n").unwrap();
+    clawft_kernel::workload_pkg::write_source_build_provenance(&src, &dir.join("bin")).unwrap();
     let input = CogPackInput {
         cog_dir: src,
         binaries: vec![(host_arch().unwrap().into(), dir.join("bin"))],
@@ -80,7 +81,7 @@ pub(crate) fn package(dir: &std::path::Path, k: &SigningKey) -> std::path::PathB
         cognitum_record: None,
         redistributable: true,
         provenance: None,
-        allow_no_provenance: true,
+        allow_no_provenance: false,
     };
     let pkg = dir.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();

@@ -742,6 +742,9 @@ fn pack(
     std::fs::write(cog_dir.join("cog.toml"), "[cog]\nid = \"swarm-probe\"\nname = \"Probe\"\nversion = \"0.1.0\"\n").unwrap();
     let bin: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
     std::fs::write(root.join("bin"), &bin).unwrap();
+    if !cog_dir.join("provenance.json").exists() {
+        crate::workload_pkg::write_source_build_provenance(&cog_dir, &root.join("bin")).unwrap();
+    }
     let rec = root.join("record.json");
     std::fs::write(&rec, b"{\"kind\":\"cognitum.cog.release-record.v1\"}").unwrap();
     let input = CogPackInput {
@@ -751,7 +754,7 @@ fn pack(
         cognitum_record: record.then_some(rec),
         redistributable,
         provenance: None,
-        allow_no_provenance: true,
+        allow_no_provenance: false,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();

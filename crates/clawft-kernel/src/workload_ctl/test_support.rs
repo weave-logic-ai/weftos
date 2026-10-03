@@ -65,6 +65,10 @@ pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf 
         std::fs::write(&p, script).unwrap();
         bins.push((a.to_string(), p));
     }
+    // Every arch carries the same script bytes, so one provenance covers them all.
+    if let Some((_, first)) = bins.first() {
+        crate::workload_pkg::write_source_build_provenance(&src, first).unwrap();
+    }
     let input = CogPackInput {
         cog_dir: src,
         binaries: bins,
@@ -76,7 +80,7 @@ pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf 
         cognitum_record: None,
         redistributable: true,
         provenance: None,
-        allow_no_provenance: true,
+        allow_no_provenance: false,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();
