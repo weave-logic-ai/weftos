@@ -74,6 +74,12 @@ Follow ADR-099 section 6, plus:
 - **Transfer only when needed and allowed**: policy `allow_weight_transfer` with a size ceiling; otherwise place where the bytes are or return `Unplaceable` with the reason. Transfers are chunked and resumable, and the placer records the fetch-versus-relocate choice.
 - Storage-tier facts come from probes (drive mounted, free space), because the removable drive can vanish; the workload becomes `Degraded` or `Lost` (not silently broken) if shards disappear under it.
 
+**Implementation status (card mesh-placement-17, 2026-10-03):** the model manifest, adopt-in-place, lazy re-hash, `model.present` / `store.tier.external` advertising, the fetch-versus-relocate decision and the sharing gate are implemented in `clawft-kernel::model_manifest` (`weaver model adopt | list | verify | explain`). Choices made there:
+- The manifest is a `kind = "model"` envelope (same signing domain and `TrustAnchors` as workload packages); `redistributable` defaults to false and is part of the signed statement. Weights enter the artifact exchange only through `model_manifest::sharing::seed_model`, which needs the opt-in and the exchange's `RedistributionPolicy` (grant origin `OptIn` or `NotFlagged`, never Cognitum). Seeding is the one place weights are duplicated on disk; adoption never copies.
+- `model.present` carries a `shards` list: one `model:<package id>` marker (complete and available only) plus the shard BLAKE3 hashes. A partial holding or a detached drive is `Degraded`, so the placer stops preferring it. Paths and drive labels are never advertised.
+- The placer integration is a soft `locality_preference` (or hard `model_present_requirement`); the fetch decision (`decide`) takes a `TransferPolicy` (`allow_weight_transfer` default off, optional `max_bytes`, free-space headroom) and names the reason when it returns `Unplaceable`.
+- Inference adapters (card 18) consume `ModelRegistry::resolve`, which lazily verifies and returns the adopted file paths, or `NotReady` (refused, degraded, detached).
+
 ### 4. Adapters
 
 `infer.llamacpp`, `infer.mlx-lm`, `infer.ollama` (each `provides()` its runtime, format, and accelerator capabilities after a probe such as `llama-server --version`, Metal availability, or `ollama` reachable). Each supports:

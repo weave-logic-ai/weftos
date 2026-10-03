@@ -230,3 +230,30 @@ fn parsers() {
     assert_eq!(parse_df(df), Some((12 * 1024, "/Volumes/My Disk".into())));
     assert_eq!(parse_df("garbage"), None);
 }
+
+/// Card mesh-placement-17: the model registry's capabilities ride in the
+/// facts; only `model.present` and a detached external store are accepted,
+/// and they are always `probed`.
+#[test]
+fn model_registry_capabilities_enter_the_facts() {
+    use clawft_types::placement::CapabilityState;
+    let model = Capability::new(CapabilityId::new("model.present").unwrap(), Provenance::Claimed)
+        .with_attr("shards", AttrValue::List(vec![AttrValue::from("model:abc")]));
+    let store = Capability::new(CapabilityId::new("store.tier.external").unwrap(), Provenance::Probed)
+        .with_attr("mounted", false)
+        .with_state(CapabilityState::Degraded);
+    let stray = Capability::new(CapabilityId::new("accel.gpu.cuda").unwrap(), Provenance::Probed);
+    let cfg = ProbeConfig { models: vec![model, store, stray], ..ProbeConfig::default() };
+    let c = probe_capabilities(&pi5(), &cfg);
+    assert!(c.has("model.present"));
+    assert!(!c.has("accel.gpu.cuda"), "the model input cannot smuggle other capabilities");
+    let m = c.caps.iter().find(|c| c.id.as_str() == "model.present").unwrap();
+    assert_eq!(m.provenance, Provenance::Probed, "claimed input is re-stamped probed");
+    let detached = c
+        .caps
+        .iter()
+        .find(|c| c.id.as_str() == "store.tier.external" && c.attrs.get("mounted") == Some(&AttrValue::Bool(false)))
+        .expect("detached store marker");
+    assert_eq!(detached.state, CapabilityState::Degraded);
+    build_facts("n-pi5aaa", 1_000, 600, 1, c).validate().unwrap();
+}

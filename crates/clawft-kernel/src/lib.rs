@@ -88,6 +88,9 @@ pub mod workload_pkg;
 // P2-B: workload-kind registry (cog-boundary audit M3).
 #[cfg(all(feature = "ecc", feature = "exochain"))]
 pub mod workload_kind;
+// mesh-placement-17: model manifest, adopt-in-place and weights locality (ADR-101 section 3).
+#[cfg(all(feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod model_manifest;
 // mesh-placement-09: WorkloadRuntime adapters (native, container, Seed API).
 #[cfg(all(feature = "workload-runtime", unix))]
 pub mod workload_runtime;
