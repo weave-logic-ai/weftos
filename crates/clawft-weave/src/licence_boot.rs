@@ -172,13 +172,54 @@ pub fn reserved_holder() -> Option<bool> {
     }
 }
 
-/// Why the licence RPCs refuse on this daemon right now, if they do.
-pub fn holder_refusal() -> Option<&'static str> {
+/// Why the licence RPCs refuse on this daemon right now, if they do: the
+/// reason, the holder (uid and user, as the mesh service names it) and how
+/// to run the command there.
+pub fn holder_refusal() -> Option<String> {
     match holder_state() {
-        HolderState::NotHolder => Some(NOT_HOLDER),
-        HolderState::Unknown => Some(HOLDER_UNKNOWN),
+        HolderState::NotHolder => Some(not_holder_message(holder_uid())),
+        HolderState::Unknown => Some(format!(
+            "{HOLDER_UNKNOWN}; check the link with `weaver mesh status` and retry"
+        )),
         _ => None,
     }
+}
+
+/// The uid the mesh service names as the licence holder (service mode).
+pub fn holder_uid() -> Option<u32> {
+    crate::cog_swarm::licence_links().holder_uid()
+}
+
+/// The user name of `uid` on this machine, if it has one.
+pub fn user_name(uid: u32) -> Option<String> {
+    nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid)).ok().flatten().map(|u| u.name)
+}
+
+/// `^[a-z_][a-z0-9._-]*$`: safe to paste into `sudo -u <name>`.
+pub fn plain_user_name(n: &str) -> bool {
+    let mut c = n.chars();
+    c.next().is_some_and(|f| f.is_ascii_lowercase() || f == '_')
+        && c.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || matches!(x, '.' | '_' | '-'))
+}
+
+/// The refusal a non-holder daemon gives for a licence verb: where the verbs
+/// run and how to run them there. A token on this daemon is no authority on
+/// the holder's, so nothing is forwarded (ADR-106, phase 3 notes).
+pub fn not_holder_message(uid: Option<u32>) -> String {
+    let (who, as_user) = match uid {
+        // Only a plain user name goes into the suggested command; anything
+        // else (shell metacharacters, spaces, unusual names) uses the uid.
+        Some(u) => match user_name(u).filter(|n| plain_user_name(n)) {
+            Some(n) => (format!("uid {u}, user {n}"), n),
+            None => (format!("uid {u}"), format!("'#{u}'")),
+        },
+        None => ("not named by the mesh service; `weaver mesh status` as an admin shows cluster_owner_uid".into(),
+                 "<cluster-owner>".into()),
+    };
+    format!(
+        "{NOT_HOLDER}. The licence holder is the cluster owner's daemon ({who}). \
+         Run the command as that user, against their daemon: `sudo -u {as_user} weaver ...`"
+    )
 }
 
 /// The state name for status output.
@@ -328,4 +369,21 @@ pub fn status(rt: &LicenceRuntime) -> Value {
         "reserved_holder": reserved_holder(),
         "holder_state": holder_state_name(),
     })
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn only_plain_user_names_go_into_the_suggested_command() {
+        for ok in ["alice", "_svc", "a.b-c_1"] {
+            assert!(plain_user_name(ok), "{ok}");
+        }
+        for bad in ["", "Alice", "1abc", "a b", "a;rm", "$(x)", "a/b", "é"] {
+            assert!(!plain_user_name(bad), "{bad:?}");
+        }
+        let m = not_holder_message(Some(4_000_000_000));
+        assert!(m.contains("uid 4000000000") && m.contains("sudo -u '#4000000000'"), "{m}");
+    }
 }

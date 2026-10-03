@@ -441,6 +441,9 @@ impl Conn {
             // This registration holds the reserved licence topics: only its
             // daemon runs the licence path (ADR-106).
             "reserved_holder": self.reg.as_ref().is_some_and(|r| self.st.router.holds_reserved(r)),
+            // Who does (the cluster owner's uid, else the service's own), so a
+            // non-holder can name it to its operator.
+            "reserved_holder_uid": self.st.router.reserved_holder_uid(),
             "known": known.iter().map(|(n, a)| serde_json::json!({"node_id": n, "addr": a})).collect::<Vec<_>>(),
         })
     }

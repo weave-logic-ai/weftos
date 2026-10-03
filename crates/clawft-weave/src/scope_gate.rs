@@ -117,11 +117,6 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "auth.token.validate",
     "project.list",
     "project.show",
-    // ADR-106: machine-level licence status (Read), mesh-wide rather than per
-    // project; `weaver doctor` reads both for its `licence.*` findings.
-    "workload.node.binding",
-    "workload.cog.checkout.status",
-    "workload.cog.checkout.list",
 ];
 
 /// User-level operations: callable outside a project, but only by a caller
@@ -162,15 +157,6 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "mesh.register",
     "mesh.heartbeat",
     "mesh.unregister",
-    // ADR-106 phase 3: a Cognitum checkout and its operator approval are
-    // machine-level licence operations (Admin), mesh-wide by design, not part
-    // of any one project.
-    "workload.cog.checkout",
-    "workload.cog.checkout.approve",
-    "workload.cog.checkout.release",
-    "workload.cog.checkout.renew",
-    // `weaver cog checkout reset-floor` is this RPC (the licence clock floor).
-    "workload.node.reset-floor",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.
@@ -284,7 +270,14 @@ pub fn decide(
     };
     let user_level =
         policy == OutsideProjectPolicy::ReadOnly && is_admin && USER_LEVEL_ALLOW.contains(&method);
-    if allowed.contains(&method) || user_level || inside() {
+    // ADR-106: the licence verbs are machine-level, not user-level or project
+    // verbs. `licence_role_gate` (before this gate) lets them through only on
+    // the machine's licence holder; there they pass outside a project as the
+    // capability table says (Read to anyone, Admin to Admin).
+    let machine_level = policy == OutsideProjectPolicy::ReadOnly
+        && crate::licence_role_gate::is_licence_verb(method)
+        && (is_admin || crate::capability::required_capability(method) == Capability::Read);
+    if allowed.contains(&method) || user_level || machine_level || inside() {
         return Ok(());
     }
     Err(Denial::new("project_required", SCOPE_MESSAGE))

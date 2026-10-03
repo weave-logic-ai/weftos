@@ -94,6 +94,14 @@ pub async fn start(
     identity: &DaemonIdentity,
     runtime_dir: &Path,
 ) {
+    // Service mode is "unknown" before anything else, so no window (and no
+    // early return below) leaves the licence role gate reading it as
+    // collapsed (not applicable).
+    crate::licence_boot::set_holder_state(if identity.is_service() {
+        HolderState::Unknown
+    } else {
+        HolderState::NotApplicable
+    });
     let s = match signer(identity, runtime_dir) {
         Ok(s) => s,
         Err(e) => {
@@ -105,13 +113,6 @@ pub async fn start(
     if s.control_key {
         tracing::info!(controller = %s.pubkey_hex(), "service mode: placement and the licence steward sign with the control key");
     }
-    // Service mode is "unknown" before anything else exists, so no window
-    // reads it as collapsed (not applicable).
-    crate::licence_boot::set_holder_state(if identity.is_service() {
-        HolderState::Unknown
-    } else {
-        HolderState::NotApplicable
-    });
     crate::workload_place_rpc::init_with_mesh_id(s.key.clone(), runtime_dir.to_path_buf(), s.mesh_node_id.clone());
     // The licence runtime (the grant store and checkout policy: local state)
     // exists from boot in both modes, so placement, built whenever its first

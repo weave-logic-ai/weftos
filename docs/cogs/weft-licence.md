@@ -168,6 +168,8 @@ pinned SPKI is added (ADR-106 section 7, decision W4).
 
 ## The steward side
 
+The licence verbs (the `weaver cog checkout` verbs, and `weaver workload node bind`, `unbind` and `reset-floor`) run on the machine's licence holder only: in service mode the cluster owner's daemon, else the collapsed daemon. Run them there (for example `sudo -u <owner> weaver cog checkout status`); another user's daemon refuses with `licence_not_here` and names the holder.
+
 The steward is the mesh node the binding names (`steward_node_id` and
 `steward_pubkey`, its node key). To relay checkouts it needs the link to
 `weft-licence`, in `licence-link.json` in its runtime dir (same owner and mode

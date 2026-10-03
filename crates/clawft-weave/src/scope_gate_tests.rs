@@ -173,12 +173,6 @@ const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "ke
 /// owned by other Phase 1 packages).
 const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe"];
 
-/// Read verbs served under a guard-prefix arm (`workload.`) that were reviewed
-/// one by one for the allow-list: ADR-106 licence status (`licence_rpc`,
-/// `licence_checkout_rpc`), public mesh facts with no secret in them.
-const REVIEWED_UNDER_PREFIX: &[&str] =
-    &["workload.node.binding", "workload.cog.checkout.status", "workload.cog.checkout.list"];
-
 fn all_methods() -> Vec<String> {
     let (mut arms, _) = dispatch_arms();
     arms.extend(INTERCEPTS.iter().map(|s| (*s).to_owned()));
@@ -232,10 +226,6 @@ fn population_allow_list_is_read_only_and_real() {
     let (arms, prefixes) = dispatch_arms();
     for m in READ_ONLY_ALLOW {
         assert_eq!(required_capability(m), Capability::Read, "{m} must be a Read method");
-        if REVIEWED_UNDER_PREFIX.contains(m) {
-            assert!(prefixes.iter().any(|p| m.starts_with(p.as_str())), "{m} is served under a prefix arm");
-            continue;
-        }
         assert!(
             arms.iter().any(|a| a == m) || NOT_LEGACY_ARMS.contains(m) || INTERCEPTS.contains(m),
             "{m} is on the allow-list but is not a dispatched method"
@@ -475,7 +465,9 @@ fn population_every_ext_route_is_classified() {
         let classified = if name.ends_with('.') {
             CLASSIFIED_PREFIXES.contains(&name)
         } else {
-            READ_ONLY_ALLOW.contains(&name) || USER_LEVEL_ALLOW.contains(&name)
+            READ_ONLY_ALLOW.contains(&name)
+                || USER_LEVEL_ALLOW.contains(&name)
+                || crate::licence_role_gate::is_licence_verb(name)
         };
         assert!(classified, "ext route {name:?} is not classified in scope_gate");
     }
@@ -498,8 +490,9 @@ fn mesh_local_routes_pass_for_a_child_inside_a_project_and_not_outside() {
 }
 
 /// ADR-106: the checkout verbs are treated alike outside a project. Checkout
-/// and approve are user-level (Admin only); status and the binding status are
-/// read-only, so `weaver doctor` gets its `licence.*` findings anywhere.
+/// and approve need Admin; status and the binding status are read-only, so
+/// `weaver doctor` gets its `licence.*` findings (machine-level verbs, see
+/// `licence_role_gate`).
 #[test]
 fn licence_checkout_verbs_are_allowed_alike_outside_a_project() {
     let ro = OutsideProjectPolicy::ReadOnly;
@@ -518,8 +511,29 @@ fn licence_checkout_verbs_are_allowed_alike_outside_a_project() {
         assert!(decide(ro, m, false, || false).is_ok(), "{m} is read-only and allowed");
         assert_eq!(required_capability(m), Capability::Read, "{m}");
     }
-    // The doctor's two calls pass the read-only gate without a project.
+    // The doctor's two calls pass the read-only gate without a project (as
+    // machine-level reads, not from the read-only list).
     for m in ["workload.node.binding", "workload.cog.checkout.status"] {
-        assert!(READ_ONLY_ALLOW.contains(&m));
+        assert!(!READ_ONLY_ALLOW.contains(&m) && decide(ro, m, false, || false).is_ok());
     }
+}
+
+/// ADR-106: the licence verbs are machine-level. They are on neither the
+/// read-only nor the user-level list; outside a project they pass as the
+/// capability table says (Read to anyone, Admin to Admin) under `read_only`,
+/// never under `deny_all`, and `licence_role_gate` admits them only on the
+/// machine's licence holder.
+#[test]
+fn licence_verbs_are_machine_level_not_user_level() {
+    use crate::licence_role_gate::LICENCE_VERBS;
+    for m in LICENCE_VERBS {
+        assert!(!READ_ONLY_ALLOW.contains(m) && !USER_LEVEL_ALLOW.contains(m), "{m}");
+        let read = required_capability(m) == Capability::Read;
+        assert_eq!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_ok(), read, "{m} anonymous");
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_ok(), "{m} admin");
+        assert!(decide(OutsideProjectPolicy::DenyAll, m, true, || false).is_err(), "{m} deny_all");
+    }
+    // The read verbs are exactly the status ones.
+    let reads: Vec<_> = LICENCE_VERBS.iter().filter(|m| required_capability(m) == Capability::Read).collect();
+    assert_eq!(reads, vec![&"workload.node.binding", &"workload.cog.checkout.status", &"workload.cog.checkout.list"]);
 }

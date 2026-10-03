@@ -95,7 +95,7 @@ fn held(ctx: &Ctx<'_>, cog: &str, version: &str) -> Option<(u64, CheckoutGrant)>
 /// Who may run release or renew here, and with which renewer.
 fn steward_renewer<'a>(ctx: &'a Ctx<'_>, p: &OneParams) -> Result<&'a Renewer, String> {
     if let Some(why) = licence_boot::holder_refusal() {
-        return Err(format!("[{why}] this daemon does not hold the licence path"));
+        return Err(why);
     }
     let shape = CheckoutWire { request_id: "r".into(), cog_id: p.cog_id.clone(), version: p.version.clone(), arch: "a".into() };
     if shape.validate().is_err() || p.version == "latest" {

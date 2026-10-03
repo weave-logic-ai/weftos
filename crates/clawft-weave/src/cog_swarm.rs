@@ -103,6 +103,7 @@ pub fn snapshot_of(v: &serde_json::Value) -> PeerSnapshot {
         connected: ids("connected"),
         licensed: ids("licensed"),
         reserved_holder: v.get("reserved_holder").and_then(serde_json::Value::as_bool),
+        reserved_holder_uid: v.get("reserved_holder_uid").and_then(serde_json::Value::as_u64).and_then(|u| u32::try_from(u).ok()),
     }
 }
 

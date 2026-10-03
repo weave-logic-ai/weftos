@@ -91,4 +91,22 @@ async fn a_non_owner_tenant_daemon_refuses_bind_and_starts_no_exchange() {
     assert_eq!(e.code(), "not_holder", "{e}");
     assert!(workload_place_rpc::licence_exchange().is_none(), "building placement starts no exchange on a non-holder");
     assert!(e.to_string().contains("licence holder"), "{e}");
+
+    // Through the daemon's real authorization path (capabilities, then the
+    // gates), an Admin caller on this tenant's daemon is refused every
+    // licence verb, told who holds the licence path and how to run it there;
+    // the role status still answers.
+    let caller = clawft_weave::rpc_ext::CallerCtx::from_auth(Some("admin".into()));
+    let caps = clawft_weave::capability::CallerCapabilities::from_scopes(["admin"]);
+    for m in clawft_weave::licence_role_gate::LICENCE_VERBS {
+        let r = clawft_weave::rpc_ext::authorize(&caller, &caps, m, &json!({}), &kernel).await;
+        if *m == clawft_weave::licence_role_gate::ROLE_STATUS_VERB {
+            assert!(r.is_ok(), "{m}");
+            continue;
+        }
+        let resp = r.unwrap_err();
+        assert_eq!(resp.error_kind.as_deref(), Some(clawft_weave::licence_role_gate::NOT_HERE_KIND), "{m}");
+        let msg = resp.error.unwrap_or_default();
+        assert!(msg.contains(&format!("uid {OTHER_UID}")) && msg.contains("sudo -u"), "{m}: {msg}");
+    }
 }
