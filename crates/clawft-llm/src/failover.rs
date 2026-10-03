@@ -176,6 +176,7 @@ fn is_failover_eligible(err: &ProviderError) -> bool {
         ProviderError::NotConfigured(_)
             | ProviderError::ModelNotFound(_)
             | ProviderError::RequestFailed(_)
+            | ProviderError::Connect(_)
             | ProviderError::InvalidResponse(_)
     )
 }

@@ -104,7 +104,7 @@ pub use local_provider::LocalProvider;
 #[cfg(feature = "native")]
 pub use openai_compat::OpenAiCompatProvider;
 #[cfg(feature = "native")]
-pub use placement::{CachedResolver, PlacedProvider, PlacementResolver};
+pub use placement::{CachedResolver, PlacedProvider, PlacementResolver, ProviderFactory};
 #[cfg(feature = "native")]
 pub use provider::Provider;
 #[cfg(feature = "native")]

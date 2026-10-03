@@ -41,16 +41,22 @@ pub const COG_GRANT_TOPIC: &str = "mesh.cog.grant";
 /// (ADR-106 section 5.5). Handled like [`FACTS_TOPIC`].
 pub const COG_SYNC_TOPIC: &str = "mesh.cog.sync";
 
+/// Control topic carrying inference adverts and forwarded requests between
+/// peers (card mesh-placement-19). Handled like [`FACTS_TOPIC`]; see
+/// `infer_proxy::hub`.
+pub const INFER_TOPIC: &str = "mesh.infer";
+
 /// Control topics the runtime consumes instead of routing locally.
-const CONTROL_TOPICS: [&str; 5] = [
+const CONTROL_TOPICS: [&str; 6] = [
     FACTS_TOPIC,
     REVOKE_TOPIC,
     COG_BINDING_TOPIC,
     COG_GRANT_TOPIC,
     COG_SYNC_TOPIC,
+    INFER_TOPIC,
 ];
 
-/// Receiver of a runtime control topic ([`FACTS_TOPIC`], [`REVOKE_TOPIC`]).
+/// Receiver of a runtime control topic (one of `CONTROL_TOPICS`).
 ///
 /// The sink decides what to trust: it is handed the connection's
 /// authenticated identity ([`PeerCtx`]) and returns payloads to send back
@@ -903,6 +909,14 @@ impl MeshRuntime {
             .as_ref()
             .ok_or_else(|| KernelError::Mesh("no local router attached to mesh runtime".into()))?;
         router.deliver(ctx, dest_scope.as_ref(), message).await
+    }
+
+    /// The connection id and verified flag of the current route to `node_id`
+    /// (None when not connected). Lets a cache of per-connection facts check
+    /// it still describes the connection in use.
+    pub fn peer_route(&self, node_id: &str) -> Option<(u64, bool)> {
+        let p = self.peers.get(node_id)?;
+        Some((self.conn_id(&p.sender), p.verified))
     }
 
     /// Number of currently connected peers.

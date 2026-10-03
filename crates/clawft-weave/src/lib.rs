@@ -169,6 +169,12 @@ pub mod node_identity;
 pub mod mic_source;
 /// Node facts probe, signing, cache and `cluster.facts` (mesh-placement-03).
 #[cfg(any(feature = "mesh", feature = "exochain"))]
+#[cfg(all(feature = "placement", unix))]
+pub mod infer_rpc;
+#[cfg(all(feature = "placement", unix))]
+pub mod infer_wire;
+#[cfg(all(test, feature = "placement", unix))]
+mod infer_wire_tests;
 pub mod node_facts_rpc;
 pub mod protocol;
 pub mod service_units;

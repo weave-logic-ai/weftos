@@ -43,6 +43,26 @@ pub struct PeerCtx {
 }
 
 impl PeerCtx {
+    /// The admission grant this connection holds, rebuilt from what the
+    /// connection recorded (`node_verified` is `Grant::admitted`: the hello
+    /// verified, the gate enforced and admitted; `class` is the class
+    /// admission assigned). `trust_scope` follows the rule every gate applies,
+    /// admitted `Node` peers only. A connection that is not admitted holds
+    /// no grant.
+    pub fn grant(&self) -> Option<crate::mesh_admit::Grant> {
+        self.node_verified.then(|| crate::mesh_admit::Grant {
+            limits: if self.class == PeerClass::Leaf {
+                crate::mesh_admit::PeerLimits::Leaf
+            } else {
+                crate::mesh_admit::PeerLimits::None
+            },
+            class: self.class,
+            admitted: true,
+            trust_scope: self.class == PeerClass::Node,
+            observed: None,
+        })
+    }
+
     /// A peer with no authenticated identity (embedded use, tests, `off`
     /// mode): `peer_id` is only the claimed source node.
     pub fn unauthenticated(peer_id: impl Into<String>) -> Self {
