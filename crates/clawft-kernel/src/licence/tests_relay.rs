@@ -285,7 +285,7 @@ async fn the_stub_refuses_unsigned_and_forged_requests_and_the_stewards_budget_i
     assert_eq!(r.stub.handle(ident).unwrap().status, 200);
 
     let budget = r.stub.steward_budget_left();
-    let forged = sign_request(&sk(99), STEWARD_NODE, "POST", CHECKOUT_PATH, b"{}".to_vec(), REQUEST_NOW_MS, "forgednonce0123456789");
+    let forged = sign_request(&sk(99), STEWARD_NODE, "seed-test", "POST", CHECKOUT_PATH, b"{}".to_vec(), REQUEST_NOW_MS, "forgednonce0123456789");
     // The unsigned GET above already used one slot of the pool.
     for _ in 0..UNSIGNED_POOL - 1 {
         assert_eq!(r.stub.handle(forged.clone()).unwrap().status, 401);
@@ -501,6 +501,7 @@ async fn a_replayed_signed_request_is_refused_by_the_stub() {
     let req = sign_request(
         &sk(21),
         STEWARD_NODE,
+        "seed-test",
         "GET",
         &format!("{GRANTS_PATH}?since=0"),
         vec![],

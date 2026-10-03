@@ -137,14 +137,23 @@ struct ErrorBody {
 pub struct SignedLicenceClient<T: LicenceTransport> {
     key: SigningKey,
     node: String,
+    /// The bound Seed's device id: the audience every request is signed for.
+    seed_device_id: String,
     transport: T,
     clock: ClockMs,
 }
 
 impl<T: LicenceTransport> SignedLicenceClient<T> {
-    /// A client for the steward `node` (its node id) holding `key`.
-    pub fn new(key: SigningKey, node: impl Into<String>, transport: T, clock: ClockMs) -> Arc<Self> {
-        Arc::new(Self { key, node: node.into(), transport, clock })
+    /// A client for the steward `node` (its node id) holding `key`, talking
+    /// to the Seed `seed_device_id` (from the binding).
+    pub fn new(
+        key: SigningKey,
+        node: impl Into<String>,
+        seed_device_id: impl Into<String>,
+        transport: T,
+        clock: ClockMs,
+    ) -> Arc<Self> {
+        Arc::new(Self { key, node: node.into(), seed_device_id: seed_device_id.into(), transport, clock })
     }
 
     async fn signed(
@@ -163,7 +172,7 @@ impl<T: LicenceTransport> SignedLicenceClient<T> {
             return Err(LicenceClientError::Refused { status: 0, code: "clock_not_set".into() });
         }
         let nonce = super::request_nonce();
-        let req = sign_request(&self.key, &self.node, method, path, body, ts_ms, &nonce);
+        let req = sign_request(&self.key, &self.node, &self.seed_device_id, method, path, body, ts_ms, &nonce);
         let resp = self.transport.call(req).await?;
         if resp.status != 200 {
             let code = serde_json::from_slice::<ErrorBody>(&resp.body)

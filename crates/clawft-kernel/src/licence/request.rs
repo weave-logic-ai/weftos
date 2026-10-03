@@ -5,10 +5,11 @@
 //! per line under its own domain,
 //!
 //! ```text
-//! weft-licence-v1/request \n METHOD \n target \n node \n ts_ms \n nonce \n sha256(body)
+//! weft-licence-v1/request \n METHOD \n target \n node \n seed_device_id \n ts_ms \n nonce \n sha256(body)
 //! ```
 //!
-//! `target` is the path and query. The timestamp is unix MILLISECONDS. The
+//! `target` is the path and query. `seed_device_id` is the audience: a
+//! request signed for one Seed is refused by another. The timestamp is unix MILLISECONDS. The
 //! nonce is 16 to 64 ASCII alphanumerics. The request headers are
 //! `x-licence-node`, `x-licence-ts`, `x-licence-nonce` and `x-licence-sig`;
 //! the verifier already knows the bound steward key, so none is sent.
@@ -18,9 +19,6 @@
 //! Seed service crate. [`tests::golden_vector_matches_weft_licence`] pins the
 //! bytes so a change on either side shows up. Moving [`signing_string`] into
 //! `weft-licence-wire` would make this one definition.
-//!
-//! Open: phase 2 will add `seed_device_id` (the audience) as one more signed
-//! line. Add it to [`signing_string`] and the client when that lands.
 
 use std::collections::HashMap;
 
@@ -74,11 +72,15 @@ pub fn signing_string(
     method: &str,
     target: &str,
     node: &str,
+    audience: &str,
     ts_ms: u64,
     nonce: &str,
     body: &[u8],
 ) -> String {
-    format!("{REQUEST_DOMAIN}\n{method}\n{target}\n{node}\n{ts_ms}\n{nonce}\n{}", sha256_hex(body))
+    format!(
+        "{REQUEST_DOMAIN}\n{method}\n{target}\n{node}\n{audience}\n{ts_ms}\n{nonce}\n{}",
+        sha256_hex(body)
+    )
 }
 
 /// A nonce the server accepts: 16 to 64 ASCII alphanumerics.
@@ -87,16 +89,18 @@ pub fn valid_nonce(n: &str) -> bool {
 }
 
 /// Sign a request with the steward key. `nonce` must satisfy [`valid_nonce`].
+#[allow(clippy::too_many_arguments)]
 pub fn sign_request(
     key: &SigningKey,
     node: &str,
+    audience: &str,
     method: &str,
     path: &str,
     body: Vec<u8>,
     ts_ms: u64,
     nonce: &str,
 ) -> LicenceRequest {
-    let sig = key.sign(signing_string(method, path, node, ts_ms, nonce, &body).as_bytes());
+    let sig = key.sign(signing_string(method, path, node, audience, ts_ms, nonce, &body).as_bytes());
     LicenceRequest {
         method: method.to_owned(),
         path: path.to_owned(),
@@ -163,6 +167,7 @@ pub fn verify_request(
     req: &LicenceRequest,
     steward_pubkey: &[u8; 32],
     steward_node: &str,
+    audience: &str,
     now_ms: u64,
     replay: &mut ReplayGuard,
 ) -> Result<(), RequestRefused> {
@@ -181,7 +186,7 @@ pub fn verify_request(
         return Err(RequestRefused::Stale);
     }
     let vk = VerifyingKey::from_bytes(steward_pubkey).map_err(|_| RequestRefused::BadSignature)?;
-    let s = signing_string(&req.method, &req.path, &auth.node, auth.timestamp_ms, &auth.nonce, &req.body);
+    let s = signing_string(&req.method, &req.path, &auth.node, audience, auth.timestamp_ms, &auth.nonce, &req.body);
     vk.verify_strict(s.as_bytes(), &Signature::from_bytes(&sig))
         .map_err(|_| RequestRefused::BadSignature)?;
     if !replay.first_use(&auth.nonce, auth.timestamp_ms, now_ms) {

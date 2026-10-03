@@ -127,7 +127,7 @@ impl StubLicence {
         let steward = sk(21).verifying_key().to_bytes();
         {
             let mut st = self.st.lock().unwrap();
-            if let Err(why) = verify_request(&req, &steward, STEWARD_NODE, REQUEST_NOW_MS, &mut st.replay) {
+            if let Err(why) = verify_request(&req, &steward, STEWARD_NODE, "seed-test", REQUEST_NOW_MS, &mut st.replay) {
                 // Refused callers share the small pool; the steward's budget
                 // is untouched.
                 if st.unsigned_left == 0 {
@@ -186,7 +186,7 @@ impl LicenceTransport for StubLink {
 }
 
 pub(super) fn steward_client(stub: &Arc<StubLicence>, _clock: &Arc<AtomicU64>) -> Arc<dyn LicenceClient> {
-    SignedLicenceClient::new(sk(21), STEWARD_NODE, StubLink(stub.clone()), Arc::new(|| REQUEST_NOW_MS))
+    SignedLicenceClient::new(sk(21), STEWARD_NODE, "seed-test", StubLink(stub.clone()), Arc::new(|| REQUEST_NOW_MS))
 }
 
 /// What a test gate answers.

@@ -78,7 +78,7 @@ impl LicenceTransport for Link {
     async fn call(&self, req: LicenceRequest) -> Result<LicenceResponse, LicenceClientError> {
         let this = &self.0;
         let mut replay = ReplayGuard::default();
-        let ok = verify_request(&req, &sk(21).verifying_key().to_bytes(), &this.node, now_ms(), &mut replay).is_ok();
+        let ok = verify_request(&req, &sk(21).verifying_key().to_bytes(), &this.node, "seed-e2e", now_ms(), &mut replay).is_ok();
         let reply = |status, body: Value| Ok(LicenceResponse { status, body: serde_json::to_vec(&body).unwrap() });
         if !ok {
             return reply(401, json!({"error": "bad_request_signature"}));
@@ -205,7 +205,7 @@ async fn rig(x_proto: Option<(u32, u32)>) -> Rig {
         .unwrap(),
     );
     let licence = Arc::new(Licence { mesh, node: svc.node_id(), checkouts: AtomicU32::new(0), transfers: AtomicU32::new(0) });
-    let client = SignedLicenceClient::new(sk(21), svc.node_id(), Link(licence.clone()), system_clock_ms());
+    let client = SignedLicenceClient::new(sk(21), svc.node_id(), "seed-e2e", Link(licence.clone()), system_clock_ms());
     let relay = Arc::new(CheckoutRelay::new(
         store.clone(),
         ex.clone(),
