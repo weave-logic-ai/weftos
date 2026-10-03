@@ -62,6 +62,13 @@ pub enum FrameType {
     /// signed payload (encoded / consensus / control). Topic lives in the
     /// IPC envelope or publisher metadata; payload is observational-only.
     SensorObservation = 0x0F,
+    /// Inference request (mesh-placement-19, ADR-101 section 5): one
+    /// OpenAI-compatible HTTP request for a role this node serves. See
+    /// `infer_proxy::wire`. Served only to admitted, verified peers.
+    InferRequest = 0x10,
+    /// Inference response (mesh-placement-19): `head`, body `chunk`s,
+    /// `end` or `error`. See `infer_proxy::wire`.
+    InferResponse = 0x11,
 }
 
 /// Wire protocol name for [`FrameType`] (WEFT-115).
@@ -88,6 +95,8 @@ impl FrameType {
         Self::LogAggregation,
         Self::AssessmentSync,
         Self::SensorObservation,
+        Self::InferRequest,
+        Self::InferResponse,
     ];
 
     /// Parse a byte into a known frame type, returning `None` for
@@ -109,6 +118,8 @@ impl FrameType {
             0x0D => Some(Self::LogAggregation),
             0x0E => Some(Self::AssessmentSync),
             0x0F => Some(Self::SensorObservation),
+            0x10 => Some(Self::InferRequest),
+            0x11 => Some(Self::InferResponse),
             _ => None,
         }
     }
@@ -209,6 +220,8 @@ mod tests {
             (0x0D, FrameType::LogAggregation),
             (0x0E, FrameType::AssessmentSync),
             (0x0F, FrameType::SensorObservation),
+            (0x10, FrameType::InferRequest),
+            (0x11, FrameType::InferResponse),
         ];
         for (byte, variant) in expected {
             assert_eq!(FrameType::from_byte(byte), Some(variant));
@@ -218,7 +231,7 @@ mod tests {
     #[test]
     fn frame_type_from_byte_unknown() {
         assert!(FrameType::from_byte(0x00).is_none());
-        assert!(FrameType::from_byte(0x10).is_none());
+        assert!(FrameType::from_byte(0x12).is_none());
         assert!(FrameType::from_byte(0xFF).is_none());
     }
 

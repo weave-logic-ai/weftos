@@ -69,6 +69,8 @@ pub mod local_provider;
 #[cfg(feature = "native")]
 pub mod openai_compat;
 #[cfg(feature = "native")]
+pub mod placement;
+#[cfg(feature = "native")]
 pub mod provider;
 #[cfg(feature = "native")]
 pub mod retry;
@@ -101,6 +103,8 @@ pub use hermes::ReasoningMode;
 pub use local_provider::LocalProvider;
 #[cfg(feature = "native")]
 pub use openai_compat::OpenAiCompatProvider;
+#[cfg(feature = "native")]
+pub use placement::{CachedResolver, PlacedProvider, PlacementResolver};
 #[cfg(feature = "native")]
 pub use provider::Provider;
 #[cfg(feature = "native")]
