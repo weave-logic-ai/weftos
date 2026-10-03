@@ -1,6 +1,10 @@
 # ADR-106: The Cognitum Seed is the licence proxy for its WeftOS mesh
 
-- **Status**: Proposed
+- **Status**: Proposed, review complete (3 rounds), awaiting owner go for Phase 1a
+- **Review history**:
+  - Round 1: B1–B2, H1–H5, M1–M7, L1–L6.
+  - Round 2: N1–N5, decided by the lead.
+  - Round 3: final check SOUND-WITH-CHANGES; A1–A4 text edits applied (additive approvals, mesh_id check, origin conditions, per-kind sync cursors).
 - **Date**: 2026-10-03
 - **Updated**: 2026-10-03. Review round 1 (SOUND-WITH-CHANGES) folded in:
   - B1: the signer is a separate process under its own uid.
@@ -205,9 +209,14 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
 7. **Before running (B2, N2).** A node installs or runs the bytes only when it holds **both** a valid grant and a valid **operator hash approval** for that (cog, version) whose sha256 set covers the artifact. A grant alone never makes bytes runnable.
 
 **Operator hash approval (the run gate in phases 1 to 3).**
-- `weaver cog checkout approve <cog>@<version>` (Admin) signs `{v: 1, mesh_id, cog_id, version, sha256: [..], approved_at, seq}` with a pinned operator key under the domain `weft-licence-v1/approval`.
+- `weaver cog checkout approve <cog>@<version>` (Admin) signs `{v: 1, mesh_id, cog_id, version, sha256: [..], approved_at}` with a pinned operator key under the domain `weft-licence-v1/approval`.
 - The operator approves after checking the hashes, for example against the registry or an upstream release.
-- Approvals are flooded on `mesh.cog.grant` and carried by sync (section 5.5), with the same seq rule as grants.
+- **Approvals are additive and content-addressed, with no seq (A1).** Each one is keyed by (mesh_id, cog, version, sha256 set). A duplicate is idempotent, and a new approval never replaces an older one. To withdraw an approval, use the existing revocation notice for the artifact's hash (`ArtifactHash`, BLAKE3), which also evicts the bytes.
+- Approvals are flooded on `mesh.cog.grant` and carried by sync (section 5.5).
+- **A verifier accepts an approval only if (A2):**
+  - its signature verifies under the `weft-licence-v1/approval` domain tag with a pinned operator key;
+  - `approval.mesh_id` equals the local `mesh_id`.
+- **Orphaned approvals.** A `mesh_nonce` change orphans approvals as well as the binding. `weaver doctor` lists the orphaned approvals, and `weaver cog checkout approve --reapprove-orphaned` re-signs them in one batch for the new id.
 - One signature per version per mesh is the cheap form of ADR-100 6.3. It replaces the per-node operator re-sign for running checked-out cogs. It does not replace the governed-placement `cogpkg` signature (section 10).
 - A compromised grant key alone therefore cannot make any node run code.
 - **Direct registry check.** A node that can reach the Cognitum registry may also compare the sha256 with the registry entry. That is an extra check, never the only gate: requiring every member to reach Cognitum would break decision 2 and offline meshes.
@@ -258,6 +267,11 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
 3. **Who is a peer (H2, N3).** The daemon cannot see admission today: `Deliver` carries no admitted flag, and `mesh_local_sink` builds `PeerCtx::unauthenticated`. Decision:
    - The machine mesh service stamps every `Deliver` with a service-vouched `origin: AdmittedPeer {node_id, class} | LocalTenant | Unadmitted`.
    - The daemon trusts `origin` only on the authenticated local service socket, the one the mesh-local protocol already guards with peer credentials. A field arriving any other way is ignored.
+   - **Conditions for honouring `origin` (A3).**
+     - It is honoured only when the negotiated mesh-local protocol version is at least the version that adds the field.
+     - It is honoured only after the client's anti-squat check on the service peer has passed (`clawft-mesh-local` `client.rs`, the service peer-credential check).
+     - On a single-user install where `service_uid` equals the daemon's uid, `AdmittedPeer` is only as strong as that uid. Anything running as that uid could already act as the daemon, so this is no new escalation.
+     - The daemon is never built with `clawft-mesh-local`'s `testing` feature.
    - Only `AdmittedPeer` with class `node` builds a verified `ServePeer` or is accepted for checkout.
    - `TenantRouter::deliver_local` stamps `LocalTenant`, never `AdmittedPeer`. This settles H2.
    - **ADR-103 amendment needed:** the mesh-local `Deliver` message gains the `origin` field, versioned. A daemon talking to an older service, which sends no `origin`, treats every delivery as `Unadmitted`. A service never forwards an `origin` supplied by a tenant.
@@ -269,10 +283,15 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
 
    Until this exists, Cognitum bytes move only between the steward and its own kernel.
 5. **Catch-up sync (H4, N4).**
-   - On each `AdmittedPeer` connect, and every 30 min, a node asks a peer (preferably the steward) for `{binding, highest-seq grant and approval per (cog, version)}`.
+   - On each `AdmittedPeer` connect, and every 30 min, a node asks a peer (preferably the steward) for the binding, the highest-seq grant per (cog, version), and the set of approvals.
    - A node answers at most one sync per peer per minute, and only for `AdmittedPeer`.
-   - **Response caps:** at most 256 entries and 256 KiB per response. Anything larger is paged with `since`.
-   - **Cheap filters first:** the record kind and size, then the key id equal to the bound grant key (grants) or a pinned operator key (binding, approvals), then `seq` greater than the stored seq. Only entries that pass all of these reach signature verification.
+   - **Response caps:** at most 256 entries and 256 KiB per response. Anything larger is paged **per record kind, with a separate cursor for each**: grants by `seq`, approvals by content key. A large set of one kind cannot hide the other (A4).
+   - **Cheap filters first:**
+     1. the record kind and size;
+     2. the key id equal to the bound grant key (grants) or to a pinned operator key (binding, approvals);
+     3. for grants and the binding, `seq` greater than the stored seq; for approvals, a content key not already held.
+
+     Only entries that pass all of these reach signature verification.
    - **On the first bad signature,** the node aborts the response, discards the rest, and penalises the peer: a 10-minute sync ban and a chained `sync_bad_signature`.
    - **Budgets:** each connection has its own sync token bucket, separate from the binding, grant and revocation flood budgets, so sync traffic cannot starve them.
    - Verification is deferred while `clock_not_set` and retried at the next sync.
@@ -368,7 +387,7 @@ A LAN path is plain text and needs the explicit per-Seed lab opt-in (`allow_unpi
 - Governed placement keeps the `cogpkg` operator signature.
 - In phase 4, once a grant carries a Cognitum-signed entry that members can verify offline (C9, C1), that entry replaces the approval, and the grant may become placement-eligible inside its mesh.
 - **ADR-105 open question 4.** The grant is a signed statement of an operator-declared licence. It is not a Cognitum proof until phase 4.
-- **Provenance.** Adds `trust = "mesh-checkout-grant"`, `grant_id`, `mesh_id`, `grant_key_id`, `approval_seq` and `registry_sha256_checked`.
+- **Provenance.** Adds `trust = "mesh-checkout-grant"`, `grant_id`, `mesh_id`, `grant_key_id`, `approval_id` (the content key) and `registry_sha256_checked`.
 - **ADR-103.** Needs an amendment for the mesh-local `Deliver` `origin` field (section 5.3), and the `mesh_nonce` mesh config entry next to the genesis pin (section 3).
 - **ADR-099 8.4 and ADR-100 6.4.** Commercial terms stay contractual.
 - **ADR-100 section 5.** The reserved method `workload.node.bind` is implemented in phase 1d. The store-pin rule for cogs the agent runs on the Seed is unchanged.
@@ -380,6 +399,7 @@ All of phase 1 runs in process, with no hardware and no network, under `scripts/
 
 **1a. Types, store and policy (pure unit tests).** `mesh_checkout.rs` (grant, binding v2, operator hash approval, `mesh_id` from `mesh_nonce`, canonical JSON, domain tags, both verification profiles, seq rules, arch union, conflicts, the persisted floor and clamp), `CheckoutGrantStore`, `MeshCheckoutPolicy` and `grant_checkout`. Tests:
 - a run or install without an approval, or with an approval whose sha256 set does not cover the artifact, is refused, even with a valid grant;
+- a duplicate approval is idempotent, an approval for another `mesh_id` is refused, and an `ArtifactHash` revocation withdraws the approval;
 - a changed `mesh_nonce` chains `binding_orphaned` and turns the checkout policy off;
 - without a binding the policy equals `ManifestPolicy`;
 - a binding that arrives at runtime takes effect with no restart;
@@ -419,7 +439,9 @@ Tests:
 - **through the real `clawft-mesh-service` and daemon path**, a remote admitted peer is stamped `AdmittedPeer` and served, while a local tenant (`LocalTenant`) and an unadmitted connection are neither served nor accepted for checkout;
 - a daemon facing a service that sends no `origin` treats every delivery as `Unadmitted`;
 - an unverified peer, a `Legacy` peer and a `Leaf` peer are refused;
-- the stub refuses an unsigned `GET /grants`, and forged requests do not consume the steward's budget.
+- the stub refuses an unsigned `GET /grants`, and forged requests do not consume the steward's budget;
+- `origin` is ignored when the negotiated protocol version is below the version that adds it, and when the service peer check failed;
+- **gate check:** `scripts/build.sh gate` fails if the daemon's dependency graph enables `clawft-mesh-local`'s `testing` feature.
 
 **1d. Bind and approval RPCs.** Implement the reserved method `workload.node.bind` (Admin), the full steward profile, the fingerprint confirmation, and `weaver cog checkout approve` (Admin). Test the end-to-end bind and refusal paths with a stub Seed identity.
 
