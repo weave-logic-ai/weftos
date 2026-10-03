@@ -25,7 +25,7 @@ use super::types::{INGEST_PATH, IngestError, MAX_BODY_BYTES, parse_batch};
 /// Largest request head (request line and headers).
 pub const MAX_HEAD_BYTES: usize = 8 * 1024;
 /// Most concurrent connections one bridge listener serves.
-pub const MAX_CONNECTIONS: usize = 64;
+pub const MAX_CONNECTIONS: usize = 128;
 
 /// Which instances a listener accepts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,9 +49,13 @@ pub struct BridgeConfig {
     /// Time allowed from accept to an authenticated request head (the
     /// pre-auth deadline; shorter than `read_timeout`).
     pub preauth_timeout: Duration,
-    /// Most connections that have not authenticated yet, at once. More are
-    /// dropped on accept, so an anonymous flood cannot use up the
-    /// connection cap meant for authenticated cogs.
+    /// Most connections that have not authenticated yet, at once. A further
+    /// connection waits up to `preauth_timeout` for a slot, then is dropped,
+    /// so an anonymous flood cannot use up the connection cap meant for
+    /// authenticated cogs. Residual limit: a process on this host (the bridge
+    /// is loopback) that keeps this many connections open and renews them
+    /// every `preauth_timeout` still delays every cog by up to that long and
+    /// can starve it; the token cannot be checked before the head arrives.
     pub max_unauthenticated: usize,
     /// Allow binding a non-loopback address. Only for an instance-scoped
     /// listener whose address a container relay needs (the VM gateway);
@@ -64,7 +68,7 @@ impl Default for BridgeConfig {
         Self {
             read_timeout: Duration::from_secs(5),
             preauth_timeout: Duration::from_secs(2),
-            max_unauthenticated: 16,
+            max_unauthenticated: 64,
             allow_non_loopback: false,
         }
     }
@@ -174,14 +178,19 @@ impl IngestBridge {
                 let Ok(slot) = slots.clone().try_acquire_owned() else {
                     continue; // over the connection cap: dropped
                 };
-                // Anonymous connections are capped separately and dropped
-                // when the cap is reached.
-                let Ok(pre) = unauth.clone().try_acquire_owned() else {
-                    continue;
-                };
-                let (me, scope) = (me.clone(), scope.clone());
+                let (me, scope, unauth) = (me.clone(), scope.clone(), unauth.clone());
                 tokio::spawn(async move {
                     let _slot = slot;
+                    // Connections that have not authenticated are capped
+                    // separately. A new one waits (first come, first served)
+                    // up to the pre-auth deadline for a slot, so holders that
+                    // never authenticate free theirs before a legitimate cog
+                    // gives up; beyond the wait it is dropped.
+                    let Ok(Ok(pre)) =
+                        tokio::time::timeout(me.cfg.preauth_timeout, unauth.acquire_owned()).await
+                    else {
+                        return;
+                    };
                     me.serve(sock, &scope, pre).await;
                 });
             }

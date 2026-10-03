@@ -73,8 +73,12 @@ The project id travels with the placement:
    `COGNITUM_COG_TOKEN` and no `COGNITUM_INGEST_URL` in their environment
    (a cog never carries a credential for a port some other process may
    own), no token is registered, and the place result, status and
-   advertisement say `ingest: disabled`. The orders have no "require ingest"
-   flag yet; a caller that needs ingest must read `ingest` in the result.
+   advertisement say `ingest: disabled`, and so does the place output: the
+   dispatch attempt carries `ingest: disabled` and the explanation adds
+   "placed with ingest disabled". The project authorisation check (step 2)
+   still runs in this state, so a degraded record never carries an
+   unverified project id. The orders have no "require ingest" flag yet; a
+   caller that needs ingest must read `ingest` in the result.
 4. Native cogs get the shared loopback listener's URL. Container routes get
    their own token-scoped listener (when `bridge.container_bind` is set),
    passed to the adapter as the relay's `ingest_upstream`; that listener
@@ -151,9 +155,14 @@ ingest requests themselves are counted (`BridgeStats`), not chained.
 
 Nothing is read from the body of an unauthenticated request. Owner-side
 failure detail is logged, not returned. Connections that have not
-authenticated are capped (16 at once per listener, dropped beyond that) and
-must present an authenticated head within 2 s, so an anonymous flood cannot
-use up the cap meant for cogs.
+authenticated are capped (64 at once per listener). A further connection
+waits, first come first served, up to the 2 s pre-auth deadline for a slot,
+and is dropped beyond that; every connection must present an authenticated
+head within 2 s. **Residual limit:** the listener is loopback, so a process
+on the same host that keeps 64 connections open and renews them every 2 s
+still delays every cog by up to that long and can starve it. The token cannot
+be checked before the head arrives; the defence is that only local processes
+can do this.
 
 `COGNITUM_COG_TOKEN` sits in the cog's environment, so any process of the
 same uid can read it (`/proc/<pid>/environ`, `ps eww`). The token only

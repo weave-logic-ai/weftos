@@ -129,9 +129,6 @@ impl IngestHooks {
     /// owner must exist, so a placement whose vectors could not be delivered
     /// is refused instead of placed.
     pub fn authorize(&self, b: &InstanceBinding) -> Result<(), IngestError> {
-        let Some(bridge) = &self.bridge else {
-            return Ok(());
-        };
         if let Some(p) = &b.project_id {
             let me = b.controller_node == self.own_node;
             let listed = self
@@ -147,6 +144,12 @@ impl IngestHooks {
                 return Err(IngestError::Forbidden);
             }
         }
+        // With the bridge down nothing is delivered, so there is no route to
+        // require; the project check above still holds, so a degraded record
+        // never carries an unverified project id.
+        let Some(bridge) = &self.bridge else {
+            return Ok(());
+        };
         if !bridge.has_route(b) {
             return Err(IngestError::NotRouted(match &b.project_id {
                 Some(p) => format!("project {p} is not routed here"),

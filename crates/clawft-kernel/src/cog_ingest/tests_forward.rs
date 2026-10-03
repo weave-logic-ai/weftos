@@ -30,7 +30,7 @@ fn two_nodes(budget: RateBudget) -> TwoNodes {
     let (proj_store, ctl_store) = (mem(), mem());
     let dir: Arc<dyn StoreDirectory> = Arc::new(
         StaticDirectory::new()
-            .with_project(PROJECT, proj_store.clone())
+            .with_project_store(PROJECT, proj_store.clone())
             .with_fallback(ctl_store.clone()),
     );
     let owner = Arc::new(StoreOwnerService::new(
@@ -49,8 +49,8 @@ fn two_nodes(budget: RateBudget) -> TwoNodes {
         conn,
     ));
     let router = StaticRouter::new()
-        .with_project(PROJECT, fwd.clone())
-        .with_project("01J9ZXW0PRJCTBBBBBBBBBBBBB", fwd.clone())
+        .with_project_route(PROJECT, fwd.clone())
+        .with_project_route("01J9ZXW0PRJCTBBBBBBBBBBBBB", fwd.clone())
         .with_controller("ctl", fwd);
     let (bridge, reg) = bridge_over(router, budget);
     TwoNodes {
@@ -215,7 +215,7 @@ fn a_project_restricted_key_cannot_forward_for_other_projects_or_project_less() 
     let store = mem();
     let dir: Arc<dyn StoreDirectory> = Arc::new(
         StaticDirectory::new()
-            .with_project(PROJECT, store.clone())
+            .with_project_store(PROJECT, store.clone())
             .with_fallback(store.clone()),
     );
     let owner = StoreOwnerService::new(
@@ -366,14 +366,14 @@ async fn a_token_revoked_while_a_request_is_in_flight_writes_nothing() {
 }
 
 #[tokio::test]
-async fn anonymous_connections_are_capped_and_time_out_before_authenticated_ones_suffer() {
+async fn a_legitimate_post_gets_through_while_anonymous_connections_hold_every_slot() {
     use std::time::Duration;
     let store = mem();
     let reg = Arc::new(TokenRegistry::new());
     let dir: Arc<dyn StoreDirectory> = Arc::new(StaticDirectory::new().with_fallback(store.clone()));
     let router = StaticRouter::new().with_controller("ctl", Arc::new(LocalForwarder::new("n", dir)));
     let cfg = BridgeConfig {
-        preauth_timeout: Duration::from_millis(300),
+        preauth_timeout: Duration::from_millis(400),
         max_unauthenticated: 2,
         ..Default::default()
     };
@@ -382,14 +382,13 @@ async fn anonymous_connections_are_capped_and_time_out_before_authenticated_ones
     let h = bridge.bind(lo(), BridgeScope::Any).await.unwrap();
     let b = batch_json(&[(1, vec8(1.0))], false);
 
-    // Two silent connections hold both anonymous slots.
+    // Two silent connections hold both anonymous slots. They are closed at
+    // the pre-auth deadline; the legitimate post waits for a slot (first
+    // come, first served) and is served once they go.
     let _a = tokio::net::TcpStream::connect(h.addr()).await.unwrap();
     let _b = tokio::net::TcpStream::connect(h.addr()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(post(h.addr(), Some(&token), &b).await.0, 0, "over the anonymous cap: dropped");
-    // They are closed at the pre-auth deadline, and the slots come back.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(post(h.addr(), Some(&token), &b).await.0, 200);
+    assert_eq!(post(h.addr(), Some(&token), &b).await.0, 200, "waited for a slot");
     assert_eq!(store.len(), 1);
 }
 
