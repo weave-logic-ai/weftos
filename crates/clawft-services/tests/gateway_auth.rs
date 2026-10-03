@@ -1135,3 +1135,85 @@ mod mcp {
         assert_eq!(rpc(&app, Some("junk"), init()).await.0, StatusCode::TOO_MANY_REQUESTS);
     }
 }
+
+// ─── /playground page (ADR-102 D2) ──────────────────────────────────────
+
+const PAGE_MARKER: &str = "<!doctype html><title>WeftOS API playground</title>";
+
+fn playground_app() -> (axum::Router, Arc<MemoryTokenValidator>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("playground.html"), PAGE_MARKER).unwrap();
+    let auth = Arc::new(MemoryTokenValidator::new());
+    let state = state_with(auth.clone(), Arc::new(InMemoryKernelFacade::new()));
+    let app = build_router(state, &[], Some(dir.path().to_str().unwrap()));
+    (app, auth, dir)
+}
+
+async fn raw(app: &axum::Router, uri: &str) -> axum::response::Response {
+    app.clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+/// The page is public HTML with the same hardening headers as every
+/// response, and it does not depend on a trailing slash.
+#[tokio::test]
+async fn playground_is_served_without_a_token_and_locked_down() {
+    let (app, _auth, _dir) = playground_app();
+    for path in ["/playground", "/playground/"] {
+        let resp = raw(&app, path).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{path}");
+        assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+        assert_eq!(resp.headers()["cache-control"], "no-store");
+        assert_eq!(resp.headers()["referrer-policy"], "no-referrer");
+        let csp = resp.headers()["content-security-policy"].to_str().unwrap();
+        assert!(csp.contains("default-src 'self'"));
+        assert!(!csp.contains("ws:") && !csp.contains("wss:") && !csp.contains('*'), "{csp}");
+        assert!(csp.contains("connect-src 'self';") && csp.contains("base-uri 'none'"), "{csp}");
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        assert_eq!(bytes.as_ref(), PAGE_MARKER.as_bytes());
+    }
+}
+
+/// Serving the page must not unlock anything: the data calls the page makes
+/// need the token, and the anonymous health view stays status-only.
+#[tokio::test]
+async fn playground_data_calls_require_the_token() {
+    let (app, auth, _dir) = playground_app();
+    for uri in ["/api/openapi.json", "/api/agents", "/api/processes"] {
+        assert_eq!(get(&app, uri, None).await.0, StatusCode::UNAUTHORIZED, "{uri}");
+        assert_eq!(get(&app, uri, Some("wft_nope")).await.0, StatusCode::UNAUTHORIZED, "{uri}");
+    }
+    assert_eq!(post(&app, "/api/auth/revoke", "wft_nope").await, StatusCode::UNAUTHORIZED);
+    let (_, anon) = get(&app, "/api/health", None).await;
+    assert_eq!(anon, serde_json::json!({ "status": "ok" }));
+
+    let token = auth.generate_token(3600).unwrap();
+    assert_eq!(get(&app, "/api/openapi.json", Some(&token)).await.0, StatusCode::OK);
+    let (_, full) = get(&app, "/api/health", Some(&token)).await;
+    assert!(full["token"]["expires_at"].is_string());
+}
+
+/// The playground's revoke button: 204, then the same token is refused.
+#[tokio::test]
+async fn playground_revoke_then_next_call_is_401() {
+    let (app, auth, _dir) = playground_app();
+    let token = auth.generate_token(3600).unwrap();
+    assert_eq!(get(&app, "/api/agents", Some(&token)).await.0, StatusCode::OK);
+    assert_eq!(post(&app, "/api/auth/revoke", &token).await, StatusCode::NO_CONTENT);
+    assert_eq!(get(&app, "/api/agents", Some(&token)).await.0, StatusCode::UNAUTHORIZED);
+}
+
+/// No static dir, no page; and a built dir without the entry is a clear 404.
+#[tokio::test]
+async fn playground_missing_build_is_a_404() {
+    let (app, _auth) = memory_app();
+    assert_eq!(raw(&app, "/playground").await.status(), StatusCode::NOT_FOUND);
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = state_with(Arc::new(MemoryTokenValidator::new()), Arc::new(InMemoryKernelFacade::new()));
+    let app = build_router(state, &[], Some(dir.path().to_str().unwrap()));
+    let resp = raw(&app, "/playground").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}

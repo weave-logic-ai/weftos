@@ -11,6 +11,7 @@
  *   - Static assets (JS/CSS/SVG/WASM under /assets/, /clawft_wasm*):
  *     cache-first, lazily populate on miss.
  *   - Everything matching /api/ or /ws: bypass.
+ *   - /playground, /playground/, /playground.html: bypass (token page).
  *
  * Push notifications are intentionally NOT wired here — that requires
  * server-side VAPID setup and is tracked separately.
@@ -52,6 +53,17 @@ function isApiOrWs(url) {
   return url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws");
 }
 
+// The API playground (ADR-102 D2) is a separate page that holds a bearer
+// token. It never goes through the SPA shell cache: a navigation there must
+// reach the gateway or fail, not be answered with the cached dashboard.
+function isPlayground(url) {
+  return (
+    url.pathname === "/playground" ||
+    url.pathname === "/playground/" ||
+    url.pathname === "/playground.html"
+  );
+}
+
 function isCacheableAsset(url) {
   return (
     url.pathname.startsWith("/assets/") ||
@@ -74,6 +86,9 @@ self.addEventListener("fetch", (event) => {
 
   // Always bypass API + WebSocket.
   if (isApiOrWs(url)) return;
+
+  // The playground is never served from this worker.
+  if (isPlayground(url)) return;
 
   // Navigation: try network first, fall back to cached shell.
   if (request.mode === "navigate") {

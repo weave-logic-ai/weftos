@@ -39,7 +39,14 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // Point at an installed Chrome when Playwright's own download is
+        // missing or a different build (no network needed).
+        launchOptions: process.env.CLAWFT_UI_E2E_CHROME
+          ? { executablePath: process.env.CLAWFT_UI_E2E_CHROME }
+          : {},
+      },
     },
   ],
   // Boot Vite preview against the production bundle with MSW enabled.

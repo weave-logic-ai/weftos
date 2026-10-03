@@ -343,6 +343,10 @@ the spec. The document is a hand-maintained asset
 A unit test in `api/openapi.rs` fails when a served route is missing from the
 spec or the spec lists one that is gone, so add new routes there.
 
+The gateway also serves an interactive page at `/playground` that generates
+try-it forms from this document and from MCP `tools/list`; see
+[`docs/guides/api-playground.md`](../guides/api-playground.md).
+
 ---
 
 ## MCP
