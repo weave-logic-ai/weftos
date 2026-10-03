@@ -316,7 +316,8 @@ async fn run(
     let node_id = client.hello_ack().node_id.clone();
     let sink = Arc::new(
         MeshSink::new(deps.delivery.clone(), client.register_ack().user_id.clone())
-            .with_machine_key(client.hello_ack().machine_pubkey),
+            .with_machine_key(client.hello_ack().machine_pubkey)
+            .with_negotiated_proto(client.proto()),
     );
     let mut backoff = Backoff::new(deps.timings.backoff.0, deps.timings.backoff.1);
     let mut next = Some(client);
@@ -327,6 +328,7 @@ async fn run(
     let mut refused: Option<std::time::Instant> = None;
     loop {
         if let Some(c) = next.take() {
+            sink.set_negotiated_proto(c.proto());
             publish(&deps.state, &c, "connected");
             connected.store(true, Ordering::Release);
             deps.chain.bound(&node_id, c.cert().serial);

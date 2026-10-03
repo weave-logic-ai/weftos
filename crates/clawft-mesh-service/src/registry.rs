@@ -7,7 +7,7 @@
 //! cannot swallow another tenant's narrower one.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -47,6 +47,9 @@ pub struct Registration {
     pub capabilities: Vec<String>,
     pub registered_at: u64,
     pub counters: Counters,
+    /// mesh-local protocol version negotiated on this connection; the
+    /// `deliver` origin stamp is written only from `PROTO_ORIGIN` up.
+    proto: AtomicU32,
     cert: Mutex<Option<UserCert>>,
     accept_from: Mutex<Vec<String>>,
     send_window: Mutex<(Instant, u32)>,
@@ -80,6 +83,7 @@ impl Registration {
             capabilities,
             registered_at,
             counters: Counters::default(),
+            proto: AtomicU32::new(clawft_mesh_local::proto::PROTO_MIN),
             cert: Mutex::new(None),
             accept_from: Mutex::new(Vec::new()),
             send_window: Mutex::new((Instant::now(), 0)),
@@ -87,6 +91,16 @@ impl Registration {
             kill,
         });
         (reg, rx, killed)
+    }
+
+    /// Record the protocol version negotiated for this connection.
+    pub fn set_proto(&self, proto: u32) {
+        self.proto.store(proto, Ordering::Relaxed);
+    }
+
+    /// The protocol version negotiated for this connection.
+    pub fn proto(&self) -> u32 {
+        self.proto.load(Ordering::Relaxed)
     }
 
     /// The user certificate most recently issued to this registration.

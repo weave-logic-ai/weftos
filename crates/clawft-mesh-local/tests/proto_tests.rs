@@ -31,7 +31,7 @@ fn all_messages() -> Vec<Message> {
         Message::Unsubscribe { prefix: "p".into() },
         Message::Ack {},
         Message::Send { dest: "weft://local/_/_".into(), message: json!({"k": [1, 2]}), request_id: Some("r".into()) },
-        Message::Deliver(Deliver { source_node: "n".into(), source_cert: Some(cert()), scope: Scope { user_id: "u".into(), project_id: None }, envelope_id: "e".into(), message: json!(null) }),
+        Message::Deliver(Deliver { source_node: "n".into(), source_cert: Some(cert()), scope: Scope { user_id: "u".into(), project_id: None }, envelope_id: "e".into(), message: json!(null), origin: None }),
         Message::VerdictRequest(VerdictRequest { subject: VerdictSubject::PeerAdmit, peer: PeerInfo { node_id: "n".into(), pubkey: "k".into(), platform: "p".into(), capabilities: vec![], genesis_hash: "g".into(), chain_seq: 3 }, topic: None }),
         Message::VerdictReply { allow: true, ttl_s: 300, reason: "r".into(), rule_hash: "h".into() },
         Message::JournalHead {},

@@ -28,6 +28,7 @@ use crate::mesh_artifact::ArtifactExchange;
 use crate::mesh_artifact_transfer::{PeerLink, PeerSet, ServeStats};
 use crate::mesh_ipc::{MeshIpcEnvelope, MeshRequest};
 use crate::mesh_noise::EncryptedChannel;
+use crate::mesh_swarm_state::ServePeer;
 
 use super::host_service::WorkloadHostService;
 use super::msg::{SignedCtl, WORKLOAD_HOST_SERVICE};
@@ -223,6 +224,11 @@ impl From<MeshError> for CallError {
 pub struct CtlConnection {
     stream: Box<dyn MeshStream>,
     local_node: String,
+    /// Whether admission verified the node at the other end of the stream
+    /// (the service-stamped `AdmittedPeer`, ADR-106 5.4). A claimed id is
+    /// never enough: the default is unverified, which the checkout
+    /// redistribution policy refuses to serve.
+    peer_verified: bool,
 }
 
 impl CtlConnection {
@@ -231,7 +237,15 @@ impl CtlConnection {
         Self {
             stream,
             local_node: local_node.into(),
+            peer_verified: false,
         }
+    }
+
+    /// State that admission verified the peer on this stream. Only a caller
+    /// that holds that evidence (a verified node connection) may set it.
+    pub fn with_peer_verified(mut self, verified: bool) -> Self {
+        self.peer_verified = verified;
+        self
     }
 
     /// Send one signed request to `dest` and wait for its correlated
@@ -261,7 +275,11 @@ impl CtlConnection {
                 let ex = exchange.ok_or_else(|| {
                     CallError::Protocol("artifact frame but nothing to serve".into())
                 })?;
-                ex.serve_frame(self.stream.as_mut(), dest, &raw, &mut stats)
+                let who = ServePeer {
+                    node_id: dest.to_owned(),
+                    verified: self.peer_verified,
+                };
+                ex.serve_frame_as(self.stream.as_mut(), &who, &raw, &mut stats)
                     .await
                     .map_err(|e| CallError::Protocol(format!("serving payload: {e}")))?;
                 continue;

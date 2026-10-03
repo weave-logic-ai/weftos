@@ -1004,6 +1004,40 @@ cmd_check_mesh_no_owned_state() {
     timer_end
 }
 
+# ADR-106 phase 1c: the daemon trusts the service-stamped `deliver` origin only
+# because its client passed the real peer-credential check. The client's
+# `testing` feature injects a fake server credential, so no non-test build of
+# the daemon may enable it (dev-dependencies are not part of `-e normal`).
+cmd_check_daemon_no_mesh_testing() {
+    header "Asserting the daemon's dependency graph does not enable clawft-mesh-local's testing feature"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   cargo tree -p clawft-weave -e normal,features -i clawft-mesh-local\n"
+        timer_end
+        return 0
+    fi
+    local tree rc=0 hits
+    tree="$(cargo tree -p clawft-weave -e normal,features -i clawft-mesh-local 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        fail "cargo tree failed for clawft-weave"
+        printf '%s\n' "$tree" | tail -20
+        return 1
+    fi
+    # The inverted tree must still reach the crate, or the check proves nothing.
+    case "$tree" in *"clawft-mesh-local v"*) ;; *)
+        fail "clawft-mesh-local is not in clawft-weave's dependency graph; update cmd_check_daemon_no_mesh_testing"
+        return 1 ;;
+    esac
+    hits="$(printf '%s\n' "$tree" | grep -E 'clawft-mesh-local feature "testing"' || true)"
+    if [ -n "$hits" ]; then
+        fail "the daemon's dependency graph enables clawft-mesh-local's testing feature (it fakes the service peer check):"
+        printf '%s\n' "$tree" | sed 's/^/        /'
+        return 1
+    fi
+    pass "clawft-mesh-local's testing feature is not enabled in the daemon's dependency graph"
+    timer_end
+}
+
 cmd_check() {
     # `check <pkg>…` scopes to the named packages (fast loop for new crates);
     # the kernel wasm gates below only run for the whole-workspace check.
@@ -1816,9 +1850,9 @@ cmd_gate() {
     if [ "${GATE_RELEASE_DRY_RUN:-}" = "1" ] || [ "${GATE_RELEASE_DRY_RUN:-}" = "true" ]; then
         WITH_RELEASE_DRY_RUN=true
     fi
-    local total=20
+    local total=21
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        total=21
+        total=22
     fi
     header "Phase Gate — ${total} checks"
     local passed=0 failed=0 skipped=0
@@ -2004,12 +2038,16 @@ cmd_gate() {
     run_gate_check 20 "mesh service owns no state (check-mesh-no-owned-state)" \
         cmd_check_mesh_no_owned_state
 
-    # 21. WEFT-460 — optional cargo-dist host-triple release rehearsal.
+    # 21. ADR-106 1c: the daemon is never built with the mesh-local test seam.
+    run_gate_check 21 "daemon does not enable clawft-mesh-local testing (check-daemon-no-mesh-testing)" \
+        cmd_check_daemon_no_mesh_testing
+
+    # 22. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
     #   scripts/build.sh gate --with-release-dry-run
     #   GATE_RELEASE_DRY_RUN=1 scripts/build.sh gate
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 21 "$total" "release-dry-run (cargo-dist host triple)"
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 22 "$total" "release-dry-run (cargo-dist host triple)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   scripts/build.sh release-dry-run\n"
@@ -2113,6 +2151,7 @@ ${BOLD}Commands:${NC}
                   -p clawft-mesh-service, scripts/dev/mesh-p3-e2e.sh, the
                   no-owned-state gate and check-mesh-only. Current user, tempdirs only
   check-tests     Compile (not run) the tests of the named packages: check-tests <pkg>…
+  check-daemon-no-mesh-testing  Fail if the daemon's dependency graph enables clawft-mesh-local's testing feature
   check-mesh-no-owned-state
                   Fail if `cargo tree -p clawft-mesh-service -e normal,features` contains
                   exo-resource-tree, rvf-runtime, cognitum-gate-tilezero, clawft-weave or
@@ -2419,6 +2458,7 @@ main() {
         test-mesh-service) cmd_test_mesh_service ;;
         check-tests)  cmd_check_tests ;;
         check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
+        check-daemon-no-mesh-testing) cmd_check_daemon_no_mesh_testing ;;
         clippy)       cmd_clippy ;;
         audit)        cmd_audit ;;
         npm-audit)    cmd_npm_audit ;;

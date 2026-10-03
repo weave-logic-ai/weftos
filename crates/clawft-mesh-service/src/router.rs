@@ -31,7 +31,7 @@ use clawft_kernel::mesh_admit::PeerClass;
 use clawft_kernel::mesh_delivery::{LocalDelivery, PeerCtx};
 use clawft_kernel::mesh_ipc::{MeshIpcEnvelope, Scope as WireScope};
 use clawft_kernel::mesh_runtime::MeshRuntime;
-use clawft_mesh_local::proto::{Deliver, Frame, Message, Scope};
+use clawft_mesh_local::proto::{Deliver, DeliverOrigin, Frame, Message, OriginClass, Scope, PROTO_ORIGIN};
 use clawft_mesh_local::{Node, WeftAddr};
 
 use crate::registry::{QueueError, Registration, Registry, ScopeMiss};
@@ -181,21 +181,41 @@ impl TenantRouter {
         Some((default, scope))
     }
 
+    /// The origin the service vouches for, from the connection (never from
+    /// anything in the envelope). `node_verified` is set only by admission.
+    fn origin_of(from: &PeerCtx) -> DeliverOrigin {
+        if !from.node_verified {
+            return DeliverOrigin::Unadmitted;
+        }
+        let class = match from.class {
+            PeerClass::Node => OriginClass::Node,
+            PeerClass::Leaf => OriginClass::Leaf,
+            PeerClass::Legacy => OriginClass::Other,
+        };
+        DeliverOrigin::AdmittedPeer { node_id: from.peer_id.clone(), class }
+    }
+
+    /// Queue a `deliver` for `reg`. The origin stamp is written only when the
+    /// connection negotiated a protocol that has the field; an older daemon
+    /// never sees it, and reads every delivery as unadmitted.
     fn queue(
         &self,
         reg: &Registration,
         from_node: &str,
         scope: Scope,
         source_cert: Option<clawft_mesh_local::UserCert>,
+        origin: DeliverOrigin,
         msg: &KernelMessage,
     ) -> Result<(), QueueError> {
         let message = serde_json::to_value(msg).map_err(|_| QueueError::Closed)?;
+        let origin = (reg.proto() >= PROTO_ORIGIN).then_some(origin);
         let frame = Frame::new(Message::Deliver(Deliver {
             source_node: from_node.to_string(),
             source_cert,
             scope,
             envelope_id: msg.id.clone(),
             message,
+            origin,
         }));
         match reg.try_queue(frame) {
             Ok(()) => {
@@ -269,7 +289,7 @@ impl TenantRouter {
                 reg.user_id
             )));
         }
-        self.queue(&reg, &self.node_id, scope, from.cert(), &msg)
+        self.queue(&reg, &self.node_id, scope, from.cert(), DeliverOrigin::LocalTenant, &msg)
             .map_err(|e| SendError::Failed(format!("{e:?}")))?;
         from.counters.sent.fetch_add(1, Ordering::Relaxed);
         self.counters.sent_local.fetch_add(1, Ordering::Relaxed);
@@ -288,7 +308,7 @@ impl LocalDelivery for TenantRouter {
         let Some((reg, scope)) = self.resolve(from, dest_scope, topic_of(&msg)) else {
             return Ok(());
         };
-        self.queue(&reg, &from.peer_id, scope, None, &msg)
+        self.queue(&reg, &from.peer_id, scope, None, Self::origin_of(from), &msg)
             .map_err(|e| KernelError::Mesh(format!("tenant {} queue: {e:?}", reg.user_id)))
     }
 
@@ -312,3 +332,7 @@ impl LocalDelivery for TenantRouter {
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "router_origin_tests.rs"]
+mod origin_tests;

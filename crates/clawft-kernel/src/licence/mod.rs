@@ -24,11 +24,14 @@
 mod approval;
 mod approval_store;
 mod binding;
+mod client;
 mod floor;
 mod gate;
 mod grant;
 mod persist;
 mod policy;
+mod relay;
+mod request;
 mod store;
 mod store_load;
 
@@ -36,6 +39,12 @@ mod store_load;
 mod tests_common;
 #[cfg(test)]
 mod tests_policy;
+#[cfg(test)]
+mod tests_relay;
+#[cfg(test)]
+mod tests_request;
+#[cfg(test)]
+mod tests_stub;
 #[cfg(test)]
 mod tests_store;
 #[cfg(test)]
@@ -57,12 +66,24 @@ pub use binding::{
     AdmissionPosture, BindState, BindingExtraCheck, BindingRecord, NoExtraChecks, SignedBinding,
     sign_binding, verify_binding_member,
 };
+pub use client::{
+    ARTIFACT_PATH, CHECKOUT_PATH, CheckoutWire, GRANTS_PATH, LicenceClient, LicenceClientError,
+    LicenceResponse, LicenceTransport, SignedLicenceClient,
+};
 pub use floor::FloorState;
 pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
 pub use grant::{
     CheckoutGrant, GrantArtifact, LicenceRef, SignedGrant, sign_grant, verify_grant,
 };
 pub use policy::MeshCheckoutPolicy;
+pub use relay::{
+    CheckoutCaller, CheckoutRefusal, CheckoutRelay, EVENT_KIND_CHECKOUT_GRANTED,
+    EVENT_KIND_CHECKOUT_REFUSED, GATE_ACTION, GrantFlood, NoFlood, install_grant,
+};
+pub use request::{
+    LicenceRequest, REQUEST_DOMAIN, ReplayGuard, RequestAuth, RequestRefused, sign_request,
+    signing_bytes, verify_request,
+};
 pub use store::{CheckoutGrantStore, VerifiedCheckoutGrant};
 
 /// Domain tag of the mesh id hash.
