@@ -195,12 +195,21 @@ pub fn user_name(uid: u32) -> Option<String> {
     nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid)).ok().flatten().map(|u| u.name)
 }
 
+/// `^[a-z_][a-z0-9._-]*$`: safe to paste into `sudo -u <name>`.
+pub fn plain_user_name(n: &str) -> bool {
+    let mut c = n.chars();
+    c.next().is_some_and(|f| f.is_ascii_lowercase() || f == '_')
+        && c.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || matches!(x, '.' | '_' | '-'))
+}
+
 /// The refusal a non-holder daemon gives for a licence verb: where the verbs
 /// run and how to run them there. A token on this daemon is no authority on
 /// the holder's, so nothing is forwarded (ADR-106, phase 3 notes).
 pub fn not_holder_message(uid: Option<u32>) -> String {
     let (who, as_user) = match uid {
-        Some(u) => match user_name(u) {
+        // Only a plain user name goes into the suggested command; anything
+        // else (shell metacharacters, spaces, unusual names) uses the uid.
+        Some(u) => match user_name(u).filter(|n| plain_user_name(n)) {
             Some(n) => (format!("uid {u}, user {n}"), n),
             None => (format!("uid {u}"), format!("'#{u}'")),
         },
@@ -360,4 +369,21 @@ pub fn status(rt: &LicenceRuntime) -> Value {
         "reserved_holder": reserved_holder(),
         "holder_state": holder_state_name(),
     })
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn only_plain_user_names_go_into_the_suggested_command() {
+        for ok in ["alice", "_svc", "a.b-c_1"] {
+            assert!(plain_user_name(ok), "{ok}");
+        }
+        for bad in ["", "Alice", "1abc", "a b", "a;rm", "$(x)", "a/b", "é"] {
+            assert!(!plain_user_name(bad), "{bad:?}");
+        }
+        let m = not_holder_message(Some(4_000_000_000));
+        assert!(m.contains("uid 4000000000") && m.contains("sudo -u '#4000000000'"), "{m}");
+    }
 }
