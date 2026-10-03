@@ -12,6 +12,7 @@
 pub mod client;
 mod hw_dex;
 mod hw_identify;
+mod style;
 
 use client::{Client, HostCog, HostStatus, Net, Settings};
 use eframe::egui::{self, Color32, RichText};
@@ -92,6 +93,9 @@ fn proj_hay(p: &Project) -> String {
 }
 
 fn buy_and_datasheet(ui: &mut egui::Ui, buy: Option<(&str, &str)>, datasheet: &str) {
+    if buy.is_none_or(|(_, u)| u.is_empty()) && datasheet.is_empty() {
+        return;
+    }
     ui.horizontal_wrapped(|ui| {
         if let Some((price, url)) = buy.filter(|(_, u)| !u.is_empty()) {
             ui.hyperlink_to(RichText::new(format!("🛒 {} ↗", if price.is_empty() { "Mouser" } else { price })).color(GREEN), url);
@@ -102,75 +106,118 @@ fn buy_and_datasheet(ui: &mut egui::Ui, buy: Option<(&str, &str)>, datasheet: &s
     });
 }
 
-fn module_card(ui: &mut egui::Ui, m: &Module) {
-    egui::CollapsingHeader::new(RichText::new(m.name.as_str()).strong())
-        .id_salt(format!("m-{}", m.id))
-        .show(ui, |ui| {
-            if !m.vendor.is_empty() {
-                ui.label(RichText::new(&m.vendor).color(GREY).small());
-            }
-            if !m.summary.is_empty() {
-                ui.label(&m.summary);
-            }
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(&m.kind).color(WL).small());
-                for c in &m.chips {
-                    ui.label(RichText::new(format!("◉ {c}")).color(GREY).small());
-                }
-            });
-            buy_and_datasheet(ui, m.buy.first().map(|b| (b.price.as_str(), b.url.as_str())), &m.datasheet);
-            if !m.good_for.is_empty() {
-                ui.label(RichText::new(format!("Good for: {}", m.good_for.join(" · "))).small());
-            }
-            if !m.not_for.is_empty() {
-                ui.label(RichText::new(format!("Not for: {}", m.not_for.join(" · "))).small().color(GREY));
-            }
-            for n in &m.notes {
-                ui.label(RichText::new(format!("⚠ {n}")).color(AMBER).small());
-            }
-            egui::Grid::new(format!("ms-{}", m.id)).num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
-                for (k, v) in &m.spec {
-                    ui.label(RichText::new(k).color(GREY).small());
-                    ui.label(RichText::new(v).small());
-                    ui.end_row();
-                }
-            });
-        });
-}
-
-fn chip_card(ui: &mut egui::Ui, c: &Chip) {
-    egui::CollapsingHeader::new(RichText::new(&c.name).strong()).id_salt(format!("c-{}", c.id)).show(ui, |ui| {
-        ui.label(RichText::new(format!("{} · {}", c.manufacturer, c.role)).color(GREY).small());
-        if !c.summary.is_empty() {
-            ui.label(&c.summary);
+/// A tag strip (chips / modules / sensor tags) rendered as uniform pills so every card's
+/// metadata row reads the same.
+fn tag_row<'a>(ui: &mut egui::Ui, tags: impl Iterator<Item = &'a str>, color: Color32) {
+    ui.horizontal_wrapped(|ui| {
+        for t in tags {
+            style::pill(ui, t, color);
         }
-        ui.horizontal_wrapped(|ui| {
-            for t in &c.tags {
-                ui.label(RichText::new(t).color(WL).small());
-            }
-        });
-        buy_and_datasheet(ui, None, &c.datasheet);
-        egui::Grid::new(format!("cs-{}", c.id)).num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
-            for (k, v) in &c.spec {
-                ui.label(RichText::new(k).color(GREY).small());
-                ui.label(RichText::new(v).small());
-                ui.end_row();
-            }
-        });
     });
 }
 
-fn project_card(ui: &mut egui::Ui, p: &Project) {
-    egui::CollapsingHeader::new(RichText::new(&p.name).strong()).id_salt(format!("p-{}", p.id)).show(ui, |ui| {
-        ui.label(RichText::new(format!("{} · {}", p.category, p.difficulty)).color(GREY).small());
-        if !p.summary.is_empty() {
-            ui.label(&p.summary);
-        }
-        ui.horizontal_wrapped(|ui| {
-            for m in &p.modules {
-                ui.label(RichText::new(format!("▸ {m}")).color(GREY).small());
+fn module_card(ui: &mut egui::Ui, m: &Module) {
+    style::card(
+        ui,
+        ("mod", &m.id),
+        |ui| {
+            style::truncated(ui, &m.name, true);
+            if !m.kind.is_empty() {
+                style::pill(ui, &m.kind, WL);
             }
-        });
+            if !m.vendor.is_empty() {
+                style::truncated(ui, &m.vendor, false);
+            }
+        },
+        |ui| {
+            if !m.summary.is_empty() {
+                ui.label(style::body(&m.summary));
+            }
+            if !m.chips.is_empty() {
+                tag_row(ui, m.chips.iter().map(String::as_str), GREY);
+            }
+            buy_and_datasheet(ui, m.buy.first().map(|b| (b.price.as_str(), b.url.as_str())), &m.datasheet);
+            if !m.good_for.is_empty() {
+                ui.label(style::dim(ui, format!("Good for: {}", m.good_for.join(" · "))));
+            }
+            if !m.not_for.is_empty() {
+                ui.label(style::dim(ui, format!("Not for: {}", m.not_for.join(" · "))));
+            }
+            for n in &m.notes {
+                ui.label(RichText::new(format!("⚠ {n}")).color(AMBER).size(12.0));
+            }
+            style::spec_grid(ui, ("ms", &m.id), m.spec.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        },
+    );
+}
+
+fn chip_card(ui: &mut egui::Ui, c: &Chip) {
+    style::card(
+        ui,
+        ("chip", &c.id),
+        |ui| {
+            style::truncated(ui, &c.name, true);
+            if !c.role.is_empty() {
+                style::pill(ui, &c.role, COG);
+            }
+            if !c.manufacturer.is_empty() {
+                style::truncated(ui, &c.manufacturer, false);
+            }
+        },
+        |ui| {
+            if !c.summary.is_empty() {
+                ui.label(style::body(&c.summary));
+            }
+            if !c.tags.is_empty() {
+                tag_row(ui, c.tags.iter().map(String::as_str), WL);
+            }
+            buy_and_datasheet(ui, None, &c.datasheet);
+            style::spec_grid(ui, ("cs", &c.id), c.spec.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        },
+    );
+}
+
+fn project_card(ui: &mut egui::Ui, p: &Project) {
+    style::card(
+        ui,
+        ("proj", &p.id),
+        |ui| {
+            style::truncated(ui, &p.name, true);
+            if !p.category.is_empty() {
+                style::pill(ui, &p.category, AMBER);
+            }
+            if !p.difficulty.is_empty() {
+                ui.label(style::dim(ui, &p.difficulty));
+            }
+        },
+        |ui| {
+            if !p.summary.is_empty() {
+                ui.label(style::body(&p.summary));
+            }
+            if !p.modules.is_empty() {
+                tag_row(ui, p.modules.iter().map(String::as_str), GREY);
+            }
+        },
+    );
+}
+
+/// Count line (scannable, at the top) + the cards, or a centered "nothing matched" when the
+/// filter is empty. Shared by the Projects / Modules / Chips tabs so they behave identically.
+fn render_catalog_list<T>(ui: &mut egui::Ui, noun: &str, items: &[&T], search: &str, render: impl Fn(&mut egui::Ui, &T)) {
+    ui.label(style::dim(ui, format!("{} {noun}", items.len())));
+    ui.add_space(style::GAP_XS);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        if items.is_empty() {
+            ui.add_space(style::GAP_M);
+            ui.vertical_centered(|ui| {
+                let msg = if search.is_empty() { format!("No {noun} here yet.") } else { format!("No {noun} match “{search}”.") };
+                ui.label(style::dim(ui, msg));
+            });
+            return;
+        }
+        for it in items {
+            render(ui, it);
+        }
     });
 }
 
@@ -196,9 +243,7 @@ impl Default for Manager {
 }
 
 fn dot(ui: &mut egui::Ui, on: bool, label: &str) {
-    let (c, glyph) = if on { (GREEN, "●") } else { (RED, "●") };
-    ui.label(RichText::new(glyph).color(c));
-    ui.label(label);
+    style::status_dot(ui, if on { GREEN } else { RED }, label);
 }
 
 fn source_badge(ui: &mut egui::Ui, source: Source) {
@@ -206,7 +251,7 @@ fn source_badge(ui: &mut egui::Ui, source: Source) {
         Source::WeaveLogic => (WL, "WeaveLogic"),
         Source::Cognitum => (COG, "Cognitum"),
     };
-    ui.label(RichText::new(t).color(c).small());
+    style::pill(ui, t, c);
 }
 
 fn source_badge_str(ui: &mut egui::Ui, source: &str) {
@@ -215,20 +260,20 @@ fn source_badge_str(ui: &mut egui::Ui, source: &str) {
         "cognitum" => (COG, "Cognitum"),
         _ => (GREY, "local"),
     };
-    ui.label(RichText::new(t).color(c).small());
+    style::pill(ui, t, c);
 }
 
 impl Manager {
     fn top_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("mgr_top").show(ctx, |ui| {
-            ui.add_space(4.0);
+            ui.add_space(style::GAP_S);
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("WeftOS").size(20.0).strong());
-                ui.label(RichText::new("appliance console").color(GREY));
+                ui.label(style::h1("WeftOS"));
+                ui.label(style::dim(ui, "appliance console"));
                 ui.separator();
-                ui.label("host");
+                ui.label(style::dim(ui, "host"));
                 ui.add(egui::TextEdit::singleline(&mut self.host_draft).desired_width(230.0).hint_text("http://<ip>:9480"));
-                ui.label("token");
+                ui.label(style::dim(ui, "token"));
                 ui.add(egui::TextEdit::singleline(&mut self.token_draft).password(true).desired_width(110.0).hint_text("<root>/host.token"));
                 if ui.button("Connect").clicked() {
                     let mut s = self.client.s.clone();
@@ -243,32 +288,36 @@ impl Manager {
                         dot(ui, true, &format!("connected · {} cog(s) running", h.running));
                     }
                     Some(Err(e)) => dot(ui, false, &format!("no host ({e})")),
-                    None => {
-                        ui.label(RichText::new("◌").color(AMBER));
-                        ui.label("connecting…");
-                    }
+                    None => style::status_dot(ui, AMBER, "connecting…"),
                 }
             });
-            ui.add_space(4.0);
+            ui.add_space(style::GAP_S);
         });
     }
 
     fn nav(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::left("mgr_nav").resizable(false).default_width(150.0).show(ctx, |ui| {
-            ui.add_space(8.0);
-            ui.selectable_value(&mut self.section, Section::Cogs, RichText::new("⚙  Cogs").size(16.0));
-            ui.add_space(2.0);
-            ui.selectable_value(&mut self.section, Section::Sensors, RichText::new("📈  Sensors").size(16.0));
-            ui.selectable_value(&mut self.section, Section::Catalog, RichText::new("📚  Catalog").size(16.0));
-            ui.add_space(2.0);
-            ui.selectable_value(&mut self.section, Section::Network, RichText::new("🌐  Network").size(16.0));
-            ui.add_space(2.0);
-            ui.selectable_value(&mut self.section, Section::Apps, RichText::new("▦  Apps").size(16.0));
-            ui.add_space(2.0);
-            ui.selectable_value(&mut self.section, Section::System, RichText::new("🖥  System").size(16.0));
-            ui.add_space(12.0);
+        egui::SidePanel::left("mgr_nav").resizable(false).exact_width(164.0).show(ctx, |ui| {
+            ui.add_space(style::GAP_M);
+            // Grouped by what each tab is about: runtime, then hardware/data, then the fleet,
+            // then the rest. One rhythm between items, a little more between groups.
+            let groups: [&[(Section, &str)]; 3] = [
+                &[(Section::Cogs, "⚙   Cogs")],
+                &[(Section::Sensors, "📈   Sensors"), (Section::Catalog, "📚   Catalog")],
+                &[(Section::Network, "🌐   Network"), (Section::Apps, "▦   Apps"), (Section::System, "🖥   System")],
+            ];
+            for (gi, group) in groups.iter().enumerate() {
+                if gi > 0 {
+                    ui.add_space(style::GAP_S);
+                }
+                for (section, label) in *group {
+                    ui.selectable_value(&mut self.section, *section, RichText::new(*label).size(15.0));
+                    ui.add_space(2.0);
+                }
+            }
+            ui.add_space(style::GAP_M);
             ui.separator();
-            ui.label(RichText::new("the OS runs cogs here with\nno per-slot cap; apps land\nnext (COG-009).").color(GREY).small());
+            ui.add_space(style::GAP_S);
+            ui.label(style::dim(ui, "The OS runs cogs here with no per-slot cap; apps land next (COG-009)."));
         });
     }
 
@@ -278,33 +327,30 @@ impl Manager {
             (sh.host.clone(), sh.catalog.clone(), sh.last_action.clone())
         };
 
-        ui.heading("Running on this OS");
-        ui.label(RichText::new("cogs supervised by weft-cog-host — restarted on exit, no 3-cog agent cap").color(GREY).small());
-        ui.add_space(4.0);
+        style::section_header(ui, "Running on this OS", "cogs supervised by weft-cog-host — restarted on exit, no 3-cog agent cap");
         match &host {
             Some(Ok(h)) => self.running_table(ui, ctx, h),
             Some(Err(e)) => {
                 ui.colored_label(RED, format!("Can't reach the cog-host: {e}"));
-                ui.label(RichText::new("Start it on the appliance: weft-cog-host serve --port 9480, then set the host above.").color(GREY).small());
+                ui.label(style::dim(ui, "Start it on the appliance: weft-cog-host serve --port 9480, then set the host above."));
             }
             None => {
-                ui.label("Connecting to the host…");
+                ui.label(style::dim(ui, "Connecting to the host…"));
             }
         }
         if let Some(a) = &action {
-            ui.add_space(2.0);
-            ui.label(RichText::new(a).color(GREY).small());
+            ui.add_space(style::GAP_XS);
+            ui.label(style::dim(ui, a));
         }
 
-        ui.add_space(14.0);
+        ui.add_space(style::GAP_L);
         ui.separator();
-        ui.heading("Marketplace");
-        ui.label(RichText::new("WeaveLogic (signed) + a mirror of Cognitum's registry — one catalog").color(GREY).small());
-        ui.add_space(4.0);
+        ui.add_space(style::GAP_S);
+        style::section_header(ui, "Marketplace", "WeaveLogic (signed) + a mirror of Cognitum's registry — one catalog");
         match &catalog {
             Some(cat) => self.marketplace(ui, ctx, cat, host.as_ref().and_then(|r| r.as_ref().ok())),
             None => {
-                ui.label("Loading the marketplace…");
+                ui.label(style::dim(ui, "Loading the marketplace…"));
             }
         }
     }
@@ -336,10 +382,10 @@ impl Manager {
                 ui.label(if c.restarts > 0 { c.restarts.to_string() } else { "—".into() });
                 ui.horizontal(|ui| {
                     if c.running {
-                        if ui.small_button("Stop").clicked() {
+                        if ui.button(RichText::new("Stop").color(RED)).clicked() {
                             self.client.lifecycle(&c.id, "stop", ctx);
                         }
-                    } else if ui.small_button("Start").clicked() {
+                    } else if ui.button(RichText::new("Start").color(GREEN)).clicked() {
                         self.client.lifecycle(&c.id, "start", ctx);
                     }
                 });
@@ -365,13 +411,14 @@ impl Manager {
 
     fn marketplace(&self, ui: &mut egui::Ui, ctx: &egui::Context, cat: &Catalog, host: Option<&HostStatus>) {
         let installed = |id: &str| host.is_some_and(|h| h.cogs.iter().any(|c| c.id == id));
-        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, false]).show(ui, |ui| {
             let mut cat_name = String::new();
             for item in &cat.items {
                 if item.category != cat_name {
                     cat_name = item.category.clone();
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(if cat_name.is_empty() { "other" } else { &cat_name }).strong().color(AMBER));
+                    ui.add_space(style::GAP_S);
+                    ui.label(RichText::new(if cat_name.is_empty() { "other" } else { &cat_name }).strong().color(AMBER).size(13.0));
+                    ui.add_space(style::GAP_XS);
                 }
                 self.market_row(ui, ctx, item, installed(&item.id));
             }
@@ -379,75 +426,90 @@ impl Manager {
     }
 
     fn market_row(&self, ui: &mut egui::Ui, ctx: &egui::Context, item: &CatalogItem, installed: bool) {
-        ui.horizontal(|ui| {
-            if item.signed {
-                ui.label(RichText::new("🛡").color(WL)).on_hover_text("Ed25519-signed; verified before install");
-            }
-            ui.label(RichText::new(&item.name).strong());
-            ui.label(RichText::new(format!("v{}", item.version)).color(GREY).small());
-            source_badge(ui, item.source);
-            if item.also_in_other_source {
-                ui.label(RichText::new("(also upstream)").color(GREY).small());
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if installed {
-                    ui.label(RichText::new("installed").color(GREEN).small());
-                } else {
-                    let resp = ui.add(egui::Button::new("Install").small());
-                    let resp = if item.signed {
-                        resp.on_hover_text("Fetch + Ed25519-verify against the pinned WeaveLogic key, then install on the host")
-                    } else {
-                        resp.on_hover_text("Cognitum cog (unsigned): fetched and sha256-checked on the host before it lands")
-                    };
-                    if resp.clicked() {
-                        self.client.install(&item.id, item.source, item.version.clone(), ctx);
-                    }
+        style::card_frame(ui).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if item.signed {
+                    ui.label(RichText::new("🛡").color(WL)).on_hover_text("Ed25519-signed; verified before install");
                 }
-                ui.label(RichText::new(item.arches.join("/")).color(GREY).small());
+                style::truncated(ui, &item.name, true);
+                ui.label(style::dim(ui, format!("v{}", item.version)));
+                source_badge(ui, item.source);
+                if item.also_in_other_source {
+                    ui.label(style::dim(ui, "(also upstream)"));
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if installed {
+                        style::pill(ui, "✓ installed", GREEN);
+                    } else {
+                        let resp = ui.add(egui::Button::new("Install"));
+                        let resp = if item.signed {
+                            resp.on_hover_text("Fetch + Ed25519-verify against the pinned WeaveLogic key, then install on the host")
+                        } else {
+                            resp.on_hover_text("Cognitum cog (unsigned): fetched and sha256-checked on the host before it lands")
+                        };
+                        if resp.clicked() {
+                            self.client.install(&item.id, item.source, item.version.clone(), ctx);
+                        }
+                    }
+                    ui.label(style::dim(ui, item.arches.join("/")));
+                });
             });
+            if !item.description.is_empty() {
+                ui.label(style::dim(ui, &item.description));
+            }
         });
-        if !item.description.is_empty() {
-            ui.label(RichText::new(&item.description).color(GREY).small());
-        }
-        ui.add_space(2.0);
+        ui.add_space(style::GAP_XS);
     }
 
     fn catalog_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            ui.heading("Hardware catalog");
+            style::h2(ui, "Hardware catalog");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("🔍 Identify hardware").on_hover_text("scan the host's USB bus and match devices to the catalog").clicked() {
+                if ui.button("🔍  Identify hardware").on_hover_text("scan the host's USB bus and match devices to the catalog").clicked() {
                     self.hw.open(&self.client, ctx);
                 }
             });
         });
-        ui.label(
-            RichText::new(format!(
+        style::caption(
+            ui,
+            format!(
                 "{} projects · {} modules · {} chips — Projects → Modules → Chips (explored across weftos, mentra, whitsentry)",
                 self.catalog.projects.len(),
                 self.catalog.modules.len(),
                 self.catalog.chips.len()
-            ))
-            .color(GREY)
-            .small(),
+            ),
         );
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.cat_tab, 0u8, "Projects");
-            ui.selectable_value(&mut self.cat_tab, 1u8, "Modules");
-            ui.selectable_value(&mut self.cat_tab, 2u8, "Chips");
-            ui.selectable_value(&mut self.cat_tab, 3u8, "Dex");
-            ui.add_space(10.0);
-            ui.add(egui::TextEdit::singleline(&mut self.cat_search).hint_text("search name, vendor, spec, what it senses…").desired_width(300.0));
-        });
-        if self.cat_tab == 1 {
-            ui.horizontal_wrapped(|ui| {
-                for k in ["all", "board", "sensor", "display", "actuator"] {
-                    ui.selectable_value(&mut self.cat_kind, k.to_string(), k);
+        ui.add_space(style::GAP_S);
+        // Filter bar: the tab picker, the search field and (for modules) the kind chips read
+        // as one toolbar instead of three loose widget rows.
+        style::card_frame(ui).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.cat_tab, 0u8, "Projects");
+                ui.selectable_value(&mut self.cat_tab, 1u8, "Modules");
+                ui.selectable_value(&mut self.cat_tab, 2u8, "Chips");
+                ui.selectable_value(&mut self.cat_tab, 3u8, "Dex");
+                ui.separator();
+                ui.label(style::dim(ui, "🔍"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.cat_search)
+                        .hint_text("search name, vendor, spec, what it senses…")
+                        .desired_width(300.0),
+                );
+                if !self.cat_search.is_empty() && ui.button("✕").on_hover_text("clear search").clicked() {
+                    self.cat_search.clear();
                 }
             });
-        }
-        ui.separator();
+            if self.cat_tab == 1 {
+                ui.add_space(style::GAP_XS);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(style::dim(ui, "kind"));
+                    for k in ["all", "board", "sensor", "display", "actuator"] {
+                        ui.selectable_value(&mut self.cat_kind, k.to_string(), k);
+                    }
+                });
+            }
+        });
+        ui.add_space(style::GAP_S);
         if self.cat_tab == 3 {
             self.dex.show(ui, ctx, &self.client, &self.catalog);
             return;
@@ -455,71 +517,54 @@ impl Manager {
         let q = self.cat_search.to_lowercase();
         let (tab, kind) = (self.cat_tab, self.cat_kind.clone());
         let cat = &self.catalog;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            let mut n = 0;
-            match tab {
-                0 => {
-                    for p in &cat.projects {
-                        if q.is_empty() || proj_hay(p).contains(&q) {
-                            project_card(ui, p);
-                            n += 1;
-                        }
-                    }
-                    ui.label(RichText::new(format!("{n} projects")).color(GREY).small());
-                }
-                2 => {
-                    for c in &cat.chips {
-                        if q.is_empty() || chip_hay(c).contains(&q) {
-                            chip_card(ui, c);
-                            n += 1;
-                        }
-                    }
-                    ui.label(RichText::new(format!("{n} chips")).color(GREY).small());
-                }
-                _ => {
-                    for m in &cat.modules {
-                        if kind != "all" && m.kind != kind {
-                            continue;
-                        }
-                        if q.is_empty() || mod_hay(m).contains(&q) {
-                            module_card(ui, m);
-                            n += 1;
-                        }
-                    }
-                    ui.label(RichText::new(format!("{n} modules")).color(GREY).small());
-                }
+        let search = &self.cat_search;
+        // Filter first so the result count can sit at the top where it's scannable, and an
+        // empty result reads as a clear "nothing matched" instead of a bare "0".
+        match tab {
+            0 => {
+                let items: Vec<_> = cat.projects.iter().filter(|p| q.is_empty() || proj_hay(p).contains(&q)).collect();
+                render_catalog_list(ui, "projects", &items, search, project_card);
             }
-        });
+            2 => {
+                let items: Vec<_> = cat.chips.iter().filter(|c| q.is_empty() || chip_hay(c).contains(&q)).collect();
+                render_catalog_list(ui, "chips", &items, search, chip_card);
+            }
+            _ => {
+                let items: Vec<_> = cat
+                    .modules
+                    .iter()
+                    .filter(|m| (kind == "all" || m.kind == kind) && (q.is_empty() || mod_hay(m).contains(&q)))
+                    .collect();
+                render_catalog_list(ui, "modules", &items, search, module_card);
+            }
+        }
     }
 
     fn network_view(&self, ui: &mut egui::Ui) {
         let net = self.client.snapshot().net.clone();
-        ui.heading("Network");
-        ui.label(RichText::new("the fleet this OS is part of — tailnet peers + the Cognitum mesh overlay").color(GREY).small());
-        ui.add_space(6.0);
+        style::section_header(ui, "Network", "the fleet this OS is part of — tailnet peers + the Cognitum mesh overlay");
         match &net {
             Some(Ok(n)) => self.fleet_tables(ui, n),
             Some(Err(e)) => {
                 ui.colored_label(RED, format!("Can't reach the host's /network: {e}"));
             }
             None => {
-                ui.label("Querying the mesh…");
+                ui.label(style::dim(ui, "Querying the mesh…"));
             }
         }
     }
 
     fn fleet_tables(&self, ui: &mut egui::Ui, n: &Net) {
         if !n.node.is_empty() {
-            ui.label(RichText::new(format!("this node: {}", n.node)).strong());
+            ui.label(style::body(format!("this node: {}", n.node)).strong());
         }
-        ui.add_space(4.0);
 
-        ui.label(RichText::new("Tailnet fleet").strong().color(AMBER));
+        style::subhead(ui, "Tailnet fleet");
         if !n.tailscale.available {
-            ui.label(RichText::new("tailscale not available on this node").color(GREY).small());
+            ui.label(style::dim(ui, "tailscale not available on this node"));
         } else {
             let online = n.tailscale.peers.iter().filter(|p| p.online).count();
-            ui.label(RichText::new(format!("{} nodes, {} online", n.tailscale.peers.len(), online)).color(GREY).small());
+            ui.label(style::dim(ui, format!("{} nodes, {} online", n.tailscale.peers.len(), online)));
             egui::Grid::new("tailnet").num_columns(4).striped(true).spacing([16.0, 5.0]).show(ui, |ui| {
                 for h in ["node", "tailnet IP", "os", "state"] {
                     ui.label(RichText::new(h).strong().small());
@@ -546,8 +591,8 @@ impl Manager {
             });
         }
 
-        ui.add_space(10.0);
-        ui.label(RichText::new("Cognitum mesh overlay").strong().color(AMBER));
+        ui.add_space(style::GAP_S);
+        style::subhead(ui, "Cognitum mesh overlay");
         let count = n.cognitum_mesh.get("count").and_then(|v| v.as_u64());
         match count {
             Some(0) => {
@@ -566,13 +611,13 @@ impl Manager {
             }
         }
 
-        ui.add_space(10.0);
-        ui.label(RichText::new("Fleet nodes (edge / ESP32)").strong().color(AMBER));
+        ui.add_space(style::GAP_S);
+        style::subhead(ui, "Fleet nodes (edge / ESP32)");
         if n.fleet.is_empty() {
-            ui.label(RichText::new("none checked in. Edge nodes POST /fleet/heartbeat to appear here (COG-010); firmware is the next step.").color(GREY).small());
+            ui.label(style::dim(ui, "none checked in. Edge nodes POST /fleet/heartbeat to appear here (COG-010); firmware is the next step."));
         } else {
             let online = n.fleet.iter().filter(|f| f.online).count();
-            ui.label(RichText::new(format!("{} node(s), {} online", n.fleet.len(), online)).color(GREY).small());
+            ui.label(style::dim(ui, format!("{} node(s), {} online", n.fleet.len(), online)));
             egui::Grid::new("fleet").num_columns(5).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
                 for h in ["node", "kind", "sensor", "signal / batt", "seen"] {
                     ui.label(RichText::new(h).strong().small());
@@ -605,41 +650,48 @@ impl Manager {
             return;
         }
 
-        ui.heading("Sensors");
-        ui.label(RichText::new("running sensor cogs and their hook-up guides").color(GREY).small());
-        ui.add_space(8.0);
+        style::section_header(ui, "Sensors", "running sensor cogs and their hook-up guides");
         let running: Vec<HostCog> = match &self.client.snapshot().host {
             Some(Ok(h)) => h.cogs.iter().filter(|c| c.running).cloned().collect(),
             _ => Vec::new(),
         };
         if running.is_empty() {
-            ui.label(RichText::new("No cogs running. Start one in the Cogs tab, then open its guide here.").color(GREY));
-        } else {
-            egui::Grid::new("sensors").num_columns(3).spacing([16.0, 8.0]).striped(true).show(ui, |ui| {
-                for c in &running {
-                    ui.label(RichText::new(&c.id).strong());
-                    ui.label(RichText::new(format!("v{}", c.version)).color(GREY).small());
-                    if ui.button("📖  Guide").clicked() {
-                        let port = default_export_port(&c.id);
-                        self.guide_cog = Some(c.id.clone());
-                        self.guide_bundle = None;
-                        self.guide_view = GuideView::at(None);
-                        self.guide_port_draft = if port == 0 { String::new() } else { port.to_string() };
-                        if port != 0 {
-                            self.client.fetch_guide(&c.id, port, ctx);
-                        }
-                    }
-                    ui.end_row();
-                }
+            ui.add_space(style::GAP_M);
+            ui.vertical_centered(|ui| {
+                ui.label(style::dim(ui, "No cogs running. Start one in the Cogs tab, then open its guide here."));
             });
+        } else {
+            for c in &running {
+                let mut open_guide = false;
+                style::card_frame(ui).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        style::truncated(ui, &c.id, true);
+                        style::pill(ui, &format!("v{}", c.version), GREY);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            open_guide = ui.button("📖  Open guide").clicked();
+                        });
+                    });
+                });
+                ui.add_space(style::GAP_XS);
+                if open_guide {
+                    let port = default_export_port(&c.id);
+                    self.guide_cog = Some(c.id.clone());
+                    self.guide_bundle = None;
+                    self.guide_view = GuideView::at(None);
+                    self.guide_port_draft = if port == 0 { String::new() } else { port.to_string() };
+                    if port != 0 {
+                        self.client.fetch_guide(&c.id, port, ctx);
+                    }
+                }
+            }
         }
-        ui.add_space(10.0);
+        ui.add_space(style::GAP_M);
         ui.label(
-            RichText::new(
+            style::dim(
+                ui,
                 "The guide is served by each cog on its own export port — no Seed agent needed. \
                  Live dashboards (ECG waveform, ToF heatmap, generic trace) come next.",
             )
-            .color(GREY)
             .italics(),
         );
     }
@@ -654,11 +706,12 @@ impl Manager {
                 self.guide_bundle = None;
                 self.client.clear_guide();
             }
-            ui.add_space(8.0);
-            ui.heading(RichText::new(format!("{id} — guide")));
+            ui.add_space(style::GAP_S);
+            style::h2(ui, format!("{id} — guide"));
         });
+        ui.add_space(style::GAP_XS);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("export port").color(GREY).small());
+            ui.label(style::dim(ui, "export port"));
             ui.add(egui::TextEdit::singleline(&mut self.guide_port_draft).desired_width(70.0));
             let load = ui.button("Load").clicked().then(|| self.guide_port_draft.trim().parse::<u16>().ok()).flatten();
             if let Some(p) = load {
@@ -685,12 +738,12 @@ impl Manager {
 
         match &self.guide_bundle {
             None => {
-                ui.add_space(8.0);
+                ui.add_space(style::GAP_S);
                 if self.guide_port_draft.trim().is_empty() {
                     ui.label(RichText::new("Unknown export port for this cog — enter it above and press Load.").color(AMBER));
-                    ui.label(RichText::new("(It's the cog's [api].bind_port, e.g. 8050 for rd-03e.)").color(GREY).small());
+                    ui.label(style::dim(ui, "(It's the cog's [api].bind_port, e.g. 8050 for rd-03e.)"));
                 } else {
-                    ui.label(RichText::new("Loading guide…").color(GREY));
+                    ui.label(style::dim(ui, "Loading guide…"));
                 }
             }
             Some(Ok(bundle)) => {
@@ -698,54 +751,54 @@ impl Manager {
                 self.guide_view.show(ui, &bundle);
             }
             Some(Err(e)) => {
-                ui.add_space(8.0);
+                ui.add_space(style::GAP_S);
                 ui.label(RichText::new(format!("Couldn't load the guide: {e}")).color(RED));
-                ui.label(RichText::new("Is the cog running and its export port reachable? Adjust the port above and press Load.").color(GREY).small());
+                ui.label(style::dim(ui, "Is the cog running and its export port reachable? Adjust the port above and press Load."));
             }
         }
     }
 
     fn apps_view(&self, ui: &mut egui::Ui) {
-        ui.add_space(40.0);
+        ui.add_space(style::GAP_L);
         ui.vertical_centered(|ui| {
-            ui.label(RichText::new("▦").size(48.0).color(GREY));
-            ui.add_space(8.0);
-            ui.heading("No apps yet");
-            ui.label(RichText::new("Apps install here alongside cogs. The OS runs them the same way —\nsupervised by WeftOS, no agent cap. Coming next.").color(GREY));
+            ui.label(RichText::new("▦").size(48.0).color(style::muted(ui)));
+            ui.add_space(style::GAP_S);
+            style::h2(ui, "No apps yet");
+            ui.add_space(style::GAP_XS);
+            ui.label(style::dim(ui, "Apps install here alongside cogs. The OS runs them the same way — supervised by WeftOS, no agent cap. Coming next."));
         });
     }
 
     fn system_view(&self, ui: &mut egui::Ui) {
         let sh = self.client.snapshot();
-        ui.heading("System");
-        ui.add_space(4.0);
-        egui::Grid::new("sys").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
-            ui.label("cog-host");
+        style::section_header(ui, "System", "the cog-host and registries this console is talking to");
+        egui::Grid::new("sys").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+            ui.label(style::dim(ui, "cog-host"));
             match &sh.host {
                 Some(Ok(h)) => ui.label(RichText::new(format!("reachable · root {} · {} running", h.root, h.running)).color(GREEN)),
                 Some(Err(e)) => ui.label(RichText::new(e).color(RED)),
-                None => ui.label("connecting…"),
+                None => ui.label(style::dim(ui, "connecting…")),
             };
             ui.end_row();
-            ui.label("host url");
-            ui.label(&self.client.s.host);
+            ui.label(style::dim(ui, "host url"));
+            ui.label(style::body(&self.client.s.host));
             ui.end_row();
-            ui.label("WeaveLogic registry");
+            ui.label(style::dim(ui, "WeaveLogic registry"));
             match &sh.our_reg {
                 Some(Ok(r)) => ui.label(RichText::new(format!("{} signed cog(s)", r.cogs.len())).color(GREEN)),
-                Some(Err(e)) => ui.label(RichText::new(e.as_str()).color(GREY)),
-                None => ui.label("…"),
+                Some(Err(e)) => ui.label(style::dim(ui, e.as_str())),
+                None => ui.label(style::dim(ui, "…")),
             };
             ui.end_row();
-            ui.label("Cognitum registry (mirror)");
+            ui.label(style::dim(ui, "Cognitum registry (mirror)"));
             match &sh.cognitum_reg {
                 Some(Ok(r)) => ui.label(RichText::new(format!("{} cog(s)", r.cogs.len())).color(GREEN)),
-                Some(Err(e)) => ui.label(RichText::new(e.as_str()).color(GREY)),
-                None => ui.label("…"),
+                Some(Err(e)) => ui.label(style::dim(ui, e.as_str())),
+                None => ui.label(style::dim(ui, "…")),
             };
             ui.end_row();
-            ui.label("interconnect");
-            ui.label(RichText::new("Cognitum agent store (:80) — cogs ingest there; WeftOS owns lifecycle (COG-009)").color(GREY));
+            ui.label(style::dim(ui, "interconnect"));
+            ui.label(style::dim(ui, "Cognitum agent store (:80) — cogs ingest there; WeftOS owns lifecycle (COG-009)"));
             ui.end_row();
         });
     }

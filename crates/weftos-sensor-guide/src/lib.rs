@@ -10,8 +10,13 @@ pub mod diagrams;
 
 pub use bundle::{GuideBundle, GuideDoc, GuidePage, Segment};
 
-use egui::RichText;
+use egui::{Color32, RichText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+
+/// WeaveLogic green, used for the "Configuring:" banner (legible on both egui themes).
+const BANNER_BG: Color32 = Color32::from_rgb(38, 96, 58);
+/// Amber caution used for the medical-device disclaimer.
+const CAUTION: Color32 = Color32::from_rgb(230, 170, 40);
 
 /// egui's default fonts lack arrows, comparison signs and ticks; show ASCII equivalents
 /// (authors may use either; ADR-104).
@@ -97,22 +102,28 @@ impl GuideView {
                 });
             ui.label(RichText::new(format!("{} sensors", sensors.len())).weak().small());
         });
+        ui.add_space(4.0);
+        // "Configuring: X" banner as a rounded panel with real padding, instead of a bare
+        // highlighted label — reads as a persistent context chip.
         let s = &sensors[self.sensor];
-        let banner = if s.location.is_empty() {
-            format!("Configuring: {}", s.name)
-        } else {
-            format!("Configuring: {}  ·  {}", s.name, s.location)
-        };
-        ui.label(
-            RichText::new(banner)
-                .strong()
-                .color(egui::Color32::WHITE)
-                .background_color(egui::Color32::from_rgb(38, 96, 58)),
-        );
+        egui::Frame::new()
+            .fill(BANNER_BG)
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(10, 5))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Configuring").size(11.0).color(Color32::from_rgb(170, 210, 185)));
+                    ui.label(RichText::new(&s.name).strong().color(Color32::WHITE));
+                    if !s.location.is_empty() {
+                        ui.label(RichText::new(format!("· {}", s.location)).color(Color32::from_rgb(210, 230, 218)));
+                    }
+                });
+            });
         if !s.detail.is_empty() {
+            ui.add_space(2.0);
             ui.label(RichText::new(&s.detail).small().weak());
         }
-        ui.add_space(2.0);
+        ui.add_space(4.0);
     }
 
     /// Register this bundle's embedded images with the egui context (once each) so `![](name)`
@@ -149,7 +160,7 @@ impl GuideView {
             .resizable(false)
             .exact_size(220.0)
             .show_inside(ui, |ui| {
-                ui.label(RichText::new(&bundle.doc.title).strong());
+                ui.label(RichText::new(&bundle.doc.title).size(16.0).strong());
                 if !bundle.doc.cog.is_empty() {
                     ui.label(
                         RichText::new(format!("cog {} {}", bundle.doc.cog, bundle.doc.cog_version))
@@ -157,28 +168,34 @@ impl GuideView {
                             .weak(),
                     );
                 }
-                ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("search the guide"));
                 ui.add_space(6.0);
+                ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("🔍 search the guide").desired_width(f32::INFINITY));
+                ui.add_space(8.0);
                 let q = self.search.to_lowercase();
+                let mut shown = 0;
                 for p in &bundle.pages {
                     if !q.is_empty() && !p.markdown.to_lowercase().contains(&q) {
                         continue;
                     }
+                    shown += 1;
+                    // Selected page reads as a highlighted row (built-in selectable hover/active
+                    // states), not just bolder text.
                     if ui
-                        .selectable_label(p.id == current, RichText::new(&p.title).strong())
+                        .selectable_label(p.id == current, RichText::new(&p.title))
                         .on_hover_text(&p.summary)
                         .clicked()
                     {
                         self.page = Some(p.id.clone());
                     }
                 }
+                if shown == 0 {
+                    ui.label(RichText::new("no pages match").small().weak());
+                }
                 if !bundle.doc.medical {
                     ui.add_space(10.0);
-                    ui.label(
-                        RichText::new("Not a medical device.")
-                            .small()
-                            .color(egui::Color32::from_rgb(230, 170, 40)),
-                    );
+                    ui.separator();
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Not a medical device.").small().color(CAUTION));
                 }
             });
         let Some(page) = bundle.page(&current) else {
