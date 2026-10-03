@@ -10748,6 +10748,7 @@ dependencies = [
 name = "weftos-cog-repo"
 version = "0.8.1"
 dependencies = [
+ "clawft-types",
  "ed25519-dalek",
  "hex",
  "reqwest",

@@ -742,6 +742,9 @@ fn pack(
     std::fs::write(cog_dir.join("cog.toml"), "[cog]\nid = \"swarm-probe\"\nname = \"Probe\"\nversion = \"0.1.0\"\n").unwrap();
     let bin: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
     std::fs::write(root.join("bin"), &bin).unwrap();
+    if !cog_dir.join("provenance.json").exists() {
+        crate::workload_pkg::write_source_build_provenance(&cog_dir, &root.join("bin")).unwrap();
+    }
     let rec = root.join("record.json");
     std::fs::write(&rec, b"{\"kind\":\"cognitum.cog.release-record.v1\"}").unwrap();
     let input = CogPackInput {
@@ -750,6 +753,8 @@ fn pack(
         source: PackageSource { repo: None, commit: Some(commit.into()), release_url: None },
         cognitum_record: record.then_some(rec),
         redistributable,
+        provenance: None,
+        allow_no_provenance: false,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();
@@ -1145,6 +1150,42 @@ async fn the_cognitum_origin_is_recorded_on_the_grant() {
         g[0].origin,
         crate::mesh_swarm_state::GrantOrigin::Cognitum { cog_id: "swarm-probe".into(), version: "0.1.0".into() },
         "the flag does not override Cognitum provenance"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_provenance_json_stamp_makes_the_grant_cognitum_origin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(1);
+    std::fs::create_dir_all(tmp.path().join("cog")).unwrap();
+    std::fs::write(tmp.path().join("cog/provenance.json"), br#"{"trust":"cognitum-sha256","sha256":"ab"}"#).unwrap();
+    let dir = pack(tmp.path(), 1024 * 1024, &k, "aaaaaaa", false, false);
+    let holder = swarm_node("holder", cfg());
+    let pkg = holder.ex.seed_package_dir(&dir, &anchors_for(&k)).unwrap();
+    let g = holder.ex.grants.get(&binary_hash(&pkg)).unwrap().clone();
+    assert_eq!(
+        g[0].origin,
+        crate::mesh_swarm_state::GrantOrigin::Cognitum { cog_id: "swarm-probe".into(), version: "0.1.0".into() }
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cognitum_release_url_alone_still_marks_cognitum_origin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let dir = pack(tmp.path(), 1024 * 1024, &k, "aaaaaaa", false, true);
+    let mut env = crate::workload_pkg::ManifestEnvelope::from_bytes(&std::fs::read(dir.join("cogpkg.json")).unwrap()).unwrap();
+    env.body["source"]["release_url"] = "https://example.invalid/cognitum/cogs".into();
+    env.signatures.clear();
+    sign_envelope(&mut env, &k, &key_id_for(&k.verifying_key().to_bytes())).unwrap();
+    write_manifest(&dir, &env).unwrap();
+    let holder = swarm_node("holder", cfg());
+    let pkg = holder.ex.seed_package_dir(&dir, &anchors_for(&k)).unwrap();
+    let g = holder.ex.grants.get(&binary_hash(&pkg)).unwrap().clone();
+    assert_eq!(
+        g[0].origin,
+        crate::mesh_swarm_state::GrantOrigin::Cognitum { cog_id: "swarm-probe".into(), version: "0.1.0".into() },
+        "a cognitum release URL is a fail-closed second signal, even with redistributable set"
     );
 }
 

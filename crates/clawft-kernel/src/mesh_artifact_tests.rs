@@ -113,6 +113,7 @@ pub(crate) fn signed_package(root: &Path, binary_len: usize, k: &SigningKey) -> 
     std::fs::write(cog_dir.join("cog.toml"), COG_TOML).unwrap();
     let bin: Vec<u8> = (0..binary_len).map(|i| (i * 31 % 251) as u8).collect();
     std::fs::write(root.join("bin"), &bin).unwrap();
+    crate::workload_pkg::write_source_build_provenance(&cog_dir, &root.join("bin")).unwrap();
     let input = CogPackInput {
         cog_dir,
         binaries: vec![("aarch64".into(), root.join("bin"))],
@@ -123,6 +124,8 @@ pub(crate) fn signed_package(root: &Path, binary_len: usize, k: &SigningKey) -> 
         },
         cognitum_record: None,
         redistributable: true,
+        provenance: None,
+        allow_no_provenance: false,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();

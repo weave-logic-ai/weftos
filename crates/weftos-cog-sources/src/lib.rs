@@ -27,6 +27,7 @@ mod tests;
 pub use config::{CogLicence, CogSource, EffectiveSources, LicensedCogs, SourceKind, SourcesFile};
 pub use error::{Result, SourceError};
 pub use fetch::{FsReader, Reader};
+pub use weftos_cog_repo::RevokedKeys;
 pub use install::{fetch_verified, install_into_host, FetchCtx, Fetched, Provenance};
 pub use resolve::{load_all, load_source, parse_ref, resolve, CogRef, Listing, LoadedSource, Resolved, SourceCog};
 

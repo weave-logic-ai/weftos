@@ -128,8 +128,23 @@ one instance cannot overwrite or dedup against another's vectors in a shared
 project store.
 
 Stores on an owner node are in-memory HNSW indexes created on first use
-(`VectorDirectory`). They are not persisted yet: a daemon restart empties
-them. Wiring them to a project kernel's durable store is a follow-up.
+(`VectorDirectory`), backed by a durable log so a daemon restart does not
+lose them. Every accepted batch is appended and synced to
+`<runtime dir>/cog-ingest-vectors/<project id>.vec` (`_controller.vec` for the
+project-less store) before the ingest is acknowledged, one capped file per
+project (64 MiB, mode 0600). On the project's first use after a restart the
+index and its dedup state are rebuilt from the log; a torn tail left by a
+crash is dropped. A batch that would pass the cap is refused as store full and
+writes nothing; vectors skipped as duplicates do not count against the cap.
+The index is updated only after the batch is on disk. A crash mid-append
+leaves a torn tail that is dropped on open. A checksum failure mid-file drops
+the frame and everything after it, logs a warning with the byte count, and
+keeps the dropped bytes in `<name>.vec.corrupt.<unix ts>`. A file that is not a
+log at all (wrong magic or over the cap) is moved aside as
+`<name>.vec.unreadable.<ts>` and the store starts empty; a transient I/O error
+only refuses the call and is retried. The log directory is mode 0700. The log only grows (no
+compaction), so repeated upserts of one id use space until the cap. Wiring
+stores to a project kernel's own durable store is a follow-up.
 
 The bridge and owner both log, and the host chains the placement as before;
 ingest requests themselves are counted (`BridgeStats`), not chained.

@@ -83,6 +83,8 @@ fn fixture_arches(record: Option<&Value>, arches: &[&str]) -> Fixture {
         },
         cognitum_record,
         redistributable: false,
+        provenance: None,
+        allow_no_provenance: true,
     };
     let pkg = root.join("pkg");
     let env = pack_cog(&input, &pkg).unwrap();
@@ -270,6 +272,8 @@ fn pack_refuses_non_empty_output_and_unknown_arch() {
         },
         cognitum_record: None,
         redistributable: false,
+        provenance: None,
+        allow_no_provenance: true,
     };
     assert!(matches!(
         pack_cog(&input, &fx.pkg),
@@ -630,4 +634,198 @@ fn one_bad_hex_signature_entry_does_not_fail_the_whole_verify() {
         verify(&forged.pkg, &anchors_for(&[&k])),
         Err(VerifyError::BadSignature { .. })
     ));
+}
+
+/// Where a test puts its `provenance.json`.
+#[derive(Clone, Copy)]
+enum Prov<'a> {
+    None,
+    /// In the cog dir, beside `cog.toml`.
+    CogDir(&'a str),
+    /// Beside the binary, where `weaver cog install` writes it.
+    BesideBin(&'a str),
+}
+
+const A64: &[u8] = b"\x7fELF aarch64 anomaly-detect";
+
+fn a64_sha() -> String {
+    hex_encode(&Sha256::digest(A64))
+}
+
+fn pack_with(
+    fx: &Fixture,
+    prov: Prov<'_>,
+    redistributable: bool,
+    allow_no_provenance: bool,
+) -> Result<(ManifestEnvelope, PathBuf), PackError> {
+    let cog_dir = fx.root.join("vendor/cogs/src/cogs/anomaly-detect");
+    match prov {
+        Prov::None => {}
+        Prov::CogDir(j) => std::fs::write(cog_dir.join("provenance.json"), j).unwrap(),
+        Prov::BesideBin(j) => std::fs::write(fx.root.join("provenance.json"), j).unwrap(),
+    }
+    let input = CogPackInput {
+        cog_dir,
+        binaries: vec![("aarch64".into(), fx.root.join("a64"))],
+        source: PackageSource {
+            repo: None,
+            commit: Some("8970f99".into()),
+            release_url: None,
+        },
+        cognitum_record: None,
+        redistributable,
+        provenance: None,
+        allow_no_provenance,
+    };
+    let out = fx.root.join("pkg-prov");
+    pack_cog(&input, &out).map(|e| (e, out))
+}
+
+fn cognitum_prov() -> String {
+    format!(
+        r#"{{"source":"cognitum","kind":"cognitum","registry":"r","cog_id":"anomaly-detect",
+        "version":"1.2.0","arch":"arm","sha256":"{}","trust":"cognitum-sha256",
+        "licence_account":"acct-secret","placement_eligible":false,"fetched_at":"2026-01-01T00:00:00Z"}}"#,
+        a64_sha()
+    )
+}
+
+fn signed_prov(sha: &str) -> String {
+    format!(r#"{{"trust":"ed25519-signed","sha256":"{sha}"}}"#)
+}
+
+#[test]
+fn pack_stamps_a_cognitum_attestation_from_provenance_json() {
+    let fx = fixture(None);
+    let (env, out) = pack_with(&fx, Prov::CogDir(&cognitum_prov()), false, false).unwrap();
+    let body = env.cog_body().unwrap();
+    let att = body
+        .attestations
+        .iter()
+        .find(|a| a.kind == pack::COGNITUM_PROVENANCE_KIND)
+        .expect("stamped");
+    let stamp = std::fs::read_to_string(out.join(&att.file.path)).unwrap();
+    assert!(!stamp.contains("acct-secret"), "licence account is not carried");
+    assert!(stamp.contains("cognitum-sha256"));
+    assert!(!body.redistributable);
+}
+
+#[test]
+fn pack_finds_the_provenance_beside_the_binary_the_install_workflow() {
+    // `weaver cog install` writes provenance.json beside the binary, in a dir with no cog.toml;
+    // the operator packs with --cog-dir pointing at the source dir. The stamp must still happen.
+    let fx = fixture(None);
+    let (env, _) = pack_with(&fx, Prov::BesideBin(&cognitum_prov()), false, false).unwrap();
+    assert!(env.cog_body().unwrap().attestations.iter().any(|a| a.kind == pack::COGNITUM_PROVENANCE_KIND));
+    let fx = fixture(None);
+    let err = pack_with(&fx, Prov::BesideBin(&cognitum_prov()), true, true).unwrap_err();
+    assert!(err.to_string().contains("--redistributable is refused"), "{err}");
+}
+
+#[test]
+fn pack_refuses_redistributable_for_a_cognitum_install() {
+    let fx = fixture(None);
+    let err = pack_with(&fx, Prov::CogDir(&cognitum_prov()), true, false).unwrap_err();
+    assert!(err.to_string().contains("--redistributable is refused"), "{err}");
+}
+
+#[test]
+fn redistributable_needs_provenance_unless_the_operator_says_otherwise() {
+    let fx = fixture(None);
+    let err = pack_with(&fx, Prov::None, true, false).unwrap_err();
+    assert!(err.to_string().contains("--no-provenance-ok"), "{err}");
+    let fx = fixture(None);
+    let (env, _) = pack_with(&fx, Prov::None, true, true).unwrap();
+    assert!(env.cog_body().unwrap().redistributable);
+}
+
+#[test]
+fn a_matching_signed_provenance_allows_redistributable_and_a_mismatch_does_not() {
+    let fx = fixture(None);
+    let (env, _) = pack_with(&fx, Prov::CogDir(&signed_prov(&a64_sha())), true, false).unwrap();
+    let body = env.cog_body().unwrap();
+    assert!(body.attestations.is_empty() && body.redistributable);
+
+    // The provenance describes some other binary: refused, even with --no-provenance-ok.
+    let fx = fixture(None);
+    let err = pack_with(&fx, Prov::CogDir(&signed_prov(&"ab".repeat(32))), true, true).unwrap_err();
+    assert!(err.to_string().contains("covers the aarch64 binary"), "{err}");
+    // Beside the binary, the same check applies to that binary.
+    let fx = fixture(None);
+    assert!(pack_with(&fx, Prov::BesideBin(&signed_prov(&"ab".repeat(32))), true, false).is_err());
+    // No sha256 or trust: cannot show anything.
+    let fx = fixture(None);
+    assert!(pack_with(&fx, Prov::CogDir(r#"{"trust":"ed25519-signed"}"#), true, false).is_err());
+}
+
+#[test]
+fn a_malformed_provenance_fails_the_pack_even_without_redistributable() {
+    let fx = fixture(None);
+    assert!(pack_with(&fx, Prov::CogDir("not json"), false, false).is_err());
+}
+
+fn pack_both_arches(fx: &Fixture, cog_dir_prov: &str) -> Result<(ManifestEnvelope, PathBuf), PackError> {
+    let cog_dir = fx.root.join("vendor/cogs/src/cogs/anomaly-detect");
+    std::fs::write(cog_dir.join("provenance.json"), cog_dir_prov).unwrap();
+    let input = CogPackInput {
+        cog_dir,
+        binaries: vec![("aarch64".into(), fx.root.join("a64")), ("armv7".into(), fx.root.join("a32"))],
+        source: PackageSource { repo: None, commit: Some("8970f99".into()), release_url: None },
+        cognitum_record: None,
+        redistributable: true,
+        provenance: None,
+        allow_no_provenance: false,
+    };
+    let out = fx.root.join("pkg-multi");
+    pack_cog(&input, &out).map(|e| (e, out))
+}
+
+#[test]
+fn every_binary_must_be_covered_by_a_matching_provenance() {
+    // The provenance matches the aarch64 binary only; the armv7 one is uncovered.
+    let fx = fixture(None);
+    let err = pack_both_arches(&fx, &signed_prov(&a64_sha())).unwrap_err();
+    assert!(err.to_string().contains("covers the armv7 binary"), "{err}");
+
+    // A provenance beside each binary is not needed when one entry per binary exists:
+    // a second entry (explicit) covering armv7 completes the set.
+    let fx = fixture(None);
+    let a32_sha = hex_encode(&Sha256::digest(b"\x7fELF armv7 anomaly-detect"));
+    std::fs::write(fx.root.join("prov32.json"), signed_prov(&a32_sha)).unwrap();
+    let cog_dir = fx.root.join("vendor/cogs/src/cogs/anomaly-detect");
+    std::fs::write(cog_dir.join("provenance.json"), signed_prov(&a64_sha())).unwrap();
+    let input = CogPackInput {
+        cog_dir,
+        binaries: vec![("aarch64".into(), fx.root.join("a64")), ("armv7".into(), fx.root.join("a32"))],
+        source: PackageSource { repo: None, commit: Some("8970f99".into()), release_url: None },
+        cognitum_record: None,
+        redistributable: true,
+        provenance: Some(fx.root.join("prov32.json")),
+        allow_no_provenance: false,
+    };
+    assert!(pack_cog(&input, &fx.root.join("pkg-both")).is_ok());
+}
+
+#[test]
+fn unknown_trust_values_are_refused_for_redistributable() {
+    let fx = fixture(None);
+    let j = format!(r#"{{"trust":"trust-me","sha256":"{}"}}"#, a64_sha());
+    let err = pack_with(&fx, Prov::CogDir(&j), true, true).unwrap_err();
+    assert!(err.to_string().contains("not one of"), "{err}");
+    let fx = fixture(None);
+    let j = format!(r#"{{"trust":"source-build","sha256":"{}"}}"#, a64_sha());
+    assert!(pack_with(&fx, Prov::CogDir(&j), true, false).is_ok());
+}
+
+#[test]
+fn no_provenance_ok_is_recorded_in_the_signed_manifest() {
+    let fx = fixture(None);
+    let (env, out) = pack_with(&fx, Prov::None, true, true).unwrap();
+    let body = env.cog_body().unwrap();
+    let att = body.attestations.iter().find(|a| a.kind == pack::NO_PROVENANCE_KIND).expect("recorded");
+    assert!(std::fs::read_to_string(out.join(&att.file.path)).unwrap().contains("--no-provenance-ok"));
+    // Not recorded when it was not relied on.
+    let fx = fixture(None);
+    let (env, _) = pack_with(&fx, Prov::CogDir(&signed_prov(&a64_sha())), true, true).unwrap();
+    assert!(env.cog_body().unwrap().attestations.is_empty());
 }

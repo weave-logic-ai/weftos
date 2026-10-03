@@ -285,6 +285,8 @@ fn build_package(
         },
         cognitum_record: None,
         redistributable: true,
+        provenance: None,
+        allow_no_provenance: true,
     };
     let pkg = dir.join("pkg");
     let mut env = pack_cog(&input, &pkg).map_err(|e| e.to_string())?;

@@ -78,11 +78,16 @@ pub(crate) fn signer_keys(verified: &VerifiedPackage, anchors: &TrustAnchors) ->
 
 /// Licence standing of a package, from its signed manifest. Fails closed:
 /// `OptIn` only when the signer wrote `redistributable = true`, and never
-/// when the package carries Cognitum provenance (a release-record
-/// attestation, or a `cognitum` release URL), even if the flag is set.
+/// when the package carries Cognitum provenance, even if the flag is set.
+/// Two signals, either of which marks it Cognitum: an attestation whose kind
+/// starts with `cognitum.` (a release record, or the install-provenance stamp
+/// `weaver workload pack` adds for a `provenance.json` with
+/// `trust = "cognitum-sha256"`), or a release URL containing `cognitum`.
+/// The URL is a substring heuristic and can only add Cognitum standing, never
+/// remove it; it stays as a backstop for packs that carry no attestation.
 /// Cognitum cogs are licence-gated, and nothing here checks a licence or that
 /// a peer belongs to the same operator. An operator re-pack of such a binary
-/// that drops the attestation is `NotFlagged`, so it is still not shared
+/// that drops both signals is `NotFlagged`, so it is still not shared
 /// unless its signer explicitly opts in.
 pub(crate) fn grant_origin(verified: &VerifiedPackage) -> GrantOrigin {
     let cognitum_record = verified

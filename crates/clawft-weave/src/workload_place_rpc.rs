@@ -218,7 +218,14 @@ async fn build(
     let identity: Arc<dyn clawft_kernel::cog_ingest::ProjectDirectory> =
         Arc::new(crate::cog_ingest_serve::IdentityDirectory);
     let ingest = match crate::cog_ingest_serve::load_config(dir) {
-        Ok(cfg) => match crate::cog_ingest_serve::start(&cfg, &boot.key, Some(identity)).await {
+        Ok(cfg) => match crate::cog_ingest_serve::start_in(
+            &cfg,
+            &boot.key,
+            Some(identity),
+            Some(dir.join(crate::cog_ingest_serve::VECTOR_STORE_DIR)),
+        )
+        .await
+        {
             Ok(rt) => Some(rt),
             Err(e) => {
                 tracing::warn!(error = %e, "cog ingest not started");

@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use weftos_cog_host::{install_verified, CogRecord, Source as HostSource, VerifiedInstall};
-use weftos_cog_repo::{sha256_hex, verify_artifact, Artifact, VerifyError};
+use weftos_cog_repo::{sha256_hex, verify_artifact_unrevoked, Artifact, RevokedKeys, VerifyError};
 
 use crate::config::{is_weftos_anchor, valid_cog_id, CogLicence, SourceKind};
 use crate::error::{Result, SourceError};
@@ -85,6 +85,9 @@ pub struct FetchCtx<'a> {
     pub now: DateTime<Utc>,
     /// Extra keys trusted by `weftos` sources (the compiled-in WeftOS signer set).
     pub extra_weftos_keys: &'a [String],
+    /// Signer keys the operator revoked (kernel `RevocationList`, `SignerKey`). A signed cog whose
+    /// verifying key is listed is refused.
+    pub revoked: &'a RevokedKeys,
 }
 
 /// A downloaded binary that passed every check.
@@ -184,7 +187,7 @@ pub fn fetch_verified(loaded: &LoadedSource, cog_id: &str, arch: &str, ctx: &Fet
             }
             let keys = src.effective_keys(ctx.extra_weftos_keys);
             let bytes = ctx.reader.read(&join(base, &art.path), MAX_BINARY_BYTES)?;
-            let signer = verify_with_any(&bytes, art, &keys).map_err(|reason| SourceError::Verify {
+            let signer = verify_with_any(&bytes, art, &keys, ctx.revoked).map_err(|reason| SourceError::Verify {
                 id: cog_id.into(),
                 source_name: src.name.clone(),
                 reason,
@@ -216,25 +219,32 @@ pub fn fetch_verified(loaded: &LoadedSource, cog_id: &str, arch: &str, ctx: &Fet
 }
 
 /// Verify against each pinned key; the size and sha256 checks do not depend
-/// on the key, so only a signature rejection moves on to the next key.
-fn verify_with_any(bytes: &[u8], art: &Artifact, keys_hex: &[String]) -> std::result::Result<String, String> {
+/// on the key, so only a signature rejection (or a revoked key) moves on to the next key.
+fn verify_with_any(bytes: &[u8], art: &Artifact, keys_hex: &[String], revoked: &RevokedKeys) -> std::result::Result<String, String> {
     if keys_hex.is_empty() {
         return Err("no key is pinned for this source".into());
     }
-    let mut last = String::new();
+    // Typed outcomes, not text: a revoked key outranks a plain signature rejection.
+    let mut revoked_key: Option<String> = None;
+    let mut rejected = false;
     for k in keys_hex {
         let raw: [u8; 32] = match hex::decode(k).ok().and_then(|v| v.try_into().ok()) {
             Some(r) => r,
             None => continue,
         };
         let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&raw) else { continue };
-        match verify_artifact(bytes, art, &vk) {
+        match verify_artifact_unrevoked(bytes, art, &vk, revoked) {
             Ok(()) => return Ok(k.clone()),
-            Err(VerifyError::SignatureRejected) => last = "Ed25519 signature is not from any key pinned for this source".into(),
+            Err(VerifyError::KeyRevoked) => revoked_key = Some(key_id(k)),
+            Err(VerifyError::SignatureRejected) => rejected = true,
             Err(e) => return Err(e.to_string()),
         }
     }
-    Err(if last.is_empty() { "no usable pinned key".into() } else { last })
+    Err(match (revoked_key, rejected) {
+        (Some(id), _) => format!("signing key {id} is revoked"),
+        (None, true) => "Ed25519 signature is not from any key pinned for this source".into(),
+        (None, false) => "no usable pinned key".into(),
+    })
 }
 
 /// Write a verified cog into a cog-host root and record its provenance.

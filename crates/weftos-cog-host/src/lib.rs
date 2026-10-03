@@ -18,7 +18,7 @@ pub mod usb_identify;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use weftos_cog_repo::{sha256_hex, verify_artifact, weavelogic_key, Artifact};
+use weftos_cog_repo::{sha256_hex, verify_artifact_unrevoked, weavelogic_key, Artifact, RevokedKeys};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -129,7 +129,17 @@ pub fn valid_cog_id(s: &str) -> bool {
 
 /// Verify and install an uploaded cog. Signed cogs must pass Ed25519 against the pinned WeaveLogic
 /// key (signed-only, COG-008); unsigned (e.g. Cognitum mirror) must at least match their sha256.
+///
+/// A signature from a key on the operator's revocation list is refused. The list is read from the
+/// runtime dir (see [`RevokedKeys::default_path`]); a list that exists but cannot be read, or a
+/// runtime dir that cannot be located, fails the install rather than reading as "nothing revoked".
 pub fn install(root: &Path, req: &InstallReq) -> Result<CogRecord, String> {
+    let revoked = if req.signed { RevokedKeys::load_default()? } else { RevokedKeys::none() };
+    install_with(root, req, &revoked)
+}
+
+/// [`install`] against an explicit revocation list.
+pub fn install_with(root: &Path, req: &InstallReq, revoked: &RevokedKeys) -> Result<CogRecord, String> {
     if !valid_cog_id(&req.id) {
         return Err(format!("bad cog id {:?}", req.id));
     }
@@ -150,7 +160,7 @@ pub fn install(root: &Path, req: &InstallReq) -> Result<CogRecord, String> {
         if art.sig.is_empty() {
             return Err("cog is marked signed but no signature was provided".into());
         }
-        verify_artifact(&bytes, &art, &weavelogic_key()).map_err(|e| format!("refusing {}: {e}", req.id))?;
+        verify_artifact_unrevoked(&bytes, &art, &weavelogic_key(), revoked).map_err(|e| format!("refusing {}: {e}", req.id))?;
     } else {
         let got = sha256_hex(&bytes);
         if got != req.sha256 {
@@ -319,9 +329,57 @@ mod tests {
             binary_b64: b64(&bytes),
             enable: false,
         };
-        let e = install(&root, &req).unwrap_err();
+        let e = install_with(&root, &req, &RevokedKeys::none()).unwrap_err();
         assert!(e.contains("signed"), "{e}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn signed_req(id: &str) -> (InstallReq, Vec<u8>) {
+        let bytes = b"signed-binary".to_vec();
+        let req = InstallReq {
+            id: id.into(),
+            version: "1".into(),
+            source: Source::WeaveLogic,
+            args: vec![],
+            signed: true,
+            sha256: sha256_hex(&bytes),
+            // Not a valid signature: a revoked key is refused before the signature is checked.
+            sig: Some("00".repeat(64)),
+            binary_b64: b64(&bytes),
+            enable: false,
+        };
+        (req, bytes)
+    }
+
+    #[test]
+    fn install_refuses_a_revoked_release_key() {
+        let root = std::env::temp_dir().join(format!("cog-host-rev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (req, _) = signed_req("rev");
+        // Not revoked: it gets as far as the signature, which is bogus.
+        let e = install_with(&root, &req, &RevokedKeys::none()).unwrap_err();
+        assert!(!e.contains("revoked"), "{e}");
+        let revoked = RevokedKeys::from_keys([weftos_cog_repo::WEAVELOGIC_PUBKEY_HEX]);
+        let e = install_with(&root, &req, &revoked).unwrap_err();
+        assert!(e.contains("revoked"), "{e}");
+        assert!(!root.exists(), "nothing was installed");
+    }
+
+    #[test]
+    fn install_fails_closed_on_an_unreadable_revocation_list() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("revoked_subjects.json"), "{not json").unwrap();
+        let root = dir.path().join("cogs");
+        let (req, _) = signed_req("bad");
+        // Only this test reads the process environment through `install`.
+        // SAFETY: no other test in this crate reads or writes this variable.
+        #[allow(unused_unsafe)]
+        unsafe {
+            std::env::set_var("WEFTOS_RUNTIME_DIR", dir.path());
+        }
+        let e = install(&root, &req).unwrap_err();
+        assert!(e.contains("parse"), "{e}");
+        assert!(!root.exists());
     }
 
     #[test]

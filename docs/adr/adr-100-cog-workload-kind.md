@@ -4,7 +4,7 @@
 - **Numbering**: This ADR was briefly filed as "COG-001" on 2026-09-29 and moved back to ADR-100 the same day. The COG-NNN series now belongs to the cogs project repo, which is private (`weave-logic-ai/cognitum-cogs`; its `docs/decisions/`), and holds cog-project decisions. This ADR stays in WeftOS because it defines how WeftOS hosts cogs.
 - **Cogs project**: operational detail on Seeds, the Pi 5, fleets, tooling and upstream work now lives in the cogs repo (`docs/devices/`, `docs/testing.md`, `docs/upstream.md`). This ADR keeps only what WeftOS implements.
 - **Date**: 2026-09-28
-- **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
+- **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status is Accepted (2026-09-29) and the decisions below are settled, with implementation tracked on the cards named in Status.
 - **Depends-On**: ADR-099 (governed workload placement)
 - **Relates-To**: ADR-025, ADR-092, ADR-101, ADR-105 (cog sources, per-project catalog and licences), `docs/research/mesh-placement/README.md`
 
@@ -105,6 +105,20 @@ the placing controller's store. A placement whose project has no known store
 owner is refused; it is never redirected to the controller's store, because
 that would put one project's data in another's store.
 
+**Where the vectors live (amended 2026-10-02).** On the owner daemon the
+store is a `VectorDirectory`: one in-memory HNSW index per project (plus one
+for the controller fallback), created on first use. The sentence above means
+that store, not a project kernel's durable store. The owner daemon keeps each
+index recoverable: every accepted batch is appended and synced to a capped log
+`<runtime dir>/cog-ingest-vectors/<project id>.vec` (`_controller.vec` for the
+fallback) before it is acknowledged, and a restarted daemon rebuilds the index
+and its dedup state from that log on the project's first use. Limits: the log
+is capped per project (64 MiB) and a batch past the cap is refused as store
+full; there is no compaction, so repeated upserts of one id use space until the
+cap; the index is rebuilt in memory, so a restart costs time proportional to the
+log. Wiring the owner store to a project kernel's own durable store remains
+follow-up work.
+
 Acceptance runs for the real-hardware card use a **replayed ESP32 feed**
 (recorded or synthetic packets). A live feed is optional and documented
 where it is used. Mechanics and limits: `docs/cogs/ingest-bridge.md`.
@@ -129,6 +143,6 @@ container instances.
 
 ## Amendment (2026-10-02): `redistributable` in the signed cog manifest
 
-The cog manifest body has an optional field `redistributable` (default false, omitted from the signed statement when false, so existing manifests and package ids are unchanged). A cog package is seeded, advertised and served over the swarm (ADR-099 section 6) only when its signer wrote `redistributable = true` and it has no Cognitum provenance (a `cognitum.*` attestation or a `cognitum` release URL), which stays licence-gated whatever the flag says. `weaver workload pack --redistributable` sets it. Our own weftos cogs need the flag to be shared.
+The cog manifest body has an optional field `redistributable` (default false, omitted from the signed statement when false, so existing manifests and package ids are unchanged). A cog package is seeded, advertised and served over the swarm (ADR-099 section 6) only when its signer wrote `redistributable = true` and it has no Cognitum provenance (a `cognitum.*` attestation, or a release URL containing `cognitum` as a fail-closed backstop), which stays licence-gated whatever the flag says. `weaver workload pack` stamps such an attestation (`cognitum.install.provenance.v1`) when the cog dir's `provenance.json` says `trust = "cognitum-sha256"`, and refuses `--redistributable` for it. It finds `provenance.json` via `--provenance`, the cog dir, or beside a `--bin`. `--redistributable` also needs a provenance with a non-Cognitum trust whose sha256 matches a packed binary, unless the operator passes `--no-provenance-ok`. `weaver workload pack --redistributable` sets the flag. Our own weftos cogs need the flag to be shared.
 
 **Compatibility.** `CogPackageBody` rejects unknown fields, so a verifier built before this change (v0.8.1 nodes, the cog repository, Seed tooling) rejects a manifest signed with `redistributable = true`. In a mixed-version mesh, upgrade every verifier before packing with the flag. Manifests without it verify everywhere as before.

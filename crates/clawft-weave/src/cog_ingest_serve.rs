@@ -44,7 +44,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clawft_kernel::cog_ingest::{
@@ -56,6 +56,7 @@ use clawft_kernel::workload_ctl::listen_tcp;
 use clawft_kernel::workload_pkg::codec::hex_decode_exact;
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
+use crate::scope_gate::ProjectBasis;
 
 /// Config file under the runtime dir.
 pub const INGEST_FILE: &str = "cog-ingest.json";
@@ -335,21 +336,27 @@ impl ProjectDirectory for IdentityDirectory {
 
 /// Refuse a project the identity records do not know or have revoked.
 /// `dir` is `None` where there are no records (a project daemon): the
-/// host's own policy decides there.
-pub fn check_project_registered(dir: Option<&dyn ProjectDirectory>, project_id: &str) -> Result<(), String> {
+/// host's own policy decides there, and the project is only
+/// [`ProjectBasis::Claimed`] (logged as `claimed`, the way the scope gate
+/// labels a claim it could not verify). A project the records vouch for is
+/// [`ProjectBasis::Verified`].
+pub fn check_project_registered(dir: Option<&dyn ProjectDirectory>, project_id: &str) -> Result<ProjectBasis, String> {
     if !valid_project_id(project_id) {
         return Err(format!("project {project_id:?} is not a valid project id"));
     }
-    match dir {
-        Some(d) if d.bound_node(project_id).is_none() => Err(format!(
-            "project {project_id} is not registered, or its key is revoked"
-        )),
-        _ => Ok(()),
-    }
+    let basis = match dir {
+        Some(d) if d.bound_node(project_id).is_none() => {
+            return Err(format!("project {project_id} is not registered, or its key is revoked"));
+        }
+        Some(_) => ProjectBasis::Verified,
+        None => ProjectBasis::Claimed,
+    };
+    tracing::debug!(project = project_id, project_basis = basis.label(), "cog ingest project check");
+    Ok(basis)
 }
 
 /// [`check_project_registered`] against this daemon's identity records.
-pub fn check_project(project_id: &str) -> Result<(), String> {
+pub fn check_project(project_id: &str) -> Result<ProjectBasis, String> {
     let dir = IdentityDirectory;
     check_project_registered(
         IdentityDirectory::available().then_some(&dir as &dyn ProjectDirectory),
@@ -390,6 +397,20 @@ pub async fn start(
     key: &SigningKey,
     projects_dir: Option<Arc<dyn ProjectDirectory>>,
 ) -> Result<IngestRuntime, String> {
+    start_in(cfg, key, projects_dir, None).await
+}
+
+/// Subdirectory of the runtime dir holding the owner's per-project vector logs.
+pub const VECTOR_STORE_DIR: &str = "cog-ingest-vectors";
+
+/// [`start`], keeping the vectors this node owns in `store_dir` (one capped log
+/// per project) so they survive a restart. `None` keeps them in memory only.
+pub async fn start_in(
+    cfg: &IngestConfig,
+    key: &SigningKey,
+    projects_dir: Option<Arc<dyn ProjectDirectory>>,
+    store_dir: Option<PathBuf>,
+) -> Result<IngestRuntime, String> {
     cfg.validate()?;
     let node_id = clawft_kernel::node_id_from_pubkey(&key.verifying_key().to_bytes());
     let routes: Vec<Route> = if cfg.routes.is_empty() {
@@ -415,7 +436,10 @@ pub async fn start(
             }
         }
     }
-    let stores = VectorDirectory::new(std::iter::empty(), false);
+    let mut stores = VectorDirectory::new(std::iter::empty(), false);
+    if let Some(dir) = store_dir {
+        stores = stores.with_persistence(dir);
+    }
     let local_dir = Arc::new(stores.view(local_projects, local_fallback));
 
     let mut router = StaticRouter::new();
