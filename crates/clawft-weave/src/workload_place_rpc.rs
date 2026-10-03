@@ -435,7 +435,7 @@ async fn build(
     // the swarm transport: artifact sessions and checkout over the machine
     // mesh's stamped deliveries (ADR-106 5.4), late-bound behind the link. A
     // steward relay floods the grants it obtains through the exchange.
-    let _licence = ensure_licence(dir, boot_policy.as_ref(), &anchors, &chain, licence_links(mesh.clone()), posture);
+    let licence = ensure_licence(dir, boot_policy.as_ref(), &anchors, &chain, licence_links(mesh.clone()), posture);
     let cog_mesh = crate::cog_swarm::install(&ex, policy.store());
     // ADR-106 phase 3: the steward relay, from `licence-link.json`.
     crate::licence_steward::wire(crate::licence_steward::WireArgs {
