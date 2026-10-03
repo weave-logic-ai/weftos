@@ -92,8 +92,8 @@ impl CogFetcher for RegistryFetcher {
             account: "weft-licence".into(),
             expires: None,
         };
-        // The Seed holds no kernel revocation list; signer revocation is the
-        // mesh node's job at install (`weaver cog install`, the exchange).
+        // Cognitum sources are sha256-pinned; `revoked` only applies to signed
+        // WeftOS/private listings.
         let ctx = FetchCtx {
             reader: &self.reader,
             licences: &[lic],

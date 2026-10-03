@@ -123,7 +123,7 @@ fn lookup(id: &str) -> Result<SeedApiRuntime, String> {
 }
 
 async fn call(rt: &LicenceRuntime, p: AdmissionPosture, m: &str, params: Value) -> Response {
-    super::route(&Ctx { rt, posture: p, now: NOW, seed: &lookup }, m, params).await
+    super::route(&Ctx { rt, posture: p, now: NOW, seed: &lookup, exchange: None }, m, params).await
 }
 
 fn record(mesh: &MeshId, seq: u64, state: BindState) -> BindingRecord {
@@ -414,4 +414,158 @@ fn the_three_methods_are_served_here_and_bind_and_unbind_are_admin_only() {
     }
     assert_eq!(required_capability("workload.node.binding"), Capability::Read);
     assert!(anon.allows_method("workload.node.binding"));
+}
+
+// ── bind and unbind are flooded at once ─────────────────────────
+
+/// A licence exchange over `rt`'s store, on its own in-process mesh runtime.
+/// Catch-up sync is off (no sync on connect, the 30 min period never comes),
+/// so anything a peer learns came by flood.
+fn exchange_over(
+    rt: &LicenceRuntime,
+    id: &str,
+) -> (Arc<clawft_kernel::mesh_runtime::MeshRuntime>, Arc<clawft_kernel::licence::LicenceExchange>) {
+    use clawft_kernel::licence as l;
+    let mut anchors = TrustAnchors::default();
+    anchors.push_signer("op", &pk(&sk(1)), KeyOrigin::Operator).unwrap();
+    let anchors = Arc::new(anchors);
+    let store = rt.policy.store().clone();
+    let approvals = Arc::new(l::ApprovalStore::open_or_poisoned(
+        &rt.dir.join("licence"),
+        anchors.clone(),
+        store.local_mesh_id().clone(),
+    ));
+    let mesh = Arc::new(clawft_kernel::mesh_runtime::MeshRuntime::new(id.into()));
+    let p = posture();
+    let ex = l::LicenceExchange::start(l::LicenceExchangeParts {
+        store,
+        approvals,
+        anchors,
+        runtime: mesh.clone(),
+        posture: Arc::new(move || p),
+        admission: Arc::new(l::CtxAdmission),
+        sink: Arc::new(l::ChainLicenceSink::new(rt.chain.clone())),
+        config: l::LicenceExchangeConfig { sync_on_connect: false, ..Default::default() },
+    });
+    (mesh, ex)
+}
+
+/// Link two runtimes as admitted full nodes.
+fn link_nodes(
+    a: (&str, &Arc<clawft_kernel::mesh_runtime::MeshRuntime>),
+    b: (&str, &Arc<clawft_kernel::mesh_runtime::MeshRuntime>),
+) {
+    use clawft_kernel::mesh_admit::PeerClass;
+    use clawft_kernel::mesh_delivery::PeerCtx;
+    let (tx_ab, rx_ab) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    let (tx_ba, rx_ba) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    for (to, from, mut rx, back) in [
+        (b.1.clone(), a.0.to_owned(), rx_ab, tx_ba.clone()),
+        (a.1.clone(), b.0.to_owned(), rx_ba, tx_ab.clone()),
+    ] {
+        tokio::spawn(async move {
+            let ctx = PeerCtx {
+                peer_id: from,
+                node_verified: true,
+                class: PeerClass::Node,
+                remote_static: None,
+                src_scope: None,
+            };
+            while let Some(bytes) = rx.recv().await {
+                let _ = to.handle_incoming_peer(&bytes, back.clone(), Some(&ctx)).await;
+            }
+        });
+    }
+    let tally = clawft_kernel::mesh_runtime::RouteTally::default();
+    assert!(a.1.register_authenticated_as(b.0.into(), tx_ab, true, PeerClass::Node, &tally));
+    assert!(b.1.register_authenticated_as(a.0.into(), tx_ba, true, PeerClass::Node, &tally));
+}
+
+async fn eventually(what: &str, mut ok: impl FnMut() -> bool) {
+    for _ in 0..400 {
+        if ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[tokio::test]
+async fn a_member_learns_a_bind_and_an_unbind_at_once_by_flood() {
+    let (sd, md) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let steward = boot(sd.path(), &Arc::new(ChainManager::new(0, 1000)), &mesh_cfg(Some(NONCE_A)));
+    let member = boot(md.path(), &Arc::new(ChainManager::new(0, 1000)), &mesh_cfg(Some(NONCE_A)));
+    let (s_mesh, s_ex) = exchange_over(&steward, "node-steward");
+    let (m_mesh, _m_ex) = exchange_over(&member, "node-member");
+    link_nodes(("node-steward", &s_mesh), ("node-member", &m_mesh));
+    let ctx = |rt| Ctx { rt, posture: posture(), now: NOW, seed: &lookup, exchange: Some(s_ex.clone()) };
+
+    let b1 = record(&mesh_of(NONCE_A), 1, BindState::Bound);
+    assert!(super::route(&ctx(&steward), "workload.node.bind", bind_params(&b1)).await.ok);
+    eventually("the member to hold the bind", || member.policy.store().active_binding().is_some()).await;
+
+    let u = record(&mesh_of(NONCE_A), 2, BindState::Unbound);
+    let r = super::route(&ctx(&steward), "workload.node.unbind", json!({"signed": signed(&u)})).await;
+    assert!(r.ok, "{:?}", r.error);
+    eventually("the member to hold the unbind", || {
+        member.policy.store().binding_status() == Err(clawft_kernel::licence::LicenceError::Unbound)
+    })
+    .await;
+    assert!(member.policy.store().active_binding().is_none(), "checkout is off on the member");
+}
+
+// ── licence_boot's tick persists the floor ──────────────────────
+
+#[tokio::test]
+async fn the_boot_store_tick_persists_the_clock_floor() {
+    use clawft_kernel::licence::{CheckoutGrant, GrantArtifact, LicenceRef, sign_grant};
+    let dir = tempfile::tempdir().unwrap();
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
+    let mesh = mesh_of(NONCE_A);
+    assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh, 1, BindState::Bound))).await.ok);
+    // The floor records the clock only once a grant has been accepted.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let grant = CheckoutGrant {
+        v: 1,
+        grant_id: String::new(),
+        mesh_id: mesh.to_hex(),
+        seed_device_id: DEVICE.into(),
+        grant_key_id: String::new(),
+        source: "cognitum".into(),
+        registry: "registry.example".into(),
+        cog_id: "probe".into(),
+        version: "1.0.0".into(),
+        artifacts: vec![GrantArtifact {
+            arch: "x86_64".into(),
+            size: 1,
+            sha256: hex_encode(&[1; 32]),
+            blake3: hex_encode(&[2; 32]),
+        }],
+        manifest_sha256: hex_encode(&[3; 32]),
+        licence: LicenceRef { ref_sha256: hex_encode(&[4; 32]), expires: now + 86_400 },
+        seq: 1,
+        issued_at: now,
+        expires_at: now + 3600,
+    };
+    rt.store().accept_grant(&sign_grant(&grant, &sk(2)).unwrap()).unwrap();
+    let file = dir.path().join("licence").join("checkout_grants.json");
+    let hw = |p: &Path| -> u64 {
+        let v: Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+        v["floors"].as_object().and_then(|m| m.values().next()).map_or(0, |f| f["hw"].as_u64().unwrap_or(0))
+    };
+    assert_eq!(hw(&file), 0, "the grant save carries no clock high-water mark");
+    let tick = crate::licence_boot::spawn_store_tick(rt.store().clone(), Duration::from_millis(10));
+    for _ in 0..200 {
+        if hw(&file) >= now {
+            tick.abort();
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the boot store tick never persisted the floor");
 }

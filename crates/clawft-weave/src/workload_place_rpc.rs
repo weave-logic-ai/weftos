@@ -206,9 +206,16 @@ fn enforce_in_background() {
 /// open a second approval store or a second set of control sinks.
 static LICENCE_EXCHANGE: OnceLock<Arc<clawft_kernel::licence::LicenceExchange>> = OnceLock::new();
 
+/// The node's licence exchange, once placement has started it (`None` before,
+/// without a mesh, or without the boot-owned licence runtime). The bind RPCs
+/// flood accepted bindings through it.
+pub fn licence_exchange() -> Option<Arc<clawft_kernel::licence::LicenceExchange>> {
+    LICENCE_EXCHANGE.get().cloned()
+}
+
 /// Start the licence exchange (ADR-106 phase 1b) over the boot-owned store
-/// and policy (`licence_boot`; the caller passes them in): chain the store's
-/// events, open the approval store, and with a mesh carry bindings, grants
+/// and policy (`licence_boot`; the caller passes them in): open the approval
+/// store, and with a mesh carry bindings, grants
 /// and approvals by flood and catch-up sync. Inert while the local mesh id is
 /// unset (no `mesh_nonce` yet), exactly like the policy. Floods and sync go
 /// to licensed peers only (`CtxAdmission`: verified and class `node`), so an
@@ -222,9 +229,10 @@ fn wire_licence(
     posture: clawft_kernel::licence::PostureFn,
 ) -> Option<Arc<clawft_kernel::licence::LicenceExchange>> {
     use clawft_kernel::licence as l;
+    // The store's own sink is `licence_boot`'s; this one chains the
+    // exchange's events (`sync_bad_signature`).
     let sink: Arc<dyn l::LicenceEventSink> = Arc::new(l::ChainLicenceSink::new(chain.clone()));
     let store = policy.store().clone();
-    store.set_sink(sink.clone());
     let runtime = mesh?;
     let anchors = Arc::new(anchors.clone());
     let approvals = Arc::new(l::ApprovalStore::open_or_poisoned(
@@ -287,12 +295,14 @@ async fn build(
     // Cognitum cogs under a valid checkout grant of a bound Seed (ADR-106).
     // The policy reads the binding live, so a binding that arrives later
     // needs no restart; with none (or no mesh id yet) it is exactly
-    // `ManifestPolicy`. The daemon built the policy at boot (`licence_boot`), with the mesh id
-    // from the configured nonce and the store the bind RPC writes to; this is
-    // the node's only grant store. Without that runtime (not installed, or a
-    // test harness) an inert policy over the same files stands in.
-    let policy = match crate::licence_boot::policy() {
-        Some(p) => p,
+    // `ManifestPolicy`. The daemon built it at boot (`licence_boot`), with the
+    // mesh id from the configured nonce and the store the bind RPC writes to;
+    // that is the node's only grant store. Without that runtime (not
+    // installed, or a test harness) an inert policy over the same files stands
+    // in, and no licence exchange is started over it.
+    let boot_policy = crate::licence_boot::policy();
+    let policy = match &boot_policy {
+        Some(p) => p.clone(),
         None => clawft_kernel::licence::MeshCheckoutPolicy::open(
             dir,
             anchors.clone(),
@@ -312,10 +322,11 @@ async fn build(
     // the swarm transport: artifact sessions and checkout over the machine
     // mesh's stamped deliveries (ADR-106 5.4), late-bound behind the link. A
     // steward relay floods the grants it obtains through the exchange.
-    let licence = match LICENCE_EXCHANGE.get() {
-        Some(x) => Some(x.clone()),
-        None => wire_licence(dir, &policy, &anchors, &chain, mesh.clone(), posture)
+    let licence = match (LICENCE_EXCHANGE.get(), &boot_policy) {
+        (Some(x), _) => Some(x.clone()),
+        (None, Some(p)) => wire_licence(dir, p, &anchors, &chain, mesh.clone(), posture)
             .map(|x| LICENCE_EXCHANGE.get_or_init(|| x).clone()),
+        (None, None) => None,
     };
     if let Some(x) = licence {
         crate::cog_swarm::set_grant_flood(x);

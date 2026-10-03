@@ -447,6 +447,9 @@ impl MeshRuntime {
     /// cluster when its handshake completes rather than on its first
     /// application frame. `verified` is the admission verdict (enforce);
     /// returns false when refused (see [`register_peer`](Self::register_peer)).
+    /// Test-only: production registers with the admitted class
+    /// ([`register_authenticated_as`](Self::register_authenticated_as)).
+    #[cfg(test)]
     pub fn register_authenticated(
         &self,
         node_id: String,
@@ -735,7 +738,10 @@ impl MeshRuntime {
         // dead channel of the dropped connection and the peer never
         // receives anything again.
         let conn = self.conn_id(&outbound);
-        if !self.register_peer(ctx.peer_id.clone(), outbound, ctx.node_verified, tally) {
+        // The class rides with the route so a re-registered leaf (after
+        // `remove_dead_peers` dropped it) stays a leaf, never a node.
+        let class = if ctx.node_verified { ctx.class } else { crate::mesh_admit::PeerClass::Legacy };
+        if !self.register_peer_classed(ctx.peer_id.clone(), outbound, ctx.node_verified, class, tally) {
             return Err(KernelError::Mesh(format!(
                 "route for {} belongs to an admitted peer",
                 ctx.peer_id

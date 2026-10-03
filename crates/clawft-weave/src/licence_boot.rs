@@ -109,6 +109,13 @@ pub fn spawn_tick(period: std::time::Duration, f: Arc<dyn Fn() + Send + Sync>) -
     })
 }
 
+/// The store tick [`install`] starts: every `period`, `store.tick()` records
+/// the clock, persists the floor's high-water mark and retries an unsaved
+/// restrictive record.
+pub fn spawn_store_tick(store: Arc<CheckoutGrantStore>, period: std::time::Duration) -> tokio::task::JoinHandle<()> {
+    spawn_tick(period, Arc::new(move || store.tick()))
+}
+
 static NOT_INSTALLED: OnceLock<String> = OnceLock::new();
 
 /// Why the licence runtime was not installed although `kernel.mesh.mesh_nonce`
@@ -200,8 +207,7 @@ pub fn install(rt: LicenceRuntime) -> Arc<LicenceRuntime> {
     let rt = Arc::new(rt);
     if RUNTIME.set(rt.clone()).is_ok() && tokio::runtime::Handle::try_current().is_ok() {
         // This module owns the store, so it owns the tick.
-        let store = rt.store().clone();
-        spawn_tick(TICK_PERIOD, Arc::new(move || store.tick()));
+        spawn_store_tick(rt.store().clone(), TICK_PERIOD);
     }
     RUNTIME.get().cloned().unwrap_or(rt)
 }

@@ -65,7 +65,9 @@ pub(super) fn link(a: &TNode, b: &TNode, verified: bool) {
     link_as(a, b, verified, class);
 }
 
-/// [`link`] where each side's admission classed the other as `class`.
+/// [`link`] where each side's admission classed the other as `class`. The
+/// context matches `mesh_serve`'s: an admitted peer is `node_verified`
+/// whatever its class (a leaf is `{node_verified: true, class: Leaf}`).
 pub(super) fn link_as(a: &TNode, b: &TNode, verified: bool, class: PeerClass) {
     let (tx_ab, rx_ab) = tokio::sync::mpsc::channel::<Vec<u8>>(1024);
     let (tx_ba, rx_ba) = tokio::sync::mpsc::channel::<Vec<u8>>(1024);
@@ -76,7 +78,7 @@ pub(super) fn link_as(a: &TNode, b: &TNode, verified: bool, class: PeerClass) {
         tokio::spawn(async move {
             let ctx = PeerCtx {
                 peer_id: from_id,
-                node_verified: verified && class == PeerClass::Node,
+                node_verified: verified,
                 class,
                 remote_static: None,
                 src_scope: None,
@@ -349,10 +351,10 @@ async fn an_admitted_leaf_receives_no_binding_grant_or_approval_flood() {
         "nothing reached the admitted leaf"
     );
     assert_eq!(a.ex.flooded.load(std::sync::atomic::Ordering::Relaxed), 3, "three records, one licensed peer");
-    // Inbound, the leaf's context is not a licensed peer either (no sync).
+    // Inbound, the leaf's (admitted) context is not a licensed peer either (no sync).
     let leaf_ctx = PeerCtx {
         peer_id: "leaf-l".into(),
-        node_verified: false,
+        node_verified: true,
         class: PeerClass::Leaf,
         remote_static: None,
         src_scope: None,
@@ -372,4 +374,26 @@ async fn the_exchange_is_the_relays_grant_flood() {
     flood.flood(&g).await;
     wait_for("C to hold the relayed grant", || has_grant(&l.c, "1.2.0")).await;
     assert!(has_grant(&l.b, "1.2.0"));
+}
+
+#[tokio::test]
+async fn a_dropped_leaf_route_comes_back_as_a_leaf_not_a_node() {
+    let a = tnode_with("node-a", Arc::new(CtxAdmission), quiet_cfg());
+    let leaf = tnode("leaf-l");
+    link_as(&a, &leaf, true, PeerClass::Leaf);
+    // The route goes (as `remove_dead_peers` drops it); the leaf's next frame
+    // re-registers it from the connection's admitted context.
+    a.rt.disconnect_peer("leaf-l");
+    assert!(!a.rt.peer_verified("leaf-l"));
+    let msg = KernelMessage::new(
+        0,
+        MessageTarget::Topic("mesh.subscribe".into()),
+        MessagePayload::Json(serde_json::json!({ "topic": "anything" })),
+    );
+    leaf.rt.route_to_remote("node-a", msg).await.unwrap();
+    wait_for("the leaf route to come back", || a.rt.peer_verified("leaf-l")).await;
+    assert!(!a.rt.peer_licensed("leaf-l"), "a re-registered leaf is still a leaf");
+    a.ex.issue_binding(binding(1, BindState::Bound)).await.unwrap();
+    settle().await;
+    assert!(!bound(&leaf), "and still gets no flood");
 }

@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use clawft_kernel::boot::Kernel;
-use clawft_kernel::licence::{AdmissionPosture, SignedBinding};
+use clawft_kernel::licence::{AdmissionPosture, LicenceExchange, SignedBinding};
 use clawft_kernel::workload_runtime::{SeedApiRuntime, StewardBind, WorkloadRuntime};
 use clawft_platform::NativePlatform;
 use clawft_rpc::Response;
@@ -54,6 +54,21 @@ pub struct Ctx<'a> {
     pub now: u64,
     /// Where Seeds come from (`workload-seeds.json` in the daemon; a stub in tests).
     pub seed: SeedLookup<'a>,
+    /// The node's licence exchange: an accepted bind or unbind is flooded
+    /// through it at once, not left to the next catch-up sync. `None` before
+    /// placement has started it (or with no mesh).
+    pub exchange: Option<Arc<LicenceExchange>>,
+}
+
+/// Flood an accepted binding record (bind or unbind) to the licensed peers.
+/// The store already holds it, so the local accept is `Known`; the flood is
+/// what matters. Best effort: sync carries it to anyone this misses.
+async fn flood(ctx: &Ctx<'_>, signed: &SignedBinding) {
+    if let Some(x) = &ctx.exchange
+        && let Err(e) = x.issue_binding(signed.clone()).await
+    {
+        tracing::warn!(error = %e, "binding accepted but not flooded; peers get it at sync");
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,7 +122,7 @@ pub async fn route(ctx: &Ctx<'_>, method: &str, params: Value) -> Response {
             Err(e) => Response::error(e),
         },
         "workload.node.unbind" => match parse::<UnbindParams>(method, params) {
-            Ok(p) => unbind(ctx, &p.signed),
+            Ok(p) => unbind(ctx, &p.signed).await,
             Err(e) => Response::error(e),
         },
         other => Response::error(format!("{other} is not a licence method")),
@@ -166,18 +181,22 @@ async fn bind(ctx: &Ctx<'_>, p: BindParams) -> Response {
         })
         .await;
     match r {
-        Ok(rec) => Response::success(json!({ "bound": rec, "grant_fingerprint": fp })),
+        Ok(rec) => {
+            flood(ctx, &signed).await;
+            Response::success(json!({ "bound": rec, "grant_fingerprint": fp }))
+        }
         Err(e) => Response::error(format!("{e} [{}]", e.code())),
     }
 }
 
-fn unbind(ctx: &Ctx<'_>, signed: &SignedBinding) -> Response {
+async fn unbind(ctx: &Ctx<'_>, signed: &SignedBinding) -> Response {
     let binder = match &ctx.rt.binder {
         Ok(b) => b,
         Err(why) => return Response::error(format!("bind state unreadable: {why}")),
     };
     match binder.unbind_v2(signed, ctx.rt.policy.store()) {
         Ok(out) => {
+            flood(ctx, signed).await;
             let mut v = json!({ "unbound": out.record, "save_pending": out.save_pending });
             if out.save_pending {
                 v["warning"] = json!(
@@ -240,7 +259,8 @@ pub async fn dispatch(
     let dir = rt.dir.clone();
     let seed = move |id: &str| crate::workload_place_policy::load_seed_runtime(&dir, id);
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    route(&Ctx { rt: &rt, posture, now, seed: &seed }, method, params).await
+    let exchange = crate::workload_place_rpc::licence_exchange();
+    route(&Ctx { rt: &rt, posture, now, seed: &seed, exchange }, method, params).await
 }
 
 #[cfg(test)]
