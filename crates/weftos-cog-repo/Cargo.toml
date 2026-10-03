@@ -25,6 +25,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
+# The same runtime-dir resolver `weaver` uses, so both read one revocation list.
+clawft-types = { workspace = true, default-features = false }
 # Base features (std) cover verify_artifact; pkcs8/pem (for the signer) come in via `cli`.
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 toml = { workspace = true, optional = true }

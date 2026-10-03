@@ -45,7 +45,7 @@ fn usage() -> ! {
          verify  <repo-dir>                      verify <repo-dir>/repo against the key in repo.toml\n\
          publish <repo-dir> --to <dir>           verify, then copy repo/ to <dir> (host that directory yourself)\n\
          Both `verify` and `install` also take --pin <pubkey-hex> (repeatable) to check a repo against your own key.\n\
-         They also refuse a key on the operator's signer-key revocation list: --revocations <file>, else revoked_subjects.json in $WEFTOS_RUNTIME_DIR or ~/.weftos/run.\n\n\
+         They also refuse a key on the operator's signer-key revocation list: --revocations <file>, else revoked_subjects.json in the runtime dir weaver resolves ($WEFTOS_RUNTIME_DIR, the project's .weftos/runtime, or ~/.clawft); fails if neither it nor $HOME is known.\n\n\
          The pinned WeaveLogic release key is compiled in; there is no way to disable verification."
     );
     std::process::exit(2);
@@ -270,7 +270,7 @@ fn verify_any(bytes: &[u8], art: &Artifact, keys: &[VerifyingKey], revoked: &Rev
 }
 
 /// The operator's signer-key revocations: `--revocations <file>`, else the kernel's list in the
-/// runtime dir. Fail-closed: a list that exists but cannot be read stops the command; an
+/// runtime dir (the same resolver `weaver` uses). Fail-closed: a list that exists but cannot be read stops the command; an
 /// explicit `--revocations` file must exist.
 fn revocations(args: &[String]) -> R<RevokedKeys> {
     match arg(args, "--revocations") {
@@ -282,10 +282,7 @@ fn revocations(args: &[String]) -> R<RevokedKeys> {
         }
         // Unit tests never read the real runtime dir.
         None if cfg!(test) => Ok(RevokedKeys::none()),
-        None => match RevokedKeys::default_path() {
-            Some(p) => RevokedKeys::load(&p),
-            None => Ok(RevokedKeys::none()),
-        },
+        None => RevokedKeys::load_default(),
     }
 }
 

@@ -224,7 +224,9 @@ fn verify_with_any(bytes: &[u8], art: &Artifact, keys_hex: &[String], revoked: &
     if keys_hex.is_empty() {
         return Err("no key is pinned for this source".into());
     }
-    let mut last = String::new();
+    // Typed outcomes, not text: a revoked key outranks a plain signature rejection.
+    let mut revoked_key: Option<String> = None;
+    let mut rejected = false;
     for k in keys_hex {
         let raw: [u8; 32] = match hex::decode(k).ok().and_then(|v| v.try_into().ok()) {
             Some(r) => r,
@@ -233,13 +235,16 @@ fn verify_with_any(bytes: &[u8], art: &Artifact, keys_hex: &[String], revoked: &
         let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&raw) else { continue };
         match verify_artifact_unrevoked(bytes, art, &vk, revoked) {
             Ok(()) => return Ok(k.clone()),
-            Err(VerifyError::KeyRevoked) => last = format!("signing key {} is revoked", key_id(k)),
-            Err(VerifyError::SignatureRejected) if !last.contains("revoked") => last = "Ed25519 signature is not from any key pinned for this source".into(),
-            Err(VerifyError::SignatureRejected) => {}
+            Err(VerifyError::KeyRevoked) => revoked_key = Some(key_id(k)),
+            Err(VerifyError::SignatureRejected) => rejected = true,
             Err(e) => return Err(e.to_string()),
         }
     }
-    Err(if last.is_empty() { "no usable pinned key".into() } else { last })
+    Err(match (revoked_key, rejected) {
+        (Some(id), _) => format!("signing key {id} is revoked"),
+        (None, true) => "Ed25519 signature is not from any key pinned for this source".into(),
+        (None, false) => "no usable pinned key".into(),
+    })
 }
 
 /// Write a verified cog into a cog-host root and record its provenance.

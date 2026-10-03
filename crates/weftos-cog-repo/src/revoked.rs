@@ -47,14 +47,26 @@ impl RevokedKeys {
         Ok(Self::from_keys(entries.iter().filter(|e| e.kind == "signer_key").map(|e| e.id.as_str())))
     }
 
-    /// Where the kernel keeps the list, as far as a standalone tool can tell:
-    /// `$WEFTOS_RUNTIME_DIR` when set, else the per-user daemon dir `~/.weftos/run`.
-    pub fn default_path() -> Option<PathBuf> {
-        let dir = match std::env::var("WEFTOS_RUNTIME_DIR").ok().filter(|d| !d.is_empty()) {
-            Some(d) => PathBuf::from(d),
-            None => PathBuf::from(std::env::var("HOME").ok().filter(|h| !h.is_empty())?).join(".weftos").join("run"),
-        };
-        Some(dir.join(SUBJECTS_FILE_NAME))
+    /// Where the kernel keeps the list: the runtime dir `weaver` resolves
+    /// (`$WEFTOS_RUNTIME_DIR`, else the project's `.weftos/runtime`, else the
+    /// legacy `~/.clawft`), the file `revoked_subjects.json` beside the host
+    /// ban file. Fails when neither `$WEFTOS_RUNTIME_DIR` nor a home directory
+    /// is known, since the answer would be a guess.
+    pub fn default_path() -> Result<PathBuf, String> {
+        let env_set = std::env::var(clawft_types::runtime_paths::RUNTIME_DIR_ENV)
+            .is_ok_and(|v| !v.trim().is_empty());
+        if !env_set && clawft_types::runtime_paths::home_dir().is_none() {
+            return Err("cannot locate the signer revocation list: $HOME is unset and no runtime dir is set; \
+                        pass --revocations <file>"
+                .into());
+        }
+        let host_ban = clawft_types::runtime_paths::RuntimePaths::resolve().revoked_hosts();
+        Ok(host_ban.with_file_name(SUBJECTS_FILE_NAME))
+    }
+
+    /// [`load`](Self::load) from [`default_path`](Self::default_path).
+    pub fn load_default() -> Result<Self, String> {
+        Self::load(&Self::default_path()?)
     }
 
     /// Whether a signer public key (hex, any case) is revoked.
