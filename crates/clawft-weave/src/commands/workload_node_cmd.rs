@@ -29,11 +29,12 @@ pub enum NodeCmd {
     Unbind(UnbindArgs),
     /// Forget the grant clock high-water mark and restart it from now (undoes
     /// a forward clock jump). Shows the floor and the grants it would revive;
-    /// changes nothing without `--confirm`.
+    /// changes nothing without `--confirm <floor>`.
     ResetFloor {
-        /// Apply the reset (chained).
-        #[arg(long)]
-        confirm: bool,
+        /// Apply the reset (chained), pinned to the floor the dry run printed;
+        /// refused when the floor has moved since.
+        #[arg(long, value_name = "FLOOR", num_args = 0..=1)]
+        confirm: Option<Option<String>>,
     },
     /// Mesh id and the held binding.
     Status {
@@ -148,22 +149,7 @@ pub async fn run(cmd: NodeCmd, client: &mut DaemonClient) -> anyhow::Result<()> 
                 print!("{}", render_status(&st));
             }
         }
-        NodeCmd::ResetFloor { confirm } => {
-            // Show first; confirm only against the floor that was shown.
-            let shown = call(client, "workload.node.reset-floor", json!({})).await?;
-            let r = if confirm {
-                let floor = shown["preview"]["floor"].as_u64();
-                call(client, "workload.node.reset-floor", json!({ "confirm": true, "floor": floor })).await?
-            } else {
-                shown
-            };
-            print!("{}", render_floor_preview(&r["preview"]));
-            if r["applied"].as_bool() == Some(true) {
-                println!("floor reset (chained as licence.floor_reset_requested and licence.floor_reset)");
-            } else {
-                println!("nothing changed; run again with --confirm to apply");
-            }
-        }
+        NodeCmd::ResetFloor { confirm } => reset_floor(client, confirm).await?,
         NodeCmd::Bind(a) => {
             let key = load_key(&a.operator_key).map_err(anyhow::Error::msg)?;
             let fp = confirm_fingerprint(&a.grant_pubkey, &a.grant_fingerprint).map_err(anyhow::Error::msg)?;
@@ -195,6 +181,34 @@ pub async fn run(cmd: NodeCmd, client: &mut DaemonClient) -> anyhow::Result<()> 
             call(client, "workload.node.unbind", json!({ "signed": signed })).await?;
             println!("unbound: {} (seq {})", rec.device_id, rec.seq);
         }
+    }
+    Ok(())
+}
+
+/// The floor `--confirm` pins: `None` for a dry run; bare `--confirm` is
+/// refused (the operator must name the floor the dry run showed).
+pub fn confirm_floor(confirm: Option<Option<String>>) -> Result<Option<u64>, String> {
+    match confirm {
+        None => Ok(None),
+        Some(None) => Err("--confirm needs the floor the dry run printed: --confirm <floor>".into()),
+        Some(Some(v)) => v.trim().parse::<u64>().map(Some).map_err(|_| format!("--confirm {v}: the floor is a number of unix seconds")),
+    }
+}
+
+/// `reset-floor`, shared by `weaver workload node` and `weaver cog checkout`:
+/// a dry run prints the floor; `--confirm <floor>` resets only if the floor is
+/// still that value.
+pub async fn reset_floor(client: &mut DaemonClient, confirm: Option<Option<String>>) -> anyhow::Result<()> {
+    let pinned = confirm_floor(confirm).map_err(anyhow::Error::msg)?;
+    let r = match pinned {
+        None => call(client, "workload.node.reset-floor", json!({})).await?,
+        Some(floor) => call(client, "workload.node.reset-floor", json!({ "confirm": true, "floor": floor })).await?,
+    };
+    print!("{}", render_floor_preview(&r["preview"]));
+    if r["applied"].as_bool() == Some(true) {
+        println!("floor reset (chained as licence.floor_reset_requested and licence.floor_reset)");
+    } else {
+        println!("nothing changed; to apply: --confirm {}", r["preview"]["floor"]);
     }
     Ok(())
 }
@@ -294,6 +308,24 @@ mod tests {
         assert_eq!(r.device_id, "seed-1");
         assert!(unbind_record(&json!({"binding": null}), 1).is_err());
         assert!(unbind_record(&json!({"mesh_id": null, "next_seq": 1, "binding": {"record": held}}), 1).is_err());
+    }
+
+    #[test]
+    fn reset_floor_confirm_must_name_the_floor() {
+        assert_eq!(confirm_floor(None), Ok(None));
+        assert_eq!(confirm_floor(Some(Some("1790000000".into()))), Ok(Some(1_790_000_000)));
+        assert!(confirm_floor(Some(None)).unwrap_err().contains("--confirm <floor>"));
+        assert!(confirm_floor(Some(Some("soon".into()))).is_err());
+        #[derive(clap::Parser, Debug)]
+        struct W {
+            #[command(subcommand)]
+            c: NodeCmd,
+        }
+        use clap::Parser;
+        let c = |a: &[&str]| W::try_parse_from(a).map(|w| w.c);
+        assert!(matches!(c(&["w", "reset-floor"]).unwrap(), NodeCmd::ResetFloor { confirm: None }));
+        assert!(matches!(c(&["w", "reset-floor", "--confirm"]).unwrap(), NodeCmd::ResetFloor { confirm: Some(None) }));
+        assert!(matches!(c(&["w", "reset-floor", "--confirm", "12"]).unwrap(), NodeCmd::ResetFloor { confirm: Some(Some(_)) }));
     }
 
     #[test]

@@ -176,7 +176,8 @@ const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.
 /// Read verbs served under a guard-prefix arm (`workload.`) that were reviewed
 /// one by one for the allow-list: ADR-106 licence status (`licence_rpc`,
 /// `licence_checkout_rpc`), public mesh facts with no secret in them.
-const REVIEWED_UNDER_PREFIX: &[&str] = &["workload.node.binding", "workload.cog.checkout.status"];
+const REVIEWED_UNDER_PREFIX: &[&str] =
+    &["workload.node.binding", "workload.cog.checkout.status", "workload.cog.checkout.list"];
 
 fn all_methods() -> Vec<String> {
     let (mut arms, _) = dispatch_arms();
@@ -502,12 +503,18 @@ fn mesh_local_routes_pass_for_a_child_inside_a_project_and_not_outside() {
 #[test]
 fn licence_checkout_verbs_are_allowed_alike_outside_a_project() {
     let ro = OutsideProjectPolicy::ReadOnly;
-    for m in ["workload.cog.checkout", "workload.cog.checkout.approve"] {
+    for m in [
+        "workload.cog.checkout",
+        "workload.cog.checkout.approve",
+        "workload.cog.checkout.release",
+        "workload.cog.checkout.renew",
+        "workload.node.reset-floor",
+    ] {
         assert!(decide(ro, m, true, || false).is_ok(), "{m} for an admin");
         assert!(decide(ro, m, false, || false).is_err(), "{m} needs admin outside a project");
         assert_eq!(required_capability(m), Capability::Admin, "{m}");
     }
-    for m in ["workload.cog.checkout.status", "workload.node.binding"] {
+    for m in ["workload.cog.checkout.status", "workload.cog.checkout.list", "workload.node.binding"] {
         assert!(decide(ro, m, false, || false).is_ok(), "{m} is read-only and allowed");
         assert_eq!(required_capability(m), Capability::Read, "{m}");
     }

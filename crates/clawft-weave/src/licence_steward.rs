@@ -189,7 +189,16 @@ fn spawn_renewal(a: &WireArgs<'_>, client: Arc<dyn clawft_kernel::licence::Licen
         Some(a.chain.clone()),
         clawft_kernel::licence::RenewalConfig::default(),
     );
+    let _ = RENEWER.set(r.clone());
     r.spawn();
+}
+
+static RENEWER: OnceLock<Arc<clawft_kernel::licence::Renewer>> = OnceLock::new();
+
+/// The steward's renewer (`weaver cog checkout renew | release` use its
+/// path), when this node has a licence link and placement started it.
+pub fn renewer() -> Option<Arc<clawft_kernel::licence::Renewer>> {
+    RENEWER.get().cloned()
 }
 
 /// Build the relay from `licence-link.json` and install it in the cog mesh.
@@ -360,6 +369,15 @@ impl clawft_kernel::licence::LicenceClient for HolderGated {
     async fn renew(&self) -> Result<clawft_kernel::licence::GrantsPage, clawft_kernel::licence::LicenceClientError> {
         self.check()?;
         self.inner.renew().await
+    }
+
+    async fn release(
+        &self,
+        cog_id: &str,
+        version: &str,
+    ) -> Result<clawft_kernel::licence::GrantsPage, clawft_kernel::licence::LicenceClientError> {
+        self.check()?;
+        self.inner.release(cog_id, version).await
     }
 }
 

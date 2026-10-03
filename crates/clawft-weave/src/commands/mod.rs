@@ -64,6 +64,8 @@ pub mod workload_place_cmd;
 pub mod workload_node_cmd;
 #[cfg(all(feature = "placement", unix))]
 pub mod cog_checkout_cmd;
+#[cfg(all(feature = "placement", unix))]
+pub mod cog_checkout_verbs;
 
 use std::path::Path;
 

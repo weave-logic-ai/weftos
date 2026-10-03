@@ -140,6 +140,24 @@ pub trait LicenceClient: Send + Sync + 'static {
         let grants = self.grants_since(since).await?;
         Ok(GrantsPage { grants, next: since, more: false })
     }
+    /// `POST /licence/v1/renew` with `{"release": [{cog_id, version}]}`: the
+    /// Seed withdraws that checkout (a renewal whose `expires_at <=
+    /// issued_at`) and, as for any renewal, renews every other active one.
+    async fn release(&self, _cog_id: &str, _version: &str) -> Result<GrantsPage, LicenceClientError> {
+        Err(LicenceClientError::BadResponse("release is not supported by this client".into()))
+    }
+}
+
+/// The body of a release (ADR-106 renewal endpoint; weft-licence `RenewReq`).
+#[derive(Serialize)]
+struct ReleaseBody<'a> {
+    release: [ReleaseRef<'a>; 1],
+}
+
+#[derive(Serialize)]
+struct ReleaseRef<'a> {
+    cog_id: &'a str,
+    version: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -259,6 +277,16 @@ impl<T: LicenceTransport> LicenceClient for SignedLicenceClient<T> {
 
     async fn renew(&self) -> Result<GrantsPage, LicenceClientError> {
         let out = self.signed("POST", RENEW_PATH, Vec::new(), MAX_RESPONSE_BODY).await?;
+        let b = serde_json::from_slice::<GrantsBody>(&out).map_err(bad)?;
+        Ok(GrantsPage { grants: b.grants, next: b.next, more: false })
+    }
+
+    async fn release(&self, cog_id: &str, version: &str) -> Result<GrantsPage, LicenceClientError> {
+        if !valid_token(cog_id) || !valid_token(version) || version == "latest" {
+            return Err(LicenceClientError::BadResponse("release needs a cog id and an exact version".into()));
+        }
+        let body = serde_json::to_vec(&ReleaseBody { release: [ReleaseRef { cog_id, version }] }).map_err(bad)?;
+        let out = self.signed("POST", RENEW_PATH, body, MAX_RESPONSE_BODY).await?;
         let b = serde_json::from_slice::<GrantsBody>(&out).map_err(bad)?;
         Ok(GrantsPage { grants: b.grants, next: b.next, more: false })
     }

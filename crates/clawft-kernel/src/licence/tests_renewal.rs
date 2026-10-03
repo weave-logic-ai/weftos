@@ -172,3 +172,23 @@ async fn a_non_steward_pass_is_skipped_and_an_unreachable_seed_backs_off() {
     let d = rw.next_delay(0);
     assert!(d >= Duration::from_secs(12 * 3600) && d < Duration::from_secs(12 * 3600 + 30 * 60), "{d:?}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_release_withdraws_the_checkout_on_the_seed_and_reaches_the_member() {
+    let r = rig(72 * 3600).await;
+    assert!(valid_on(&r.b));
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let rw = renewer(&r, r.client.clone(), Some(chain.clone()));
+    let rep = rw.release("fall-detect", "1.2.0").await.expect("released");
+    assert_eq!(rep.withdrawn, 1, "{rep:?}");
+    wait_for("B has the withdrawal", || seq_on(&r.b) == 2).await;
+    assert!(!valid_on(&r.b) && !valid_on(&r.a));
+    assert!(r.b.fx.store.grant_rows()[0].withdrawn);
+    assert!(chain.tail(chain.len()).iter().any(|e| e.kind == EVENT_KIND_CHECKOUT_LAPSED));
+    // The next renewal does not bring it back: the Seed marked it released.
+    let rep = rw.run_once().await.unwrap();
+    assert_eq!(rep.renewed, 0, "{rep:?}");
+    assert!(!valid_on(&r.a));
+    // A malformed or "latest" version is refused before anything is sent.
+    assert!(rw.release("fall-detect", "latest").await.is_err());
+}

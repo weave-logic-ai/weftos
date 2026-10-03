@@ -227,6 +227,9 @@ pub mod licence_steward;
 /// `workload.cog.checkout | approve | status` (ADR-106 phase 3).
 #[cfg(all(feature = "placement", unix))]
 pub mod licence_checkout_rpc;
+/// `workload.cog.checkout.release | renew | list` (ADR-106 phase 3).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_checkout_verbs;
 /// This node's cog ingest bridge and store owner (mesh-placement-10).
 #[cfg(all(feature = "placement", unix))]
 pub mod cog_ingest_serve;

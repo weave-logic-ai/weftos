@@ -124,6 +124,8 @@ nix = { version = "0.29", default-features = false, features = ["signal", "proce
 clawft-mesh-local = { workspace = true }
 
 [dev-dependencies]
+# ADR-106: the checkout verbs are tested against the real Seed-side service on loopback.
+weft-licence = { path = "../weft-licence", default-features = false }
 # Self dev-dependency: turns `test-support` on for this crate's integration tests.
 clawft-weave = { path = ".", features = ["test-support"] }
 

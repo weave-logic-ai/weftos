@@ -105,6 +105,11 @@ weaver cog checkout <cog>@<version> --arch aarch64       # e.g. fall-detect@1.2.
 weaver cog checkout approve fall-detect@1.2.0 --operator-key ~/.config/weftos/operator.seed   # shows the hashes and a content key
 weaver cog checkout approve fall-detect@1.2.0 --operator-key ~/.config/weftos/operator.seed --confirm <content-key>
 weaver cog checkout status --explain                      # grants, approvals, the run gate per artifact
+weaver cog checkout list                                  # held grants, expiry, approval per artifact (read-only)
+weaver cog checkout renew fall-detect@1.2.0               # on the steward: renew now (the Seed renews every checkout)
+weaver cog checkout release fall-detect@1.2.0             # on the steward: end the checkout (also renews the others)
+weaver cog checkout reset-floor                           # dry run: prints the floor (same as weaver workload node reset-floor)
+weaver cog checkout reset-floor --confirm <floor>         # resets only if the floor is still that value
 weaver cog checkout approve --reapprove-orphaned --operator-key <file> --confirm <digest>   # after a mesh_nonce change
 ```
 
@@ -118,6 +123,7 @@ weaver cog checkout approve --reapprove-orphaned --operator-key <file> --confirm
 - **Which binary.** The binary that runs is the one the node's runtime admits (native: the host arch; container: its own arch order); only it needs a grant and an approval, so checking out and approving just that arch is enough. A revoked binary of any other arch still refuses the package. A placement whose variant names a different arch is refused (`arch_mismatch`). At each start the staged file is hashed again from disk.
 - **Re-packed bytes.** A package that does not say Cognitum but carries a binary a held grant lists (or a revoked hash) is gated all the same, under its own id.
 - **A deleted licence store** does not turn the gate off: the first accepted binding writes `licence-bound.marker` beside the store, and a node with the marker (or with approvals) but no binding refuses (`binding_inactive`) until sync brings the binding back. Deleting the whole `licence/` directory does reset it (the node reads as never bound until a peer re-syncs); whoever can do that can already tamper with the daemon.
+- **Release and renew** run on the steward (they use its link to `weft-licence`); elsewhere they answer `[not_steward]` with the steward's node id. `release` makes the Seed withdraw that checkout: the withdrawal is flooded, new starts stop, and running instances keep running. `renew` does now what the 12-hourly pass does; the Seed has no per-checkout renewal, so every active checkout is renewed, and so does `release` for the checkouts it does not end. Both are Admin, paced to one per 60 s on the node (`[rate_limited]` names the wait), and chained with the caller (project, token or operator). `reset-floor --confirm` takes the floor the dry run printed and refuses if it has moved; a bare `--confirm` is refused.
 - **A lapse** (an expired or withdrawn grant, or an unbind) refuses new starts and restarts. Running instances keep running.
 - **To withdraw an approval**, revoke the artifact hash: `weaver workload revoke --hash <blake3>`. That also evicts the bytes.
 - Signed WeftOS and private packages never reach this gate. A node that never held a Seed binding keeps the per-project path above.

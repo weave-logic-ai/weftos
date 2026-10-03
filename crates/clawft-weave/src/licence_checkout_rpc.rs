@@ -6,6 +6,8 @@
 //! | `workload.cog.checkout.approve` | Admin      | `{cog_id, version, prepare: true}`: what the operator signs; `{signed: [..]}`: verify, store, flood |
 //! | `workload.cog.checkout.status`  | Read       | binding, steward, relay, held grants (with the run gate per artifact) and approvals |
 //!
+//! `release`, `renew` and `list` are in `licence_checkout_verbs`.
+//!
 //! The operator key stays with the CLI: the daemon names the content
 //! (mesh id, cog, version, the sha256 set from the held grant), the CLI signs
 //! it under `weft-licence-v1/approval`, and the daemon verifies it (pinned
@@ -35,12 +37,17 @@ use crate::licence_steward::{self, RelayState};
 pub const METHODS: &[&str] =
     &["workload.cog.checkout", "workload.cog.checkout.approve", "workload.cog.checkout.status"];
 
+/// Every method this module routes (the verbs module adds release, renew, list).
+pub fn handles_any(m: &str) -> bool {
+    METHODS.contains(&m) || crate::licence_checkout_verbs::METHODS.contains(&m)
+}
+
 /// How long a member waits for the steward's answer (a first checkout fetches the bytes).
 pub const STEWARD_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// True for the methods this module serves.
 pub fn handles(m: &str) -> bool {
-    METHODS.contains(&m)
+    handles_any(m)
 }
 
 /// Is the steward a licensed peer of this node right now?
@@ -65,6 +72,10 @@ pub struct Ctx<'a> {
     /// Who is asking (a checkout on the steward is charged to and gated as
     /// this principal).
     pub principal: &'a str,
+    /// The steward's renewer (release and renew use its path).
+    pub renewer: Option<Arc<clawft_kernel::licence::Renewer>>,
+    /// The node-wide pace of manual release and renew.
+    pub manual: &'a crate::licence_checkout_verbs::ManualLimit,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +132,15 @@ pub async fn route(ctx: &Ctx<'_>, method: &str, params: Value) -> Response {
             Err(e) => Err(e),
         },
         "workload.cog.checkout.status" => Ok(status(ctx)),
+        "workload.cog.checkout.list" => Ok(crate::licence_checkout_verbs::list(ctx)),
+        "workload.cog.checkout.release" => match parse(method, params) {
+            Ok(p) => crate::licence_checkout_verbs::release(ctx, p).await,
+            Err(e) => Err(e),
+        },
+        "workload.cog.checkout.renew" => match parse(method, params) {
+            Ok(p) => crate::licence_checkout_verbs::renew(ctx, p).await,
+            Err(e) => Err(e),
+        },
         other => Err(format!("{other} is not a checkout method")),
     };
     match r {
@@ -304,9 +324,9 @@ pub fn principal_of(ctx: &crate::rpc_ext::ExtCtx) -> String {
     }
 }
 
-/// `workload.cog.checkout`, registered in `rpc_ext::ROUTES` (Admin: a
-/// checkout spends the Seed's licence and transfer budget), so the handler
-/// knows the caller's principal.
+/// `workload.cog.checkout`, `.release` and `.renew`, registered in
+/// `rpc_ext::ROUTES` (Admin: each spends the Seed's licence budget), so the
+/// handler knows the caller's principal (rate limits and chain events).
 pub fn handle_ext(call: crate::rpc_ext::ExtCall) -> crate::rpc_ext::ExtFuture {
     Box::pin(async move {
         let principal = principal_of(&call.ctx);
@@ -335,7 +355,7 @@ async fn dispatch_as(
     };
     // Checkout and approve need the cog mesh and the licence exchange, which
     // placement builds; status reports whatever is there.
-    if method != "workload.cog.checkout.status"
+    if !matches!(method, "workload.cog.checkout.status" | "workload.cog.checkout.list")
         && let Err(e) = crate::workload_place_rpc::ensure_started(kernel.clone()).await
     {
         return Response::error(format!("placement unavailable: {e}"));
@@ -352,6 +372,8 @@ async fn dispatch_as(
         arch,
         now: chrono::Utc::now().timestamp().max(0) as u64,
         principal,
+        renewer: licence_steward::renewer(),
+        manual: &crate::licence_checkout_verbs::MANUAL,
     };
     route(&ctx, method, params).await
 }
