@@ -45,6 +45,11 @@ pub enum RunRefusal {
     /// No operator approval for this cog version covers the binary's sha256.
     #[error("no operator approval covers this binary")]
     NoApproval,
+    /// This daemon is another tenant's on a machine of a Seed-licensed mesh:
+    /// Cognitum cogs there run under the machine's licence holder (the
+    /// cluster owner's daemon), never on the ADR-105 path here.
+    #[error("Cognitum cogs on this machine run under its licence holder, not this daemon ({0})")]
+    NotHolder(String),
 }
 
 impl RunRefusal {
@@ -57,6 +62,7 @@ impl RunRefusal {
             Self::NotInGrant => "not_in_grant",
             Self::HashRevoked => "hash_revoked",
             Self::NoApproval => "no_approval",
+            Self::NotHolder(_) => "not_holder",
         }
     }
 
@@ -70,6 +76,9 @@ impl RunRefusal {
             Self::GrantLapsed => "renew through the steward (a lapsed licence stops new starts)".into(),
             Self::HashRevoked => "the artifact was revoked; it cannot run".into(),
             Self::NoApproval => format!("weaver cog checkout approve {cog_id}@{version}"),
+            Self::NotHolder(_) => {
+                format!("place {cog_id}@{version} from the cluster owner's daemon (the machine's licence holder)")
+            }
         }
     }
 }

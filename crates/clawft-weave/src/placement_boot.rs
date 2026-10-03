@@ -25,7 +25,9 @@
 //! otherwise), which before phase 3 never ran in service mode. In service
 //! mode only the daemon that holds the service's reserved topics (the cluster
 //! owner's) runs the licence path; another tenant's daemon places but runs no
-//! licence runtime, exchange or binder. The answer is re-read with every
+//! licence exchange, binder, relay or renewer (its licence runtime, the local
+//! grant store and policy, exists from boot in every mode, so placement never
+//! captures a stand-in), and refuses Cognitum cogs in a Seed-licensed mesh. The answer is re-read with every
 //! peer-view refresh of the service links, so the path comes up when the
 //! link (re)connects and follows a `cluster_owner_uid` change.
 
@@ -103,13 +105,23 @@ pub async fn start(
     if s.control_key {
         tracing::info!(controller = %s.pubkey_hex(), "service mode: placement and the licence steward sign with the control key");
     }
+    // Service mode is "unknown" before anything else exists, so no window
+    // reads it as collapsed (not applicable).
+    crate::licence_boot::set_holder_state(if identity.is_service() {
+        HolderState::Unknown
+    } else {
+        HolderState::NotApplicable
+    });
     crate::workload_place_rpc::init_with_mesh_id(s.key.clone(), runtime_dir.to_path_buf(), s.mesh_node_id.clone());
+    // The licence runtime (the grant store and checkout policy: local state)
+    // exists from boot in both modes, so placement, built whenever its first
+    // call comes, always holds the node's real store. Only the exchange, the
+    // binder, the relay and the renewer follow the holder role.
+    install_runtime(kernel, runtime_dir, &s).await;
     if !identity.is_service() {
-        crate::licence_boot::set_holder_state(HolderState::NotApplicable);
         install_licence(kernel, runtime_dir, &s, false, false).await;
         return;
     }
-    crate::licence_boot::set_holder_state(HolderState::Unknown);
     let links = crate::cog_swarm::licence_links();
     if crate::cog_swarm::service_licence_links().is_some() {
         // The link is up: ask now rather than wait for the periodic refresh.
@@ -177,26 +189,10 @@ async fn install_licence(
         crate::licence_boot::skipped(k.kernel_config().mesh.as_ref(), "no chain manager");
         return;
     };
-    let anchors = crate::workload_place_policy::load_anchors(runtime_dir).unwrap_or_else(|e| {
-        warn!(error = %e, "operator keys unreadable; no Seed binding can verify");
-        Default::default()
-    });
-    let rt = match crate::licence_boot::runtime() {
-        Some(rt) => rt,
-        None => {
-            let rt = crate::licence_boot::install(crate::licence_boot::build(crate::licence_boot::InitArgs {
-                dir: runtime_dir,
-                anchors: anchors.clone(),
-                revocations: k.revocation_list().clone(),
-                chain: chain.clone(),
-                mesh: k.kernel_config().mesh.as_ref(),
-                steward_node_id: s.mesh_node_id.clone(),
-                steward_pubkey: s.pubkey_hex(),
-            }));
-            check_steward_key(&rt, s);
-            rt
-        }
-    };
+    let anchors = load_anchors(runtime_dir);
+    drop(k);
+    let Some(rt) = install_runtime(kernel, runtime_dir, s).await else { return };
+    let k = kernel.read().await;
     // The exchange from boot, not from the first placement call: a member
     // that never places still takes and passes on bindings and grants.
     let posture = crate::licence_boot::posture(k.kernel_config().mesh.as_ref(), k.governance_gate().is_some());
@@ -223,6 +219,41 @@ async fn install_licence(
         }
         None => tracing::debug!("no kernel mesh: the licence exchange is not started"),
     }
+}
+
+fn load_anchors(dir: &Path) -> clawft_kernel::workload_pkg::TrustAnchors {
+    crate::workload_place_policy::load_anchors(dir).unwrap_or_else(|e| {
+        warn!(error = %e, "operator keys unreadable; no Seed binding can verify");
+        Default::default()
+    })
+}
+
+/// The licence runtime (grant store, checkout policy, binder state), once.
+/// `None` without a chain manager.
+async fn install_runtime(
+    kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
+    runtime_dir: &Path,
+    s: &PlacementSigner,
+) -> Option<Arc<crate::licence_boot::LicenceRuntime>> {
+    if let Some(rt) = crate::licence_boot::runtime() {
+        return Some(rt);
+    }
+    let k = kernel.read().await;
+    let Some(chain) = k.chain_manager().cloned() else {
+        crate::licence_boot::skipped(k.kernel_config().mesh.as_ref(), "no chain manager");
+        return None;
+    };
+    let rt = crate::licence_boot::install(crate::licence_boot::build(crate::licence_boot::InitArgs {
+        dir: runtime_dir,
+        anchors: load_anchors(runtime_dir),
+        revocations: k.revocation_list().clone(),
+        chain,
+        mesh: k.kernel_config().mesh.as_ref(),
+        steward_node_id: s.mesh_node_id.clone(),
+        steward_pubkey: s.pubkey_hex(),
+    }));
+    check_steward_key(&rt, s);
+    Some(rt)
 }
 
 /// A held binding that names this node as steward under another key: the

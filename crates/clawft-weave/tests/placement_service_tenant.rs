@@ -41,7 +41,17 @@ async fn a_non_owner_tenant_daemon_refuses_bind_and_starts_no_exchange() {
     let runtime = tmp.path().join("runtime");
     let rec = svc.record();
     let identity = DaemonIdentity::for_service(rec.node_id.clone(), rec.machine_pubkey).unwrap();
-    let kcfg = KernelConfig { chain: Some(ChainConfig::isolated_in(&tmp.path().join("chain"))), ..KernelConfig::default() };
+    // A Seed-licensed mesh (a mesh id from the configured nonce).
+    let mesh = clawft_types::config::MeshConfig {
+        genesis_hash: Some("47".repeat(32)),
+        mesh_nonce: Some("ab".repeat(32)),
+        ..Default::default()
+    };
+    let kcfg = KernelConfig {
+        chain: Some(ChainConfig::isolated_in(&tmp.path().join("chain"))),
+        mesh: Some(mesh),
+        ..KernelConfig::default()
+    };
     let kernel = Kernel::boot_in_service_mode(Config::default(), kcfg, Arc::new(NativePlatform::new()), rec.node_id.clone())
         .await
         .expect("kernel boots in service mode");
@@ -50,7 +60,9 @@ async fn a_non_owner_tenant_daemon_refuses_bind_and_starts_no_exchange() {
     placement_boot::start(&kernel, &identity, &runtime).await;
 
     assert_eq!(licence_boot::reserved_holder(), Some(false));
-    assert!(licence_boot::runtime().is_none(), "no licence runtime or binder on a non-owner daemon");
+    // The local grant store exists from boot (placement never captures a
+    // stand-in); the exchange, the binder and the relay do not run here.
+    assert!(licence_boot::runtime().is_some(), "the licence runtime (local state) exists in every mode");
     assert!(workload_place_rpc::licence_exchange().is_none(), "no licence exchange on a non-owner daemon");
     assert!(workload_place_rpc::runtime_dir().is_some(), "placement itself is still initialised");
 
@@ -61,4 +73,22 @@ async fn a_non_owner_tenant_daemon_refuses_bind_and_starts_no_exchange() {
     let st = st.result.unwrap();
     assert_eq!(st["reserved_holder"], false);
     assert!(render_status(&st).contains("NOT the holder"), "{}", render_status(&st));
+
+    // One licence covers the whole mesh: this tenant's run gate refuses a
+    // Cognitum cog with its own reason instead of the ADR-105 fallback.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let p = runtime.join(workload_place_rpc::PERMITS_FILE);
+        std::fs::write(&p, "[]").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let r = workload_place_rpc::dispatch("workload.status", json!({}), kernel.clone()).await;
+    assert!(r.ok, "{:?}", r.error);
+    let gate = workload_place_rpc::in_process_host().and_then(|h| h.licence_gate().cloned()).expect("run gate");
+    let (sha, b3) = (clawft_kernel::licence::sha256_hex(b"cog"), clawft_kernel::workload_pkg::codec::hex_encode(blake3::hash(b"cog").as_bytes()));
+    let req = clawft_kernel::licence::RunRequest { cog_id: "fall-detect", version: "1.2.0", sha256: &sha, blake3: &b3 };
+    let e = gate.check(&req).unwrap_err();
+    assert_eq!(e.code(), "not_holder", "{e}");
+    assert!(workload_place_rpc::licence_exchange().is_none(), "building placement starts no exchange on a non-holder");
+    assert!(e.to_string().contains("licence holder"), "{e}");
 }

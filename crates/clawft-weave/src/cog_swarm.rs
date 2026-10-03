@@ -154,6 +154,34 @@ pub fn grant_flood() -> Arc<dyn GrantFlood> {
     FLOOD.get().cloned().unwrap_or_else(|| Arc::new(NoFlood))
 }
 
+/// A flood that looks up its target on every call: whatever
+/// [`set_grant_flood`] installed by then, nothing before. The relay and the
+/// renewer are built when placement starts, which can be before the licence
+/// exchange exists (service mode, holder not yet known); a flood read once
+/// would then stay [`NoFlood`] for the life of the process.
+pub struct LateFlood(Arc<dyn Fn() -> Option<Arc<dyn GrantFlood>> + Send + Sync>);
+
+impl LateFlood {
+    /// A late flood over `source` (tests; the daemon uses [`late_grant_flood`]).
+    pub fn new(source: Arc<dyn Fn() -> Option<Arc<dyn GrantFlood>> + Send + Sync>) -> Self {
+        Self(source)
+    }
+}
+
+#[async_trait]
+impl GrantFlood for LateFlood {
+    async fn flood(&self, grant: &clawft_kernel::licence::SignedGrant) {
+        if let Some(f) = (self.0)() {
+            f.flood(grant).await;
+        }
+    }
+}
+
+/// The node's flood, looked up on each call (see [`LateFlood`]).
+pub fn late_grant_flood() -> Arc<dyn GrantFlood> {
+    Arc::new(LateFlood::new(Arc::new(|| FLOOD.get().cloned())))
+}
+
 /// Install this node's cog mesh once its exchange and grant store exist, and
 /// make the bytes of the grants already held shareable again (a restart).
 /// Returns the cog mesh, whose tunnel dialer is the production

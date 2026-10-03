@@ -14,7 +14,8 @@
 //!
 //! The Seed never connects into the mesh: only the steward pulls. On a node
 //! the binding does not name the client refuses before sending
-//! (`seed_not_bound`, `not_steward`) and the pass is skipped. When the Seed
+//! (`seed_not_bound`, `not_steward`, or `not_holder` from a daemon that does not
+//! hold the licence role) and the pass is skipped. When the Seed
 //! cannot be reached the next pass backs off (1 min doubling to 1 h); a
 //! skipped pass polls again in 5 min, so a binding that arrives later is
 //! renewed soon. The catch-up cursor may not move past the Seed's counter
@@ -101,7 +102,7 @@ pub struct Renewer {
 }
 
 fn skip(e: &LicenceClientError) -> bool {
-    matches!(e, LicenceClientError::Refused { status: 0, code } if code == "not_steward" || code == "seed_not_bound")
+    matches!(e, LicenceClientError::Refused { status: 0, code } if code == "not_steward" || code == "seed_not_bound" || code == "not_holder")
 }
 
 impl Renewer {

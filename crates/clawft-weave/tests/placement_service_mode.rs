@@ -173,6 +173,14 @@ async fn placement_runs_in_service_mode_signed_by_the_control_key() {
         &json!([{ "addr": pi_addr, "tier": "paired" }, { "addr": other_addr, "tier": "paired" }]),
     );
 
+    // A steward link: the relay must sign as the machine (the binding's
+    // steward_node_id), never as the control key's own id.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let p = runtime.join(clawft_weave::licence_steward::LINK_FILE);
+        std::fs::write(&p, r#"{"url":"http://100.64.0.10:8700","allow_unpinned_lab_link":true}"#).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     placement_boot::start(&kernel, &identity, &runtime).await;
 
     // The boot step: this daemon holds the reserved topics, the exchange is
@@ -198,6 +206,8 @@ async fn placement_runs_in_service_mode_signed_by_the_control_key() {
     assert!(targets.contains(&pi), "the board that trusts the control key answered: {st}");
     assert!(!targets.contains(&other), "a board that trusts only the machine key refuses this daemon: {st}");
 
+    let relay = clawft_weave::licence_steward::state().expect("placement built the relay state");
+    assert_eq!(relay.node_id, machine_id, "the relay signs as the machine's node id: {relay:?}");
     let v = call(&kernel, "workload.place", params).await.unwrap();
     assert_eq!(v["placed"]["node_id"], pi.as_str(), "{}", v["explain"]);
     let iid = v["placed"]["instance_id"].as_str().unwrap().to_string();
