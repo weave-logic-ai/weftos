@@ -33,7 +33,8 @@
   - ADR-105 (cog sources; section 3 licensing)
   - mesh-facts (`RedistributionPolicy` with `Audience`, `GrantOrigin`, `ServePeer`), now in `integrate/cog-repo`
 - **Relates-To**: COG-009 (`weft-cog-host` on the appliance) and COG-011 (per-node Ed25519 request signing, clock floor), both in the private cogs repo
-- **Implementation**: none yet. Phase plan below.
+- **Implementation**: Phase 1a built (see the status line below). Phases 1b to 4 are not started.
+- **Implementation status, phase 1a**: done on branch `wt/seed-1a`. Module `crates/clawft-kernel/src/licence/` (gated like the mesh swarm code): `MeshId`, binding v2 with the member profile, `CheckoutGrant`, `Approval`, `CheckoutGrantStore`, `ApprovalStore`, the persisted clock floor with the clamp, `MeshCheckoutPolicy`, `ArtifactExchange::grant_checkout`, and the `may_run` gate. The daemon installs `MeshCheckoutPolicy` unconditionally (`workload_place_rpc.rs`); its local mesh id is unset until the `mesh_nonce` config entry exists, so it behaves exactly like `ManifestPolicy` for now. Not yet: floods and sync (1b), transport and steward relay (1c), the steward profile hook (`BindingExtraCheck`) and the RPCs (1d), and wiring `may_run` into placement (phase 3). Detail choices made in 1a are listed under "Phase 1a implementation notes" below.
 
 ## Owner decisions this ADR implements (not reopened here)
 
@@ -233,6 +234,8 @@ Otherwise it chains `binding_refused: open_membership` and stays on the `Manifes
   licence: { ref_sha256, expires },      # hashed licence ref; no plaintext account
   seq, issued_at, expires_at }
 ```
+
+`grant_id` is the sha256 of the canonical payload with `grant_id` set to the empty string, since the payload cannot contain its own hash. `grant_key_id` is `ed25519:` plus the first 16 hex chars of `sha256(grant public key)`. Verifiers refuse a grant whose `grant_id` or `grant_key_id` does not match, whose lifetime exceeds 7 days, or whose artifacts are unsorted or duplicated by arch.
 
 **Replacement rules (M6).**
 - For one (mesh, cog, version), the highest `seq` wins and a lower `seq` is ignored.
@@ -466,6 +469,21 @@ Tests:
 Placement still uses operator re-signing. Acceptance: after a lapse, a restart is refused.
 
 **Phase 4. Needs Cognitum.** A Cognitum-signed entitlement and a signed registry entry (C9) attached verbatim to grants and verified offline by members, replacing the operator approval. Then grant-backed placement eligibility (replacing operator re-signing inside the mesh), licensed download, a device-key cross-certificate of the grant key, a Cognitum withdrawal feed, and multi-Seed meshes if wanted.
+
+## Phase 1a implementation notes
+
+Choices made while building 1a that the text above leaves open. None change a decision.
+
+- **Envelope.** Every record travels as `{payload, public_key, signature}` (hex). The signed bytes are `domain tag || "\n" || payload`. The payload is the serde struct serialization, and a verifier refuses a payload that does not re-serialize to itself, so each record has one signed spelling.
+- **Operator keys.** A binding or approval is accepted only from a `TrustAnchors` key with origin `Operator`. A pinned `Weftos` key is not accepted, unlike revocation notices.
+- **Binding fields.** `node_id` from the v1 `BindRecord` is dropped, because `steward_node_id` names the same node. The v2 record is `{v, device_id, device_pubkey, mesh_id, grant_pubkey, steward_node_id, steward_pubkey, state, seq, bound_at}`.
+- **Unbind keeps the record.** An `unbound` binding is stored, so its `seq` persists and grants stop at once. A rebind with the same grant key resumes the held grants. A rebind with a new grant key voids them.
+- **Grant rules added.** A newer `seq` may not change the hashes of an arch the older grant carried (`ChangesArtifact`). A grant is valid only while `max(now, floor)` is below both `expires_at` and `licence.expires`. Expired and withdrawn grants stay in the store as `seq` tombstones, so an older unexpired grant cannot be replayed to undo a withdrawal.
+- **Same-seq conflict.** The store keeps the newest earlier grant per (cog, version). On a conflict it restores that grant and refuses both payloads at that `seq` from then on.
+- **Floor clamp.** The stored high-water mark is clamped only when it is more than 30 days past the newest accepted `issued_at` and also ahead of the running clock. A mark the clock has caught up with is genuine, so a long quiet gap is not a clamp.
+- **Fail closed.** A store file that is missing is empty. One that cannot be read, parsed or re-verified (every signature is checked again at load) is an error from `open`, or a poisoned store from `open_or_poisoned`, which serves nothing, refuses writes and leaves the file alone.
+- **Run gate.** `may_run` checks a valid grant that lists the binary's sha256, then that the grant's BLAKE3 is not revoked as an `ArtifactHash`, then an approval covering the sha256. The revocation is how an approval is withdrawn.
+- **Events.** The stores report `binding_refused`, `binding_conflict`, `binding_orphaned`, `grant_conflict`, `floor_clamped` and `floor_reset` through a `LicenceEventSink`. The daemon maps them to chain events in a later phase.
 
 ## Open questions
 
