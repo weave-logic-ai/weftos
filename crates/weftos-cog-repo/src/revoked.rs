@@ -28,8 +28,8 @@ struct Entry {
 
 impl RevokedKeys {
     /// No revocations.
-    pub fn none() -> Self {
-        Self::default()
+    pub const fn none() -> Self {
+        Self { keys: BTreeSet::new() }
     }
 
     /// From explicit keys (hex, any case).

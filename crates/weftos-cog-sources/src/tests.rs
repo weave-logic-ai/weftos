@@ -14,16 +14,18 @@ use crate::resolve::{load_all, load_source, parse_ref, resolve};
 use crate::testkit::*;
 use weftos_cog_repo::{RevokedKeys, WEAVELOGIC_PUBKEY_HEX};
 
+static NO_REVOCATIONS: RevokedKeys = RevokedKeys::none();
+
 fn eff(sources: Vec<CogSource>, licences: Vec<crate::config::CogLicence>) -> EffectiveSources {
     EffectiveSources { sources, licences, ..Default::default() }
 }
 
 fn ctx<'a>(reader: &'a dyn crate::fetch::Reader, eff: &'a EffectiveSources) -> FetchCtx<'a> {
-    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: &[], revoked: &RevokedKeys::none() }
+    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: &[], revoked: &NO_REVOCATIONS }
 }
 
 fn ctx_with<'a>(reader: &'a dyn crate::fetch::Reader, eff: &'a EffectiveSources, keys: &'a [String]) -> FetchCtx<'a> {
-    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: keys, revoked: &RevokedKeys::none() }
+    FetchCtx { reader, licences: &eff.licences, now: now(), extra_weftos_keys: keys, revoked: &NO_REVOCATIONS }
 }
 
 // ── config ────────────────────────────────────────────────────────────────
@@ -272,6 +274,10 @@ fn private_source_refuses_wrong_key_unsigned_and_hash_mismatch() {
     assert_eq!(fetch_verified(&l, "acme-gauge", "arm64", &ctx(&FsReader, &e)).unwrap_err().code(), "no_artifact");
 }
 
+fn ctx_revoked<'a>(eff: &'a EffectiveSources, revoked: &'a RevokedKeys) -> FetchCtx<'a> {
+    FetchCtx { reader: &FsReader, licences: &eff.licences, now: now(), extra_weftos_keys: &[], revoked }
+}
+
 #[test]
 fn a_revoked_signer_key_is_refused_at_install() {
     let tmp = tempfile::tempdir().unwrap();
@@ -281,14 +287,13 @@ fn a_revoked_signer_key_is_refused_at_install() {
     let e = eff(vec![], vec![]);
     let s = source("acme-private", SourceKind::Private, &reg, &[pub_hex(&mine)], 0);
     let l = load_source(&s, &FsReader).unwrap();
-    let c = |revoked: &RevokedKeys| FetchCtx { reader: &FsReader, licences: &e.licences, now: now(), extra_weftos_keys: &[], revoked };
 
     // an unrelated revocation changes nothing
     let unrelated = RevokedKeys::from_keys([pub_hex(&other)]);
-    assert!(fetch_verified(&l, "acme-gauge", "arm", &c(&unrelated)).is_ok());
+    assert!(fetch_verified(&l, "acme-gauge", "arm", &ctx_revoked(&e, &unrelated)).is_ok());
     // the signer's key, in any case, is refused
     let revoked = RevokedKeys::from_keys([pub_hex(&mine).to_uppercase()]);
-    let err = fetch_verified(&l, "acme-gauge", "arm", &c(&revoked)).unwrap_err();
+    let err = fetch_verified(&l, "acme-gauge", "arm", &ctx_revoked(&e, &revoked)).unwrap_err();
     assert_eq!(err.code(), "verify_failed");
     assert!(err.to_string().contains("revoked"), "{err}");
 }
