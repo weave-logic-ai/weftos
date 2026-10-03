@@ -253,6 +253,31 @@ impl FileCfg {
                 }
             }
         }
+        // Listener ports (a role's proxy and exposed ports) are unique across
+        // all roles and never a server's port. Servers may share a port only
+        // when both are Ollama roles (one Ollama serves several models).
+        let mut listeners = std::collections::HashSet::new();
+        for r in &self.roles {
+            for p in r.proxy_port.into_iter().chain(r.expose.as_ref().map(|e| e.port)) {
+                if !listeners.insert(p) {
+                    return bad(format!("port {p} is used by more than one proxy or exposed listener"));
+                }
+            }
+        }
+        let mut servers: BTreeMap<u16, bool> = BTreeMap::new();
+        for r in &self.roles {
+            if let Some(p) = r.instance_port {
+                if listeners.contains(&p) {
+                    return bad(format!("port {p} is both a server port and a proxy or exposed listener port"));
+                }
+                let ollama = r.flavor.as_deref() == Some("ollama");
+                if let Some(prev_ollama) = servers.insert(p, ollama)
+                    && !(prev_ollama && ollama)
+                {
+                    return bad(format!("instance_port {p} is used by more than one role (only Ollama roles share a server)"));
+                }
+            }
+        }
         if self.budget_gb.is_some_and(|g| !g.is_finite() || g <= 0.0 || g > 4096.0) {
             return bad("budget_gb must be 0..=4096".into());
         }
@@ -328,7 +353,7 @@ pub struct Resolved {
 /// Merge roster facts (when `imported` is given) under each role's fields
 /// and build its spec. Explicit role fields win over the roster.
 pub fn resolve_roles(cfg: &FileCfg, imported: Option<&ImportedRoster>) -> Result<Vec<Resolved>, String> {
-    let mut out = Vec::new();
+    let mut out: Vec<Resolved> = Vec::new();
     for r in &cfg.roles {
         let fail = |m: String| Err(format!("{CONFIG_FILE}: role {}: {m}", r.role));
         let from_roster = match (&r.roster_id, imported) {
@@ -384,6 +409,24 @@ pub fn resolve_roles(cfg: &FileCfg, imported: Option<&ImportedRoster>) -> Result
             return fail("a managed role needs its memory (memory_gb or the roster's ram_gb) when budget_gb is set".into());
         }
         spec.validate().map_err(|e| format!("{CONFIG_FILE}: role {}: {e}", r.role))?;
+        // Ports are known now (a roster may have supplied them): no two
+        // roles share a server port unless both are Ollama, and a server
+        // never sits on a listener's port.
+        let port = spec.serve.port;
+        let listener = |p: Option<u16>| p.is_some() && p == port;
+        for other in &out {
+            if other.spec.serve.port == port
+                && !(other.spec.runtime == InferFlavor::Ollama && spec.runtime == InferFlavor::Ollama)
+            {
+                return fail(format!("port {:?} is also role {}'s server port (only Ollama roles share a server)", port, other.cfg.role));
+            }
+            if listener(other.cfg.proxy_port) || listener(other.cfg.expose.as_ref().map(|e| e.port)) {
+                return fail(format!("server port {port:?} is role {}'s listener port", other.cfg.role));
+            }
+        }
+        if cfg.roles.iter().any(|o| o.role != r.role && (listener(o.proxy_port) || listener(o.expose.as_ref().map(|e| e.port)))) {
+            return fail(format!("server port {port:?} is another role's listener port"));
+        }
         out.push(Resolved { cfg: r.clone(), managed, spec });
     }
     Ok(out)

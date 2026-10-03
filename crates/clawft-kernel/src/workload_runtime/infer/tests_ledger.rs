@@ -57,8 +57,18 @@ async fn a_server_that_gave_up_restarting_holds_no_memory_and_can_be_started_aga
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(m.rt.reconcile(&h).await.unwrap(), Reconcile::GaveUp { attempts: 1 });
     assert_eq!(ledger.used(), 0, "nothing is running, so nothing is held");
-    // The operator starts it again: fresh reservation, fresh restart budget.
+    // A plain start (what an automatic drive does) does not give the budget
+    // back: the server dies again and has given up at once.
     std::fs::remove_file(m.script_dir.join("pid.txt")).unwrap();
+    m.rt.start(&h).await.unwrap();
+    assert_eq!(ledger.used(), 6 * GB);
+    crash(script_pid(&m.script_dir).await);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(m.rt.reconcile(&h).await.unwrap(), Reconcile::GaveUp { attempts: 1 }, "the budget was not reset");
+    assert_eq!(ledger.used(), 0);
+    // The operator's start resets it explicitly: fresh reservation, fresh budget.
+    std::fs::remove_file(m.script_dir.join("pid.txt")).unwrap();
+    m.rt.reset_restarts(&h).await;
     m.rt.start(&h).await.unwrap();
     assert_eq!(ledger.used(), 6 * GB);
     script_pid(&m.script_dir).await;
@@ -204,4 +214,32 @@ async fn ollama_only_unloads_a_model_it_loaded() {
         }
         assert_eq!(unloads(&server).await, 1, "via_unload={via_unload}: exactly one unload");
     }
+}
+
+#[tokio::test]
+async fn an_aborted_ollama_load_is_still_unloaded_at_stop() {
+    let ledger = Arc::new(ResidencyLedger::new(None));
+    let m = ollama_with(&ledger);
+    let server = MockServer::start().await;
+    mount_ollama(&server, &["orpheus-tts:latest"], &[]).await;
+    // The unload answers at once; the load is still in flight when the
+    // operator stops the role.
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .and(wiremock::matchers::body_partial_json(serde_json::json!({"keep_alive": 0})))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(5)))
+        .mount(&server)
+        .await;
+    let h = load(&m.rt, ospec(port_of(&server))).await;
+    m.rt.start(&h).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(loads(&server).await, 1, "the load request was sent");
+    m.rt.stop(&h, Duration::from_secs(1)).await.unwrap();
+    assert_eq!(unloads(&server).await, 1, "what we asked Ollama to load is unloaded even if the load was cut short");
+    m.rt.unload(h).await.unwrap();
 }

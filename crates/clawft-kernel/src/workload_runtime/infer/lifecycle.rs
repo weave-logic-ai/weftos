@@ -246,10 +246,6 @@ impl InferRuntime {
                         return Err(RuntimeError::InvalidState("already running".into()));
                     }
                     mg.proc = None;
-                    // An explicit start gets a fresh restart budget (a server
-                    // that gave up is started again by the operator, not by
-                    // reconcile).
-                    mg.restarts = 0;
                     spawn(self, inst)
                 }
                 ManagedPlan::Ollama { tag } => {
@@ -275,8 +271,13 @@ impl InferRuntime {
                             we_loaded.store(false, std::sync::atomic::Ordering::SeqCst);
                             Ok(())
                         } else {
+                            // Ours from the moment we ask, so a load that is
+                            // aborted half way is still unloaded at stop.
+                            we_loaded.store(true, std::sync::atomic::Ordering::SeqCst);
                             let r = ollama::load(&client, &tag, &keep).await;
-                            we_loaded.store(r.is_ok(), std::sync::atomic::Ordering::SeqCst);
+                            if r.is_err() {
+                                we_loaded.store(false, std::sync::atomic::Ordering::SeqCst);
+                            }
                             r
                         };
                         if r.is_err()
@@ -302,6 +303,21 @@ impl InferRuntime {
             ledger.release(&h.instance_id);
         }
         result
+    }
+
+    /// Give a managed instance a fresh restart budget. Only an explicit
+    /// operator start calls this: an automatic restart or drive never does,
+    /// so a server that keeps dying stays given up.
+    pub async fn reset_restarts(&self, h: &InstanceHandle) {
+        if let Some(mg) = self
+            .instances
+            .lock()
+            .await
+            .get_mut(&h.instance_id)
+            .and_then(|i| i.managed.as_mut())
+        {
+            mg.restarts = 0;
+        }
     }
 
     /// Give back the instance's budget (no-op without a ledger).

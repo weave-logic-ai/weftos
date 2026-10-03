@@ -603,8 +603,18 @@ placed workloads. Managed roles are governed and off by default.
   the reason. The memory a managed role holds is released when it stops
   (after the process has exited), gives up restarting, is stopped for
   listening beyond loopback, or fails to load, and the role stops claiming to
-  run. An Ollama model that was already in memory when asked is never
-  loaded or unloaded by WeftOS.
+  run. A role whose server gave up restarting, or was stopped for listening
+  beyond loopback, is no longer wanted: it stays down, with that reason in
+  the status, until an explicit `infer.start` (which is also the only thing
+  that gives a server that gave up a fresh restart budget). An Ollama model
+  that was already in memory when asked is never loaded or unloaded by
+  WeftOS. Ollama has no ownership, though: a model WeftOS loaded that
+  another client later evicted and reloaded is still unloaded at stop, and a
+  load WeftOS started and then cut short is unloaded too.
+- Ports must not collide: each `proxy_port` and `expose.port` is used by one
+  listener across all roles and is never a server's port, and two roles
+  share an `instance_port` only when both are Ollama roles (one Ollama
+  serves several models). The check includes the ports a roster supplies.
 - Consumers follow a placed role when nothing explicit chose their
   endpoint: in-process agents (`provider`), the kernel `llm` service (its
   endpoint is the `local` role's server, refreshed when the role moves; its

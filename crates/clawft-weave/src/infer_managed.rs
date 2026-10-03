@@ -119,6 +119,39 @@ impl InferState {
         }
     }
 
+    /// A terminal outcome: the role is no longer wanted, and nothing starts
+    /// it again until an operator says `infer.start`. (An automatic retry
+    /// would loop a crashing server, or put back one that had exposed
+    /// itself beyond loopback.)
+    fn terminal(&self, r: &RoleState, why: String) {
+        let mut g = r.run.lock().unwrap_or_else(|e| e.into_inner());
+        g.wanted = false;
+        g.started = false;
+        g.retry_at = None;
+        g.reason = Some(format!("{why}; it stays down until an explicit infer.start"));
+    }
+
+    /// Act on what one reconcile pass found for a served managed role.
+    pub(crate) async fn on_reconcile(&self, r: &RoleState, out: Option<Reconcile>) {
+        if r.managed.is_none() {
+            return;
+        }
+        match out {
+            Some(Reconcile::GaveUp { attempts }) => {
+                self.terminal(r, format!("the server exited and gave up after {attempts} restarts"));
+            }
+            Some(Reconcile::StoppedExposed { .. }) => {
+                self.terminal(r, "the server was stopped for listening beyond loopback".into());
+                // The adapter will not start it again until it is reloaded:
+                // drop the instance, so the explicit start loads a new one.
+                if let (Some(m), Some(h)) = (&r.managed, r.handle.lock().await.take()) {
+                    let _ = m.host.unload(h).await;
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn fail(&self, r: &RoleState, why: String) {
         let mut g = r.run.lock().unwrap_or_else(|e| e.into_inner());
         g.reason = Some(why);
@@ -188,23 +221,7 @@ impl InferState {
             match h {
                 Some(h) if live => {
                     let out = self.table.sync_local(&r.cfg.role, &r.rt, &h).await;
-                    // A server that gave up restarting, or was stopped for
-                    // listening beyond loopback, is not running: say so (its
-                    // memory is already released) and try again later.
-                    match out.reconcile {
-                        Some(Reconcile::GaveUp { attempts }) if r.managed.is_some() => {
-                            self.fail(r, format!("the server exited and gave up after {attempts} restarts"));
-                        }
-                        Some(Reconcile::StoppedExposed { .. }) if r.managed.is_some() => {
-                            self.fail(r, "the server was stopped for listening beyond loopback".into());
-                            // The adapter will not start it again until it is
-                            // reloaded: drop the instance so the retry loads a new one.
-                            if let (Some(m), Some(h)) = (&r.managed, r.handle.lock().await.take()) {
-                                let _ = m.host.unload(h).await;
-                            }
-                        }
-                        _ => {}
-                    }
+                    self.on_reconcile(r, out.reconcile).await;
                 }
                 _ => self.table.deregister_local(&r.cfg.role),
             }
@@ -222,6 +239,11 @@ impl InferState {
             let mut g = r.run.lock().unwrap_or_else(|e| e.into_inner());
             g.wanted = true;
             g.retry_at = None;
+        }
+        // An explicit start is the only thing that gives a server that gave
+        // up a fresh restart budget.
+        if let Some(h) = r.handle.lock().await.clone() {
+            r.rt.reset_restarts(&h).await;
         }
         self.drive(r).await;
         Ok(self.role_json(r))

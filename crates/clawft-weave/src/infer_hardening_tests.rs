@@ -69,13 +69,13 @@ async fn native_api_roles_resolve_only_to_servers_on_this_node() {
     // The voice TTS speaks Ollama's native API, which the mesh does not
     // carry to peers: its role resolves locally or not at all, while a
     // provider role may go through the proxy.
-    let up = fake_on(0).await;
+    let (up, up2) = (fake_on(0).await, fake_on(0).await);
     let dir = tempfile::tempdir().unwrap();
     write_cfg(
         dir.path(),
         serde_json::json!({"roles": [
             {"role": "hermes", "flavor": "llamacpp", "instance_port": up.addr.port(), "provider": "local"},
-            {"role": "orpheus-tts", "flavor": "llamacpp", "instance_port": up.addr.port()}]}),
+            {"role": "orpheus-tts", "flavor": "llamacpp", "instance_port": up2.addr.port()}]}),
     );
     let (st, _) = build(parts(dir.path(), None, false, None)).await.unwrap().unwrap();
     let providers: std::collections::HashSet<String> = ["hermes".to_string()].into();
@@ -162,4 +162,55 @@ async fn a_managed_role_whose_ollama_load_failed_stops_claiming_to_run() {
     assert_eq!(st.ledger.used(), 0);
     assert!(st.table.resolve("tts").is_none());
     let _ = Arc::strong_count(&st);
+}
+
+async fn wait_for(p: &std::path::Path) -> bool {
+    crate::infer_managed_tests::wait_for(p).await
+}
+
+#[tokio::test]
+async fn a_terminal_outcome_stays_down_until_an_explicit_start() {
+    use clawft_kernel::workload_runtime::infer::Reconcile;
+    for exposed in [false, true] {
+        let lab = lab();
+        write_cfg(
+            lab.path(),
+            serde_json::json!({"roles": [managed("hermes", "Model-A", 1.0, free_port(), None)], "serve_programs": lab.serve()}),
+        );
+        let (st, _) = build(lab.parts(Some(lab.gate(Some(permit(NetworkPolicy::None)))))).await.unwrap().unwrap();
+        st.start_role("hermes").await.unwrap();
+        let pid_file = lab.path().join("bin/pid.txt");
+        assert!(wait_for(&pid_file).await);
+        if !exposed {
+            // A give-up means the process is dead: make it so.
+            let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGKILL).unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        std::fs::remove_file(&pid_file).unwrap();
+        let r = st.find("hermes").unwrap();
+        let outcome = if exposed {
+            Reconcile::StoppedExposed { reachable_on: vec!["192.0.2.1".parse().unwrap()] }
+        } else {
+            Reconcile::GaveUp { attempts: 5 }
+        };
+        st.on_reconcile(r, Some(outcome)).await;
+        let (state, reason) = state_of(&st, "hermes");
+        assert_eq!(state, "refused", "exposed={exposed}");
+        assert!(reason.unwrap().contains("explicit infer.start"), "exposed={exposed}");
+        assert!(!r.run.lock().unwrap().wanted, "no longer wanted");
+        assert_eq!(r.handle.lock().await.is_some(), !exposed, "a stopped-exposed instance is dropped, not reused");
+        // Many passes later: nothing was launched, loaded or exposed again.
+        for _ in 0..4 {
+            st.sync_once().await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(!pid_file.exists(), "exposed={exposed}: it started again by itself");
+        assert_eq!(r.handle.lock().await.is_some(), !exposed);
+        assert_eq!(state_of(&st, "hermes").0, "refused");
+        // The operator's start brings it back.
+        st.start_role("hermes").await.unwrap();
+        assert!(wait_for(&pid_file).await, "exposed={exposed}: infer.start did not start it");
+        st.shutdown().await;
+    }
 }
