@@ -164,7 +164,7 @@ impl SeedBinder {
         seen.insert(digest);
         drop((seen, bound));
         match b.store.accept_binding(b.signed, b.posture, &check).map_err(lic)? {
-            Outcome::Applied => {}
+            Outcome::Applied | Outcome::AppliedUnsaved => {}
             Outcome::Duplicate | Outcome::Ignored => return Err(BindError::Replayed),
         }
         self.chain.append(
@@ -226,8 +226,9 @@ impl SeedBinder {
             open_membership: false,
         };
         let save_pending = match store.accept_binding(signed, off, &NoExtraChecks) {
+            Ok(Outcome::AppliedUnsaved) => true,
             Ok(_) => false,
-            // The store applied the restriction in memory; only the disk write failed.
+            // Older store behaviour: applied in memory, the disk write failed.
             Err(LicenceError::Persist(_)) => true,
             Err(e) => return Err(lic(e)),
         };
