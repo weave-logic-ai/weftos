@@ -1555,6 +1555,7 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wasmtime-wasi",
+ "weft-licence",
  "weft-licence-wire",
  "weftos-rvf-crypto",
  "weftos-rvf-wire",
@@ -10659,6 +10660,24 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "weft-licence"
+version = "0.8.1"
+dependencies = [
+ "blake3",
+ "chrono",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "weft-licence-wire",
+ "weftos-cog-market",
+ "weftos-cog-sources",
+]
 
 [[package]]
 name = "weft-licence-wire"

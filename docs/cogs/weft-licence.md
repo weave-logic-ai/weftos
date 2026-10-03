@@ -1,0 +1,282 @@
+# weft-licence: the Seed licence proxy
+
+Code: `crates/weft-licence` (service and CLI), `crates/weft-licence-wire` (the grant
+wire format, shared with the kernel). Decision: ADR-106, section 2 and Phase 2.
+
+`weft-licence` runs on the Cognitum Seed as its own binary, system user and
+systemd unit. It is not part of `weft-cog-host` and shares nothing with it: not
+the uid, not the bearer token, not the API. It holds the licence check, the grant
+key and the checked-out binaries for the one WeftOS mesh the Seed is bound to.
+The steward node (one admitted mesh node) is its only client.
+
+## What it does
+
+1. The steward asks for `cog X, version V, arch A`.
+2. `weft-licence` checks the declared licence, fetches the cog from the Cognitum
+   registry, checks the registry sha256 and size, computes BLAKE3 (the swarm
+   content hash) and caches the bytes.
+3. It writes the new `seq` to disk, fsynced, and only then releases the signed
+   `CheckoutGrant`.
+4. The steward pulls the bytes once, then pulls renewals every 12 h. Members
+   fetch from peers, never from the Seed.
+
+## Files
+
+| Path | What |
+|---|---|
+| `/usr/local/bin/weft-licence` | the binary (installed signed-only, COG-008) |
+| `/etc/weft-licence/config.toml` | configuration, see `crates/weft-licence/dist/config.example.toml` |
+| `/etc/systemd/system/weft-licence.service` | the unit, from `crates/weft-licence/dist/weft-licence.service` |
+| `/var/lib/weft-licence/` | state, mode 0700, owned by `weft-licence` |
+| `.../grant.key` | the grant key, mode 0600 |
+| `.../binding.json` | the operator-signed binding (one mesh only) |
+| `.../slots.json` | checkouts with their `seq` and latest grants |
+| `.../serves.json`, `nonces.json` | the serve ledger and replay nonces |
+| `.../licence.json` | the operator-signed declared licence (you place it) |
+| `.../overrides/` | operator-signed serve overrides |
+| `.../cache/` | artifact cache named by BLAKE3, 256 MiB LRU |
+
+## Install
+
+On the Seed, as root.
+
+```sh
+useradd --system --no-create-home --shell /usr/sbin/nologin weft-licence
+install -d -m 0700 -o weft-licence -g weft-licence /var/lib/weft-licence
+install -d -m 0755 /etc/weft-licence
+install -m 0755 weft-licence /usr/local/bin/weft-licence      # armv7 build, see "Build"
+install -m 0644 config.toml /etc/weft-licence/config.toml     # edit device_id, listen, registry_url
+install -m 0644 weft-licence.service /etc/systemd/system/weft-licence.service
+```
+
+Do not add `weft-licence` to the group of any cog uid, and do not run the cogs
+as `weft-licence`. The key's protection is that no other user can read it.
+
+The unit assumes systemd. The Seed init system was not checked from this
+repository; if it differs, run the same command line under it with the same user
+and a 0700 state directory.
+
+## `init` over USB
+
+Run over the USB link, with someone at the device. The key is never created or
+learned over the network, so it cannot be swapped in transit.
+
+```sh
+su -s /bin/sh weft-licence -c \
+  'weft-licence --state-dir /var/lib/weft-licence init --operator-key <operator pubkey hex>'
+```
+
+It prints:
+
+```
+grant key written: /var/lib/weft-licence/grant.key
+grant_pubkey:      <64 hex>
+fingerprint:       ed25519:<16 hex>
+```
+
+`init` never overwrites an existing key: a second run fails with `a grant key
+already exists`. `--operator-key` pins an operator public key in the state
+directory (it can also be listed in `operator_pubkeys`).
+
+## Confirm the fingerprint, then bind
+
+1. On the operator machine, compare the printed `fingerprint` with the one
+   `weaver` shows for this Seed. If they differ, stop and delete the key.
+2. The operator signs the binding record (v2, domain `weft-licence-v1/binding`)
+   with the pinned operator key. Its `grant_pubkey` is the printed one.
+3. Apply it over USB:
+
+   ```sh
+   weft-licence --config /etc/weft-licence/config.toml bind binding.json
+   ```
+
+The binding is checked against the pinned operator key, the Seed's `device_id`
+and its own grant key, and its `seq` must exceed the stored one. A `bound`
+record for another mesh while bound is refused with `seed_bound_elsewhere`.
+There is no bind endpoint on the network. After an operator-signed `unbound`
+record, the grant key is deleted and `init` runs again before the next bind.
+
+## Declared licence
+
+Until Cognitum provides a signed entitlement (phase 4), the licence is an
+operator-signed record placed at `licence_file`. Domain
+`weft-licence-v1/licence`, the signed envelope `{payload, public_key, signature}`
+over this payload:
+
+```json
+{"v":1,"mesh_id":"<hex>","source":"cognitum","account_ref":"<label>",
+ "cogs":["fall-detect"],"expires":1800000000,"issued_at":1791000000}
+```
+
+`cogs` is a list of cog ids or `["*"]`. `expires` is optional. Only the sha256 of
+`account_ref` leaves the Seed. The file is re-read and re-verified on every
+check. There is no `weaver` command to sign it yet; the signer is
+`weft_licence::providers::sign_licence`.
+
+## Run
+
+```sh
+systemctl daemon-reload && systemctl enable --now weft-licence
+journalctl -u weft-licence -f
+```
+
+The unit refuses to start without `grant.key`. Log lines carry ids and counts
+only: `checkout granted`, `byte transfer`, `renew`, `refused <code>`.
+
+## Listener and tailnet ACL
+
+The listener binds only the addresses in `listen`: the USB link-local interface
+and the tailnet interface. `0.0.0.0` and `::` are refused at startup and in
+`http::serve`. It serves plain HTTP; confidentiality comes from the link
+(WireGuard on the tailnet, or the cable). Integrity does not depend on the
+link: requests and grants are signed and bytes are checked against signed hashes.
+
+Recommended tailnet ACL: allow the `weft-licence` port only from the steward host.
+
+```json
+{"action": "accept", "src": ["tag:weft-steward"], "dst": ["tag:seed:8700"]}
+```
+
+A LAN-only plain link needs the explicit per-Seed lab opt-in until TLS with a
+pinned SPKI is added (ADR-106 section 7, decision W4).
+
+## Protocol
+
+Every endpoint except identity needs a steward signature. The request headers are
+`x-licence-node`, `x-licence-ts`, `x-licence-nonce` (16 to 64 hex) and
+`x-licence-sig`. The signed string, one field per line:
+
+```
+weft-licence-v1/request
+<METHOD>
+<path and query>
+<node>
+<ts>
+<nonce>
+<sha256 of the body, hex>
+```
+
+The signature is Ed25519 (`verify_strict`) under the bound `steward_pubkey`. The
+timestamp must be within 120 s of the Seed clock, and a nonce is refused a second
+time, including across a restart.
+
+| Endpoint | Auth | What |
+|---|---|---|
+| `GET /licence/v1/identity` | none | service, device id, grant key id and pubkey, bound mesh, clock state |
+| `POST /licence/v1/checkout` | steward | `{request_id, cog_id, version\|"latest", arch}`, answers `{grant, artifacts}` |
+| `GET /licence/v1/artifact/<blake3>` | steward | the bytes, 4 MiB/s, counted against the serve limit |
+| `POST /licence/v1/renew` | steward | renews every active checkout, optional `{"release":[{cog_id,version}]}` |
+| `GET /licence/v1/grants?since=<ctr>` | steward | the latest grant per checkout, paged at 256 |
+
+A withdrawal is a renewal whose `expires_at <= issued_at`. It is issued for a
+released checkout and for one the licence no longer covers. Seed keys never sign
+revocation notices.
+
+### Limits (configurable)
+
+| Limit | Default |
+|---|---|
+| Checkouts or transfers in flight | 1 |
+| Steward requests per minute | 10, charged after the signature verifies |
+| Unsigned and refused requests per minute | 30 in total, a separate pool |
+| Largest artifact | 64 MiB |
+| Transfer rate | 4 MiB/s |
+| Byte transfers per artifact per steward key per 24 h | 3, raised only by an operator-signed override |
+| Cache | 256 MiB LRU, active checkouts are never evicted |
+| Grant lifetime | 72 h, at most 7 days, never past the licence expiry |
+
+Forged traffic costs only the unsigned pool, so it cannot use up the steward's
+budget.
+
+### Clock
+
+The Seed has no RTC. Below the build-time floor (`CLOCK_FLOOR`, 2026-09-21), or
+below the highest `issued_at` it ever signed, the service answers
+`clock_not_set` and neither verifies requests nor signs. The floor is meant to
+equal the COG-011 bridge's; the COG-011 text is not in this repository, so the
+constant is taken from the ADR wording and must be matched to the bridge's.
+
+### Error codes
+
+`cog_unlicensed`, `licence_expired`, `licence_unreadable`, `cog_not_found`,
+`version_unavailable`, `arch_unavailable`, `size_unknown`, `artifact_too_large`,
+`artifact_changed`, `verify_failed`, `fetch_failed`, `busy`, `rate_limited`,
+`rate_limited_unsigned`, `serve_limit`, `no_grant`, `gone`, `cache_full`,
+`clock_not_set`, `seed_not_bound`, `bad_signature`, `stale_request`, `replayed`,
+`wrong_node`, `malformed_auth`, `persist_failed`.
+
+### Serve override
+
+After a steward rebuild the 3-per-day limit can be raised for one artifact and
+one steward key. The operator signs a `ServeOverride`
+(`weft-licence-v1/serve-override`, fields `v, key_id, cog_id, version, arch,
+extra, expires_at`) and installs it over USB:
+
+```sh
+weft-licence --config /etc/weft-licence/config.toml override override.json
+```
+
+## Build
+
+```sh
+scripts/build.sh licence-cross              # armv7 and aarch64, in the cogs cross image
+scripts/build.sh licence-cross armv7        # one target
+scripts/build.sh licence-uid-check          # Linux: another user cannot read the key
+```
+
+`licence-cross` uses the cogs cross image `weavelogic-cogs-cross:1.97.1` (built by
+`scripts/cross-build.sh` in the private cogs repo), builds offline from the host
+cargo registry, and writes `target/licence-cross/<triple>/release/weft-licence`.
+It skips with a message when docker or the image is missing. The build enables
+`--features net`, which adds the https registry reader (rustls).
+
+Recorded on 2026-10-02 (release profile, already stripped):
+
+| Target | Size |
+|---|---|
+| `armv7-unknown-linux-gnueabihf` | 2,825,356 bytes |
+| `aarch64-unknown-linux-gnu` | 3,019,520 bytes |
+
+`weftos-cog-sources` builds for `armv7-unknown-linux-gnueabihf` as part of this.
+
+## Pending Cognitum (phase 4)
+
+| Stub | Where | Question |
+|---|---|---|
+| Declared licence instead of a Cognitum entitlement | `providers::LicenceProvider`, `LocalDeclaredLicence` | C1, C3 |
+| Registry fetch of a public registry, no token | `providers::CogFetcher`, `registry::RegistryFetcher` | C2 |
+| Device-key signing of the grant key | `providers::DeviceSigner`, `StubDeviceSigner` (returns none) | C4 |
+| Binding does not check `device_pubkey` against `/api/v1/identity` | `bind::apply` | C4 |
+| Only the armhf (`arm`) binary exists in the registry | `RegistryFetcher::fetch` | C7 |
+
+C7 matters for acceptance: the Cognitum `app-registry.json` lists one `arm`
+binary per cog, so a checkout for `aarch64` answers `arch_unavailable` until the
+registry carries it. The grant and the arch union already handle any arch.
+
+## Owner-run check on the real Seed
+
+Not run from the repository. Steps, in order:
+
+1. Build both targets with `scripts/build.sh licence-cross` and copy the armv7
+   binary, `weft-licence.service` and `config.toml` to the Seed.
+2. Install as above. Set `device_id`, `listen` (USB and tailnet addresses only)
+   and `registry_url` in the config.
+3. Run `init --operator-key <hex>` over USB. Compare the fingerprint with
+   `weaver`. Sign and apply the binding. Place the signed `licence.json`.
+4. `systemctl enable --now weft-licence`, then from the steward host:
+   `curl http://<seed tailnet address>:8700/licence/v1/identity` and confirm
+   `"bound": true`, `"clock_ok": true` and the same `grant_key_id`.
+5. Check the isolation on the Seed itself: as the user a cog runs under,
+   `cat /var/lib/weft-licence/grant.key` and `ls /var/lib/weft-licence` must both
+   fail with permission denied.
+6. Check out `fall-detect` (the `arm` binary, since the registry has no aarch64
+   until C7). `journalctl -u weft-licence` must show one `checkout granted` and
+   one `byte transfer`.
+7. After the transport phase (1c) is in place: a second mesh node runs it from
+   peers, and the journal still shows exactly one `byte transfer`.
+8. Switch the Seed off for longer than the grant lifetime (72 h by default) and
+   confirm sharing stops when the grants lapse.
+9. Check the clock floor: boot the Seed with no network time and confirm
+   `"clock_ok": false` and `clock_not_set` on a signed request.
+
+Stop there and report. The Pi and the Seed hardware are owner-run.

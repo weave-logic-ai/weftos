@@ -44,6 +44,8 @@ COGS_ARGS=()
 LAUNCHER_LINUX=false
 # test-pi: everything after the subcommand is passed through to scripts/pi/pi_lane.py
 PI_ARGS=()
+# licence-cross: which targets to build (default: armv7 and aarch64)
+LICENCE_TARGETS=()
 
 # ── Reporting helpers ────────────────────────────────────────────────
 pass()  { printf "  ${GREEN}PASS${NC}  %s\n" "$*"; }
@@ -1532,6 +1534,92 @@ cmd_cogs_launcher() {
     return $rc
 }
 
+# ── weft-licence cross-build (ADR-106 phase 2) ────────────────────────
+# Cross-builds the Seed-side `weft-licence` binary (with the https registry
+# reader) for armv7-unknown-linux-gnueabihf (the Seed userland is armhf) and
+# aarch64-unknown-linux-gnu inside the WeaveLogic cogs cross image
+# (weavelogic-cogs-cross:1.97.1, built by cogs/scripts/cross-build.sh from
+# scripts/cross/Dockerfile in the private cogs repo, so the toolchain is the
+# one the cogs themselves use). Offline: crates come from the host's cargo
+# registry, nothing is downloaded. Skips with a message when docker or the
+# image is missing. Output: target/licence-cross/<triple>/release/weft-licence
+# (stripped copy beside it as weft-licence.stripped) and a size report.
+cmd_licence_cross() {
+    header "weft-licence cross-build (Seed: armv7 + aarch64)"
+    local image="${LICENCE_CROSS_IMAGE:-weavelogic-cogs-cross:1.97.1}"
+    local out="$ROOT/target/licence-cross"
+    local targets=("${LICENCE_TARGETS[@]+"${LICENCE_TARGETS[@]}"}")
+    [ ${#targets[@]} -gt 0 ] || targets=(armv7-unknown-linux-gnueabihf aarch64-unknown-linux-gnu)
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   docker run %s cargo build --locked --offline --release -p weft-licence --features net --target %s\n" "$image" "${targets[*]}"
+        return 0
+    fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker image inspect "$image" >/dev/null 2>&1; then
+        skip "cross toolchain not available (need docker and image $image; build it with the cogs repo scripts/cross-build.sh)"
+        return 0
+    fi
+    [ -d "$HOME/.cargo/registry" ] || { fail "no host cargo registry at ~/.cargo/registry (offline build needs it)"; return 1; }
+    timer_start
+    local rc=0 t strip_bin
+    mkdir -p "$out"
+    for t in "${targets[@]}"; do
+        case "$t" in
+            armv7-unknown-linux-gnueabihf) strip_bin=arm-linux-gnueabihf-strip ;;
+            aarch64-unknown-linux-gnu)     strip_bin=aarch64-linux-gnu-strip ;;
+            *) fail "unknown target $t"; return 1 ;;
+        esac
+        info "building weft-licence for $t"
+        docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$ROOT":/src:ro -v "$out":/target \
+            -v "$HOME/.cargo/registry":/cargo-home/registry \
+            -w /src -e HOME=/tmp -e CARGO_HOME=/cargo-home \
+            -e CARGO_TARGET_DIR=/target -e RUSTUP_TOOLCHAIN=1.97.1 -e CARGO_NET_OFFLINE=true \
+            -e CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+            -e CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+            "$image" bash -euo pipefail -c '
+                cargo build --locked --offline --release -p weft-licence --features net --target '"$t"'
+                cp /target/'"$t"'/release/weft-licence /target/'"$t"'/release/weft-licence.stripped
+                '"$strip_bin"' /target/'"$t"'/release/weft-licence.stripped
+            ' || { fail "cross-build failed for $t"; rc=1; continue; }
+        local raw="$out/$t/release/weft-licence" st="$out/$t/release/weft-licence.stripped"
+        pass "$t: $(wc -c < "$raw" | tr -d ' ') bytes, stripped $(wc -c < "$st" | tr -d ' ') bytes ($st)"
+    done
+    timer_end
+    return $rc
+}
+
+# weft-licence uid isolation check (ADR-106 phase 2 acceptance): on Linux, a
+# different user (standing in for a cog's uid) cannot read or list the grant
+# key written by `weft-licence init` under the service user. Runs the aarch64
+# binary from `licence-cross` in the cogs cross image, as real users.
+cmd_licence_uid_check() {
+    header "weft-licence key isolation between users (Linux container)"
+    local image="${LICENCE_CROSS_IMAGE:-weavelogic-cogs-cross:1.97.1}"
+    local bin="$ROOT/target/licence-cross/aarch64-unknown-linux-gnu/release/weft-licence"
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   docker run %s (init as weft-licence, read as another user)\n" "$image"
+        return 0
+    fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker image inspect "$image" >/dev/null 2>&1; then
+        skip "docker or image $image not available"
+        return 0
+    fi
+    [ -x "$bin" ] || { fail "no aarch64 binary; run: scripts/build.sh licence-cross aarch64"; return 1; }
+    docker run --rm -v "$bin":/usr/local/bin/weft-licence:ro "$image" bash -euo pipefail -c '
+        useradd --system --no-create-home weft-licence
+        useradd --no-create-home cog1
+        install -d -m 0700 -o weft-licence -g weft-licence /var/lib/weft-licence
+        su -s /bin/bash weft-licence -c "weft-licence --state-dir /var/lib/weft-licence init" | sed "s/^/  svc: /"
+        stat -c "  key mode %a owner %U" /var/lib/weft-licence/grant.key
+        stat -c "  dir mode %a owner %U" /var/lib/weft-licence
+        if su -s /bin/bash cog1 -c "cat /var/lib/weft-licence/grant.key" 2>/dev/null; then echo "  FAIL: another user read the key"; exit 1; fi
+        if su -s /bin/bash cog1 -c "ls /var/lib/weft-licence" 2>/dev/null; then echo "  FAIL: another user listed the state dir"; exit 1; fi
+        echo "  another user can neither read nor list: ok"
+        if su -s /bin/bash weft-licence -c "weft-licence --state-dir /var/lib/weft-licence init" 2>&1; then echo "  FAIL: init overwrote"; exit 1; fi
+        echo "  second init refused: ok"
+    '
+}
+
 # ── Real Pi 5 test lane (mesh-placement-fu-pi-test-lane) ────────────
 # Cross-builds aarch64 test binaries in an arm64 Debian container, runs them
 # on the Pi named by WEFTOS_PI_HOST (skips when unset) with an isolated HOME
@@ -2157,6 +2245,16 @@ ${BOLD}Commands:${NC}
                   that cogs-conformance --launcher uses to run cogs through
                   the WorkloadRuntime adapters; --linux-arm64 builds it in an
                   arm64 Rust container (COG_LAUNCHER_BUILDER, default rust:1-bookworm).
+  licence-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
+                  Cross-build weft-licence (ADR-106 phase 2, the Seed licence
+                  proxy) with the https registry reader in the cogs cross image
+                  (LICENCE_CROSS_IMAGE, default weavelogic-cogs-cross:1.97.1),
+                  offline from the host cargo registry. Skips when docker or the
+                  image is missing. Output under target/licence-cross/.
+  licence-uid-check
+                  Linux check that another user cannot read or list the
+                  weft-licence grant key (runs the licence-cross aarch64
+                  binary as real users in the cogs cross image).
   gate            Run full phase gate (19 checks, includes cargo audit +
                   npm audit critical/high / WEFT-598 +
                   kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56 +
@@ -2251,6 +2349,19 @@ parse_args() {
     # --help) through to scripts/pi/pi_lane.py.
     if [ "$COMMAND" = "test-pi" ]; then
         PI_ARGS=("$@")
+        return 0
+    fi
+
+    if [ "$COMMAND" = "licence-cross" ]; then
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                armv7|armv7-unknown-linux-gnueabihf) LICENCE_TARGETS+=(armv7-unknown-linux-gnueabihf) ;;
+                aarch64|aarch64-unknown-linux-gnu) LICENCE_TARGETS+=(aarch64-unknown-linux-gnu) ;;
+                --dry-run) DRY_RUN=true ;;
+                *) echo "licence-cross: unknown option $1" >&2; exit 1 ;;
+            esac
+            shift
+        done
         return 0
     fi
 
@@ -2427,6 +2538,8 @@ main() {
         agents-leak-check)  cmd_agents_leak_check ;;
         cogs-conformance)   cmd_cogs_conformance ;;
         cogs-launcher)      cmd_cogs_launcher ;;
+        licence-cross)      cmd_licence_cross ;;
+        licence-uid-check)  cmd_licence_uid_check ;;
         test-pi)            cmd_test_pi ;;
         n6-leaf)            cmd_n6_leaf ;;
         gate)         cmd_gate ;;

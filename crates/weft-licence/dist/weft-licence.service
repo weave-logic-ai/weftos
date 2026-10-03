@@ -1,0 +1,50 @@
+# weft-licence (ADR-106 phase 2): the Seed-side licence proxy.
+# Its own system user and unit, never inside weft-cog-host. Install as
+# /etc/systemd/system/weft-licence.service after `weft-licence init` has run.
+[Unit]
+Description=WeftOS licence proxy for the attached mesh (weft-licence)
+Documentation=https://github.com/weave-logic-ai/weftos/blob/master/docs/cogs/weft-licence.md
+# No RTC on the Seed: wait for the clock. The service also refuses to sign
+# below its clock floor, so a late sync only delays signing.
+After=network.target time-sync.target
+Wants=time-sync.target
+# Do not start without the grant key: run `weft-licence init` first (USB).
+ConditionPathExists=/var/lib/weft-licence/grant.key
+
+[Service]
+Type=simple
+User=weft-licence
+Group=weft-licence
+ExecStart=/usr/local/bin/weft-licence --config /etc/weft-licence/config.toml serve
+Restart=on-failure
+RestartSec=5
+
+# The state dir holds the grant key: 0700, owned by this user only.
+StateDirectory=weft-licence
+StateDirectoryMode=0700
+UMask=0077
+
+# Hardening. This unit has no endpoint that runs code and needs no write
+# access outside its state directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+# The cache is 256 MiB on disk and one artifact (at most 64 MiB) is in memory
+# during a checkout.
+MemoryMax=192M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

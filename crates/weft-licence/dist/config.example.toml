@@ -1,0 +1,33 @@
+# /etc/weft-licence/config.toml  (ADR-106 phase 2). Every field has a default
+# except `listen`, `device_id` and `registry_url`.
+
+state_dir = "/var/lib/weft-licence"
+device_id = "REPLACE-WITH-THE-SEED-DEVICE-ID"
+
+# Named addresses only: the USB link-local interface and the tailnet
+# interface. 0.0.0.0 and :: are refused at startup. Placeholders below.
+listen = ["169.254.42.1:8700", "100.64.0.9:8700"]
+
+# Pinned operator public keys (64 hex). `init --operator-key` also records
+# one in the state directory. They verify the binding, the licence file and
+# serve overrides.
+operator_pubkeys = []
+
+# The operator-signed declared licence (domain weft-licence-v1/licence).
+licence_file = "/var/lib/weft-licence/licence.json"
+
+# Cognitum registry. https only.
+registry_url = "https://registry.example/app-registry.json"
+
+# Grant lifetime. Default 72 h, at most 7 days.
+grant_ttl_secs = 259200
+
+[limits]
+in_flight = 1
+requests_per_min = 10
+unsigned_per_min = 30
+max_artifact_bytes = 67108864      # 64 MiB
+rate_bytes_per_sec = 4194304       # 4 MiB/s
+serves_per_day = 3
+cache_bytes = 268435456            # 256 MiB
+renew_batch = 256

@@ -36,6 +36,8 @@ mod tests_common;
 #[cfg(test)]
 mod tests_policy;
 #[cfg(test)]
+mod tests_seed_service;
+#[cfg(test)]
 mod tests_store;
 #[cfg(test)]
 mod tests_types;

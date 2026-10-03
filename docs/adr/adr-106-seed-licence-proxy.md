@@ -485,6 +485,20 @@ Choices made while building 1a that the text above leaves open. None change a de
 - **Run gate.** `may_run` checks a valid grant that lists the binary's sha256, then that the grant's BLAKE3 is not revoked as an `ArtifactHash`, then an approval covering the sha256. The revocation is how an approval is withdrawn.
 - **Events.** The stores report `binding_refused`, `binding_conflict`, `binding_orphaned`, `grant_conflict`, `floor_clamped` and `floor_reset` through a `LicenceEventSink`. The daemon maps them to chain events in a later phase.
 
+## Phase 2 implementation notes
+
+Choices made while building `weft-licence` that the text above leaves open. None change a decision. Operator doc: `docs/cogs/weft-licence.md`.
+
+- **Shared wire crate.** The kernel is too heavy for armhf, so the pure types moved to `crates/weft-licence-wire` (grant, binding record, signed envelope, `MeshId`, `LicenceError`, sign and verify helpers). The kernel re-exports them unchanged. The Seed service and the member stores use one grant format.
+- **Bind is a USB command, not an endpoint.** The steward key is only known once the binding exists, so a bind could not carry a steward signature, and N5 says every endpoint except identity does. `weft-licence bind <file>` applies the operator-signed record (pinned operator key, the Seed's `device_id`, the Seed's own grant key, `seq` above the stored one). The device public key is not checked yet (C4).
+- **Bytes are a second signed call.** `POST /licence/v1/checkout` returns the grant and the artifact paths. `GET /licence/v1/artifact/<blake3>` sends the bytes. This is what "bytes are sent only on request" and the 3-per-24-h limit count. The in-flight permit covers both.
+- **Renewal.** `POST /licence/v1/renew` re-checks the licence for every active checkout and signs a new grant (`seq + 1`). It also takes `{"release": [...]}`. A released checkout and one the licence no longer covers get a withdrawal (`expires_at <= issued_at`). `GET /licence/v1/grants?since=<ctr>` is read only and lists the latest signed grant per checkout, ordered by a global issue counter, 256 per page.
+- **Durable order.** The grant is signed in memory, the slot table (with the new `seq`, the arch union and the grant) is written, fsynced and renamed, and only then is the grant released. A failed write drops the grant and leaves the in-memory table unchanged.
+- **Replay memory is persisted.** The nonce list is written on each verified request, so a restart does not reopen the replay window.
+- **No expiry on the licence** is written into the grant as `issued_at + 7 days`, so the verifier's `licence.expires` comparison stays finite. A grant never outlives a declared licence expiry.
+- **Registry coverage.** The Cognitum registry lists one `arm` binary per cog (C7), and `aarch64` answers `arch_unavailable` until it does.
+- **Clock floor.** `CLOCK_FLOOR` is 2026-09-21. The COG-011 text is not in this repository, so the value follows the ADR wording and must be matched to the bridge's constant.
+
 ## Open questions
 
 **For Cognitum (C).** Anything not verifiable locally is marked as an assumption above.

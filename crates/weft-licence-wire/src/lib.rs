@@ -16,7 +16,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod binding;
 mod grant;
+pub use binding::{
+    BindState, BindingRecord, SignedBinding, sign_binding, verify_binding_signature,
+};
 pub use grant::{
     CheckoutGrant, GrantArtifact, LicenceRef, MAX_GRANT_ARTIFACTS, SignedGrant, sign_grant,
     verify_grant, verify_grant_signature,
