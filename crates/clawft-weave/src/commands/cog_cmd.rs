@@ -283,8 +283,19 @@ impl Roots {
 
 /// The compiled-in WeftOS package signer keys (extra trusted keys of `weftos` sources).
 /// `workload_pkg` is built only with `ecc` + `exochain`; without them no signer is compiled in.
+/// That narrows what a `weftos` source is trusted with, so say so (once per process) instead of
+/// silently trusting less. This is a warning, not a compile error: a weaver without those
+/// features is a supported build, and a source's own pinned keys still apply.
 #[cfg(not(all(feature = "ecc", feature = "exochain")))]
 fn weftos_signer_keys() -> Vec<String> {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        eprintln!(
+            "warning: this weaver was built without the ecc and exochain features, so no WeftOS \
+             signer keys are compiled in; `weftos` sources are trusted only with the keys pinned \
+             in their own configuration. Use a default-feature build for the full WeftOS trust set."
+        );
+    });
     Vec::new()
 }
 
@@ -297,17 +308,6 @@ fn weftos_signer_keys() -> Vec<String> {
         .collect()
 }
 
-fn default_baseline(inputs: &CatalogInputs) -> anyhow::Result<Option<Expectations>> {
-    let p = inputs.baseline.clone().or_else(|| {
-        let d = PathBuf::from("scripts/cogs/expectations.json");
-        d.is_file().then_some(d)
-    });
-    let Some(p) = p else { return Ok(None) };
-    let bytes = std::fs::read(&p).with_context(|| format!("read baseline {}", p.display()))?;
-    Ok(Some(Expectations::parse(&bytes)?))
-}
-
-fn print_failures(failures: &[(String, weftos_cog_sources::SourceError)]) {
 /// Signer keys the operator revoked, from the kernel `RevocationList` that sits in the runtime dir
 /// (`revoked_hosts.json` and its sibling `revoked_subjects.json`). Fail-closed: an unreadable
 /// subjects file refuses the install rather than reading as "nothing revoked".
@@ -322,6 +322,17 @@ fn revoked_signer_keys(host_ban_file: &Path) -> anyhow::Result<RevokedKeys> {
     ))
 }
 
+fn default_baseline(inputs: &CatalogInputs) -> anyhow::Result<Option<Expectations>> {
+    let p = inputs.baseline.clone().or_else(|| {
+        let d = PathBuf::from("scripts/cogs/expectations.json");
+        d.is_file().then_some(d)
+    });
+    let Some(p) = p else { return Ok(None) };
+    let bytes = std::fs::read(&p).with_context(|| format!("read baseline {}", p.display()))?;
+    Ok(Some(Expectations::parse(&bytes)?))
+}
+
+fn print_failures(failures: &[(String, weftos_cog_sources::SourceError)]) {
     for (name, e) in failures {
         eprintln!("warning: source '{name}' not loaded: {e}");
     }
