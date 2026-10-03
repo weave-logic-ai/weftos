@@ -25,6 +25,7 @@ import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -52,9 +53,34 @@ def _load_json(path):
         raise InputError("%s: %s" % (path, e))
 
 
-def driver_machine():
-    """Machine of the host that drives the harness (and any container engine)."""
-    return platform.machine()
+ENGINE_ARCH = {"amd64": "x86_64", "arm64": "aarch64"}
+
+
+def driver_machine(runtime=None):
+    """See engine_machine (a seam the tests replace)."""
+    return engine_machine(runtime)
+
+
+def engine_machine(runtime=None, runner=subprocess.run):
+    """Machine the harness's container engine runs on.
+
+    This host's machine, except for docker when DOCKER_HOST points at another
+    engine (or this host's machine is unknown): then the engine is asked
+    (`docker info --format {{.Architecture}}`). None when that fails, which
+    callers treat as not native.
+    """
+    here = platform.machine()
+    if runtime != "docker" or (here and not os.environ.get("DOCKER_HOST")):
+        return here or None
+    try:
+        p = runner(["docker", "info", "--format", "{{.Architecture}}"],
+                   capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (p.stdout or "").strip().lower()
+    if p.returncode != 0 or not out:
+        return None
+    return ENGINE_ARCH.get(out, out)
 
 
 def _write_json(path, doc):
@@ -157,7 +183,14 @@ def execute(args, expectations, ids, sweep_mode):
             raise InputError(str(e))
     if manifest is None and not args.binary_dir:
         raise InputError("downloaded cog binaries must be verified: pass --sha256-manifest "
-                         "(a JSON map of cog-<id>-<arch> to sha256), or --binary-dir")
+                         "(a JSON map of cog-<id>-<arch> to sha256)")
+    if manifest is None:
+        if not args.insecure_local:
+            raise InputError("--binary-dir without --sha256-manifest runs unverified "
+                             "binaries: pass --insecure-local to accept that")
+        print("WARNING: running local binaries with NO hash verification "
+              "(--insecure-local); results say nothing about what those files are",
+              file=sys.stderr)
     specs, missing, binaries = [], [], []
     for cid in ids:
         name = runtimes.binary_name(cid, args.arch)
@@ -167,7 +200,9 @@ def execute(args, expectations, ids, sweep_mode):
             cand = os.path.join(args.binary_dir, name)
             if os.path.isfile(cand):
                 path, why = cand, None
-                if expected and runtimes.sha256_file(cand) != expected:
+                if manifest is not None and not expected:
+                    path, why = None, "not listed in the sha256 manifest"
+                elif expected and runtimes.sha256_file(cand) != expected:
                     path, why = None, "sha256 does not match the manifest"
         else:
             path, why = runtimes.fetch_binary(cid, args.arch, cache, expected_sha256=expected)
@@ -240,7 +275,7 @@ def cmd_sweep(args):
                    feed=args.feed, timeout_s=args.timeout, measured_at=measured_at, host=host)
     label = args.label or "%s-%s-%s" % (runtime, args.arch, args.mode)
     out_dir = os.path.join(args.results_dir, label)
-    dm = driver_machine()
+    dm = driver_machine(args.runtime)
     caps = classify.cycle_capabilities(results, args.arch, runtime, measured_at, args.runtime, dm)
     summary["emulated"] = classify.emulated_ids(results, args.arch, args.runtime, dm)
     _write_json(os.path.join(out_dir, "results.json"), {"results": results, "host": host})
@@ -275,7 +310,7 @@ def cmd_probe(args):
         node_caps = facts.get("capabilities", []) if isinstance(facts, dict) else facts
         if not isinstance(node_caps, list):
             raise InputError("node facts: expected a list or {capabilities:[...]}")
-    dm = driver_machine()
+    dm = driver_machine(args.runtime)
     caps = classify.upgrade_provenance(node_caps, results, args.arch, measured_runtime(args),
                                        measured_at, args.runtime, dm)
     doc = {"cog": args.cog, "outcome": classify.classify(results[0]),
@@ -331,8 +366,11 @@ def _runner_opts(p):
                    help="ssh/native: run the harness via sudo -n (ingest stub binds :80)")
     p.add_argument("--binary-dir", help="use local binaries instead of downloading")
     p.add_argument("--sha256-manifest", help="JSON map of cog-<id>-<arch> to the expected "
-                   "sha256 (from the registry or a package manifest). Downloaded binaries "
-                   "must match it; local binaries are checked when listed")
+                   "sha256 (from the registry or a package manifest). With a manifest, "
+                   "every binary must be listed and match; its trust root is whoever "
+                   "supplied it")
+    p.add_argument("--insecure-local", action="store_true",
+                   help="allow --binary-dir with no manifest (no hash check, loud warning)")
     p.add_argument("--cache-dir", default=CACHE_DIR)
     p.add_argument("--expectations", default=EXPECTATIONS)
     p.add_argument("--keep-workdir", action="store_true")

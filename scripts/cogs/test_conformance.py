@@ -27,7 +27,7 @@ import runtimes  # noqa: E402
 
 # A native arm64 driver; the emulation tests in conformance_honesty_tests.py
 # pass other machines explicitly.
-conformance.driver_machine = lambda: "aarch64"
+conformance.driver_machine = lambda *_a, **_k: "aarch64"
 
 
 def raw(cid, mode="once", rc=0, ingest=1, timed_out=False, cycle_ms=700.0, status="ran",
@@ -444,7 +444,8 @@ class MeasuredFile(unittest.TestCase):
 # both files under 500 lines; importing the classes makes `python3
 # test_conformance.py` run them too.
 from conformance_honesty_tests import (  # noqa: E402,F401
-    EmulationIsNotMeasured, HashVerifiedBinaries, IntervalClean, MalformedInput)
+    EmulationIsNotMeasured, EngineArch, ExecutedCopy, HashVerifiedBinaries, IntervalClean,
+    LocalBinaryTrust, MalformedInput)
 
 
 if __name__ == "__main__":

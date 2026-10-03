@@ -130,15 +130,22 @@ ADR-100 and the card text say "7 need seed peers or other CLI", but 93 + 5 + 7 i
   machine that ran it matches the arch (`aarch64`/`arm64` for aarch64; `armv7l`,
   `armv8l` for arm, plus an aarch64 kernel on a raw node). For a container
   harness the driving host's machine is checked as well, because an emulated
-  container reports the emulated machine. An unknown machine is not native. A
+  container reports the emulated machine. When `DOCKER_HOST` is set, the
+  engine is asked (`docker info --format {{.Architecture}}`); if that fails the
+  run is not native. An unknown machine is not native. A
   non-native run emits no `perf.cog.cycle_ms`, upgrades no node capability, and
   is listed under `emulated` in the sweep summary and the probe output.
-- **Downloaded binaries are hash-checked.** Pass `--sha256-manifest` (a JSON
-  map of `cog-<id>-<arch>` to its sha256, taken from the registry or a package
-  manifest, at the top level or under `binaries`). A download that does not match
-  is never written, a cache entry that does not match is discarded, and the
-  harness compares the hash again on the node just before it runs the binary.
-  Without a manifest only `--binary-dir` runs (listed entries are still checked).
+- **Binaries are hash-checked.** Pass `--sha256-manifest` (a JSON map of
+  `cog-<id>-<arch>` to its sha256, at the top level or under `binaries`). With a
+  manifest, every binary must be listed and match, whether downloaded or from
+  `--binary-dir`; an unlisted one is refused. A download that does not match is
+  never written and a mismatching cache entry is discarded. The manifest's trust
+  root is whoever supplies it: the harness proves the files match the manifest,
+  not that the manifest is honest. `--binary-dir` with no manifest runs
+  unverified binaries and needs an explicit `--insecure-local` (it prints a
+  warning). On the node the harness copies each binary into a directory it
+  owns, makes it read-only, hashes that copy, and runs that copy, so the file
+  cannot be swapped between the check and exec.
 - **Interval cogs must cycle.** An `--interval` run is clean only when it was
   still running at the deadline (or stopped by the launcher) after at least two
   cycle events. One POST and then silence is `no-output`.

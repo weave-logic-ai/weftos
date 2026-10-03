@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import socket
 import sys
 import tempfile
 import unittest
@@ -83,7 +84,7 @@ class EmulationIsNotMeasured(unittest.TestCase):
     def test_sweep_and_probe_report_emulation_and_write_nothing_measured(self):
         real_exec, real_dm = conformance.execute, conformance.driver_machine
         conformance.execute = lambda *_a, **_k: ([raw("anomaly-detect")], {"machine": "x"})
-        conformance.driver_machine = lambda: "x86_64"
+        conformance.driver_machine = lambda *_a, **_k: "x86_64"
         try:
             with tempfile.TemporaryDirectory() as d:
                 mf = os.path.join(d, "perf.measured.json")
@@ -205,7 +206,9 @@ class HashVerifiedBinaries(unittest.TestCase):
             with open(cog, "wb") as f:
                 f.write(b"#!/bin/sh\necho ran > %s/ran\n" % d.encode())
             os.chmod(cog, 0o755)
-            r = harness.run_plan({"timeout": 5, "cogs": [
+            ports = {"udp_port": free_port(socket.SOCK_DGRAM),
+                     "ingest_port": free_port(socket.SOCK_STREAM)}
+            r = harness.run_plan({"timeout": 5, **ports, "cogs": [
                 {"id": "x", "binary": cog, "sha256": "0" * 64}]})["results"][0]
             self.assertFalse(os.path.exists(os.path.join(d, "ran")), "binary was executed")
         self.assertEqual(r["status"], "exec-error")
@@ -286,3 +289,125 @@ class MalformedInput(unittest.TestCase):
     def test_well_formed_probe_input_still_succeeds(self):
         rc, err = self.probe(json.dumps({"capabilities": NODE}))
         self.assertEqual((rc, err), (0, ""))
+
+
+class LocalBinaryTrust(unittest.TestCase):
+    def sweep_args(self, d, *extra):
+        return conformance.build_parser().parse_args(
+            ["sweep", "--binary-dir", d, "--cache-dir", os.path.join(d, "cache"), *extra])
+
+    def test_binary_dir_without_a_manifest_needs_insecure_local(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(conformance.InputError) as cm:
+                conformance.execute(self.sweep_args(d), {"x": {}}, ["x"], "once")
+            self.assertIn("--insecure-local", str(cm.exception))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                results, _ = conformance.execute(
+                    self.sweep_args(d, "--insecure-local"), {"x": {}}, ["x"], "once")
+            self.assertIn("NO hash verification", err.getvalue())
+            self.assertEqual(results[0]["status"], "missing-binary")
+
+    def test_a_manifest_refuses_binaries_it_does_not_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            for cid in ("x", "y"):
+                with open(os.path.join(d, runtimes.binary_name(cid, "aarch64")), "wb") as f:
+                    f.write(ELF)
+            man = os.path.join(d, "m.json")
+            with open(man, "w") as f:
+                json.dump({runtimes.binary_name("x", "aarch64"): SHA}, f)
+            real = runtimes.make_adapter
+            runtimes.make_adapter = lambda *a, **k: type(
+                "A", (), {"binary_root": lambda s, w: "/w", "run": lambda s, w, timeout: (
+                    json.dump({"results": [], "host": None},
+                              open(os.path.join(w, "results.json"), "w")) and None
+                    or os.path.join(w, "results.json"))})()
+            try:
+                args = self.sweep_args(d, "--sha256-manifest", man)
+                results, _ = conformance.execute(args, {"x": {}, "y": {}}, ["x", "y"], "once")
+            finally:
+                runtimes.make_adapter = real
+        by = {r["id"]: r for r in results if r["status"] == "missing-binary"}
+        self.assertEqual(list(by), ["y"])
+        self.assertIn("not listed", by["y"]["reason"])
+
+
+def free_port(kind):
+    import socket
+    with socket.socket(socket.AF_INET, kind) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class ExecutedCopy(unittest.TestCase):
+    def test_the_binary_runs_from_a_private_read_only_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            marker = os.path.join(d, "marker")
+            cog = os.path.join(d, "cog-x-aarch64")
+            with open(cog, "w") as f:
+                f.write('#!/bin/sh\necho "$0" > %s\n[ -w "$0" ] && echo writable >> %s '
+                        '|| echo readonly >> %s\n' % ((marker,) * 3))
+            os.chmod(cog, 0o755)
+            ports = {"udp_port": free_port(socket.SOCK_DGRAM),
+                     "ingest_port": free_port(socket.SOCK_STREAM)}
+            r = harness.run_plan({"timeout": 5, **ports, "cogs": [
+                {"id": "x", "binary": cog, "sha256": hashlib.sha256(
+                    open(cog, "rb").read()).hexdigest()}]})["results"][0]
+            self.assertEqual(r["status"], "ran")
+            ran_path, perm = open(marker).read().split("\n")[:2]
+            self.assertNotEqual(ran_path, cog)
+            self.assertIn("cog-run-", ran_path)
+            self.assertEqual(perm, "readonly")
+            self.assertFalse(os.path.exists(ran_path), "the private copy is removed")
+            self.assertEqual(os.path.basename(ran_path), "cog-x-aarch64")
+            # the hash is of the copy: a mismatch still stops it
+            os.unlink(marker)
+            bad = harness.run_plan({"timeout": 5, **ports, "cogs": [
+                {"id": "x", "binary": cog, "sha256": "0" * 64}]})["results"][0]
+            self.assertEqual(bad["status"], "exec-error")
+            self.assertFalse(os.path.exists(marker))
+
+
+class EngineArch(unittest.TestCase):
+    class P:
+        def __init__(self, out="", rc=0):
+            self.stdout, self.returncode = out, rc
+
+    def dm(self, runner, runtime="docker", docker_host="tcp://engine:2375"):
+        env = dict(os.environ)
+        env.pop("DOCKER_HOST", None)
+        if docker_host:
+            env["DOCKER_HOST"] = docker_host
+        old, os.environ = os.environ, env
+        try:
+            return conformance.engine_machine(runtime, runner)
+        finally:
+            os.environ = old
+
+    def test_a_remote_docker_engine_is_asked_for_its_architecture(self):
+        seen = []
+
+        def runner(cmd, **k):
+            seen.append(cmd)
+            return self.P("amd64\n")
+        self.assertEqual(self.dm(runner), "x86_64")
+        self.assertEqual(seen[0], ["docker", "info", "--format", "{{.Architecture}}"])
+        self.assertEqual(self.dm(lambda c, **k: self.P("aarch64\n")), "aarch64")
+
+    def test_a_failed_query_is_not_native(self):
+        self.assertIsNone(self.dm(lambda c, **k: self.P("", 1)))
+        self.assertIsNone(self.dm(lambda c, **k: self.P("  ", 0)))
+
+        def boom(c, **k):
+            raise OSError("no docker")
+        self.assertIsNone(self.dm(boom))
+        caps = classify.cycle_capabilities([raw()], "aarch64", "docker", "T", "docker",
+                                           driver_machine=None)
+        self.assertEqual(caps, [])
+
+    def test_no_query_for_a_local_engine_or_another_runtime(self):
+        def runner(c, **k):
+            raise AssertionError("must not query")
+        import platform
+        self.assertEqual(self.dm(runner, docker_host=None), platform.machine())
+        self.assertEqual(self.dm(runner, runtime="podman"), platform.machine())
