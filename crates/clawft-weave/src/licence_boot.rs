@@ -117,22 +117,78 @@ pub fn spawn_store_tick(store: Arc<CheckoutGrantStore>, period: std::time::Durat
 }
 
 static NOT_INSTALLED: OnceLock<String> = OnceLock::new();
-static RESERVED: OnceLock<Option<bool>> = OnceLock::new();
+/// Whether this daemon holds the mesh service's reserved licence topics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HolderState {
+    /// Collapsed mode (no service), or before boot.
+    NotApplicable,
+    /// The cluster owner's daemon: it runs the licence path.
+    Holder,
+    /// Another tenant's daemon: no licence path here.
+    NotHolder,
+    /// The service could not be asked (link down, refresh failed).
+    Unknown,
+}
+
+static HOLDER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Why a service-mode daemon that is not the reserved-topic holder runs no
 /// licence path.
 pub const NOT_HOLDER: &str = "this daemon does not hold the mesh service's reserved licence topics \
      (it is not the cluster owner's daemon); the Seed licence runtime, exchange and binder run only there";
 
-/// Record whether this daemon holds the service's reserved topics: `None` in
-/// collapsed mode (not applicable), `Some(false)` for another tenant's daemon.
-pub fn set_reserved_holder(v: Option<bool>) {
-    let _ = RESERVED.set(v);
+/// Why the licence path is off while the holder cannot be determined.
+pub const HOLDER_UNKNOWN: &str = "holder status unknown: the mesh service query failed; \
+     the licence path is off until the service answers";
+
+/// Record the holder state (it changes on reconnect and on a
+/// `cluster_owner_uid` change at the service).
+pub fn set_holder_state(v: HolderState) {
+    let n = match v {
+        HolderState::NotApplicable => 0,
+        HolderState::Holder => 1,
+        HolderState::NotHolder => 2,
+        HolderState::Unknown => 3,
+    };
+    HOLDER.store(n, std::sync::atomic::Ordering::Release);
 }
 
-/// See [`set_reserved_holder`] (`None` also before boot).
+/// See [`set_holder_state`].
+pub fn holder_state() -> HolderState {
+    match HOLDER.load(std::sync::atomic::Ordering::Acquire) {
+        1 => HolderState::Holder,
+        2 => HolderState::NotHolder,
+        3 => HolderState::Unknown,
+        _ => HolderState::NotApplicable,
+    }
+}
+
+/// `Some(true|false)` when known in service mode, `None` otherwise.
 pub fn reserved_holder() -> Option<bool> {
-    RESERVED.get().copied().flatten()
+    match holder_state() {
+        HolderState::Holder => Some(true),
+        HolderState::NotHolder => Some(false),
+        _ => None,
+    }
+}
+
+/// Why the licence RPCs refuse on this daemon right now, if they do.
+pub fn holder_refusal() -> Option<&'static str> {
+    match holder_state() {
+        HolderState::NotHolder => Some(NOT_HOLDER),
+        HolderState::Unknown => Some(HOLDER_UNKNOWN),
+        _ => None,
+    }
+}
+
+/// The state name for status output.
+pub fn holder_state_name() -> &'static str {
+    match holder_state() {
+        HolderState::NotApplicable => "not_applicable",
+        HolderState::Holder => "holder",
+        HolderState::NotHolder => "not_holder",
+        HolderState::Unknown => "unknown",
+    }
 }
 
 /// Why the licence runtime was not installed although `kernel.mesh.mesh_nonce`
@@ -270,5 +326,6 @@ pub fn status(rt: &LicenceRuntime) -> Value {
         "next_seq": held.as_ref().map_or(1, |h| h.seq + 1),
         "steward": { "node_id": rt.steward_node_id, "pubkey": rt.steward_pubkey },
         "reserved_holder": reserved_holder(),
+        "holder_state": holder_state_name(),
     })
 }

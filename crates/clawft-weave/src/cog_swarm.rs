@@ -98,7 +98,11 @@ pub fn snapshot_of(v: &serde_json::Value) -> PeerSnapshot {
             .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
             .unwrap_or_default()
     };
-    PeerSnapshot { connected: ids("connected"), licensed: ids("licensed") }
+    PeerSnapshot {
+        connected: ids("connected"),
+        licensed: ids("licensed"),
+        reserved_holder: v.get("reserved_holder").and_then(serde_json::Value::as_bool),
+    }
 }
 
 /// True when this daemon's registration holds the service's reserved topics

@@ -225,12 +225,13 @@ pub fn render_floor_preview(p: &Value) -> String {
 /// Plain-text `status`.
 pub fn render_status(st: &Value) -> String {
     let mut out = String::new();
-    if st["installed"].as_bool() == Some(false) {
+    if st["installed"].as_bool() == Some(false) || st["reason"].is_string() {
         out.push_str(&format!("licence   not running here: {}\n", st["reason"].as_str().unwrap_or("?")));
     }
     match st["reserved_holder"].as_bool() {
         Some(true) => out.push_str("reserved  this daemon holds the service's licence topics\n"),
         Some(false) => out.push_str("reserved  NOT the holder (another tenant's daemon; the owner's runs the licence path)\n"),
+        None if st["holder_state"] == "unknown" => out.push_str("reserved  UNKNOWN (the mesh service could not be asked)\n"),
         None => {}
     }
     if let Some(k) = st["steward"]["pubkey"].as_str() {

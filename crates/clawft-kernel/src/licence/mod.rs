@@ -28,6 +28,7 @@ mod chain_sink;
 mod client;
 mod exchange;
 mod exchange_sync;
+mod exchange_retry;
 mod exchange_types;
 mod floor;
 mod floor_preview;
@@ -97,13 +98,14 @@ pub use exchange::{
     CtxAdmission, ExchangeError, LicenceExchange, LicenceExchangeConfig, LicenceExchangeParts,
     PeerAdmission, PostureFn, Receipt, Spend, sign_unbind,
 };
+pub use exchange_retry::MAX_SYNC_RETRIES;
 pub use exchange_sync::{GrantCursor, SYNC_MAX_BYTES, SYNC_MAX_ENTRIES, SyncMsg};
 pub use floor::FloorState;
 pub use floor_preview::{FloorPreview, RevivedGrant};
 pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
 pub use links::LicenceLinks;
 pub use service_links::{
-    LICENCE_TOPICS, MAX_REPLY_SENDS, PEER_REFRESH, PeerDirectory, PeerSnapshot, ServiceLicenceLinks, ServiceLinksCounters,
+    LICENCE_TOPICS, MAX_REPLY_SENDS, MAX_REPLY_SENDS_PER_PEER, PEER_REFRESH, PeerDirectory, PeerSnapshot, ServiceLicenceLinks, ServiceLinksCounters,
     is_licence_topic,
 };
 pub use weft_licence_wire::{

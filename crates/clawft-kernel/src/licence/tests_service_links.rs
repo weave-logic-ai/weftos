@@ -86,6 +86,7 @@ fn snode(bus: &Arc<Bus>, id: &str, connected: &[&str], licensed: &[&str], with_e
     let dir = Arc::new(Dir(Mutex::new(PeerSnapshot {
         connected: connected.iter().map(|s| s.to_string()).collect(),
         licensed: licensed.iter().map(|s| s.to_string()).collect(),
+        reserved_holder: None,
     })));
     let links = ServiceLicenceLinks::new(Arc::new(BusSender { me: id.into(), bus: bus.clone() }), dir.clone());
     bus.links.insert(id.into(), links.clone());
@@ -145,7 +146,7 @@ async fn a_late_joiner_syncs_as_soon_as_the_service_reports_it_licensed() {
 
     // C comes up later; its service reports A connected and licensed.
     let c = snode(&bus, "node-c", &[], &[], true);
-    *c.dir.0.lock().unwrap() = PeerSnapshot { connected: vec!["node-a".into()], licensed: vec!["node-a".into()] };
+    *c.dir.0.lock().unwrap() = PeerSnapshot { connected: vec!["node-a".into()], licensed: vec!["node-a".into()], ..Default::default() };
     c.links.refresh().await.unwrap();
     wait_for("C to catch up by sync", || {
         c.fx.store.active_binding().is_some()
@@ -291,7 +292,7 @@ impl PeerDirectory for FlakyDir {
         if self.0.load(Ordering::SeqCst) {
             return Err("the mesh service link is reconnecting".into());
         }
-        Ok(PeerSnapshot { connected: vec!["node-b".into()], licensed: vec!["node-b".into()] })
+        Ok(PeerSnapshot { connected: vec!["node-b".into()], licensed: vec!["node-b".into()], reserved_holder: Some(true) })
     }
 }
 
@@ -307,4 +308,82 @@ async fn a_failed_refresh_clears_the_licensed_view() {
     assert!(!links.peer_licensed("node-b") && links.peer_ids().is_empty(), "nobody is licensed while the link is down");
     assert_eq!(links.counters.refresh_failed.load(Ordering::Relaxed), 1);
     assert_eq!(links.counters.refreshed.load(Ordering::Relaxed), 1);
+}
+
+fn quiet_exchange(fx: &Fx, links: &Arc<ServiceLicenceLinks>) -> Arc<LicenceExchange> {
+    LicenceExchange::start(LicenceExchangeParts {
+        store: fx.store.clone(),
+        approvals: fx.approvals.clone(),
+        anchors: anchors(),
+        runtime: links.clone(),
+        posture: Arc::new(posture),
+        admission: Arc::new(CtxAdmission),
+        sink: fx.sink.clone(),
+        config: LicenceExchangeConfig { sync_on_connect: false, ..Default::default() },
+    })
+}
+
+fn sync_request() -> KernelMessage {
+    json_msg(COG_SYNC_TOPIC, serde_json::to_value(SyncMsg::Request { grant_after: None, approval_after: None }).unwrap())
+}
+
+#[tokio::test]
+async fn a_request_dropped_at_the_reply_cap_is_not_recorded_as_served() {
+    let fx = Fx::new();
+    let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sender = Arc::new(SlowSender { delay: std::time::Duration::from_millis(300), sent: sent.clone() });
+    let links = ServiceLicenceLinks::with_reply_caps(sender, Arc::new(Dir::default()), 1, 4);
+    let _ex = quiet_exchange(&fx, &links);
+    // The slow peer's reply holds the only slot; the fast peer's request is
+    // dropped before the exchange sees it.
+    links.deliver(&ctx("slow", true, PeerClass::Node), sync_request()).await;
+    links.deliver(&ctx("fast", true, PeerClass::Node), sync_request()).await;
+    assert_eq!(links.counters.replies_dropped.load(Ordering::SeqCst), 1);
+    wait_for("the slow reply to go out", || sent.load(Ordering::SeqCst) == 1).await;
+    // Asked again within the minute, the fast peer is answered: the drop did
+    // not count as having served it.
+    links.deliver(&ctx("fast", true, PeerClass::Node), sync_request()).await;
+    wait_for("the fast peer is answered", || sent.load(Ordering::SeqCst) == 2).await;
+}
+
+#[tokio::test]
+async fn one_peer_holds_at_most_its_own_share_of_reply_slots() {
+    let fx = Fx::new();
+    let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sender = Arc::new(SlowSender { delay: std::time::Duration::from_secs(5), sent: sent.clone() });
+    let links = ServiceLicenceLinks::with_reply_caps(sender, Arc::new(Dir::default()), 64, 1);
+    let _ex = quiet_exchange(&fx, &links);
+    links.deliver(&ctx("slow", true, PeerClass::Node), sync_request()).await;
+    links.deliver(&ctx("slow", true, PeerClass::Node), sync_request()).await;
+    assert_eq!(links.counters.replies_dropped.load(Ordering::SeqCst), 1, "the second is over the per-peer cap");
+    links.deliver(&ctx("other", true, PeerClass::Node), sync_request()).await;
+    assert_eq!(links.counters.replies_dropped.load(Ordering::SeqCst), 1, "another peer still gets a slot");
+    assert_eq!(MAX_REPLY_SENDS_PER_PEER, 4);
+}
+
+#[tokio::test]
+async fn an_unanswered_sync_is_asked_again_a_bounded_number_of_times() {
+    let bus = Arc::new(Bus::default());
+    let n = snode(&bus, "node-n", &[], &[], true);
+    let ex = n.ex.as_ref().unwrap();
+    let expire = || {
+        ex.pending.insert(
+            "node-a".into(),
+            super::exchange_sync::Pending {
+                sent: std::time::Instant::now().checked_sub(std::time::Duration::from_secs(121)).unwrap(),
+                pages: 0,
+                grant_after: None,
+                approval_after: None,
+            },
+        );
+    };
+    for round in 1..=MAX_SYNC_RETRIES as usize {
+        expire();
+        ex.retry_expired().await;
+        assert_eq!(bus.sent_on("node-n", "node-a", COG_SYNC_TOPIC), round, "retry {round}");
+    }
+    expire();
+    ex.retry_expired().await;
+    assert_eq!(bus.sent_on("node-n", "node-a", COG_SYNC_TOPIC), MAX_SYNC_RETRIES as usize, "then it waits");
+    assert!(ex.pending.is_empty() && ex.retries.is_empty());
 }

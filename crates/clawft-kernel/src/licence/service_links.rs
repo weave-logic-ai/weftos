@@ -51,6 +51,9 @@ pub const PEER_REFRESH: Duration = Duration::from_secs(10);
 /// (the peer's next sync asks again).
 pub const MAX_REPLY_SENDS: usize = 64;
 
+/// Reply sends in flight to one peer, inside [`MAX_REPLY_SENDS`].
+pub const MAX_REPLY_SENDS_PER_PEER: usize = 4;
+
 /// True when `msg` is on one of [`LICENCE_TOPICS`].
 pub fn is_licence_topic(msg: &KernelMessage) -> bool {
     matches!(&msg.target, MessageTarget::Topic(t) if LICENCE_TOPICS.contains(&t.as_str()))
@@ -63,6 +66,9 @@ pub struct PeerSnapshot {
     pub connected: Vec<String>,
     /// Peers whose route admission verified with class `node`.
     pub licensed: Vec<String>,
+    /// Whether the asking daemon holds the service's reserved licence topics
+    /// (`None`: the service did not say).
+    pub reserved_holder: Option<bool>,
 }
 
 /// Who the machine mesh service says is connected.
@@ -85,7 +91,8 @@ pub struct ServiceLinksCounters {
     pub refresh_failed: AtomicU64,
     /// Peer view refreshes that succeeded.
     pub refreshed: AtomicU64,
-    /// Replies dropped because [`MAX_REPLY_SENDS`] were in flight.
+    /// Sync requests not answered (and not recorded as served) because the
+    /// reply caps were full; the requester re-asks.
     pub replies_dropped: AtomicU64,
 }
 
@@ -103,6 +110,9 @@ pub struct ServiceLicenceLinks {
     view: RwLock<View>,
     events: MeshPeerEventBus,
     replies: Arc<tokio::sync::Semaphore>,
+    per_peer: DashMap<String, Arc<tokio::sync::Semaphore>>,
+    per_peer_cap: usize,
+    holder: tokio::sync::watch::Sender<Option<bool>>,
     /// Counters.
     pub counters: ServiceLinksCounters,
 }
@@ -110,15 +120,60 @@ pub struct ServiceLicenceLinks {
 impl ServiceLicenceLinks {
     /// Links that send through `sender` and read peers from `directory`.
     pub fn new(sender: Arc<dyn PeerSender>, directory: Arc<dyn PeerDirectory>) -> Arc<Self> {
+        Self::with_reply_caps(sender, directory, MAX_REPLY_SENDS, MAX_REPLY_SENDS_PER_PEER)
+    }
+
+    /// [`Self::new`] with explicit reply caps (in flight overall, per peer).
+    pub fn with_reply_caps(
+        sender: Arc<dyn PeerSender>,
+        directory: Arc<dyn PeerDirectory>,
+        total: usize,
+        per_peer: usize,
+    ) -> Arc<Self> {
         Arc::new(Self {
             sender,
             directory,
             sinks: DashMap::new(),
             view: RwLock::new(View::default()),
             events: MeshPeerEventBus::new(),
-            replies: Arc::new(tokio::sync::Semaphore::new(MAX_REPLY_SENDS)),
+            replies: Arc::new(tokio::sync::Semaphore::new(total.max(1))),
+            per_peer: DashMap::new(),
+            per_peer_cap: per_peer.max(1),
+            holder: tokio::sync::watch::channel(None).0,
             counters: ServiceLinksCounters::default(),
         })
+    }
+
+    /// Whether this daemon holds the service's reserved licence topics, as
+    /// of the last refresh (`None`: unknown, the last refresh failed or the
+    /// service did not say).
+    pub fn holder(&self) -> Option<bool> {
+        *self.holder.borrow()
+    }
+
+    /// Changes of [`Self::holder`].
+    pub fn subscribe_holder(&self) -> tokio::sync::watch::Receiver<Option<bool>> {
+        self.holder.subscribe()
+    }
+
+    fn set_holder(&self, v: Option<bool>) {
+        self.holder.send_if_modified(|h| {
+            let changed = *h != v;
+            *h = v;
+            changed
+        });
+    }
+
+    /// A reply slot for `peer`: one of the global and one of its own.
+    fn reserve(&self, peer: &str) -> Option<(tokio::sync::OwnedSemaphorePermit, tokio::sync::OwnedSemaphorePermit)> {
+        let mine = self
+            .per_peer
+            .entry(peer.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(self.per_peer_cap)))
+            .clone();
+        let p = mine.try_acquire_owned().ok()?;
+        let g = self.replies.clone().try_acquire_owned().ok()?;
+        Some((g, p))
     }
 
     /// Read the service's peer view; raise `Joined` for each peer that became
@@ -130,11 +185,13 @@ impl ServiceLicenceLinks {
                 // Link down or the service gone: nobody is known to be
                 // licensed until the next good view (no floods meanwhile).
                 *self.view.write().unwrap_or_else(|p| p.into_inner()) = View::default();
+                self.set_holder(None);
                 self.counters.refresh_failed.fetch_add(1, Ordering::Relaxed);
                 return Err(e);
             }
         };
         self.counters.refreshed.fetch_add(1, Ordering::Relaxed);
+        self.set_holder(snap.reserved_holder);
         let licensed: HashSet<String> = snap.licensed.into_iter().collect();
         let joined: Vec<String> = {
             let mut v = self.view.write().unwrap_or_else(|p| p.into_inner());
@@ -199,11 +256,24 @@ impl ServiceLicenceLinks {
                 verified: true,
             });
         }
+        // A sync request is answered only with a reply slot in hand, taken
+        // before the exchange sees it: a request that could not be answered
+        // is not recorded as served, so the requester's retry is.
+        let mut slot = None;
+        if topic.as_str() == COG_SYNC_TOPIC && payload.get("op").and_then(|o| o.as_str()) == Some("request") {
+            match self.reserve(&from.peer_id) {
+                Some(s) => slot = Some(s),
+                None => {
+                    self.counters.replies_dropped.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
+            }
+        }
         self.counters.delivered.fetch_add(1, Ordering::Relaxed);
         // Replies go out on their own tasks: this runs on the link's one
         // delivery worker, and a slow peer must not hold up the others.
         for reply in sink.on_peer_control(from, conn_of(&from.peer_id), payload) {
-            let Ok(permit) = self.replies.clone().try_acquire_owned() else {
+            let Some(permit) = slot.take().or_else(|| self.reserve(&from.peer_id)) else {
                 self.counters.replies_dropped.fetch_add(1, Ordering::Relaxed);
                 continue;
             };

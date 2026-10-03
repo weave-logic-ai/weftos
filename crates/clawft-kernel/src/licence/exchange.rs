@@ -71,6 +71,8 @@ pub struct LicenceExchange {
     pub(super) served: DashMap<String, Instant>,
     /// Peers banned from sync, and since when.
     pub(super) banned: DashMap<String, Instant>,
+    /// Unanswered sync requests re-sent to a peer in a row.
+    pub(super) retries: DashMap<String, u8>,
     /// Open sync sessions served to a peer.
     pub(super) sessions: DashMap<String, super::exchange_sync::ServeSession>,
     /// Flood messages sent (a forward or an issue to one peer counts one).
@@ -99,6 +101,7 @@ impl LicenceExchange {
             pending: DashMap::new(),
             served: DashMap::new(),
             banned: DashMap::new(),
+            retries: DashMap::new(),
             sessions: DashMap::new(),
             flooded: Default::default(),
         });

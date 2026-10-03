@@ -25,7 +25,9 @@
 //! otherwise), which before phase 3 never ran in service mode. In service
 //! mode only the daemon that holds the service's reserved topics (the cluster
 //! owner's) runs the licence path; another tenant's daemon places but runs no
-//! licence runtime, exchange or binder.
+//! licence runtime, exchange or binder. The answer is re-read with every
+//! peer-view refresh of the service links, so the path comes up when the
+//! link (re)connects and follows a `cluster_owner_uid` change.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -37,6 +39,7 @@ use tokio::sync::RwLock;
 use serde_json::json;
 use tracing::warn;
 
+use crate::licence_boot::HolderState;
 use crate::node_identity::{DaemonIdentity, IdentityError};
 
 /// The placement control key under the runtime dir, in service mode.
@@ -78,6 +81,12 @@ pub fn signer(identity: &DaemonIdentity, runtime_dir: &Path) -> Result<Placement
 }
 
 /// Daemon boot: placement, the licence runtime and the licence exchange.
+///
+/// In service mode the licence part follows the service's answer to "does
+/// this daemon hold the reserved topics?", read with every peer-view refresh
+/// (so a reconnect or a `cluster_owner_uid` change is picked up): it starts
+/// when the answer becomes yes, and idles (the licence RPCs refuse, and the
+/// service routes no licence records here) when it becomes no or unknown.
 pub async fn start(
     kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
     identity: &DaemonIdentity,
@@ -95,15 +104,71 @@ pub async fn start(
         tracing::info!(controller = %s.pubkey_hex(), "service mode: placement and the licence steward sign with the control key");
     }
     crate::workload_place_rpc::init_with_mesh_id(s.key.clone(), runtime_dir.to_path_buf(), s.mesh_node_id.clone());
-    let holder = if identity.is_service() { Some(service_holder().await) } else { None };
-    crate::licence_boot::set_reserved_holder(holder);
-    if holder == Some(false) {
-        warn!("{}", crate::licence_boot::NOT_HOLDER);
+    if !identity.is_service() {
+        crate::licence_boot::set_holder_state(HolderState::NotApplicable);
+        install_licence(kernel, runtime_dir, &s, false).await;
         return;
     }
+    crate::licence_boot::set_holder_state(HolderState::Unknown);
+    let links = crate::cog_swarm::licence_links();
+    if crate::cog_swarm::service_licence_links().is_some() {
+        // The link is up: ask now rather than wait for the periodic refresh.
+        for _ in 0..5 {
+            if links.refresh().await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+    let mut rx = links.subscribe_holder();
+    let first = *rx.borrow_and_update();
+    let (kernel, dir, s) = (kernel.clone(), runtime_dir.to_path_buf(), Arc::new(s));
+    apply_holder(&kernel, &dir, &s, first).await;
+    tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            let v = *rx.borrow_and_update();
+            apply_holder(&kernel, &dir, &s, v).await;
+        }
+    });
+}
+
+/// Act on the service's holder answer (`None`: unknown).
+async fn apply_holder(
+    kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
+    dir: &Path,
+    s: &PlacementSigner,
+    v: Option<bool>,
+) {
+    let before = crate::licence_boot::holder_state();
+    let now = match v {
+        Some(true) => HolderState::Holder,
+        Some(false) => HolderState::NotHolder,
+        None => HolderState::Unknown,
+    };
+    crate::licence_boot::set_holder_state(now);
+    if before != now {
+        match now {
+            HolderState::Holder => tracing::info!("this daemon holds the mesh service's licence topics; the licence path is on"),
+            HolderState::NotHolder => warn!(was = ?before, "{}", crate::licence_boot::NOT_HOLDER),
+            _ => warn!(was = ?before, "{}", crate::licence_boot::HOLDER_UNKNOWN),
+        }
+    }
+    if now == HolderState::Holder {
+        install_licence(kernel, dir, s, true).await;
+    }
+}
+
+/// Install the licence runtime (once) and start the licence exchange (once)
+/// over the kernel's mesh or the service links. Idempotent.
+async fn install_licence(
+    kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
+    runtime_dir: &Path,
+    s: &PlacementSigner,
+    service: bool,
+) {
     // ADR-106: the mesh id from the configured nonce, the checkout policy and
-    // the steward binder. Built here (not lazily) so a changed nonce chains
-    // `binding_orphaned` at boot.
+    // the steward binder. Built at boot (not lazily) so a changed nonce
+    // chains `binding_orphaned` at boot.
     let k = kernel.read().await;
     let Some(chain) = k.chain_manager().cloned() else {
         crate::licence_boot::skipped(k.kernel_config().mesh.as_ref(), "no chain manager");
@@ -113,21 +178,28 @@ pub async fn start(
         warn!(error = %e, "operator keys unreadable; no Seed binding can verify");
         Default::default()
     });
-    let rt = crate::licence_boot::install(crate::licence_boot::build(crate::licence_boot::InitArgs {
-        dir: runtime_dir,
-        anchors: anchors.clone(),
-        revocations: k.revocation_list().clone(),
-        chain: chain.clone(),
-        mesh: k.kernel_config().mesh.as_ref(),
-        steward_node_id: s.mesh_node_id.clone(),
-        steward_pubkey: s.pubkey_hex(),
-    }));
+    let rt = match crate::licence_boot::runtime() {
+        Some(rt) => rt,
+        None => {
+            let rt = crate::licence_boot::install(crate::licence_boot::build(crate::licence_boot::InitArgs {
+                dir: runtime_dir,
+                anchors: anchors.clone(),
+                revocations: k.revocation_list().clone(),
+                chain: chain.clone(),
+                mesh: k.kernel_config().mesh.as_ref(),
+                steward_node_id: s.mesh_node_id.clone(),
+                steward_pubkey: s.pubkey_hex(),
+            }));
+            check_steward_key(&rt, s);
+            rt
+        }
+    };
     // The exchange from boot, not from the first placement call: a member
     // that never places still takes and passes on bindings and grants.
-    check_steward_key(&rt, &s);
     let posture = crate::licence_boot::posture(k.kernel_config().mesh.as_ref(), k.governance_gate().is_some());
     let links = crate::workload_place_rpc::licence_links(k.a2a_router().mesh_runtime().cloned());
     drop(k);
+    let was_running = crate::workload_place_rpc::licence_exchange().is_some();
     let started = crate::workload_place_rpc::ensure_licence(
         runtime_dir,
         Some(rt.policy()),
@@ -136,28 +208,18 @@ pub async fn start(
         links,
         Arc::new(move || posture),
     );
-    if started.is_none() {
-        if identity.is_service() {
+    match started {
+        // Started late (the holder answer came after the link's peers were
+        // seen): ask every peer now instead of waiting for joins.
+        Some(x) if !was_running && service => {
+            tokio::spawn(async move { x.sync_all().await });
+        }
+        Some(_) => {}
+        None if service => {
             warn!("service mode: the licence exchange did not start (no mesh service link); no bindings or grants reach this node");
-        } else {
-            tracing::debug!("no kernel mesh: the licence exchange is not started");
         }
+        None => tracing::debug!("no kernel mesh: the licence exchange is not started"),
     }
-}
-
-/// Ask the service whether this daemon holds the reserved topics, a few
-/// times while the link settles. Fails closed (not the holder).
-async fn service_holder() -> bool {
-    let mut last = String::new();
-    for _ in 0..5 {
-        match crate::cog_swarm::reserved_holder().await {
-            Ok(v) => return v,
-            Err(e) => last = e,
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-    warn!(error = %last, "could not ask the mesh service who holds the licence topics; the licence path stays off");
-    false
 }
 
 /// A held binding that names this node as steward under another key: the
