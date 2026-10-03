@@ -108,22 +108,44 @@ pub fn is_loopback_http(url: &str) -> bool {
     host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Builds the concrete provider for a config (the placed base URL is
+/// already in it). Lets a dialect-aware provider such as `LocalProvider` be
+/// placed, not only the plain OpenAI-compatible one.
+pub type ProviderFactory = Arc<dyn Fn(LlmProviderConfig) -> Arc<dyn Provider> + Send + Sync>;
+
+fn openai_factory() -> ProviderFactory {
+    Arc::new(|cfg| Arc::new(OpenAiCompatProvider::new(cfg)))
+}
+
 /// A provider whose endpoint follows placement, falling back to its
 /// configured `base_url`.
 pub struct PlacedProvider {
     role: String,
     config: LlmProviderConfig,
-    fallback: OpenAiCompatProvider,
+    fallback: Arc<dyn Provider>,
+    factory: ProviderFactory,
     resolver: Arc<CachedResolver>,
-    placed: Mutex<HashMap<String, Arc<OpenAiCompatProvider>>>,
+    placed: Mutex<HashMap<String, Arc<dyn Provider>>>,
 }
 
 impl PlacedProvider {
     /// Provider for `config` that resolves `role` through `resolver`.
     pub fn new(role: String, config: LlmProviderConfig, resolver: Arc<CachedResolver>) -> Self {
+        Self::with_factory(role, config, resolver, openai_factory())
+    }
+
+    /// As [`new`](Self::new), building every concrete provider (the
+    /// fallback included) with `factory`.
+    pub fn with_factory(
+        role: String,
+        config: LlmProviderConfig,
+        resolver: Arc<CachedResolver>,
+        factory: ProviderFactory,
+    ) -> Self {
         Self {
             role,
-            fallback: OpenAiCompatProvider::new(config.clone()),
+            fallback: factory(config.clone()),
+            factory,
             config,
             resolver,
             placed: Mutex::new(HashMap::new()),
@@ -137,7 +159,7 @@ impl PlacedProvider {
 
     /// The provider to use right now and the placed URL it was built for
     /// (`None`: the static fallback).
-    fn current(&self) -> (Option<String>, Option<Arc<OpenAiCompatProvider>>) {
+    fn current(&self) -> (Option<String>, Option<Arc<dyn Provider>>) {
         let Some(url) = self
             .resolver
             .resolve_base_url(&self.role)
@@ -153,7 +175,7 @@ impl PlacedProvider {
             .or_insert_with(|| {
                 let mut cfg = self.config.clone();
                 cfg.base_url = url.clone();
-                Arc::new(OpenAiCompatProvider::new(cfg))
+                (self.factory)(cfg)
             })
             .clone();
         (Some(url), Some(p))

@@ -81,6 +81,9 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-099: revocation and device-to-node binding are trust-root
         // changes, so Admin rather than Write.
         "workload.revoke" => Capability::Admin,
+        // mesh-placement-19: who may use whose model server is a governed
+        // decision, the same standing as a revocation.
+        "infer.expose" | "infer.allow" => Capability::Admin,
         "workload.node.bind" => Capability::Admin,
 
         // ── Write: state-mutating verbs ─────────────────────────────
@@ -189,7 +192,11 @@ pub fn required_capability(method: &str) -> Capability {
         | "app.list"
         | "app.inspect"
         | "workload.list"
-        | "workload.inspect" => Capability::Read,
+        | "workload.inspect"
+        | "infer.status" => Capability::Read,
+
+        // An unclassified `infer.*` verb is a mutation, never anonymous Read.
+        m if m.starts_with("infer.") => Capability::Admin,
 
         // ADR-099 default-deny posture: an unclassified `workload.*` verb
         // is treated as a mutation, never as anonymous-callable Read.
@@ -451,6 +458,21 @@ mod tests {
         assert!(write.allows_method("ipc.publish"));
         let admin = CallerCapabilities::from_scopes(["admin"]);
         assert!(admin.allows_method("ipc.publish"));
+    }
+
+    #[test]
+    fn inference_verbs_are_classified() {
+        // mesh-placement-19: status reads; who may use whose server is Admin,
+        // and an unclassified `infer.*` verb is never anonymous Read.
+        let anon = CallerCapabilities::anonymous();
+        let write = CallerCapabilities::from_scopes(["write"]);
+        let admin = CallerCapabilities::from_scopes(["admin"]);
+        assert!(anon.allows_method("infer.status"));
+        for m in ["infer.expose", "infer.allow", "infer.somethingnew"] {
+            assert!(!anon.allows_method(m), "{m}");
+            assert!(!write.allows_method(m), "{m}");
+            assert!(admin.allows_method(m), "{m}");
+        }
     }
 
     #[test]

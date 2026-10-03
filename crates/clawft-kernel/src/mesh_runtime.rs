@@ -29,10 +29,16 @@ pub const FACTS_TOPIC: &str = "mesh.node_facts";
 /// mesh-placement-25). Handled like [`FACTS_TOPIC`].
 pub const REVOKE_TOPIC: &str = "mesh.artifact.revoke";
 
-/// Control topics the runtime consumes instead of routing locally.
-const CONTROL_TOPICS: [&str; 2] = [FACTS_TOPIC, REVOKE_TOPIC];
+/// Control topic carrying inference adverts and forwarded requests between
+/// peers (card mesh-placement-19). Handled like [`FACTS_TOPIC`]; see
+/// `infer_proxy::hub`.
+pub const INFER_TOPIC: &str = "mesh.infer";
 
-/// Receiver of a runtime control topic ([`FACTS_TOPIC`], [`REVOKE_TOPIC`]).
+/// Control topics the runtime consumes instead of routing locally.
+const CONTROL_TOPICS: [&str; 3] = [FACTS_TOPIC, REVOKE_TOPIC, INFER_TOPIC];
+
+/// Receiver of a runtime control topic ([`FACTS_TOPIC`], [`REVOKE_TOPIC`],
+/// [`INFER_TOPIC`]).
 ///
 /// The sink decides what to trust: it is handed the connection's
 /// authenticated identity ([`PeerCtx`]) and returns payloads to send back
@@ -242,7 +248,7 @@ impl MeshRuntime {
     }
 
     /// Install the sink for the control topic `topic` (first call wins).
-    /// Only [`FACTS_TOPIC`] and [`REVOKE_TOPIC`] are control topics.
+    /// Only [`FACTS_TOPIC`], [`REVOKE_TOPIC`] and [`INFER_TOPIC`] are control topics.
     pub fn set_control_sink(&self, topic: &str, sink: Arc<dyn PeerControlSink>) {
         self.control_sinks.entry(topic.to_string()).or_insert(sink);
     }

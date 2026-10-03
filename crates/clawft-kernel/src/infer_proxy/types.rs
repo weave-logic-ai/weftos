@@ -16,6 +16,8 @@ pub struct ProxyLimits {
     pub max_headers: usize,
     /// Request body.
     pub max_request_body: usize,
+    /// Request body over the mesh (sent as hex inside a control message).
+    pub max_mesh_request_body: usize,
     /// Response body, summed over all chunks.
     pub max_response_body: u64,
     /// Time to read a request head.
@@ -38,6 +40,7 @@ impl Default for ProxyLimits {
             max_head_bytes: 16 * 1024,
             max_headers: 64,
             max_request_body: 8 * 1024 * 1024,
+            max_mesh_request_body: 2 * 1024 * 1024,
             max_response_body: 64 * 1024 * 1024,
             head_timeout: Duration::from_secs(10),
             body_timeout: Duration::from_secs(30),

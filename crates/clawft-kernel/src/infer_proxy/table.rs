@@ -401,6 +401,23 @@ impl PlacementTable {
             .flatten()
     }
 
+    /// Whether `peer` is on `role`'s serve allowlist.
+    pub fn mesh_peer_allowed(&self, role: &str, peer: &str) -> bool {
+        self.inner
+            .read()
+            .unwrap()
+            .serve_allow
+            .get(role)
+            .is_some_and(|s| s.contains(peer))
+    }
+
+    /// Roles currently exposed to the mesh.
+    pub fn exposed_roles(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.inner.read().unwrap().exposed.iter().cloned().collect();
+        v.sort();
+        v
+    }
+
     /// Whether `peer` is on any role's serve allowlist.
     pub fn peer_listed_any(&self, peer: &str) -> bool {
         self.inner

@@ -21,6 +21,7 @@
 //! [`ServiceAdvertisement`]: crate::mesh_service_adv::ServiceAdvertisement
 
 pub mod http;
+pub mod hub;
 pub mod listener;
 pub mod mesh_forward;
 pub mod mesh_policy;
@@ -34,6 +35,8 @@ mod support;
 #[cfg(test)]
 mod tests_http;
 #[cfg(test)]
+mod tests_hub;
+#[cfg(test)]
 mod tests_mesh;
 #[cfg(test)]
 mod tests_mesh_serve;
@@ -42,6 +45,7 @@ mod tests_proxy;
 
 #[cfg(feature = "exochain")]
 pub use types::ChainAudit;
+pub use hub::InferHub;
 pub use listener::{InferProxy, OccupiedPolicy, ProxyStats, Started};
 pub use mesh_forward::{InferPeer, ServeGate, ServePolicy, Served, forward_remote, serve_infer};
 pub use table::{MeshLocal, PlacementTable, SERVICE_PREFIX, SyncOutcome};

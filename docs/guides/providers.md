@@ -476,6 +476,55 @@ instances by wrapping both in `Box<dyn Provider>` and registering them with a
 `ProviderRouter` (or using them directly without routing).
 
 
+## Placed local inference
+
+By default `local/` goes to the address in `[kernel.llm]` or the ADR-060
+default (`127.0.0.1:8090`). The daemon can instead keep that address stable
+while the model server moves, and let other nodes on the mesh use it. This is
+off unless `<runtime>/inference.json` exists.
+
+```json
+{ "roles": [ { "role": "hermes", "flavor": "llamacpp",
+               "instance_port": 18090, "proxy_port": 8090,
+               "on_occupied": "refuse", "provider": "local" } ],
+  "mesh": { "expose": ["hermes"],
+            "serve_peers":  { "hermes": ["<node id>"] },
+            "remote_nodes": { "hermes": ["<node id>"] } } }
+```
+
+- A role watches a model server that somebody else runs on
+  `127.0.0.1:<instance_port>` (`llamacpp`, `mlx-lm` or `ollama`). The daemon
+  only reads from it; it never starts, stops or signals it. A server that is
+  not up yet is picked up when it appears.
+- `proxy_port` makes the daemon listen on that loopback port and forward
+  OpenAI-compatible requests to wherever the role is served, so existing
+  clients keep their address. The proxy forwards only GET and POST on the
+  inference paths, to the instance the placement table names, never to a host
+  the request names. If something already answers on `proxy_port` it is not
+  bound over: `refuse` (default) fails, `adopt` leaves the existing server as
+  the address.
+- `provider: "local"` makes in-process agents resolve `local/` through the
+  role. Precedence is unchanged: `LLM_SERVICE_URL`, then `[kernel.llm]` and
+  `[providers.local]`, then placement, then the ADR-060 constants. Any
+  explicit setting wins, and if placement has no answer the configured
+  address is used.
+- Mesh use is deny by default. `expose` lets a role leave loopback;
+  `serve_peers` names the peers this node serves it to; `remote_nodes` names
+  the nodes this node will use. A peer is served only when admission is
+  enforced, it is a full node (not a leaf) and its id was verified on the
+  connection. Peers are sent only the OpenAI inference paths, with `model`
+  pinned to the served model and everything outside a body-key allowlist
+  dropped. The local client's `Authorization` header goes to the local server
+  only, never over the mesh; adopting a server is the decision to trust it
+  with the credentials local clients send to that address.
+- `infer.status` (read) shows roles, proxy state, where each role resolves
+  and why the mesh is or is not available. `infer.expose` and `infer.allow`
+  (admin) change exposure and the allowlists until restart; each change is
+  recorded on the chain. The file holds the persistent settings.
+- In service mode (ADR-103) the machine mesh service owns the mesh and hands
+  the daemon deliveries as an unverified peer, so local placement and the
+  proxy work but serving or using a remote node does not; the status says so.
+
 ## API Key Management
 
 API keys are resolved at request time, not at configuration time. The

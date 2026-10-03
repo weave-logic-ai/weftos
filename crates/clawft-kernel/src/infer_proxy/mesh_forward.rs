@@ -61,6 +61,9 @@ pub async fn forward_remote(
             "peer {node_id} is not an admitted peer"
         )));
     }
+    if req.body.len() > limits.max_mesh_request_body {
+        return Err(ProxyError::TooLarge("request body over the mesh limit".into()));
+    }
     let mut stream = dialer.dial(node_id).await?;
     let result = async {
         let payload = wire::encode_request(req)?;
@@ -334,7 +337,13 @@ pub async fn serve_infer(
         if frame.frame_type != FrameType::InferRequest {
             return Err(ProxyError::BadRequest("expected an infer request".into()));
         }
-        let mut req = wire::decode_request(&frame.payload, &limits)?;
+        let mut req = wire::decode_request(
+            &frame.payload,
+            &ProxyLimits {
+                max_request_body: limits.max_mesh_request_body,
+                ..limits.clone()
+            },
+        )?;
         if !mesh_path_allowed(&req.path) {
             return Err(ProxyError::Forbidden("path is not served to peers".into()));
         }

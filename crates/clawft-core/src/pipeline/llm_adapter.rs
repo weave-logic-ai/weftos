@@ -449,17 +449,14 @@ pub fn create_adapter_from_config(config: &Config) -> Arc<dyn LlmProvider> {
     #[cfg(feature = "native")]
     if is_local {
         let app_api_key = resolve_app_api_key(&provider_name, config);
-        let mut local = LocalProvider::from_config(provider_config, app_api_key);
-        if provider_name == "local"
+        // Match LocalProvider::hermes_serving() window for ADR-060.
+        let num_ctx = provider_name == "local"
             || provider_name == "hermes"
-            || bare_model == clawft_types::config::DEFAULT_LOCAL_LLM_MODEL
-        {
-            // Match LocalProvider::hermes_serving() window for ADR-060.
-            local = local.with_num_ctx(clawft_llm::local_provider::HERMES_DEFAULT_NUM_CTX);
-        }
+            || bare_model == clawft_types::config::DEFAULT_LOCAL_LLM_MODEL;
+        let local = maybe_placed(&provider_name, config, &provider_config, app_api_key, num_ctx);
         // WEFT-39: shared EML RetryModel, restored from disk on first use.
         let retrying = clawft_llm::retry::RetryPolicy::with_model(
-            local,
+            ProviderRef(local),
             clawft_llm::retry::RetryConfig::default(),
             shared_retry_model(),
         );
@@ -577,12 +574,15 @@ fn create_adapter_for_provider(provider_name: &str, config: &Config) -> Arc<dyn 
 
     #[cfg(feature = "native")]
     if is_local {
-        let mut local = LocalProvider::from_config(provider_config, app_api_key);
-        if matches!(provider_name, "local" | "hermes") {
-            local = local.with_num_ctx(clawft_llm::local_provider::HERMES_DEFAULT_NUM_CTX);
-        }
+        let local = maybe_placed(
+            provider_name,
+            config,
+            &provider_config,
+            app_api_key,
+            matches!(provider_name, "local" | "hermes"),
+        );
         let retrying = clawft_llm::retry::RetryPolicy::with_model(
-            local,
+            ProviderRef(local),
             clawft_llm::retry::RetryConfig::default(),
             shared_retry_model(),
         );
@@ -625,6 +625,61 @@ fn resolve_app_api_key(provider_name: &str, config: &Config) -> Option<String> {
         None
     } else {
         Some(key.expose().to_string())
+    }
+}
+
+/// Lets an `Arc<dyn Provider>` be wrapped by `RetryPolicy` (which takes a
+/// concrete provider type).
+#[cfg(feature = "native")]
+struct ProviderRef(Arc<dyn clawft_llm::Provider>);
+
+#[cfg(feature = "native")]
+#[async_trait::async_trait]
+impl clawft_llm::Provider for ProviderRef {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    async fn complete(
+        &self,
+        request: &clawft_llm::ChatRequest,
+    ) -> clawft_llm::Result<clawft_llm::ChatResponse> {
+        self.0.complete(request).await
+    }
+    async fn complete_stream(
+        &self,
+        request: &clawft_llm::ChatRequest,
+        tx: tokio::sync::mpsc::Sender<clawft_llm::StreamChunk>,
+    ) -> clawft_llm::Result<()> {
+        self.0.complete_stream(request, tx).await
+    }
+}
+
+/// Wrap a local provider so its endpoint follows placement when the daemon
+/// installed a hook and no explicit setting chose the endpoint (see
+/// [`crate::placement_hook`]). Otherwise the provider is returned as built.
+#[cfg(feature = "native")]
+fn maybe_placed(
+    name: &str,
+    config: &Config,
+    provider_config: &LlmProviderConfig,
+    app_api_key: Option<String>,
+    num_ctx: bool,
+) -> Arc<dyn clawft_llm::Provider> {
+    let build = move |cfg: LlmProviderConfig| -> Arc<dyn clawft_llm::Provider> {
+        let mut local = LocalProvider::from_config(cfg, app_api_key.clone());
+        if num_ctx {
+            local = local.with_num_ctx(clawft_llm::local_provider::HERMES_DEFAULT_NUM_CTX);
+        }
+        Arc::new(local)
+    };
+    match crate::placement_hook::placement_for(name, config) {
+        Some((role, cache)) => Arc::new(clawft_llm::PlacedProvider::with_factory(
+            role,
+            provider_config.clone(),
+            cache,
+            Arc::new(build),
+        )),
+        None => build(provider_config.clone()),
     }
 }
 

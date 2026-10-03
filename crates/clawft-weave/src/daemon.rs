@@ -1214,6 +1214,29 @@ pub async fn run(
             }
         });
     }
+    // mesh-placement-19: inference placement (loopback proxy per role, the
+    // adapters, the mesh hub). Off unless <runtime>/inference.json exists.
+    #[cfg(all(feature = "placement", unix))]
+    {
+        let (audit, mesh) = {
+            let k = kernel.read().await;
+            let audit = k.chain_manager().cloned().map(|c| {
+                Arc::new(clawft_kernel::infer_proxy::ChainAudit(c)) as Arc<dyn clawft_kernel::infer_proxy::ProxyAudit>
+            });
+            (audit, k.a2a_router().mesh_runtime().cloned())
+        };
+        let parts = crate::infer_wire::InitParts {
+            dir: &runtime_dir,
+            node_id: daemon_identity.node_id.clone(),
+            mesh,
+            service_mode: daemon_identity.is_service(),
+            audit,
+            limits: Default::default(),
+        };
+        if let Err(e) = crate::infer_wire::init(parts).await {
+            error!(error = %e, "inference placement not started");
+        }
+    }
     {
         let k = kernel.read().await;
         let pubkey: [u8; 32] = daemon_identity.public_key();
@@ -6239,6 +6262,11 @@ async fn dispatch(
         // mesh-placement-03: signed node facts (local + verified peers).
         #[cfg(any(feature = "mesh", feature = "exochain"))]
         "cluster.facts" => crate::node_facts_rpc::handle(params, kernel).await,
+        // mesh-placement-19: inference placement (off unless inference.json exists).
+        #[cfg(all(feature = "placement", unix))]
+        "infer.status" | "infer.expose" | "infer.allow" => {
+            crate::infer_rpc::handle(method.as_str(), params).await
+        }
         "cluster.join" => {
             let join_params: ClusterJoinParams = match serde_json::from_value(params) {
                 Ok(p) => p,
