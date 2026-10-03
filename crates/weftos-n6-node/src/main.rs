@@ -5,10 +5,11 @@
 //!   internal HSI is 0.5 % off, so nothing timing-related runs from it.
 //! - Ethernet: ETH1 over RMII to the Nucleo's PHY (pins from ST's
 //!   Nx_PTP_Client: REF_CLK PF7, CRS_DV PF10, RXD0/1 PF14/PF15,
-//!   TX_EN PF11, TXD0/1 PF12/PF13, MDIO PF4, MDC PG11), DHCPv4.
-//! - PTP: the ETH1 MAC's IEEE 1588 system clock is started directly through
-//!   its registers (see `ptp`), counting from the HSE-derived bus clock. There
-//!   is no PTP master on the LAN yet, so it free-runs; its time is logged.
+//!   TX_EN PF11, TXD0/1 PF12/PF13, MDIO PF4, MDC PG11).
+//! - Network: DHCPv4, falling back to static 192.168.10.2/24 after 5 s (for a
+//!   direct cable to a host).
+//! - PTP: the ETH1 MAC's IEEE 1588 clock, disciplined by a PTPv2 slave
+//!   against a master on the link (see `ptp`).
 //! - UWB: reads the DWM3000EVB's DEV_ID over SPI5 on the Arduino header
 //!   (SCK PE15, MOSI PG2, MISO PG1, CS PA3), expecting 0xDECA03xx.
 //! - Announce: every 2 s, a `weftos-leaf-types::LeafServices` CBOR message
@@ -18,6 +19,8 @@
 
 extern crate alloc;
 
+mod ptp;
+
 use alloc::string::String;
 use core::ptr::addr_of_mut;
 
@@ -25,7 +28,8 @@ use defmt::*;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_net::udp::UdpSocket;
-use embassy_net::StackStorage;
+use embassy_net::wire::{IpCidr, Ipv4Addr, Ipv4Cidr};
+use embassy_net::{Stack, StackStorage};
 use embassy_stm32::eth::{Ethernet, GenericPhy, PacketQueue, Sma};
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::spi::{self, Spi};
@@ -35,7 +39,7 @@ use embassy_stm32::rcc::{
 };
 use embassy_stm32::time::Hertz;
 use embassy_stm32::{bind_interrupts, eth, Config};
-use embassy_time::Timer;
+use embassy_time::{with_timeout, Duration, Timer};
 use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 use static_cell::StaticCell;
@@ -79,88 +83,6 @@ fn rcc_config() -> Config {
     config
 }
 
-/// The ETH1 MAC's IEEE 1588 system time, driven through its registers.
-///
-/// embassy-stm32's `ptp` feature targets the H5/H7 MAC and does not build for
-/// the N6 (its MACSSIR has no SNSINC field), so this does the reference-manual
-/// sequence itself: enable timestamping with nanosecond rollover, set the
-/// subsecond increment, load the fine-correction addend, then initialise the
-/// time. In fine mode the accumulator adds `addend` every bus clock and steps
-/// the time by `ssinc_ns` on each overflow, so
-/// `addend = 2^32 * (1e9 / ssinc_ns) / hclk`.
-mod ptp {
-    use core::ptr::{read_volatile, write_volatile};
-
-    const MAC: usize = 0x5803_6000; // ETH1 (secure alias)
-    const MACTSCR: usize = MAC + 0xB00;
-    const MACSSIR: usize = MAC + 0xB04;
-    const MACSTSR: usize = MAC + 0xB08;
-    const MACSTNR: usize = MAC + 0xB0C;
-    const MACSTSUR: usize = MAC + 0xB10;
-    const MACSTNUR: usize = MAC + 0xB14;
-    const MACTSAR: usize = MAC + 0xB18;
-
-    const TSENA: u32 = 1 << 0;
-    const TSCFUPDT: u32 = 1 << 1;
-    const TSINIT: u32 = 1 << 2;
-    const TSADDREG: u32 = 1 << 5;
-    const TSCTRLSSR: u32 = 1 << 9; // subseconds count nanoseconds, roll over at 1e9
-
-    fn rd(a: usize) -> u32 {
-        unsafe { read_volatile(a as *const u32) }
-    }
-    fn wr(a: usize, v: u32) {
-        unsafe { write_volatile(a as *mut u32, v) }
-    }
-    fn wait_clear(a: usize, bit: u32) -> bool {
-        for _ in 0..1_000_000 {
-            if rd(a) & bit == 0 {
-                return true;
-            }
-        }
-        false
-    }
-
-    pub struct Started {
-        pub hclk: u32,
-        pub ssinc_ns: u32,
-        pub addend: u32,
-    }
-
-    /// Start the clock at 0 s. Returns the settings, or None if the MAC never acknowledged.
-    pub fn start(hclk: u32) -> Option<Started> {
-        // The step must be slower than the bus clock: ~2 bus cycles per step.
-        let ssinc_ns = (2_000_000_000u64).div_ceil(u64::from(hclk)).max(1) as u32;
-        let addend = (((1u128 << 32) * 1_000_000_000) / (u128::from(ssinc_ns) * u128::from(hclk))) as u32;
-        wr(MACTSCR, TSENA | TSCTRLSSR);
-        wr(MACSSIR, (ssinc_ns & 0xFF) << 16);
-        wr(MACTSAR, addend);
-        wr(MACTSCR, rd(MACTSCR) | TSADDREG);
-        if !wait_clear(MACTSCR, TSADDREG) {
-            return None;
-        }
-        wr(MACTSCR, rd(MACTSCR) | TSCFUPDT);
-        wr(MACSTSUR, 0);
-        wr(MACSTNUR, 0);
-        wr(MACTSCR, rd(MACTSCR) | TSINIT);
-        if !wait_clear(MACTSCR, TSINIT) {
-            return None;
-        }
-        Some(Started { hclk, ssinc_ns, addend })
-    }
-
-    /// Current (seconds, nanoseconds), re-reading across a seconds rollover.
-    pub fn now() -> (u32, u32) {
-        loop {
-            let s = rd(MACSTSR);
-            let n = rd(MACSTNR) & 0x7FFF_FFFF;
-            if rd(MACSTSR) == s {
-                return (s, n);
-            }
-        }
-    }
-}
-
 /// Read the DW3000 DEV_ID register (short-addressed read of register 0x00).
 fn read_dw3000_id(spi: &mut Spi<'_, embassy_stm32::mode::Blocking, spi::mode::Master>, cs: &mut Output<'_>) -> u32 {
     let mut buf = [0x00u8, 0, 0, 0, 0];
@@ -176,6 +98,11 @@ fn read_dw3000_id(spi: &mut Spi<'_, embassy_stm32::mode::Blocking, spi::mode::Ma
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static>) -> ! {
     runner.run().await
+}
+
+#[embassy_executor::task]
+async fn ptp_task(stack: Stack<'static>, clock_id: [u8; 8], nominal_addend: u32) -> ! {
+    ptp::run(stack, clock_id, nominal_addend).await
 }
 
 fn announce() -> LeafServices {
@@ -231,13 +158,16 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     let hclk = embassy_stm32::rcc::frequency::<ETH1>().0;
-    match ptp::start(hclk) {
-        Some(st) => info!(
-            "PTP clock started: bus {} Hz, step {} ns, addend 0x{:08x}",
-            st.hclk, st.ssinc_ns, st.addend
-        ),
-        None => warn!("PTP clock did not start (MAC did not acknowledge)"),
-    }
+    let nominal_addend = match ptp::start(hclk) {
+        Some(st) => {
+            info!("PTP clock started: bus {} Hz, step {} ns, addend 0x{:08x}", st.hclk, st.ssinc_ns, st.addend);
+            Some(st.addend)
+        }
+        None => {
+            warn!("PTP clock did not start (MAC did not acknowledge)");
+            None
+        }
+    };
 
     static STACK: StaticCell<StackStorage> = StaticCell::new();
     let (stack, runner) = embassy_net::Stack::new(STACK.init(StackStorage::new()), 0x5746_544e_3600_0001);
@@ -249,8 +179,20 @@ async fn main(spawner: Spawner) -> ! {
     info!("waiting for Ethernet link");
     iface.wait_link_up().await;
     info!("link up; waiting for DHCP");
-    iface.wait_config_up().await;
-    info!("DHCP configured");
+    if with_timeout(Duration::from_secs(5), iface.wait_config_up()).await.is_ok() {
+        info!("DHCP configured");
+    } else {
+        unwrap!(iface.set_dhcpv4(None));
+        unwrap!(iface.add_ip_addr(IpCidr::V4(Ipv4Cidr::new(Ipv4Addr::new(192, 168, 10, 2), 24))));
+        info!("no DHCP server; static 192.168.10.2/24");
+    }
+
+    unwrap!(iface.join_multicast_group(ptp::MCAST));
+    if let Some(addend) = nominal_addend {
+        // EUI-64 clock identity from the MAC: 02:57:46:ff:fe:54:4e:36.
+        let clock_id = [MAC[0], MAC[1], MAC[2], 0xFF, 0xFE, MAC[3], MAC[4], MAC[5]];
+        spawner.spawn(unwrap!(ptp_task(stack, clock_id, addend)));
+    }
 
     // embassy-net (xarxa stack): sockets own their buffers; bind local port, any remote.
     let mut sock = unwrap!(UdpSocket::new(stack));

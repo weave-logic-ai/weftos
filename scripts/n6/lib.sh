@@ -23,6 +23,9 @@ load_and_start() {
   # and the load is verified afterwards.
   probe-rs reset --chip "$CHIP" >/dev/null 2>&1
   sleep 1
+  # Clock AXISRAM1 and AXISRAM2 (RCC.MEMENSR bits 7, 8): images such as the
+  # NPU example put loadable sections in AXISRAM1, which is off at reset.
+  probe-rs write --chip "$CHIP" b32 0x56028A4C 0x180 >/dev/null 2>&1 || true
   probe-rs gdb --chip "$CHIP" --gdb-connection-string 127.0.0.1:1337 >/tmp/gdbsrv.log 2>&1 &
   local srv=$! _
   for _ in $(seq 1 30); do grep -q "GDB stub" /tmp/gdbsrv.log 2>/dev/null && break; sleep 0.2; done
