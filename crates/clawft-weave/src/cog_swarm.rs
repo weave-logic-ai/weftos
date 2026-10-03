@@ -9,7 +9,9 @@
 //! The daemon runs no steward relay yet: the real `weft-licence` link arrives
 //! with phase 2, so a request to this node's `mesh.cog.checkout` is answered
 //! `no_steward`. Members can still fetch from peers and serve what a grant
-//! (from a reply, flood or sync) makes shareable.
+//! (from a reply, flood or sync) makes shareable. The relay's [`GrantFlood`]
+//! is [`grant_flood`]: the node's `LicenceExchange` once placement has started
+//! it (phase 1b), `NoFlood` before.
 //!
 //! The service reserves the `mesh.cog.`, `mesh.artifact.` and `mesh.licence.`
 //! topics for the cluster owner's registration (the only one with no
@@ -24,7 +26,7 @@ use async_trait::async_trait;
 use clawft_kernel::a2a::RemoteForwarder;
 use clawft_kernel::error::{KernelError, KernelResult};
 use clawft_kernel::ipc::KernelMessage;
-use clawft_kernel::licence::CheckoutGrantStore;
+use clawft_kernel::licence::{CheckoutGrantStore, GrantFlood, NoFlood};
 use clawft_kernel::mesh_artifact::ArtifactExchange;
 use clawft_kernel::mesh_artifact_tunnel::PeerSender;
 use clawft_kernel::mesh_cog::{CogMesh, CogMeshDelivery, CogMeshSlot};
@@ -34,6 +36,7 @@ use crate::mesh_local_sink::ServiceForwarder;
 
 static SLOT: OnceLock<Arc<CogMeshSlot>> = OnceLock::new();
 static FORWARDER: OnceLock<Arc<ServiceForwarder>> = OnceLock::new();
+static FLOOD: OnceLock<Arc<dyn GrantFlood>> = OnceLock::new();
 
 fn slot() -> &'static Arc<CogMeshSlot> {
     SLOT.get_or_init(Arc::default)
@@ -60,6 +63,18 @@ pub fn wrap(delivery: Arc<dyn LocalDelivery>) -> Arc<dyn LocalDelivery> {
 /// Remember the service link's forwarder for outbound tunnel frames.
 pub fn set_forwarder(f: Arc<ServiceForwarder>) {
     let _ = FORWARDER.set(f);
+}
+
+/// Set the flood a steward relay hands its grants to (the node's licence
+/// exchange). First call wins.
+pub fn set_grant_flood(f: Arc<dyn GrantFlood>) {
+    let _ = FLOOD.set(f);
+}
+
+/// The flood for a steward relay on this node: the licence exchange once it
+/// is started, [`NoFlood`] before.
+pub fn grant_flood() -> Arc<dyn GrantFlood> {
+    FLOOD.get().cloned().unwrap_or_else(|| Arc::new(NoFlood))
 }
 
 /// Install this node's cog mesh once its exchange and grant store exist, and

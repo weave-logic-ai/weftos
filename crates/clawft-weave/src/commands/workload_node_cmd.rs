@@ -159,7 +159,7 @@ pub async fn run(cmd: NodeCmd, client: &mut DaemonClient) -> anyhow::Result<()> 
             };
             print!("{}", render_floor_preview(&r["preview"]));
             if r["applied"].as_bool() == Some(true) {
-                println!("floor reset (chained as floor_reset_requested and floor_reset)");
+                println!("floor reset (chained as licence.floor_reset_requested and licence.floor_reset)");
             } else {
                 println!("nothing changed; run again with --confirm to apply");
             }

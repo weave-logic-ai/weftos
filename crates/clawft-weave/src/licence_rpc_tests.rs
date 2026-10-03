@@ -247,12 +247,12 @@ async fn a_changed_nonce_orphans_the_binding_chains_it_and_the_doctor_reports_it
     let chain = Arc::new(ChainManager::new(0, 1000));
     let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
     assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await.ok);
-    assert!(!chain_kinds(&chain).contains(&"binding_orphaned".to_owned()));
+    assert!(!chain_kinds(&chain).contains(&"licence.binding_orphaned".to_owned()));
 
     // Restart with another nonce: orphaned at boot, no first use needed.
     let rt2 = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_B)));
     let kinds = chain_kinds(&chain);
-    assert_eq!(kinds.iter().filter(|k| *k == "binding_orphaned").count(), 1, "{kinds:?}");
+    assert_eq!(kinds.iter().filter(|k| *k == "licence.binding_orphaned").count(), 1, "{kinds:?}");
     assert!(rt2.policy.store().active_binding().is_none(), "checkout is off");
     let st = licence_boot::status(&rt2);
     assert_eq!(st["binding"]["orphaned"], true);
@@ -308,11 +308,11 @@ async fn reset_floor_previews_without_confirm_and_chains_with_it() {
     let v = r.result.unwrap();
     assert_eq!(v["applied"], false);
     assert!(v["preview"]["revived"].is_array());
-    assert!(!chain_kinds(&chain).contains(&"floor_reset".to_owned()), "a preview changes nothing");
+    assert!(!chain_kinds(&chain).contains(&"licence.floor_reset".to_owned()), "a preview changes nothing");
     let r = call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true})).await;
     assert_eq!(r.result.unwrap()["applied"], true);
     let kinds = chain_kinds(&chain);
-    assert!(kinds.contains(&"floor_reset_requested".to_owned()) && kinds.contains(&"floor_reset".to_owned()), "{kinds:?}");
+    assert!(kinds.contains(&"licence.floor_reset_requested".to_owned()) && kinds.contains(&"licence.floor_reset".to_owned()), "{kinds:?}");
 }
 
 #[tokio::test]
@@ -325,7 +325,7 @@ async fn confirm_with_a_stale_floor_is_refused() {
     let floor = shown["preview"]["floor"].as_u64().unwrap();
     let e = call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true, "floor": floor + 1})).await;
     assert!(err_of(&e).contains("floor_changed"), "{e:?}");
-    assert!(!chain_kinds(&chain).contains(&"floor_reset".to_owned()));
+    assert!(!chain_kinds(&chain).contains(&"licence.floor_reset".to_owned()));
     assert!(call(&rt, posture(), "workload.node.reset-floor", json!({"confirm": true, "floor": floor})).await.ok);
 }
 
@@ -368,7 +368,7 @@ async fn a_poisoned_store_is_a_flag_not_an_error_string_and_a_bad_nonce_with_a_b
     let rt = boot(dir.path(), &chain, &mesh_cfg(Some(NONCE_A)));
     assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await.ok);
     let bad = boot(dir.path(), &chain, &mesh_cfg(Some("zz")));
-    assert!(chain_kinds(&chain).contains(&"mesh_config_error".to_owned()));
+    assert!(chain_kinds(&chain).contains(&"licence.mesh_config_error".to_owned()));
     assert_eq!(licence_boot::status(&bad)["config_error"].as_str().is_some(), true);
 
     let dir2 = tempfile::tempdir().unwrap();

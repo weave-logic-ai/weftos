@@ -53,10 +53,9 @@ impl CheckoutGrantStore {
             next.binding = Some(Held { signed: signed.clone(), body: rec });
             next.orphan_reported = false;
             if restrictive {
-                self.commit_restrictive(inner, next)?;
-            } else {
-                self.commit(inner, next)?;
+                return Ok(self.commit_restrictive(inner, next));
             }
+            self.commit(inner, next)?;
             Ok(Outcome::Applied)
         })
     }
@@ -116,7 +115,7 @@ impl CheckoutGrantStore {
                         version: held.body.version,
                         seq,
                     });
-                    self.commit_restrictive(inner, next)?;
+                    let _ = self.commit_restrictive(inner, next);
                     return Err(LicenceError::Conflict(seq));
                 }
                 check_union(&cur.body, &held.body)?;
@@ -128,10 +127,9 @@ impl CheckoutGrantStore {
             slot.current = Some(held);
             next.floors.entry(b.grant_pubkey).or_default().note_issued(issued);
             if restrictive {
-                self.commit_restrictive(inner, next)?;
-            } else {
-                self.commit(inner, next)?;
+                return Ok(self.commit_restrictive(inner, next));
             }
+            self.commit(inner, next)?;
             Ok(Outcome::Applied)
         })
     }

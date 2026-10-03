@@ -428,8 +428,8 @@ async fn pump(
                                 // first-envelope path.
                                 if act.admitted
                                     && let Some(id) = act.bound.as_deref()
-                                    && !rt.register_authenticated(
-                                        id.to_owned(), out_tx.clone(), true, &tally)
+                                    && !rt.register_authenticated_as(
+                                        id.to_owned(), out_tx.clone(), true, act.class, &tally)
                                 {
                                     tracing::warn!(peer = %peer_addr, node = id,
                                         "route refused for admitted peer, closing");

@@ -6,7 +6,7 @@
 //! A node with no `mesh_nonce` has no local mesh id: the policy then equals
 //! `ManifestPolicy` and no binding is accepted (the path is inert). A changed
 //! nonce or pin makes the stored binding orphaned: the store chains
-//! `binding_orphaned` (once, at boot below), turns checkout off, and
+//! `licence.binding_orphaned` (once, at boot below), turns checkout off, and
 //! `weaver doctor` reports it.
 
 use std::path::{Path, PathBuf};
@@ -14,8 +14,8 @@ use std::sync::{Arc, OnceLock};
 
 use clawft_kernel::chain::ChainManager;
 use clawft_kernel::licence::{
-    AdmissionPosture, CheckoutGrantStore, LicenceEvent, LicenceEventSink, LocalMeshId, MeshCheckoutPolicy,
-    mesh_id_from_config,
+    AdmissionPosture, ChainLicenceSink, CheckoutGrantStore, LICENCE_EVENT_PREFIX, LocalMeshId,
+    MeshCheckoutPolicy, mesh_id_from_config,
 };
 use clawft_kernel::revocation::RevocationList;
 use clawft_kernel::workload_pkg::TrustAnchors;
@@ -25,6 +25,13 @@ use serde_json::{Value, json};
 
 /// Chain source of licence events.
 pub const LICENCE_CHAIN_SOURCE: &str = "licence";
+
+/// The chain kind of a licence event this module or the licence RPCs append
+/// directly: `licence.<name>`, the same form the store's
+/// [`ChainLicenceSink`] uses for its own events.
+pub fn licence_kind(name: &str) -> String {
+    format!("{LICENCE_EVENT_PREFIX}{name}")
+}
 
 /// How often the boot-owned store is ticked (clock high-water mark persisted,
 /// an unsaved unbind retried).
@@ -125,27 +132,6 @@ pub fn runtime() -> Option<Arc<LicenceRuntime>> {
     RUNTIME.get().cloned()
 }
 
-/// Maps store events to chain events (`binding_orphaned`, `binding_refused`,
-/// ...). The payload carries only identifiers.
-pub struct ChainEvents(pub Arc<ChainManager>);
-
-impl LicenceEventSink for ChainEvents {
-    fn emit(&self, ev: LicenceEvent) {
-        let payload = match &ev {
-            LicenceEvent::BindingRefused(why) => json!({ "reason": why }),
-            LicenceEvent::BindingConflict(seq) => json!({ "seq": seq }),
-            LicenceEvent::BindingOrphaned { stored, local } => {
-                json!({ "stored_mesh_id": stored, "local_mesh_id": local })
-            }
-            LicenceEvent::GrantConflict { cog_id, version, seq } => {
-                json!({ "cog_id": cog_id, "version": version, "seq": seq })
-            }
-            LicenceEvent::FloorReset(to) => json!({ "to": to }),
-        };
-        self.0.append(LICENCE_CHAIN_SOURCE, ev.name(), Some(payload));
-    }
-}
-
 /// Everything [`init`] reads.
 pub struct InitArgs<'a> {
     /// The runtime dir.
@@ -181,13 +167,13 @@ pub fn build(a: InitArgs<'_>) -> LicenceRuntime {
         }
     }
     let policy = MeshCheckoutPolicy::open(a.dir, a.anchors, a.revocations, local.clone());
-    policy.store().set_sink(Arc::new(ChainEvents(a.chain.clone())));
+    policy.store().set_sink(Arc::new(ChainLicenceSink::new(a.chain.clone())));
     let _ = policy.store().binding_status(); // chains binding_orphaned now
     if let Some(why) = &config_error
         && policy.store().held_binding().is_some()
     {
         // A binding is held but the mesh id cannot be derived: say so on the chain.
-        a.chain.append(LICENCE_CHAIN_SOURCE, "mesh_config_error", Some(json!({ "reason": why })));
+        a.chain.append(LICENCE_CHAIN_SOURCE, &licence_kind("mesh_config_error"), Some(json!({ "reason": why })));
     }
     let binder = SeedBinder::new(Vec::new(), a.chain.clone())
         .with_state_file(a.dir.join(BIND_STATE_FILE))

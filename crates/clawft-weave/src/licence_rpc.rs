@@ -194,7 +194,8 @@ fn unbind(ctx: &Ctx<'_>, signed: &SignedBinding) -> Response {
 /// key and restart it from now (the only way to undo a forward clock jump).
 /// Without `confirm` it returns the preview (the floor, the floor after, the
 /// grants it would revive) and changes nothing. With it, the request is
-/// chained with that preview, then the store resets and chains `floor_reset`.
+/// chained with that preview (`licence.floor_reset_requested`), then the store
+/// resets and chains `licence.floor_reset`.
 fn reset_floor(ctx: &Ctx<'_>, confirm: bool, expected_floor: Option<u64>) -> Response {
     let store = ctx.rt.policy.store();
     if !confirm {
@@ -208,7 +209,7 @@ fn reset_floor(ctx: &Ctx<'_>, confirm: bool, expected_floor: Option<u64>) -> Res
         Ok(preview) => {
             ctx.rt.chain.append(
                 licence_boot::LICENCE_CHAIN_SOURCE,
-                "floor_reset_requested",
+                &licence_boot::licence_kind("floor_reset_requested"),
                 Some(json!({ "preview": &preview })),
             );
             Response::success(json!({ "applied": true, "preview": preview }))

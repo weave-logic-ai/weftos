@@ -24,7 +24,11 @@
 mod approval;
 mod approval_store;
 mod binding;
+mod chain_sink;
 mod client;
+mod exchange;
+mod exchange_sync;
+mod exchange_types;
 mod floor;
 mod floor_preview;
 mod gate;
@@ -37,9 +41,16 @@ mod store;
 mod steward;
 mod store_accept;
 mod store_load;
+mod store_sync;
 
 #[cfg(test)]
 mod tests_common;
+#[cfg(test)]
+mod tests_exchange;
+#[cfg(test)]
+mod tests_fixes;
+#[cfg(test)]
+mod tests_sync;
 #[cfg(test)]
 mod tests_policy;
 #[cfg(test)]
@@ -73,10 +84,16 @@ pub use binding::{
     AdmissionPosture, BindState, BindingExtraCheck, BindingRecord, NoExtraChecks, SignedBinding,
     sign_binding, verify_binding_member,
 };
+pub use chain_sink::{ChainLicenceSink, LICENCE_EVENT_PREFIX};
 pub use client::{
     ARTIFACT_PATH, CHECKOUT_PATH, CheckoutWire, ClockMs, system_clock_ms, GRANTS_PATH, LicenceClient, LicenceClientError,
     LicenceResponse, LicenceTransport, SignedLicenceClient,
 };
+pub use exchange::{
+    CtxAdmission, ExchangeError, LicenceExchange, LicenceExchangeConfig, LicenceExchangeParts,
+    PeerAdmission, PostureFn, Receipt, Spend, sign_unbind,
+};
+pub use exchange_sync::{GrantCursor, SYNC_MAX_BYTES, SYNC_MAX_ENTRIES, SyncMsg};
 pub use floor::FloorState;
 pub use floor_preview::{FloorPreview, RevivedGrant};
 pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
@@ -184,6 +201,11 @@ pub enum LicenceEvent {
     },
     /// An operator reset the floor.
     FloorReset(u64),
+    /// A sync response carried a bad signature; the peer is banned from sync.
+    SyncBadSignature {
+        /// The peer that sent it.
+        peer: String,
+    },
 }
 
 impl LicenceEvent {
@@ -195,6 +217,7 @@ impl LicenceEvent {
             Self::BindingOrphaned { .. } => "binding_orphaned",
             Self::GrantConflict { .. } => "grant_conflict",
             Self::FloorReset(_) => "floor_reset",
+            Self::SyncBadSignature { .. } => "sync_bad_signature",
         }
     }
 }

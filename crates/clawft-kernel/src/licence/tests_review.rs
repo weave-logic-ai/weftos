@@ -85,7 +85,7 @@ fn restrictive_records_apply_even_when_the_save_fails_and_tick_retries() {
     put(&fx, &grant(1, T0, DAY, &["aarch64"])).unwrap();
     block_saves(&fx);
     let w = grant(2, T0 + 10, 0, &["aarch64"]);
-    assert!(matches!(put(&fx, &w), Err(LicenceError::Persist(_))));
+    assert_eq!(put(&fx, &w), Ok(Outcome::AppliedUnsaved));
     assert!(!covered(&fx, "aarch64"), "a disk fault must not keep a withdrawn grant alive");
     unblock_saves(&fx);
     fx.store.tick(); // retries the save
@@ -202,7 +202,7 @@ fn an_unsaved_unbind_is_retried_by_tick_even_though_no_binding_is_in_effect() {
     block_saves(&fx);
     let unbind = binding(2, BindState::Unbound);
     let r = fx.store.accept_binding(&unbind, posture(), &NoExtraChecks);
-    assert!(matches!(r, Err(LicenceError::Persist(_))));
+    assert_eq!(r, Ok(Outcome::AppliedUnsaved));
     assert!(!covered(&fx, "aarch64"), "applied in memory");
     unblock_saves(&fx);
     fx.store.tick();

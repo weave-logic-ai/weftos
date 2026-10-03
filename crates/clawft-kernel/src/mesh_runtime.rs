@@ -29,8 +29,26 @@ pub const FACTS_TOPIC: &str = "mesh.node_facts";
 /// mesh-placement-25). Handled like [`FACTS_TOPIC`].
 pub const REVOKE_TOPIC: &str = "mesh.artifact.revoke";
 
+/// Control topic carrying signed Seed bindings (ADR-106). Handled like
+/// [`FACTS_TOPIC`].
+pub const COG_BINDING_TOPIC: &str = "mesh.cog.binding";
+
+/// Control topic carrying signed checkout grants and operator approvals
+/// (ADR-106). Handled like [`FACTS_TOPIC`].
+pub const COG_GRANT_TOPIC: &str = "mesh.cog.grant";
+
+/// Control topic carrying licence catch-up sync requests and responses
+/// (ADR-106 section 5.5). Handled like [`FACTS_TOPIC`].
+pub const COG_SYNC_TOPIC: &str = "mesh.cog.sync";
+
 /// Control topics the runtime consumes instead of routing locally.
-const CONTROL_TOPICS: [&str; 2] = [FACTS_TOPIC, REVOKE_TOPIC];
+const CONTROL_TOPICS: [&str; 5] = [
+    FACTS_TOPIC,
+    REVOKE_TOPIC,
+    COG_BINDING_TOPIC,
+    COG_GRANT_TOPIC,
+    COG_SYNC_TOPIC,
+];
 
 /// Receiver of a runtime control topic ([`FACTS_TOPIC`], [`REVOKE_TOPIC`]).
 ///
@@ -64,6 +82,9 @@ pub struct PeerConnection {
     /// admission verified. A verified route cannot be taken over by an
     /// unverified connection claiming the same id.
     pub verified: bool,
+    /// The admitted class of the connection (`Node`, `Leaf`, ...); `Legacy`
+    /// for a route no admission verdict classed.
+    pub class: crate::mesh_admit::PeerClass,
     /// Live-route accounting for the serving connection (None for routes
     /// added without one). Dropping the route, by removal or replacement,
     /// decrements it.
@@ -242,7 +263,7 @@ impl MeshRuntime {
     }
 
     /// Install the sink for the control topic `topic` (first call wins).
-    /// Only [`FACTS_TOPIC`] and [`REVOKE_TOPIC`] are control topics.
+    /// Only the topics in `CONTROL_TOPICS` are control topics.
     pub fn set_control_sink(&self, topic: &str, sink: Arc<dyn PeerControlSink>) {
         self.control_sinks.entry(topic.to_string()).or_insert(sink);
     }
@@ -433,7 +454,21 @@ impl MeshRuntime {
         verified: bool,
         tally: &RouteTally,
     ) -> bool {
-        self.register_peer(node_id, sender, verified, Some(tally))
+        self.register_authenticated_as(node_id, sender, verified, crate::mesh_admit::PeerClass::Node, tally)
+    }
+
+    /// [`register_authenticated`](Self::register_authenticated) with the
+    /// admitted class of the connection, so outbound decisions that need a
+    /// full node ([`peer_licensed`](Self::peer_licensed)) can tell a leaf.
+    pub fn register_authenticated_as(
+        &self,
+        node_id: String,
+        sender: tokio::sync::mpsc::Sender<Vec<u8>>,
+        verified: bool,
+        class: crate::mesh_admit::PeerClass,
+        tally: &RouteTally,
+    ) -> bool {
+        self.register_peer_classed(node_id, sender, verified, class, Some(tally))
     }
 
     /// Register or refresh a route. Returns false when refused: an
@@ -449,6 +484,22 @@ impl MeshRuntime {
         verified: bool,
         tally: Option<&RouteTally>,
     ) -> bool {
+        let class = if verified {
+            crate::mesh_admit::PeerClass::Node
+        } else {
+            crate::mesh_admit::PeerClass::Legacy
+        };
+        self.register_peer_classed(node_id, sender, verified, class, tally)
+    }
+
+    fn register_peer_classed(
+        &self,
+        node_id: String,
+        sender: tokio::sync::mpsc::Sender<Vec<u8>>,
+        verified: bool,
+        class: crate::mesh_admit::PeerClass,
+        tally: Option<&RouteTally>,
+    ) -> bool {
         use dashmap::mapref::entry::Entry;
         debug!(peer = %node_id, "adding peer connection");
         let address = self
@@ -460,6 +511,7 @@ impl MeshRuntime {
             connected_at: chrono::Utc::now(),
             sender,
             verified,
+            class,
             _tally: tally.map(RouteGuard::new),
         };
         // Decide and write under the entry (shard) lock so an unverified
@@ -850,6 +902,21 @@ impl MeshRuntime {
     /// Number of currently connected peers.
     pub fn peer_count(&self) -> usize {
         self.peers.len()
+    }
+
+    /// True when `node_id` is routed through a connection whose node id
+    /// admission verified.
+    pub fn peer_verified(&self, node_id: &str) -> bool {
+        self.peers.get(node_id).is_some_and(|p| p.verified)
+    }
+
+    /// True when `node_id` is routed through a verified connection whose
+    /// admitted class is `node`: the outbound twin of
+    /// `mesh_artifact_tunnel::licensed_peer`. A verified leaf is not.
+    pub fn peer_licensed(&self, node_id: &str) -> bool {
+        self.peers
+            .get(node_id)
+            .is_some_and(|p| p.verified && p.class == crate::mesh_admit::PeerClass::Node)
     }
 
     /// List the node IDs of all connected peers.
