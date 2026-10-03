@@ -46,6 +46,10 @@ bodies, and a copyable `curl`.
   `$WEFT_TOKEN` (`export WEFT_TOKEN=...` first), so it is safe to paste into a
   ticket or chat. Turning the mask off inlines the real token in the header; it
   still never appears in the URL.
+- Response bodies and error text are scrubbed of the exact token string before
+  they are shown. Redaction is exact-match only: a server that echoes the token
+  re-encoded (base64, URL-encoded, split or truncated) is not caught, so do not
+  treat the display as safe to share.
 - A token is owner-equivalent (ADR-102 D4): every REST route and the full MCP
   profile, including shell, process and file-write tools. Treat the page like a
   root shell and revoke the token when done.
@@ -53,15 +57,25 @@ bodies, and a copyable `curl`.
 ## What the gateway enforces
 
 - `/playground` is plain HTML with no data and no token in it. It is served with
-  `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and the gateway CSP
-  (same-origin scripts and connections only), like every other response.
+  `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and its own strict
+  CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+  img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none';
+  frame-ancestors 'none'`. Unlike the gateway-wide policy it does not allow
+  `ws:`/`wss:`, so the page can only talk to its own origin.
+- The dashboard's service worker (`clawft-ui/public/sw.js`) bypasses
+  `/playground`, `/playground/` and `/playground.html`, so the cached dashboard
+  shell is never served there.
+- Everything the server sends (tool names and descriptions, OpenAPI text, tool
+  output, response bodies) is rendered as text by React; nothing uses
+  `dangerouslySetInnerHTML`.
 - Everything the page calls (`/api/*`, `/mcp`) goes through the bearer
   middleware. Without a valid token those calls return 401, and
   `/api/health` returns only `{"status":"ok"}`.
 - Tests: `crates/clawft-services/tests/gateway_auth.rs` (`playground_*`) covers
   the page being served and the data calls requiring the token;
   `clawft-ui/tests/e2e/playground.spec.ts` drives the page in a browser (token
-  link, REST call, MCP call, curl masking, revoke, 401), and
+  link, REST call, MCP call, curl masking, revoke, 401, and hostile server
+  content rendering as text), and
   `clawft-ui/src/playground/core.test.ts` covers the pure logic
   (`npm run test:unit`).
 

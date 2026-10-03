@@ -47,7 +47,14 @@ const TOOLS = [
   { name: "ping", description: "No arguments", inputSchema: { type: "object", properties: {} } },
 ];
 
-async function fakeGateway(page: Page): Promise<Gateway> {
+interface Overrides {
+  spec?: unknown;
+  tools?: unknown[];
+  toolOutput?: string;
+  agentsBody?: string;
+}
+
+async function fakeGateway(page: Page, over: Overrides = {}): Promise<Gateway> {
   const gw: Gateway = { requests: [], live: true };
   const json = (route: Route, status: number, body: unknown) =>
     route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -85,16 +92,19 @@ async function fakeGateway(page: Page): Promise<Gateway> {
       gw.live = false;
       return route.fulfill({ status: 204 });
     }
-    if (url.pathname === "/api/openapi.json") return json(route, 200, SPEC);
-    if (url.pathname === "/api/agents") return json(route, 200, [{ name: "default" }]);
+    if (url.pathname === "/api/openapi.json") return json(route, 200, over.spec ?? SPEC);
+    if (url.pathname === "/api/agents") {
+      if (over.agentsBody !== undefined) return route.fulfill({ status: 200, contentType: "text/html", body: over.agentsBody });
+      return json(route, 200, [{ name: "default" }]);
+    }
     if (url.pathname === "/mcp") {
       const msg = JSON.parse(req.postData() ?? "{}");
       if (msg.method === "notifications/initialized") return route.fulfill({ status: 202 });
       if (msg.method === "initialize") return json(route, 200, { jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } });
-      if (msg.method === "tools/list") return json(route, 200, { jsonrpc: "2.0", id: msg.id, result: { tools: TOOLS } });
+      if (msg.method === "tools/list") return json(route, 200, { jsonrpc: "2.0", id: msg.id, result: { tools: over.tools ?? TOOLS } });
       if (msg.method === "tools/call") {
-        const text = String(msg.params?.arguments?.text ?? "");
-        return json(route, 200, { jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: `echo: ${text}` }] } });
+        const text = over.toolOutput ?? `echo: ${String(msg.params?.arguments?.text ?? "")}`;
+        return json(route, 200, { jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text }] } });
       }
     }
     return route.fulfill({ status: 404 });
@@ -173,4 +183,64 @@ test.describe("API playground", () => {
     await expect(page.getByTestId("token-state")).toHaveText("rejected");
     await expect(page.getByRole("tab", { name: "REST" })).toBeVisible();
   });
+
+  test("hostile server content renders as text, never as markup", async ({ page }) => {
+    const IMG = '<img src=x onerror="window.__pwned=1">';
+    const SCRIPT = "<script>window.__pwned=1</script>";
+    const hostile = `${IMG}${SCRIPT}`;
+    await fakeGateway(page, {
+      spec: {
+        openapi: "3.1.0",
+        paths: {
+          "/api/evil/{id}": {
+            get: {
+              summary: hostile,
+              tags: [IMG],
+              parameters: [{ name: "id", in: "path", required: true, description: hostile, schema: { type: "string" } }],
+            },
+          },
+        },
+      },
+      tools: [
+        {
+          name: `t-${IMG}`,
+          description: hostile,
+          inputSchema: {
+            type: "object",
+            properties: { a: { type: "string", description: hostile }, e: { enum: [IMG, SCRIPT] } },
+          },
+        },
+      ],
+      toolOutput: hostile,
+      agentsBody: hostile,
+    });
+    await page.goto(`/playground.html#token=${TOKEN}`);
+    await expect(page.getByTestId("token-state")).toHaveText("active");
+
+    const noMarkup = async () => {
+      await expect(page.locator("#root img")).toHaveCount(0);
+      await expect(page.locator("#root script")).toHaveCount(0);
+      expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+    };
+
+    // REST: summary, tag, parameter description, then the response body.
+    await page.getByRole("tab", { name: "REST" }).click();
+    await expect(page.getByTestId("rest-op-count")).toContainText("1 operations");
+    await page.getByRole("button", { name: /evil/ }).click();
+    await expect(page.getByText(IMG, { exact: false }).first()).toBeVisible();
+    await page.getByLabel(/^id/).fill("1");
+    await page.getByTestId("rest-send").click();
+    await expect(page.getByTestId("call-status")).toBeVisible();
+    await noMarkup();
+
+    // MCP: tool name, description, schema description, enum, tool output.
+    await page.getByRole("tab", { name: "MCP tools" }).click();
+    await expect(page.getByTestId("mcp-tool-count")).toContainText("1 tools");
+    await page.getByRole("button", { name: /^t-/ }).click();
+    await expect(page.getByText(IMG, { exact: false }).first()).toBeVisible();
+    await page.getByTestId("mcp-call").click();
+    await expect(page.getByTestId("mcp-output")).toHaveText(hostile);
+    await noMarkup();
+  });
 });
+

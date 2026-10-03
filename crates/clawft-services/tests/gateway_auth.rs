@@ -1167,7 +1167,10 @@ async fn playground_is_served_without_a_token_and_locked_down() {
         assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
         assert_eq!(resp.headers()["cache-control"], "no-store");
         assert_eq!(resp.headers()["referrer-policy"], "no-referrer");
-        assert!(resp.headers()["content-security-policy"].to_str().unwrap().contains("default-src 'self'"));
+        let csp = resp.headers()["content-security-policy"].to_str().unwrap();
+        assert!(csp.contains("default-src 'self'"));
+        assert!(!csp.contains("ws:") && !csp.contains("wss:") && !csp.contains('*'), "{csp}");
+        assert!(csp.contains("connect-src 'self';") && csp.contains("base-uri 'none'"), "{csp}");
         let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
         assert_eq!(bytes.as_ref(), PAGE_MARKER.as_bytes());
     }

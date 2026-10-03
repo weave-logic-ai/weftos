@@ -8,6 +8,10 @@
 
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildArgs,
   buildCurl,
@@ -40,6 +44,16 @@ describe("takeFragmentToken", () => {
     assert.equal(takeFragmentToken("").token, null);
     assert.equal(takeFragmentToken("#token=").token, null);
     assert.equal(takeFragmentToken("#other=1").token, null);
+  });
+
+  it("keeps leftover fragment text verbatim, including non key=value parts", () => {
+    assert.deepEqual(takeFragmentToken(`#section-2&token=${TOKEN}`), { token: TOKEN, rest: "section-2" });
+    assert.deepEqual(takeFragmentToken(`#a=1&weird%zz&token=${TOKEN}&b=x%20y`), {
+      token: TOKEN,
+      rest: "a=1&weird%zz&b=x%20y",
+    });
+    assert.deepEqual(takeFragmentToken("#just-an-anchor"), { token: null, rest: "just-an-anchor" });
+    assert.deepEqual(takeFragmentToken("#a=1+2"), { token: null, rest: "a=1+2" });
   });
 
   it("does not honour a query-string style token", () => {
@@ -304,5 +318,60 @@ describe("listOperations / buildPath", () => {
     const del = listOperations(doc).find((o) => o.key === "DELETE /api/agents/{name}")!;
     assert.deepEqual(buildPath(del, { name: "a/b c", force: "true" }), { path: "/api/agents/a%2Fb%20c?force=true", missing: [] });
     assert.deepEqual(buildPath(del, {}), { path: "/api/agents/", missing: ["name"] });
+  });
+});
+
+/**
+ * Round-trip the curl through a real shell: swap `curl -sS` for printf so
+ * nothing is fetched, and check the arguments the shell would hand to curl.
+ */
+function shellArgs(curl: string, env: Record<string, string> = {}): string[] {
+  const script = curl.replace(/^curl -sS/, "printf '%s\\n'");
+  const r = spawnSync("sh", ["-c", script], { env: { PATH: process.env.PATH ?? "", ...env }, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return r.stdout.split("\n").slice(0, -1);
+}
+
+describe("buildCurl against a shell", () => {
+  const marker = join(tmpdir(), `weft-playground-pwned-${process.pid}`);
+
+  it("keeps a hostile path, query and URL inert", () => {
+    const urls = [
+      `http://h/api/x?q='; touch ${marker}; echo '`,
+      "http://h/api/$(touch " + marker + ")/`touch " + marker + "`",
+      `http://h/a b"c\\d'e?x=$HOME&y=%27`,
+    ];
+    for (const url of urls) {
+      const args = shellArgs(buildCurl({ method: "GET", url }, TOKEN, true), { WEFT_TOKEN: TOKEN });
+      assert.deepEqual(args.slice(0, 3), ["-X", "GET", url]);
+      assert.ok(!existsSync(marker), "a shell command in the URL ran");
+    }
+  });
+
+  it("keeps a hostile body inert", () => {
+    const body = `{"a":"'; touch ${marker}; echo '","b":"$(touch ${marker})"}`;
+    const args = shellArgs(buildCurl({ method: "POST", url: "http://h/mcp", body }, TOKEN, true), { WEFT_TOKEN: TOKEN });
+    assert.equal(args[args.indexOf("--data-raw") + 1], body);
+    assert.ok(!existsSync(marker));
+  });
+
+  it("masked: the token comes from the environment", () => {
+    const args = shellArgs(buildCurl({ method: "GET", url: "http://h/x" }, TOKEN, true), { WEFT_TOKEN: TOKEN });
+    assert.ok(args.includes(`Authorization: Bearer ${TOKEN}`));
+  });
+
+  it("unmasked: a token with quotes and $ reaches curl as one header, unexpanded", () => {
+    for (const tok of [`a"b`, "a$HOME", "a'b", `q"$'x`, "a`b", "a!b", "a\\b"]) {
+      const args = shellArgs(buildCurl({ method: "GET", url: "http://h/x" }, tok, false));
+      assert.ok(args.includes(`Authorization: Bearer ${tok}`), `${tok}: ${JSON.stringify(args)}`);
+      assert.ok(!existsSync(marker));
+    }
+  });
+
+  it("never puts any token in the URL argument", () => {
+    for (const tok of [TOKEN, `a"b`, "a$HOME"]) {
+      const args = shellArgs(buildCurl({ method: "GET", url: "http://h/x?y=1" }, tok, false));
+      assert.equal(args[2], "http://h/x?y=1");
+    }
   });
 });

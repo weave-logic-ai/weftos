@@ -21,18 +21,33 @@ export interface FragmentTake {
   rest: string;
 }
 
-/** Pull the token out of `location.hash` and return what is left of it. */
+/**
+ * Pull the token out of `location.hash` and return what is left of it.
+ * Segments other than the token keys (including ones that are not
+ * `key=value`) are kept verbatim, in order.
+ */
 export function takeFragmentToken(hash: string): FragmentTake {
   // A query string is not a fragment; never honour a token from one.
   if (hash.startsWith("?")) return { token: null, rest: hash };
-  const params = new URLSearchParams(hash.replace(/^#/, ""));
+  const frag = hash.startsWith("#") ? hash.slice(1) : hash;
   let token: string | null = null;
-  for (const key of FRAGMENT_KEYS) {
-    const v = params.get(key);
-    if (v && v.trim()) token ??= v.trim();
-    params.delete(key);
+  const kept: string[] = [];
+  for (const seg of frag.split("&")) {
+    const eq = seg.indexOf("=");
+    const key = eq === -1 ? "" : decodeURIComponent(safe(seg.slice(0, eq)));
+    if (eq !== -1 && FRAGMENT_KEYS.includes(key)) {
+      const v = decodeURIComponent(safe(seg.slice(eq + 1).replace(/\+/g, " "))).trim();
+      if (v) token ??= v;
+      continue;
+    }
+    if (seg !== "") kept.push(seg);
   }
-  return { token, rest: params.toString() };
+  return { token, rest: kept.join("&") };
+}
+
+/** `decodeURIComponent` input that never throws on a stray `%`. */
+function safe(s: string): string {
+  return s.replace(/%(?![0-9a-fA-F]{2})/g, "%25");
 }
 
 // ─── Expiry countdown ──────────────────────────────────────────────────
