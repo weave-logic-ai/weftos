@@ -103,7 +103,10 @@ impl FactsWire {
 /// What tier and provenance a peer's facts earn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FactsTrustPolicy {
-    /// Tier for a peer whose node id admission verified.
+    /// Tier for a peer whose node id admission verified. `Paired` here is the
+    /// cache's class (protected from `Discovered` churn); it is not an
+    /// operator pairing and placement never reads it. `weaver cluster nodes
+    /// --facts` shows it as "mesh-verified" for that reason.
     pub verified_tier: TrustTier,
     /// Tier for every other connection.
     pub unverified_tier: TrustTier,

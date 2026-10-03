@@ -131,9 +131,19 @@ fn docker(
         d = d.with_attr("version", v);
     }
     c.push(d);
+    // The CLI answers for whichever engine the daemon's own HOME and docker
+    // context select, which may not be the one an interactive shell uses.
+    let context = host
+        .run("docker", &["context", "show"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() <= 64 && !s.chars().any(char::is_control))
+        .unwrap_or_else(|| "unknown".into());
     c.note(
         "docker",
-        format!("docker info (variant {variant}); emulation from {source}"),
+        format!(
+            "docker info (variant {variant}); emulation from {source}; \
+             probed as the daemon's user with docker context {context}"
+        ),
     );
 }
 

@@ -108,6 +108,17 @@ impl Collected {
     }
 }
 
+/// Say that `count` external volumes were seen and that their names and mount
+/// points are not advertised (they are the user's, not the mesh's).
+pub(crate) fn note_external_withheld(c: &mut Collected, count: usize) {
+    if count > 0 {
+        c.note(
+            "store.tier.external",
+            format!("{count} external volume(s) mounted; names and mount points are not advertised"),
+        );
+    }
+}
+
 /// Build a capability, or `None` if the id is not valid (for example an
 /// arch string from a tool that does not fit the id grammar).
 pub fn cap(id: &str, provenance: Provenance) -> Option<Capability> {

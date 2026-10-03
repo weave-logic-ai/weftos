@@ -599,6 +599,10 @@ pub const EVENT_KIND_ARTIFACT_REVOKE: &str = "artifact.revoke";
 /// A peer was banned for serving corrupt pieces.
 pub const EVENT_KIND_ARTIFACT_PEER_BAN: &str = "artifact.peer_ban";
 
+/// An operator-forced node-facts probe ran (`cluster.facts` with `refresh`).
+/// Payload: `node`, `seq`.
+pub const EVENT_KIND_NODE_FACTS_REFRESH: &str = "node.facts.refresh";
+
 /// Cron job added event.
 pub const EVENT_KIND_CRON_ADD: &str = "cron.add";
 

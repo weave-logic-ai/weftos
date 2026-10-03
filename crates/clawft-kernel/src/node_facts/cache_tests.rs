@@ -170,3 +170,40 @@ fn an_operator_tier_change_applies_even_when_the_facts_are_unchanged() {
     );
     assert!(!c.set_trust_tier("n-unknown", TrustTier::Pinned));
 }
+
+/// The staleness check and the write are one step: however inserts for one
+/// node interleave, the highest `seq` is what stays held, and every `Ok`
+/// except the last winner's had a lower seq than something that followed.
+#[test]
+fn concurrent_inserts_for_one_node_never_leave_older_facts_held() {
+    use std::sync::Arc;
+    const TOP: u64 = 300;
+    let k = key();
+    let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+    let blocks: Arc<Vec<SignedNodeFacts>> =
+        Arc::new((1..=TOP).map(|s| signed(&k, s, 1_000)).collect());
+    for round in 0..30 {
+        let c = Arc::new(NodeFactsCache::new());
+        let threads: Vec<_> = (0..16usize)
+            .map(|t| {
+                let (c, blocks) = (c.clone(), blocks.clone());
+                std::thread::spawn(move || {
+                    // Each thread walks the seqs in its own order.
+                    let n = blocks.len();
+                    for i in 0..n {
+                        let idx = if t % 2 == 0 { i } else { n - 1 - i };
+                        let r = c.insert(blocks[idx].clone(), TrustTier::Paired, 1_000);
+                        assert!(
+                            matches!(r, Ok(_) | Err(CacheError::Stale { .. })),
+                            "unexpected {r:?}"
+                        );
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(c.get(&id, 1_000).unwrap().facts.seq, TOP, "round {round}");
+    }
+}
