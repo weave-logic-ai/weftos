@@ -235,15 +235,21 @@ async fn build(
     // The licence boundary is explicit: what this node may hand to peers is
     // decided by the signed manifests (`redistributable = true`), except for
     // Cognitum cogs under a valid checkout grant of a bound Seed (ADR-106).
-    // The policy is installed unconditionally and reads the binding live, so
-    // a binding that arrives later needs no restart; with none (or no mesh id
-    // yet) it is exactly `ManifestPolicy`.
-    let policy = clawft_kernel::licence::MeshCheckoutPolicy::open(
-        dir,
-        anchors.clone(),
-        revocations.clone(),
-        clawft_kernel::licence::LocalMeshId::unset(),
-    );
+    // The policy reads the binding live, so a binding that arrives later
+    // needs no restart; with none (or no mesh id yet) it is exactly
+    // `ManifestPolicy`. The daemon built the policy at boot (`licence_boot`), with the mesh id
+    // from the configured nonce and the store the bind RPC writes to; this is
+    // the node's only grant store. Without that runtime (not installed, or a
+    // test harness) an inert policy over the same files stands in.
+    let policy = match crate::licence_boot::policy() {
+        Some(p) => p,
+        None => clawft_kernel::licence::MeshCheckoutPolicy::open(
+            dir,
+            anchors.clone(),
+            revocations.clone(),
+            clawft_kernel::licence::LocalMeshId::unset(),
+        ),
+    };
     let cfg = ExchangeConfig {
         redistribution: policy.clone(),
         ..ExchangeConfig::default()

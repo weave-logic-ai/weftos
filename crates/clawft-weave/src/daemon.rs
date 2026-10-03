@@ -1186,8 +1186,39 @@ pub async fn run(
     // nothing to sign with here and placement stays off (no fallback key).
     #[cfg(all(feature = "placement", unix))]
     match daemon_identity.signing_key() {
-        Ok(key) => crate::workload_place_rpc::init(key.clone(), runtime_dir.clone()),
-        Err(e) => warn!(error = %e, "placement control plane disabled"),
+        Ok(key) => {
+            crate::workload_place_rpc::init(key.clone(), runtime_dir.clone());
+            // ADR-106: the mesh id from the configured nonce, the checkout
+            // policy and the steward binder. Built here (not lazily) so a
+            // changed nonce chains `binding_orphaned` at boot.
+            let k = kernel.read().await;
+            if let Some(chain) = k.chain_manager().cloned() {
+                let anchors = crate::workload_place_policy::load_anchors(&runtime_dir)
+                    .unwrap_or_else(|e| {
+                        warn!(error = %e, "operator keys unreadable; no Seed binding can verify");
+                        Default::default()
+                    });
+                let pk = key.verifying_key().to_bytes();
+                crate::licence_boot::install(crate::licence_boot::build(crate::licence_boot::InitArgs {
+                    dir: &runtime_dir,
+                    anchors,
+                    revocations: k.revocation_list().clone(),
+                    chain,
+                    mesh: k.kernel_config().mesh.as_ref(),
+                    steward_node_id: clawft_kernel::node_id_from_pubkey(&pk),
+                    steward_pubkey: hex::encode(pk),
+                }));
+            } else {
+                crate::licence_boot::skipped(k.kernel_config().mesh.as_ref(), "no chain manager");
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "placement control plane disabled");
+            crate::licence_boot::skipped(
+                kernel.read().await.kernel_config().mesh.as_ref(),
+                "no node signing key (placement is off)",
+            );
+        }
     }
     // mesh-placement-03: probe, sign and cache this node's facts. In service
     // mode the service signs and advertises the machine's facts.

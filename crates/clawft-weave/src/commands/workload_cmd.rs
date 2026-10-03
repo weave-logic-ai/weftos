@@ -42,6 +42,13 @@ pub enum WorkloadCommand {
     #[cfg(all(feature = "placement", unix))]
     #[command(flatten)]
     Placement(super::workload_place_cmd::WorkloadPlaceCmd),
+    /// Seed binding (ADR-106): bind, unbind, status.
+    #[cfg(all(feature = "placement", unix))]
+    Node {
+        /// Subcommand.
+        #[command(subcommand)]
+        cmd: super::workload_node_cmd::NodeCmd,
+    },
 }
 
 fn short_hash(h: &str) -> String {
@@ -137,6 +144,10 @@ pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
         WorkloadCommand::Catalog(_) => unreachable!("catalog is handled before connecting"),
         #[cfg(all(feature = "ecc", feature = "exochain"))]
         WorkloadCommand::Package(_) => unreachable!("package commands are handled before connecting"),
+        #[cfg(all(feature = "placement", unix))]
+        WorkloadCommand::Node { cmd } => {
+            super::workload_node_cmd::run(cmd, &mut client).await?;
+        }
         #[cfg(all(feature = "placement", unix))]
         WorkloadCommand::Placement(cmd) => {
             let cwd = std::env::current_dir()?;

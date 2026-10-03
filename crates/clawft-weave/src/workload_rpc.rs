@@ -19,8 +19,9 @@
 //! placement family (`place`, `explain`, `status`, `stop`, `logs`,
 //! `revoke`, `unload {instance_id}`) is served by `workload_place_rpc`.
 //! `load` and `start` are target-side `workload.ctl` methods, and `migrate`
-//! and `node.bind` belong to later cards: they answer "not available on
-//! this node". Any other `workload.*` method is refused and the refusal
+//! belongs to a later card: it answers "not available on this node".
+//! `node.bind`, `node.unbind`, `node.binding` and `node.reset-floor`
+//! (ADR-106) are served by `licence_rpc` on a placement build. Any other `workload.*` method is refused and the refusal
 //! chained (default deny).
 //!
 //! [`WorkloadGate`]: clawft_kernel::workload_governance::WorkloadGate
@@ -54,7 +55,16 @@ const NOT_YET: &[&str] = &[
     "workload.start",
     "workload.migrate",
     "workload.revoke",
+];
+
+/// ADR-106 phase 1d verbs. Served by `licence_rpc` on a placement build;
+/// without placement there are no Seeds to bind.
+const NEEDS_PLACEMENT: &[&str] =
+    &[
     "workload.node.bind",
+    "workload.node.unbind",
+    "workload.node.binding",
+    "workload.node.reset-floor",
 ];
 
 /// The gate context for a catalog action. The catalog records what the
@@ -266,6 +276,9 @@ pub fn route(
         "workload.inspect" => handle_inspect(reg, &params),
         "workload.install" => handle_install(reg, params, node_id, gate, audit),
         "workload.unload" => handle_unload(reg, &params, gate, audit),
+        m if NEEDS_PLACEMENT.contains(&m) => Response::error(format!(
+            "{m} is not available in this build (it needs the placement feature)"
+        )),
         m if NOT_YET.contains(&m) => Response::error(format!(
             "{m} is not available on this node yet (ADR-099: needs runtime adapters / \
              mesh control plane)"
@@ -287,6 +300,10 @@ pub async fn dispatch(
         tokio::sync::RwLock<clawft_kernel::boot::Kernel<clawft_platform::NativePlatform>>,
     >,
 ) -> Response {
+    #[cfg(all(feature = "placement", unix))]
+    if crate::licence_rpc::handles(method) {
+        return crate::licence_rpc::dispatch(method, params, kernel).await;
+    }
     #[cfg(all(feature = "placement", unix))]
     if crate::workload_place_rpc::handles(method, &params) {
         return crate::workload_place_rpc::dispatch(method, params, kernel).await;

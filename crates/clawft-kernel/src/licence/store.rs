@@ -96,7 +96,7 @@ impl std::fmt::Debug for CheckoutGrantStore {
     }
 }
 
-fn grant_valid(g: &CheckoutGrant, eff_now: u64) -> bool {
+pub(super) fn grant_valid(g: &CheckoutGrant, eff_now: u64) -> bool {
     !g.is_withdrawal()
         && eff_now < g.expires_at
         && eff_now < g.licence.expires
@@ -299,6 +299,20 @@ impl CheckoutGrantStore {
     /// The binding in effect, or the reason there is none.
     pub fn binding_status(&self) -> Result<BindingRecord, LicenceError> {
         self.run(|inner, ev| self.binding_in_effect(inner, ev))
+    }
+
+    /// The stored binding whatever its state (bound, unbound or orphaned), for
+    /// the steward's `seq` rule and for status. Not for gating anything.
+    pub fn held_binding(&self) -> Option<BindingRecord> {
+        self.lock().binding.as_ref().map(|h| h.body.clone())
+    }
+
+    /// The MEMBER profile against this store's anchors and local mesh id,
+    /// without storing anything (the steward verifies before it spends any
+    /// replay state).
+    pub fn verify_member(&self, signed: &super::SignedBinding) -> Result<BindingRecord, LicenceError> {
+        let local = self.local.get().ok_or(LicenceError::NoLocalMesh)?;
+        super::verify_binding_member(signed, &self.anchors, &local)
     }
 
     /// Run `f` over every currently valid grant (binding in effect, grant key

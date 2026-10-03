@@ -18,6 +18,11 @@
 //!
 //! Bearer tokens never reach a record, an error or a chain event: the only
 //! Seed data used is the (public) identity.
+//!
+//! ADR-106 phase 1d adds the licence form: [`SeedBinder::bind_v2`] verifies an
+//! operator-signed `licence::BindingRecord` v2 under the steward profile (the
+//! checks above, plus the grant key fingerprint, `mesh_id` and `seq`), and
+//! [`SeedBinder::unbind_v2`] withdraws it. Both live in `seed_bind/v2.rs`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -44,8 +49,8 @@ pub const BIND_DOMAIN: &[u8] = b"weftos.workload.node.bind.v1\0";
 /// Default age after which a bind record is no longer accepted.
 pub const DEFAULT_MAX_BIND_AGE_SECS: u64 = 600;
 /// File name of the persisted bind state, beside `workload-placements.json`.
-// not yet wired: no daemon or RPC path reaches `SeedBinder`; when wired it
-// must use `dir.join(BIND_STATE_FILE)` (the runtime dir).
+/// The daemon's `workload.node.bind` uses `dir.join(BIND_STATE_FILE)` (the
+/// runtime dir).
 pub const BIND_STATE_FILE: &str = "workload-seed-binds.json";
 const MAX_STATE_BYTES: u64 = 256 * 1024;
 const MAX_BOUND_DEVICES: usize = 1000;
@@ -141,6 +146,16 @@ pub enum BindError {
     /// The link to the Seed is not pinned (and no lab opt-in is set).
     #[error("{0}")]
     UnpinnedTransport(String),
+    /// A licence-record check failed (v2 binding: signature, mesh id,
+    /// steward profile, admission posture).
+    #[error("{0}")]
+    Licence(crate::licence::LicenceError),
+    /// The device is already bound to another mesh here; unbind first.
+    #[error("device {device_id} is already bound to another mesh (seed_bound_elsewhere); unbind it first")]
+    SeedBoundElsewhere {
+        /// The Seed's device id.
+        device_id: String,
+    },
     /// The bind state could not be saved, so nothing was bound.
     #[error("bind state not saved: {0}")]
     State(String),
@@ -162,6 +177,8 @@ impl BindError {
             Self::Replayed => "replayed",
             Self::NodeTaken(_) => "node_taken",
             Self::UnpinnedTransport(_) => "unpinned_transport",
+            Self::Licence(e) => v2::licence_code(e),
+            Self::SeedBoundElsewhere { .. } => "seed_bound_elsewhere",
             Self::State(_) => "state_unwritable",
             Self::Seed(_) => "seed_unreachable",
         }
@@ -301,9 +318,14 @@ impl SeedBinder {
     }
 
     fn refuse(&self, signed: &SignedBind, e: &BindError) {
-        let record_hash = hex_encode(&Sha256::digest(signed.record.as_bytes()));
+        self.refuse_record(&signed.record, e);
+    }
+
+    /// Chain a refusal for the record text `record` (v1 or v2 payload).
+    fn refuse_record(&self, record: &str, e: &BindError) {
+        let record_hash = hex_encode(&Sha256::digest(record.as_bytes()));
         // Only identifiers, clipped: never the record or any token.
-        let claimed = serde_json::from_str::<Value>(&signed.record).unwrap_or(Value::Null);
+        let claimed = serde_json::from_str::<Value>(record).unwrap_or(Value::Null);
         let clip = |k: &str| {
             claimed
                 .get(k)
@@ -448,6 +470,9 @@ impl SeedBinder {
         Ok(Binding { record })
     }
 }
+
+mod v2;
+pub use v2::{StewardBind, UnbindOutcome, grant_fingerprint};
 
 impl SeedApiRuntime {
     /// This adapter's operator-assigned node id.

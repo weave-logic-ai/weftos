@@ -50,6 +50,7 @@ pub fn event_kind_for(action: &str) -> Option<&'static str> {
         "workload.migrate" => chain::EVENT_KIND_WORKLOAD_MIGRATE,
         "workload.revoke" => chain::EVENT_KIND_WORKLOAD_REVOKE,
         "workload.node.bind" => chain::EVENT_KIND_WORKLOAD_NODE_BIND,
+        "workload.node.unbind" => chain::EVENT_KIND_WORKLOAD_NODE_UNBIND,
         _ => return None,
     })
 }

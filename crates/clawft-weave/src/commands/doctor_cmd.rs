@@ -82,6 +82,11 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
     }
     #[cfg(not(all(unix, feature = "mesh")))]
     let _ = (install_wanted, &config_dir);
+    // ADR-106: mesh_nonce, binding orphaned, mesh id unset with a binding.
+    #[cfg(all(unix, feature = "placement"))]
+    if runtime_wanted && let Some(st) = crate::licence_doctor::gather().await {
+        report.findings.extend(crate::licence_doctor::findings(&st));
+    }
     let code = doctor::print_report(&report, "weaver doctor", args.json, args.strict);
     if code != 0 {
         std::process::exit(code);

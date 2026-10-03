@@ -26,12 +26,15 @@ mod approval_store;
 mod binding;
 mod client;
 mod floor;
+mod floor_preview;
 mod gate;
+mod mesh_config;
 mod persist;
 mod policy;
 mod relay;
 mod request;
 mod store;
+mod steward;
 mod store_accept;
 mod store_load;
 
@@ -75,6 +78,7 @@ pub use client::{
     LicenceResponse, LicenceTransport, SignedLicenceClient,
 };
 pub use floor::FloorState;
+pub use floor_preview::{FloorPreview, RevivedGrant};
 pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
 pub use weft_licence_wire::{
     APPROVAL_DOMAIN, BINDING_DOMAIN, CheckoutGrant, FAR_FUTURE_CLAMP_SECS, GRANT_DOMAIN,
@@ -87,6 +91,7 @@ pub(crate) use weft_licence_wire::{
     envelope_key, parse_canonical, sign_envelope, signed_bytes, valid_hex32, valid_token,
     verify_envelope, verify_grant_signature,
 };
+pub use mesh_config::{MeshIdConfigError, mesh_id_from_config};
 pub use policy::MeshCheckoutPolicy;
 pub use relay::{
     CheckoutCaller, CheckoutRefusal, CheckoutRelay, RelayLimits, EVENT_KIND_CHECKOUT_GRANTED,
@@ -96,6 +101,7 @@ pub use request::{
     CLOCK_FLOOR_SECS, LicenceRequest, REQUEST_DOMAIN, REQUEST_WINDOW_MS, ReplayGuard,
     RequestAuth, RequestRefused, sign_request, signing_string, valid_nonce, verify_request,
 };
+pub use steward::StewardCheck;
 pub use store::{CheckoutGrantStore, VerifiedCheckoutGrant};
 
 /// What an accepted record did.
@@ -103,6 +109,9 @@ pub use store::{CheckoutGrantStore, VerifiedCheckoutGrant};
 pub enum Outcome {
     /// New state was recorded.
     Applied,
+    /// A record that only restricts (an unbind, a withdrawal) is in force
+    /// but could not be saved; `tick` retries. Propagate it like `Applied`.
+    AppliedUnsaved,
     /// Already held; nothing changed.
     Duplicate,
     /// A lower `seq` than the one held; ignored.
