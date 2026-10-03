@@ -87,9 +87,12 @@ Before pushing the release tag:
       cargo-dist host-triple packaging locally before the tag push
       (WEFT-460). See [Local release dry-run](#local-release-dry-run)
       below.
-- [ ] Confirm the `WEAVELOGIC_RELEASE_KEY` repository secret exists.
-      The `host` job signs the release with it and fails without it (see
-      [Release signature](#release-signature)).
+- [ ] Confirm the `release` environment exists and holds the
+      `WEAVELOGIC_RELEASE_KEY` secret. The `host` job signs the release
+      with it and fails without it, and a required reviewer must approve
+      that job (see [Release signature](#release-signature)).
+- [ ] Tag with a `v` prefix (`vX.Y.Z`): `release.yml` triggers only on
+      `v[0-9]+.[0-9]+.[0-9]+*`, and the signing script accepts the same tags.
 
 The release tag should point at the commit that contains the dated
 changelog entry, not the version-bump commit immediately before it.
@@ -186,7 +189,7 @@ release assets:
 
 | Asset | Content |
 |---|---|
-| `weftos-release.json` | `{"schema":1,"kind":"weftos-release","tag":"v…","assets":{"<file>":"<sha256>",…}}` covering every file uploaded, `dist-manifest.json` included |
+| `weftos-release.json` | `{"schema":1,"kind":"weftos-release","tag":"v…","published":"<UTC RFC 3339>","assets":{"<file>":"<sha256>",…}}` covering every file uploaded, `dist-manifest.json` included. `weaver update` warns when the latest release's `published` is more than 90 days old. |
 | `weftos-release.json.sig` | Hex Ed25519 signature over `weftos-release-v1\n` followed by the bytes of `weftos-release.json` |
 
 The key is the `WEAVELOGIC_RELEASE_KEY` secret: the raw 32-byte Ed25519 seed
@@ -204,6 +207,28 @@ key bytes, inside PEM `PUBLIC KEY` armour), then:
 xxd -r -p weftos-release.json.sig > sig
 openssl pkeyutl -verify -pubin -inkey pub.pem -rawin -in msg -sigfile sig
 ```
+
+**Protecting the key: the `release` environment.** The `host` job declares
+`environment: release`, so GitHub only hands it secrets stored in that
+environment. A repository administrator must set this up once, in the
+repository's Settings, Environments:
+
+1. Create an environment named `release`.
+2. Under deployment branches and tags, allow only tags matching `v*`.
+3. Add at least one required reviewer. Every release then waits for a
+   person to approve the `host` job before the key is exposed.
+4. Store `WEAVELOGIC_RELEASE_KEY` as an environment secret there, and
+   delete any repository-level copy, so no other workflow or branch can
+   read it.
+
+**Shared key.** The release signature uses the same key as COG-008 cog
+signing. A domain prefix separates the two, but only one way: the cog signer
+refuses payloads that start with `weftos-release-` or are not ELF, Mach-O or
+wasm binaries, so no cog signature can pass as a release signature. A
+release signature, however, verifies as the signature of a "cog" whose bytes
+are the prefixed JSON document. That is not executable, but a dedicated
+release key, pinned separately in `weaver`, would remove the overlap and
+limit the damage if either key leaked. It is recommended and not yet done.
 
 Local GUI build (not just release CI):
 
@@ -599,8 +624,12 @@ it, change the dep, run it again, and diff.
 
 ## Troubleshooting a Failed Release
 
-**`host` failed at "Sign release".** `WEAVELOGIC_RELEASE_KEY` is missing,
-is not 64 hex characters, or does not match the pinned public key. Fix the
+**`host` is waiting.** The `release` environment needs a reviewer to
+approve the job before it can read the signing key.
+
+**`host` failed at "Sign release".** `WEAVELOGIC_RELEASE_KEY` is missing
+from the `release` environment, is not 64 hex characters, or does not match
+the pinned public key. Fix the
 secret and re-run the workflow. Do not publish an unsigned release by
 hand: `weaver update` refuses it.
 
@@ -621,5 +650,6 @@ WASI build and re-run; Release Gate will re-evaluate prerelease status
 on the next downstream success.
 
 **Tag pushed but no workflows ran.** Make sure the tag matches the
-trigger pattern (`**[0-9]+.[0-9]+.[0-9]+*`) and that you pushed the tag
+trigger pattern (`v[0-9]+.[0-9]+.[0-9]+*` for `release.yml`;
+`**[0-9]+.[0-9]+.[0-9]+*` for the KB, SBOM and browser-WASM workflows) and that you pushed the tag
 itself (`git push origin <tag>`), not just the branch.

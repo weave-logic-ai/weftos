@@ -141,6 +141,8 @@ weft-cog-repo verify acme-cogs
 weft-cog-repo publish acme-cogs --to ./acme-cogs-public
 ```
 
+`sign` only signs executables: each binary must start with an ELF, Mach-O or wasm magic number, and a payload starting with `weftos-release-` is refused (that prefix is reserved for `weaver update`'s release signatures).
+
 `publish` verifies every artifact, then copies `acme-cogs/repo/` to the directory you name and prints the `[[cog_source]]` snippet for consumers. **It does not upload anything**: put that directory on static HTTPS, object storage or a file share yourself. Then, in each project that should use it:
 
 ```sh
@@ -164,7 +166,7 @@ There are four different keys. Do not mix them up.
 
 | Key | Signs | Held by | Pinned where |
 |---|---|---|---|
-| WeaveLogic release key | binaries in the WeftOS registry (COG-008) | CI secret `WEAVELOGIC_RELEASE_KEY` | compiled in: `WEAVELOGIC_PUBKEY_HEX` |
+| WeaveLogic release key | binaries in the WeftOS registry (COG-008), and WeftOS releases (`weftos-release.json`, checked by `weaver update`) | CI secret `WEAVELOGIC_RELEASE_KEY` (the `release` environment) | compiled in: `WEAVELOGIC_PUBKEY_HEX` |
 | WeftOS package signer | `cogpkg.json` manifests (governed placement) | a secret store (see below) | compiled in: `WEFTOS_PINNED_SIGNERS` |
 | Your private-repo key | binaries in your private registry | you | each project's `pinned_keys` |
 | Operator package key | `cogpkg.json` manifests you pack | you | the node's `workload-trust.json` |

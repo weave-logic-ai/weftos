@@ -50,6 +50,8 @@ mod update_tests;
 mod update_tests_hardening;
 #[cfg(test)]
 mod update_tests_signature;
+#[cfg(test)]
+mod update_tests_rollback;
 pub mod vault_cmd;
 #[cfg(all(feature = "ecc", feature = "exochain"))]
 pub mod model_cmd;

@@ -78,10 +78,11 @@ weaver update --check      # report only; install nothing
 weaver update --dry-run    # show which files would be replaced
 weaver update --restart    # restart the per-user daemon without asking
 weaver update --no-restart # never ask; print the restart command
-weaver update --force      # reinstall even when already on the latest release
+weaver update --force      # reinstall the same version, or update an install with no receipt
 ```
 
-`--insecure-skip-signature` also exists; see below before using it.
+`--allow-downgrade` and `--insecure-skip-signature` also exist; see below
+before using either.
 
 `weaver update` reads `dist-manifest.json` from the latest GitHub Release
 and checks that the release is signed before it believes anything in it (see
@@ -113,6 +114,26 @@ the release came from WeaveLogic. An unsigned release, a bad signature, a
 signature for another tag, or an archive or manifest that does not match the
 signed list is refused, with nothing downloaded or installed. `--check`
 refuses too, so an unverified version is never reported as available.
+
+The signed list also records when the release was signed (`published`). If
+the latest release was signed more than 90 days ago, `weaver update` warns:
+a mirror or attacker may be serving an old release and hiding newer ones.
+
+If an operator has revoked the release key (a `signer_key` entry in
+`revoked_subjects.json` in the runtime dir, the same list cog installs
+honour), `weaver update` refuses everything, `--check` included. An
+unreadable list also stops it. A revoked key means a new key, which can only
+arrive with a new `weaver`. Reinstall out of band from a source you trust,
+following WeaveLogic's key-rotation announcement.
+
+**No downgrades.** `weaver update` never installs a release older than the
+running build, and `--force` does not change that: it only reinstalls the
+same version or confirms an install with no receipt. The receipt also records
+the highest version ever installed through it (`weftos_highest_version`),
+and a release below that is refused as well. This stops a validly signed but
+older release, served as "latest", from rolling you back to fixed bugs.
+`--allow-downgrade` installs the older release anyway, with a warning. A
+downgrade never lowers the recorded highest version.
 
 `--insecure-skip-signature` installs without checking the signature. It
 prints a warning, and the sha256 and archive checks still run. It exists for

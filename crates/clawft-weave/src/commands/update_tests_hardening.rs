@@ -107,12 +107,12 @@ fn a_real_failure_at_the_backup_step_restores_everything() {
 }
 
 #[test]
-fn forcing_an_older_release_warns() {
+fn an_allowed_downgrade_warns() {
     let w = World::receipt_install("1.0.0", "0.9.0", &Rel::default());
     let host = Fake::default();
     let mut ctx = w.ctx(w.weaver(), &host, &no);
     ctx.current_version = "1.0.0".into();
-    let (r, out) = run(&ctx, Opts { force: true, ..Opts::default() });
+    let (r, out) = run(&ctx, Opts { allow_downgrade: true, ..Opts::default() });
     assert!(matches!(r.unwrap(), Outcome::Installed { .. }), "{out}");
-    assert!(out.contains("warning: downgrading from v1.0.0 to v0.9.0"), "{out}");
+    assert!(out.contains("WARNING: --allow-downgrade: downgrading from v1.0.0 to v0.9.0"), "{out}");
 }

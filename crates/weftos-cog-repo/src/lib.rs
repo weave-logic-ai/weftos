@@ -63,6 +63,37 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(h.finalize())
 }
 
+/// Payload prefix reserved for documents the same key signs that are not cogs:
+/// `weaver update` verifies `"weftos-release-v1\n" + weftos-release.json`.
+/// The cog signer refuses any payload that starts with it, so no cog
+/// signature can ever pass as a release signature.
+pub const RESERVED_PREFIX: &[u8] = b"weftos-release-";
+
+/// Executable magic numbers a cog binary may start with: ELF, wasm, and
+/// Mach-O (32/64-bit, both byte orders, and fat). Published cogs are ELF
+/// (`arm` / `arm64` Seed binaries); the others are allowed for local builds.
+const COG_MAGICS: [&[u8]; 7] = [
+    b"\x7fELF",
+    b"\0asm",
+    &[0xfe, 0xed, 0xfa, 0xce],
+    &[0xfe, 0xed, 0xfa, 0xcf],
+    &[0xce, 0xfa, 0xed, 0xfe],
+    &[0xcf, 0xfa, 0xed, 0xfe],
+    &[0xca, 0xfe, 0xba, 0xbe],
+];
+
+/// Checked by every cog signing path before signing: refuses a payload in the
+/// reserved release namespace and anything that is not an executable.
+pub fn check_signable(bytes: &[u8]) -> Result<(), String> {
+    if bytes.starts_with(RESERVED_PREFIX) {
+        return Err("payload starts with the reserved \"weftos-release-\" prefix; refusing to sign it as a cog".into());
+    }
+    if !COG_MAGICS.iter().any(|m| bytes.starts_with(m)) {
+        return Err("payload is not an ELF, Mach-O or wasm binary; refusing to sign it as a cog".into());
+    }
+    Ok(())
+}
+
 /// The pinned verifying key.
 pub fn weavelogic_key() -> VerifyingKey {
     let raw: [u8; 32] = hex::decode(WEAVELOGIC_PUBKEY_HEX).expect("pinned pubkey hex").try_into().expect("32 bytes");
@@ -136,6 +167,18 @@ mod tests {
             sha256: sha256_hex(bytes),
             sig: hex::encode(sk.sign(bytes).to_bytes()),
             manifest_path: "cogs/arm/manifest.json".into(),
+        }
+    }
+
+    #[test]
+    fn the_signer_refuses_release_prefixed_and_non_executable_payloads() {
+        let e = check_signable(b"weftos-release-v1\n{\"schema\":1}").unwrap_err();
+        assert!(e.contains("reserved"), "{e}");
+        assert!(check_signable(b"weftos-release-v2 anything").is_err());
+        assert!(check_signable(b"#!/bin/sh\necho hi").unwrap_err().contains("not an ELF"));
+        assert!(check_signable(b"").is_err());
+        for ok in [&b"\x7fELF\x02\x01"[..], b"\0asm\x01\0\0\0", &[0xcf, 0xfa, 0xed, 0xfe, 7], &[0xca, 0xfe, 0xba, 0xbe, 0]] {
+            assert!(check_signable(ok).is_ok(), "{ok:?}");
         }
     }
 

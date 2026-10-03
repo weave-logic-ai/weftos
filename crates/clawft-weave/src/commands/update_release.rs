@@ -268,9 +268,12 @@ fn fetch_text(src: &Source, url: &str, scratch: &Path) -> anyhow::Result<String>
 /// [`Trust::Skip`], verify it against the signed hash list for its tag. A
 /// missing or bad signature fails here, before anything else is believed.
 pub fn fetch_latest(src: &Source, triple: &str, scratch: &Path, trust: &Trust) -> anyhow::Result<Release> {
+    if let Trust::Pinned { key, revoked } = trust {
+        signature::check_not_revoked(key, revoked)?;
+    }
     let text = fetch_text(src, &src.manifest_url(), scratch)?;
     let mut rel = parse_manifest(&text, triple)?;
-    let Trust::Pinned(key) = trust else {
+    let Trust::Pinned { key, .. } = trust else {
         return Ok(rel);
     };
     let missing = |what: &str| format!("release {} has no {what}; refusing an unsigned release", rel.tag);

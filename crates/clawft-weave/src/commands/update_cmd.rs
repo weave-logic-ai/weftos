@@ -29,9 +29,12 @@ pub struct UpdateFlags {
     /// Show which binaries would be replaced; download and install nothing.
     #[arg(long)]
     pub dry_run: bool,
-    /// Reinstall even if already on the latest release.
+    /// Reinstall the same version, or proceed without an install receipt. Never installs an older release.
     #[arg(long)]
     pub force: bool,
+    /// Install a release older than this build or than the highest version installed before. Unsafe.
+    #[arg(long)]
+    pub allow_downgrade: bool,
     /// Restart the per-user daemon after installing, without asking.
     #[arg(long, conflicts_with = "no_restart")]
     pub restart: bool,
@@ -96,7 +99,7 @@ fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
     let ctx = Ctx {
         src: Source::github(),
-        trust: if flags.insecure_skip_signature { Trust::Skip } else { Trust::pinned() },
+        trust: if flags.insecure_skip_signature { Trust::Skip } else { Trust::pinned()? },
         triple: detect_target_triple().to_string(),
         current_version: CURRENT_VERSION.to_string(),
         dirty: option_env!("BUILD_VERSION").is_some_and(|v| v.contains("-dirty")),
@@ -113,12 +116,16 @@ fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
         check: flags.check,
         dry_run: flags.dry_run,
         force: flags.force,
+        allow_downgrade: flags.allow_downgrade,
         restart: flags.restart,
         no_restart: flags.no_restart,
     };
     let outcome = execute(&ctx, &opts, &mut std::io::stdout())?;
     match outcome {
         Outcome::Refused { .. } => anyhow::bail!("update refused: this install is managed elsewhere"),
+        Outcome::DowngradeRefused { version } => {
+            anyhow::bail!("update refused: v{version} is older than what is installed (see --allow-downgrade)")
+        }
         Outcome::Installed { .. } => print_service_update_lines(),
         _ => {}
     }

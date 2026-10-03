@@ -14,6 +14,7 @@ use ed25519_dalek::{Signer, SigningKey};
 
 use super::update_release::Source;
 use super::update_signature::{DOMAIN, SIGNATURE, SIGNED_DOC, Trust};
+use weftos_cog_repo::RevokedKeys;
 
 pub const TRIPLE: &str = "test-triple";
 pub const BINS: [(&str, &str); 3] = [("weft", "clawft-cli"), ("weaver", "clawft-weave"), ("weftos", "weftos")];
@@ -24,7 +25,7 @@ pub fn test_key() -> SigningKey {
 }
 
 pub fn test_trust() -> Trust {
-    Trust::Pinned(test_key().verifying_key())
+    Trust::Pinned { key: test_key().verifying_key(), revoked: RevokedKeys::none() }
 }
 
 pub type Routes = Arc<Mutex<HashMap<String, Vec<u8>>>>;
@@ -172,6 +173,8 @@ pub enum Sign {
 #[derive(Default, Clone)]
 pub struct Rel {
     pub sign: Sign,
+    /// The signed `published` time (default: now).
+    pub published: Option<&'static str>,
     /// Make the `weftos` archive hostile (checksums are still published and valid).
     pub evil: Option<Evil>,
     /// Version the binaries inside the archives report (defaults to the release's).
@@ -208,7 +211,7 @@ fn sign_doc(key: &SigningKey, doc: &[u8], domain: bool) -> Vec<u8> {
 }
 
 /// The signed hash list over every published file of `tag`, as CI writes it.
-pub fn hash_doc(routes: &HashMap<String, Vec<u8>>, tag: &str, doc_tag: &str) -> Vec<u8> {
+pub fn hash_doc(routes: &HashMap<String, Vec<u8>>, tag: &str, doc_tag: &str, published: &str) -> Vec<u8> {
     let prefix = format!("/r/download/{tag}/");
     let mut assets = std::collections::BTreeMap::new();
     for (path, body) in routes {
@@ -216,7 +219,7 @@ pub fn hash_doc(routes: &HashMap<String, Vec<u8>>, tag: &str, doc_tag: &str) -> 
             assets.insert(name.to_string(), super::update_signature::sha256_hex(body));
         }
     }
-    serde_json::to_vec_pretty(&serde_json::json!({"schema": 1, "kind": "weftos-release", "tag": doc_tag, "assets": assets}))
+    serde_json::to_vec_pretty(&serde_json::json!({"schema": 1, "kind": "weftos-release", "tag": doc_tag, "published": published, "assets": assets}))
         .unwrap()
 }
 
@@ -253,14 +256,15 @@ pub fn publish(mock: &Mock, work: &Path, version: &str, rel: &Rel) {
     // CI uploads dist-manifest.json as a release asset; `latest/` redirects to it.
     routes.insert(format!("/r/download/{tag}/dist-manifest.json"), manifest.clone());
     routes.insert("/r/latest/download/dist-manifest.json".into(), manifest);
-    sign_release(&mut routes, work, version, rel.sign);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    sign_release(&mut routes, work, version, rel.sign, rel.published.unwrap_or(&now));
 }
 
-fn sign_release(routes: &mut HashMap<String, Vec<u8>>, work: &Path, version: &str, mode: Sign) {
+fn sign_release(routes: &mut HashMap<String, Vec<u8>>, work: &Path, version: &str, mode: Sign, published: &str) {
     let tag = format!("v{version}");
     let at = |n: &str| format!("/r/download/{tag}/{n}");
     let doc_tag = if mode == Sign::OtherTag { "v0.8.5" } else { tag.as_str() };
-    let doc = hash_doc(routes, &tag, doc_tag);
+    let doc = hash_doc(routes, &tag, doc_tag, published);
     let sig = match mode {
         Sign::WrongKey => sign_doc(&SigningKey::from_bytes(&[9; 32]), &doc, true),
         Sign::Garbage => b"not a signature\n".to_vec(),

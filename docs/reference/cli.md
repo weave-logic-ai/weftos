@@ -306,7 +306,7 @@ per-user daemon restart. Full behaviour: [Updating](../deployment/install.md#upd
 ### Usage
 
 ```
-weaver update [--check] [--dry-run] [--force] [--restart | --no-restart] [--insecure-skip-signature]
+weaver update [--check] [--dry-run] [--force] [--allow-downgrade] [--restart | --no-restart] [--insecure-skip-signature]
 ```
 
 ### Options
@@ -315,13 +315,15 @@ weaver update [--check] [--dry-run] [--force] [--restart | --no-restart] [--inse
 |---|---|
 | `--check` | Report the latest version and how it would be applied; install nothing. |
 | `--dry-run` | Print the binaries that would be replaced; download and install nothing. |
-| `--force` | Reinstall even when already on the latest release; also confirms overwriting an install with no receipt, and allows a downgrade (with a warning). |
+| `--force` | Reinstall the same version, or confirm overwriting an install with no receipt. Never installs an older release. |
+| `--allow-downgrade` | Install a release older than this build or than the highest version the receipt records (warns). |
 | `--restart` | Restart the per-user daemon after installing, without asking. |
 | `--no-restart` | Never ask; print the restart command. |
 | `--insecure-skip-signature` | Install without checking the release signature (warns; sha256 still checked). For emergencies only. |
 
-An unsigned or badly signed release is refused (non-zero exit), with nothing
-downloaded. Homebrew, `cargo install` and source-build installs are refused with their own
+An unsigned or badly signed release, a revoked release key, and (without
+`--allow-downgrade`) an older release are refused with a non-zero exit and
+nothing downloaded. A latest release signed more than 90 days ago gets a warning. Homebrew, `cargo install` and source-build installs are refused with their own
 update command (exit code non-zero). The older `weaver update check` and
 `weaver update install` forms still work.
 

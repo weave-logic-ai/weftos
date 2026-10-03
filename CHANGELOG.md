@@ -24,6 +24,22 @@ Staging area for changes after the 0.8.1 cut.
   rehashed `.sha256` files. `--check` refuses them too.
 - New flag `--insecure-skip-signature` (warns; sha256 checks still run) for
   emergencies. There is no runtime way to change the trusted key.
+- No rollbacks: `--force` now only reinstalls the same version or confirms an
+  install with no receipt. A release older than the running build, or older
+  than the receipt's new `weftos_highest_version` mark, needs
+  `--allow-downgrade` (warns). A downgrade never lowers the mark.
+- A release key revoked in the operator's signer revocation list
+  (`revoked_subjects.json`, as used for cogs) makes `weaver update` refuse
+  everything and point to an out-of-band reinstall.
+- The signed list carries a `published` time; a latest release signed over 90
+  days ago gets a warning.
+- The cog signer (`weft-cog-repo sign`, public and private repos) refuses
+  payloads starting with `weftos-release-` and anything that is not an ELF,
+  Mach-O or wasm binary, so a cog signature can never pass as a release
+  signature.
+- `release.yml` triggers only on `v[0-9]+.[0-9]+.[0-9]+*` tags, and its
+  signing `host` job runs in the `release` GitHub Environment, which needs
+  a one-time setup (v* tags, a required reviewer, the secret moved there).
 
 ### Changed — `weaver update` is sha256-checked, all-binary and install-method aware
 
