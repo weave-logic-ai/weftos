@@ -89,5 +89,6 @@ async fn a_non_owner_tenant_daemon_refuses_bind_and_starts_no_exchange() {
     let req = clawft_kernel::licence::RunRequest { cog_id: "fall-detect", version: "1.2.0", sha256: &sha, blake3: &b3 };
     let e = gate.check(&req).unwrap_err();
     assert_eq!(e.code(), "not_holder", "{e}");
+    assert!(workload_place_rpc::licence_exchange().is_none(), "building placement starts no exchange on a non-holder");
     assert!(e.to_string().contains("licence holder"), "{e}");
 }
