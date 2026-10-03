@@ -84,7 +84,7 @@ Revoking a signer key is how you respond to a leaked package key; also remove it
 
 **Limits:** instances on a Cognitum Seed are not stopped by a revocation (the Seed holds its own store; a revoked store cog is refused at the next place or start). A remote `workload-host` that is not connected when you revoke keeps its instances until it receives the notice or you stop them.
 
-The catalog RPCs `workload.install` and `workload.unload` (daemon RPC only; there is no `weaver workload install` verb) are default-deny: they need an entry in `workload-permits.json`. They decide as the principal `catalog`, on packages that count as `unsigned` because the catalog only records a name, kind and manifest hash and verifies nothing. So the permit has to say both, and a permit that accepts unsigned packages without naming principals is refused when the file is read (the daemon then refuses every catalog verb until it is fixed):
+The catalog RPCs `workload.install` and `workload.unload` (daemon RPC only, with no weaver CLI verb) are default-deny: they need an entry in `workload-permits.json`. They decide as the principal `catalog`, on packages that count as `unsigned` because the catalog only records a name, kind and manifest hash and verifies nothing. So the permit has to say both, and a permit that accepts unsigned packages without naming principals is refused when the file is read (the daemon then refuses every catalog verb until it is fixed):
 
 ```json
 [{"id": "catalog", "actions": ["workload.install", "workload.unload"], "kinds": ["cog"],
