@@ -107,6 +107,7 @@ async fn multi_gb_file_transfer_is_interrupted_and_resumed() {
             release_url: None,
         },
         attestations: vec![],
+        redistributable: true,
     };
     let k = key(7);
     let anchors = anchors_for(&k);

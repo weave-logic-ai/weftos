@@ -374,13 +374,15 @@ fn a_full_cache_evicts_discovered_before_refusing_and_never_pushes_out_paired() 
         f.capabilities = vec![cap("cpu.arch.aarch64", Provenance::Probed)];
         sign_node_facts(&f, &k).unwrap()
     };
-    // Full of Discovered: a newcomer evicts the oldest instead of failing.
-    for n in 0..MAX_CACHED_NODES as u32 {
-        cache.insert_remote(mk(n), TrustTier::Discovered, Provenance::Claimed, 1, now() + (n as u64 % 5)).unwrap();
+    // Discovered entries are capped as a class: past the cap a newcomer
+    // evicts instead of failing, and a Paired one is simply added.
+    use crate::node_facts::cache::MAX_DISCOVERED;
+    for n in 0..(MAX_DISCOVERED as u32 + 100) {
+        cache.insert_remote(mk(n), TrustTier::Discovered, Provenance::Claimed, 1 + (n as u64 % 200), now() + (n as u64 % 5)).unwrap();
     }
-    assert_eq!(cache.len(), MAX_CACHED_NODES);
+    assert_eq!(cache.len(), MAX_DISCOVERED);
     cache.insert_remote(mk(9_000), TrustTier::Paired, Provenance::Probed, 2, now() + 10).unwrap();
-    assert_eq!(cache.len(), MAX_CACHED_NODES);
+    assert_eq!(cache.len(), MAX_DISCOVERED + 1);
     // Full of Paired: Discovered cannot displace them.
     let full = crate::node_facts::NodeFactsCache::new();
     for n in 0..MAX_CACHED_NODES as u32 {
@@ -414,4 +416,66 @@ async fn a_delta_without_its_base_asks_for_the_facts() {
         b.ex.ingest(&ctx(&a.id, true), w, now(), &mut Vec::new()).unwrap();
     }
     assert_eq!(held(&b, &a).unwrap().load().busy, 1);
+}
+
+#[test]
+fn a_reconnecting_attacker_cannot_evict_a_real_discovered_peer() {
+    use crate::node_facts::cache::MAX_DISCOVERED;
+    let cache = crate::node_facts::NodeFactsCache::new();
+    let mk = |n: u32| {
+        let mut b = [0u8; 32];
+        b[..4].copy_from_slice(&n.to_be_bytes());
+        b[31] = 7;
+        let k = SigningKey::from_bytes(&b);
+        let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+        let mut f = NodeFacts::new(id.clone(), now(), 600, 1);
+        f.capabilities = vec![cap("cpu.arch.aarch64", Provenance::Probed)];
+        (id, sign_node_facts(&f, &k).unwrap())
+    };
+    // A real, unverified leaf (connection 1) arrives first, one entry.
+    let (real, s) = mk(0);
+    cache.insert_remote(s, TrustTier::Discovered, Provenance::Claimed, 1, now()).unwrap();
+    // The attacker reconnects over and over, four fresh ids per connection,
+    // far past the global cap.
+    let mut n = 1;
+    for conn in 100..100 + (3 * MAX_DISCOVERED as u64 / 4) {
+        for _ in 0..4 {
+            let (_, s) = mk(n);
+            n += 1;
+            cache.insert_remote(s, TrustTier::Discovered, Provenance::Claimed, conn, now() + 1).unwrap();
+        }
+    }
+    assert!(cache.get(&real, now()).is_some(), "the real peer survives the churn");
+    let held = cache.list(now()).into_iter().filter(|c| c.trust_tier() == TrustTier::Discovered).count();
+    assert!(held <= MAX_DISCOVERED, "{held}");
+    // A verified peer is never displaced either.
+    let (paired, s) = mk(999_999);
+    cache.insert_remote(s, TrustTier::Paired, Provenance::Probed, 2, now() + 2).unwrap();
+    for conn in 5_000..5_100u64 {
+        for _ in 0..4 {
+            let (_, s) = mk(n);
+            n += 1;
+            cache.insert_remote(s, TrustTier::Discovered, Provenance::Claimed, conn, now() + 3).unwrap();
+        }
+    }
+    assert!(cache.get(&paired, now()).is_some());
+    assert!(cache.get(&real, now()).is_some());
+}
+
+#[tokio::test]
+async fn the_byte_budget_is_charged_on_the_whole_frame() {
+    let b = node(40);
+    // A frame whose signed payload is tiny but which carries a large extra
+    // field: charged by total size, so a few of them exhaust the byte budget.
+    let big = serde_json::json!({"op": "request", "pad": "x".repeat(200_000)});
+    let c = ctx("node-x", false);
+    let mut dropped = 0;
+    for _ in 0..8 {
+        // `allow` is what the sink calls first: count refusals through it.
+        if !b.ex.allow(77, super::json_size(&big)) {
+            dropped += 1;
+        }
+    }
+    assert!(dropped >= 3, "4 x 256 KiB burst, then refill: {dropped} dropped");
+    let _ = c;
 }

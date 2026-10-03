@@ -15,6 +15,13 @@
 //!   the signature, the key-to-node-id binding, the TTL window and the
 //!   `seq` ordering are all checked by [`NodeFactsCache`], and a peer can
 //!   only speak for itself (`node_id` must be the sender).
+//! - **Budget.** Each connection has a frame and byte budget, charged on the
+//!   whole frame and spent before anything is parsed or verified; one
+//!   connection holds at most [`MAX_DISCOVERED_PER_CONN`] `Discovered`
+//!   entries and the cache holds at most 512 in all (the heaviest connection
+//!   loses its oldest entry first). A connection that reconnects gets a fresh
+//!   id and a fresh quota, so a patient attacker can still churn the
+//!   `Discovered` class; `Paired` and `Pinned` entries are never touched.
 //! - **Trust.** The receiver assigns the [`TrustTier`]. A peer whose node id
 //!   admission verified (ADR-103 A10) gets [`FactsTrustPolicy::verified_tier`];
 //!   any other connection (including every peer under `observe`, where none
@@ -537,12 +544,7 @@ impl PeerControlSink for FactsExchange {
         // Budget first: nothing below (parse, signature check) runs for a
         // connection that is over its frame or byte budget. The size is read
         // off the signed payload string, which is what the verify cost follows.
-        let size = payload
-            .get("signed")
-            .and_then(|s| s.get("payload"))
-            .and_then(|p| p.as_str())
-            .map_or(0, str::len)
-            + 128;
+        let size = json_size(payload);
         if !self.allow(conn, size) {
             tracing::debug!(peer = %ctx.peer_id, conn, "node facts frame dropped: over budget");
             return Vec::new();
@@ -571,6 +573,19 @@ impl PeerControlSink for FactsExchange {
             }
         }
         replies.iter().filter_map(FactsWire::to_value).collect()
+    }
+}
+
+/// Size of a JSON value in bytes (strings, keys and scalars), walked without
+/// allocating: the budget is charged for the whole frame, not for one field.
+fn json_size(v: &serde_json::Value) -> usize {
+    match v {
+        serde_json::Value::String(s) => s.len() + 2,
+        serde_json::Value::Array(a) => 2 + a.iter().map(|x| json_size(x) + 1).sum::<usize>(),
+        serde_json::Value::Object(o) => {
+            2 + o.iter().map(|(k, x)| k.len() + 4 + json_size(x)).sum::<usize>()
+        }
+        _ => 8,
     }
 }
 

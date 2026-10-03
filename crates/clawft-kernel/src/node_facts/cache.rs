@@ -21,6 +21,8 @@ use crate::node_facts_advert::{
 
 /// Most nodes held.
 pub const MAX_CACHED_NODES: usize = 4096;
+/// Most mesh-derived `Discovered` entries held at once, whatever the total.
+pub const MAX_DISCOVERED: usize = 512;
 
 /// Where a node's tier came from. Only an operator-set tier is sticky: a
 /// mesh-derived tier follows the current connection (admission) every frame.
@@ -214,10 +216,22 @@ impl NodeFactsCache {
                 });
             }
         }
-        if !self.entries.contains_key(&node_id) && self.entries.len() >= MAX_CACHED_NODES {
-            self.evict_expired(now);
-            if self.entries.len() >= MAX_CACHED_NODES && !self.evict_oldest_discovered() {
+        if !self.entries.contains_key(&node_id) {
+            // Unverified claims are capped as a class, so they cannot crowd
+            // out the cache; the heaviest connection pays first.
+            if remote
+                && entry.tier_source == TierSource::Mesh
+                && entry.trust_tier == TrustTier::Discovered
+                && self.count_discovered() >= MAX_DISCOVERED
+                && !self.evict_discovered_by_weight()
+            {
                 return Err(CacheError::Full);
+            }
+            if self.entries.len() >= MAX_CACHED_NODES {
+                self.evict_expired(now);
+                if self.entries.len() >= MAX_CACHED_NODES && !self.evict_discovered_by_weight() {
+                    return Err(CacheError::Full);
+                }
             }
         }
         Ok(match self.entries.insert(node_id, entry) {
@@ -226,14 +240,42 @@ impl NodeFactsCache {
         })
     }
 
-    /// Drop the oldest mesh-derived `Discovered` entry. False if none.
-    fn evict_oldest_discovered(&self) -> bool {
-        let victim = self
+    fn count_discovered(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.tier_source == TierSource::Mesh && e.trust_tier == TrustTier::Discovered)
+            .count()
+    }
+
+    /// Drop one mesh-derived `Discovered` entry, chosen by weight: the oldest
+    /// entry of the connection that holds the most of them, so a connection
+    /// that fills its quota loses its own entries before anyone else's, and a
+    /// peer with one entry outlives an attacker with several. (A connection
+    /// that reconnects gets a fresh id and a fresh quota; connections with
+    /// equally many entries lose the oldest first. There is no remote address
+    /// to charge: see the swarm doc.) False if there is none to drop.
+    fn evict_discovered_by_weight(&self) -> bool {
+        let mut by_origin: std::collections::HashMap<u64, (usize, u64, String)> = Default::default();
+        for e in self
             .entries
             .iter()
             .filter(|e| e.tier_source == TierSource::Mesh && e.trust_tier == TrustTier::Discovered)
-            .min_by_key(|e| e.received_at)
-            .map(|e| e.key().clone());
+        {
+            // Entries with no connection (origin 0) each count as their own group.
+            let group = if e.origin == 0 { u64::MAX - (by_origin.len() as u64) } else { e.origin };
+            let slot = by_origin
+                .entry(group)
+                .or_insert((0, u64::MAX, String::new()));
+            slot.0 += 1;
+            if (e.received_at, e.key().clone()) < (slot.1, slot.2.clone()) || slot.2.is_empty() {
+                slot.1 = e.received_at;
+                slot.2 = e.key().clone();
+            }
+        }
+        let victim = by_origin
+            .values()
+            .max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)))
+            .map(|v| v.2.clone());
         match victim {
             Some(k) => self.entries.remove(&k).is_some(),
             None => false,

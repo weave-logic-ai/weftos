@@ -218,3 +218,36 @@ fn a_malleated_signature_is_refused_by_strict_verification() {
     bad.signature[63] |= 0xf0; // S out of canonical range
     assert!(verify_revocation(&bad, &anchors).is_err());
 }
+
+#[tokio::test]
+async fn junk_on_one_connection_blocks_neither_another_connection_nor_issue() {
+    let l = line();
+    let ctx = PeerCtx::unauthenticated("node-b");
+    // Connection 1 floods: right key, tampered payload (passes the cheap
+    // checks, fails the signature), so each one spends its own tokens.
+    for i in 0..60u8 {
+        let mut junk = sign_revocation(RevocationKind::ArtifactHash, &hex_encode(&[i; 32]), "x", 1, &key(1)).unwrap();
+        junk.payload = junk.payload.replace("\"x\"", "\"y\"");
+        let v = serde_json::to_value(&junk).unwrap();
+        assert!(l.a.rev.on_peer_control(&ctx, 1, &v).is_empty());
+    }
+    // Connection 1 is now out of tokens even for a genuine notice ...
+    let genuine = notice(&l, &key(1));
+    assert_eq!(l.a.rev.accept_from(&genuine, Some(1)), Err(NoticeError::RateLimited));
+    // ... but a genuine notice on connection 2 goes through,
+    assert_eq!(l.a.rev.accept_from(&genuine, Some(2)), Ok(true));
+    // and the operator's own issue() is not blocked either.
+    let own = sign_revocation(RevocationKind::ArtifactHash, &hex_encode(&[77; 32]), "own", 2, &key(1)).unwrap();
+    assert_eq!(l.a.rev.issue(own).await, Ok(true));
+}
+
+#[tokio::test]
+async fn unpinned_signers_cost_no_budget() {
+    let l = line();
+    for i in 0..100u8 {
+        let n = sign_revocation(RevocationKind::ArtifactHash, &hex_encode(&[i; 32]), "x", 1, &key(9)).unwrap();
+        assert_eq!(l.a.rev.accept_from(&n, Some(5)), Err(NoticeError::UnauthorizedSigner));
+    }
+    // The connection still has its whole budget.
+    assert_eq!(l.a.rev.accept_from(&notice(&l, &key(1)), Some(5)), Ok(true));
+}

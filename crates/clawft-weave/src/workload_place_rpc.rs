@@ -180,7 +180,11 @@ async fn build(
     let id = clawft_kernel::node_id_from_pubkey(&pk);
     let anchors = load_anchors(dir)?;
     let gate = gate(dir, &chain, effective)?;
-    let store = ArtifactStore::new_file(dir.join("workload-artifacts"));
+    // `open_file` indexes the blobs already on disk (installed workloads'
+    // files from earlier runs), so the exchange finds them present and never
+    // takes ownership of, or evicts, bytes it did not create.
+    let store = ArtifactStore::open_file(dir.join("workload-artifacts"))
+        .map_err(|e| format!("workload artifact store: {e}"))?;
     let mut ex = ArtifactExchange::new(&id, Arc::new(store), ExchangeConfig::default())
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());

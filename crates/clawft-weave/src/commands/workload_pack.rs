@@ -61,6 +61,11 @@ pub struct PackArgs {
     /// Cognitum ADR-154/155 release record to carry as an attestation.
     #[arg(long)]
     pub cognitum_record: Option<PathBuf>,
+    /// Sign the package as redistributable: other nodes may be seeded and
+    /// served its files over the swarm. Off by default; a package that
+    /// carries a Cognitum attestation is never redistributed regardless.
+    #[arg(long)]
+    pub redistributable: bool,
     /// Also verify and store the package in this file-backed ArtifactStore.
     #[arg(long, requires = "trust")]
     pub store: Option<PathBuf>,
@@ -177,6 +182,7 @@ fn pack(a: PackArgs) -> anyhow::Result<()> {
             release_url: a.release_url.clone(),
         },
         cognitum_record: a.cognitum_record.clone(),
+        redistributable: a.redistributable,
     };
     let mut env = pack_cog(&input, &a.out)?;
     if let Some(key_path) = &a.key {

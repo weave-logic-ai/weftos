@@ -122,6 +122,7 @@ pub(crate) fn signed_package(root: &Path, binary_len: usize, k: &SigningKey) -> 
             release_url: None,
         },
         cognitum_record: None,
+        redistributable: true,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();

@@ -284,6 +284,7 @@ fn build_package(
             release_url: Some(release),
         },
         cognitum_record: None,
+        redistributable: true,
     };
     let pkg = dir.join("pkg");
     let mut env = pack_cog(&input, &pkg).map_err(|e| e.to_string())?;

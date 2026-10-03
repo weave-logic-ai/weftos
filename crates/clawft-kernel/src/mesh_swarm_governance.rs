@@ -94,10 +94,15 @@ impl ArtifactExchange {
     /// The first grant that currently allows seeding `content_hash`: not
     /// revoked, and its package may be redistributed.
     pub(crate) fn servable_grant(&self, content_hash: &[u8; 32]) -> Option<GrantInfo> {
-        self.grants.get(content_hash)?.iter().find(|g| {
-            g.redistributable
-                && !self.is_revoked_subject(&g.package_id, &g.signers, content_hash)
-        }).cloned()
+        let gs = self.grants.get(content_hash)?;
+        // One package that marks this content non-redistributable vetoes it
+        // for every package that lists it: fail closed.
+        if gs.iter().any(|g| !g.redistributable) {
+            return None;
+        }
+        gs.iter()
+            .find(|g| !self.is_revoked_subject(&g.package_id, &g.signers, content_hash))
+            .cloned()
     }
 
     /// Apply the revocation list to everything held: drop each revoked
@@ -105,8 +110,10 @@ impl ArtifactExchange {
     /// any partial copy), and chain `artifact.revoke` and `artifact.evict`.
     /// Safe to call repeatedly.
     ///
-    /// Revocation evicts **even pinned** cache entries: a revoked package must
-    /// stop running as well as stop seeding.
+    /// Revocation evicts **even pinned** cache entries (the bytes are removed
+    /// and serving is blocked). It does not stop a workload that is already
+    /// running from them: that instance continues until it restarts, and
+    /// placement does not yet react to `artifact.revoke`.
     ///
     /// Revocation is monotonic mesh-wide: entries are only ever added, by an
     /// operator command or a signed notice, and a notice is re-flooded to

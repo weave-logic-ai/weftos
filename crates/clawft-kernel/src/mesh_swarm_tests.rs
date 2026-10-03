@@ -722,7 +722,14 @@ fn scripted(d: ArtifactDescriptor, data: Option<Vec<u8>>, requests: Arc<AtomicUs
 
 /// A signed package; `commit` varies the package id, `record` adds a
 /// Cognitum release-record attestation. The binary is the same bytes every time.
-fn pack(root: &std::path::Path, len: usize, k: &ed25519_dalek::SigningKey, commit: &str, record: bool) -> PathBuf {
+fn pack(
+    root: &std::path::Path,
+    len: usize,
+    k: &ed25519_dalek::SigningKey,
+    commit: &str,
+    record: bool,
+    redistributable: bool,
+) -> PathBuf {
     let cog_dir = root.join("cog");
     std::fs::create_dir_all(&cog_dir).unwrap();
     std::fs::write(cog_dir.join("cog.toml"), "[cog]\nid = \"swarm-probe\"\nname = \"Probe\"\nversion = \"0.1.0\"\n").unwrap();
@@ -735,6 +742,7 @@ fn pack(root: &std::path::Path, len: usize, k: &ed25519_dalek::SigningKey, commi
         binaries: vec![("aarch64".into(), root.join("bin"))],
         source: PackageSource { repo: None, commit: Some(commit.into()), release_url: None },
         cognitum_record: record.then_some(rec),
+        redistributable,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();
@@ -748,7 +756,7 @@ async fn a_cognitum_origin_artifact_is_neither_advertised_nor_served() {
     use crate::mesh_swarm_cache::{ArtifactCache, CacheConfig};
     let tmp = tempfile::tempdir().unwrap();
     let k = key(1);
-    let dir = pack(tmp.path(), 2 * 1024 * 1024, &k, "aaaaaaa", true);
+    let dir = pack(tmp.path(), 2 * 1024 * 1024, &k, "aaaaaaa", true, true);
     let anchors = anchors_for(&k);
     let holder = swarm_node("holder", cfg());
     let pkg = holder.ex.seed_package_dir(&dir, &anchors).unwrap();
@@ -786,8 +794,8 @@ async fn content_listed_by_two_packages_survives_the_revocation_of_one() {
     let (a_dir, b_dir) = (tmp.path().join("a"), tmp.path().join("b"));
     std::fs::create_dir_all(&a_dir).unwrap();
     std::fs::create_dir_all(&b_dir).unwrap();
-    let a = pack(&a_dir, 2 * 1024 * 1024, &k, "aaaaaaa", false);
-    let b = pack(&b_dir, 2 * 1024 * 1024, &k, "bbbbbbb", false);
+    let a = pack(&a_dir, 2 * 1024 * 1024, &k, "aaaaaaa", false, true);
+    let b = pack(&b_dir, 2 * 1024 * 1024, &k, "bbbbbbb", false, true);
     let holder = swarm_node("holder", cfg());
     let pa = holder.ex.seed_package_dir(&a, &anchors).unwrap();
     let pb = holder.ex.seed_package_dir(&b, &anchors).unwrap();
@@ -997,4 +1005,70 @@ fn a_pinned_entry_is_not_forgotten_except_by_revocation() {
     assert!(ex.forget(&d.id(), "lru").is_none());
     assert!(ex.is_verified(&d.id()));
     assert!(ex.forget(&d.id(), "revoked").is_some(), "revocation overrides a pin");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_repack_without_the_attestation_or_the_flag_is_not_served() {
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let anchors = anchors_for(&k);
+    // An operator re-pack of a licence-gated binary: no attestation, and the
+    // signer never opted in to redistribution.
+    let dir = pack(tmp.path(), 2 * 1024 * 1024, &k, "ccccccc", false, false);
+    let holder = swarm_node("holder", cfg());
+    let pkg = holder.ex.seed_package_dir(&dir, &anchors).unwrap();
+    assert!(holder.ex.servable_artifacts().is_empty());
+    assert!(events(&holder.chain, EVENT_KIND_ARTIFACT_SEED).is_empty());
+    let leech = swarm_node("leech", cfg());
+    let net = Arc::new(Net::new("leech").with(&holder, Spec::default()));
+    assert!(leech
+        .ex
+        .swarm_fetch_package(net, &cands(std::slice::from_ref(&holder)), &pkg.manifest_hash, &anchors, &opts())
+        .await
+        .is_err());
+    assert!(events(&holder.chain, crate::chain::EVENT_KIND_ARTIFACT_SERVE).is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_non_redistributable_grant_vetoes_a_hash_for_every_package() {
+    let tmp = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let anchors = anchors_for(&k);
+    let (open_dir, gated_dir) = (tmp.path().join("open"), tmp.path().join("gated"));
+    std::fs::create_dir_all(&open_dir).unwrap();
+    std::fs::create_dir_all(&gated_dir).unwrap();
+    let open = pack(&open_dir, 2 * 1024 * 1024, &k, "aaaaaaa", false, true);
+    let gated = pack(&gated_dir, 2 * 1024 * 1024, &k, "bbbbbbb", false, false);
+    for order in [[&open, &gated], [&gated, &open]] {
+        let holder = swarm_node("holder", cfg());
+        let mut last = None;
+        for d in order {
+            last = Some(holder.ex.seed_package_dir(d, &anchors).unwrap());
+        }
+        let bin = holder.ex.resolve(&ArtifactKey::Content(binary_hash(&last.unwrap()))).unwrap();
+        assert!(!holder.ex.is_servable(&bin), "shared hash, one non-redistributable grant");
+        assert!(holder.ex.servable_artifacts().iter().all(|d| d.id() != bin.id()));
+    }
+}
+
+#[test]
+fn a_blob_left_on_disk_by_an_earlier_run_is_never_evicted_after_a_restart() {
+    // An installed workload's file, written by a previous process.
+    let dir = tempfile::tempdir().unwrap();
+    let data = vec![8u8; 2000];
+    ArtifactStore::new_file(dir.path().to_path_buf())
+        .store(&data, crate::artifact_store::ArtifactType::Generic)
+        .unwrap();
+    // The daemon reopens the store with its index (`open_file`); the exchange
+    // finds the blob present, so it does not own it.
+    let ex = node_with("n", ArtifactStore::open_file(dir.path().to_path_buf()).unwrap(), cfg()).ex;
+    let d = ex.seed_bytes(&data).unwrap();
+    ex.forget(&d.id(), "lru").unwrap();
+    assert!(ex.store().contains(&hex_encode(&d.content_hash)), "the workload's file survives");
+    // Control: with `new_file` (no index) the exchange would have re-stored the
+    // bytes as its own and evicted them, which is why the daemon must not use it.
+    let ex2 = node_with("n2", ArtifactStore::new_file(dir.path().to_path_buf()), cfg()).ex;
+    let d2 = ex2.seed_bytes(&data).unwrap();
+    ex2.forget(&d2.id(), "lru").unwrap();
+    assert!(!ex2.store().contains(&hex_encode(&d2.content_hash)));
 }

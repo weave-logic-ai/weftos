@@ -75,11 +75,18 @@ pub(crate) fn signer_keys(verified: &VerifiedPackage, anchors: &TrustAnchors) ->
         .collect()
 }
 
-/// May this package be handed to other nodes? No when it carries Cognitum
-/// provenance (a release-record attestation, or a `cognitum` release URL):
-/// those cogs are licence-gated, and nothing here checks a licence or that a
-/// peer belongs to the same operator, so they are never seeded or advertised.
+/// May this package be handed to other nodes? Fails closed: only when the
+/// signer said so in the signed manifest (`redistributable = true`, absent
+/// means false), and never when it carries Cognitum provenance (a
+/// release-record attestation, or a `cognitum` release URL) even if the flag
+/// is set. Cognitum cogs are licence-gated, and nothing here checks a licence
+/// or that a peer belongs to the same operator. An operator re-pack of such a
+/// binary that drops the attestation is still not shared unless its signer
+/// explicitly opts in.
 pub(crate) fn redistributable(verified: &VerifiedPackage) -> bool {
+    if !verified.body.redistributable {
+        return false;
+    }
     let cognitum_record = verified
         .body
         .attestations

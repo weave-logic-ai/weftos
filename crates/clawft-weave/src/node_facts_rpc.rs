@@ -20,9 +20,11 @@
 //!
 //! With a mesh runtime attached, each probe goes through
 //! [`FactsExchange`](clawft_kernel::node_facts_exchange::FactsExchange): a
-//! changed capability set becomes a new signed base, a live-state change
-//! (busy/free, free memory) a small signed delta, and both are sent to every
-//! connected or joining peer. Peers' facts arrive on the same exchange and
+//! changed capability set becomes a new signed base, a live-state change a
+//! small signed delta, and both are sent to every connected or joining peer.
+//! The live probe reads free memory only; no probe sets a capability's
+//! busy/free state, so those deltas appear only when something else (the
+//! workload host) marks one. Peers' facts arrive on the same exchange and
 //! are cached with a receiver-assigned trust tier.
 
 use std::path::{Path, PathBuf};

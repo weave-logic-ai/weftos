@@ -14,9 +14,11 @@
 //!   `artifact.revoke` and `artifact.evict` chained
 //!   ([`ArtifactExchange::apply_revocations`]).
 //! - **Limited.** A signer key that is itself revoked can no longer issue
-//!   revocations, signatures are checked strictly (no malleable encodings),
-//!   and a node accepts a bounded number of notices per second, so a stolen
-//!   key cannot make every node verify and sweep in a loop.
+//!   revocations and signatures are checked strictly. Cheap checks (size,
+//!   pinned key, revoked signer, already applied) come first and are free; a
+//!   notice that passes them spends a token from its own connection's bucket
+//!   before the signature verify, so junk on one connection cannot starve
+//!   notices from another, and the operator's own `issue` is exempt.
 //! - **Flooded.** A notice that was new here is forwarded to every other
 //!   peer; one that was already known is not, so a notice crosses a mesh
 //!   once and cannot loop. Revocations are only ever added by notices, so a
@@ -159,9 +161,20 @@ pub struct RevocationExchange {
     anchors: TrustAnchors,
     runtime: Arc<MeshRuntime>,
     me: std::sync::Weak<Self>,
-    /// Token bucket for accepted notices: `(tokens, last refill)`.
-    bucket: std::sync::Mutex<(f64, std::time::Instant)>,
+    /// Token buckets for notices that reach signature verification, one per
+    /// connection (0 = callers with no connection): `(tokens, last refill)`.
+    buckets: dashmap::DashMap<u64, (f64, std::time::Instant)>,
+    /// Notices already applied (hash of payload, key, signature), oldest first.
+    seen: std::sync::Mutex<Seen>,
 }
+
+/// Applied-notice keys: a set for lookup, a queue for oldest-first eviction.
+type Seen = (std::collections::HashSet<[u8; 32]>, std::collections::VecDeque<[u8; 32]>);
+
+/// Connections whose buckets are remembered at once.
+const MAX_TRACKED_CONNS: usize = 1024;
+/// Applied notices remembered for de-duplication.
+const MAX_SEEN: usize = 4096;
 
 /// Notices accepted per second (burst [`NOTICE_BURST`]).
 pub const NOTICES_PER_SEC: f64 = 2.0;
@@ -185,15 +198,23 @@ impl RevocationExchange {
             anchors,
             runtime: runtime.clone(),
             me: w.clone(),
-            bucket: std::sync::Mutex::new((NOTICE_BURST, std::time::Instant::now())),
+            buckets: dashmap::DashMap::new(),
+            seen: Default::default(),
         });
         runtime.set_control_sink(REVOKE_TOPIC, me.clone());
         me
     }
 
-    fn take_token(&self) -> bool {
-        let mut b = self.bucket.lock().unwrap_or_else(|p| p.into_inner());
+    /// Spend one token from `conn`'s bucket.
+    fn take_token(&self, conn: u64) -> bool {
+        if self.buckets.len() >= MAX_TRACKED_CONNS && !self.buckets.contains_key(&conn) {
+            let oldest = self.buckets.iter().min_by_key(|b| b.1).map(|b| *b.key());
+            if let Some(k) = oldest {
+                self.buckets.remove(&k);
+            }
+        }
         let now = std::time::Instant::now();
+        let mut b = self.buckets.entry(conn).or_insert((NOTICE_BURST, now));
         let dt = now.duration_since(b.1).as_secs_f64();
         b.1 = now;
         b.0 = (b.0 + dt * NOTICES_PER_SEC).min(NOTICE_BURST);
@@ -204,24 +225,75 @@ impl RevocationExchange {
         true
     }
 
-    /// Record and apply a notice. Returns whether it was new here; a notice
-    /// already on the list is not swept again.
+    fn notice_key(signed: &SignedRevocation) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        h.update(signed.payload.as_bytes());
+        h.update(&signed.public_key);
+        h.update(&signed.signature);
+        *h.finalize().as_bytes()
+    }
+
+    /// Record and apply a notice from a caller with no connection (budget 0).
+    /// Returns whether it was new here; a notice already applied is not
+    /// swept again.
     pub fn accept(&self, signed: &SignedRevocation) -> Result<bool, NoticeError> {
-        // Budget first: verification and the sweep are the expensive parts.
-        if !self.take_token() {
-            return Err(NoticeError::RateLimited);
+        self.accept_from(signed, Some(0))
+    }
+
+    /// As [`Self::accept`] for a notice from connection `conn`. The cheap
+    /// checks come first and cost no budget: size, a pinned operator/WeftOS
+    /// key, a signer that is not itself revoked, a notice not already
+    /// applied. Only then is a token spent (from `conn`'s own bucket, so
+    /// junk on one connection cannot starve notices on another), before the
+    /// signature verify. `None` skips the budget (the operator's own `issue`).
+    fn accept_from(
+        &self,
+        signed: &SignedRevocation,
+        conn: Option<u64>,
+    ) -> Result<bool, NoticeError> {
+        if signed.payload.len() > MAX_NOTICE_BYTES {
+            return Err(NoticeError::Malformed("payload too large".into()));
         }
-        let n = verify_revocation(signed, &self.anchors)?;
+        let pk: [u8; 32] = signed
+            .public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| NoticeError::Malformed("public key length".into()))?;
+        match self.anchors.signer(&pk) {
+            Some(k) if matches!(k.origin, KeyOrigin::Operator | KeyOrigin::Weftos) => {}
+            _ => return Err(NoticeError::UnauthorizedSigner),
+        }
         if self
             .list
-            .is_subject_revoked(RevocationKind::SignerKey, &crate::workload_pkg::codec::hex_encode(&signed.public_key))
+            .is_subject_revoked(RevocationKind::SignerKey, &crate::workload_pkg::codec::hex_encode(&pk))
         {
             return Err(NoticeError::SignerRevoked);
         }
+        let key = Self::notice_key(signed);
+        if self.seen.lock().unwrap_or_else(|p| p.into_inner()).0.contains(&key) {
+            return Ok(false);
+        }
+        if let Some(conn) = conn
+            && !self.take_token(conn)
+        {
+            return Err(NoticeError::RateLimited);
+        }
+        let n = verify_revocation(signed, &self.anchors)?;
         let new = self
             .list
             .revoke_subject(n.kind, &n.id, &n.reason)
             .map_err(|e| NoticeError::Malformed(e.to_string()))?;
+        {
+            let mut g = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+            if g.0.insert(key) {
+                g.1.push_back(key);
+                if g.1.len() > MAX_SEEN
+                    && let Some(old) = g.1.pop_front()
+                {
+                    g.0.remove(&old);
+                }
+            }
+        }
         if new {
             self.ex.apply_revocations();
         }
@@ -229,9 +301,10 @@ impl RevocationExchange {
     }
 
     /// Revoke here (the operator's own node) and send the notice to every
-    /// peer. `signed` must verify against this node's anchors.
+    /// peer. `signed` must verify against this node's anchors. Not rate
+    /// limited: peers' traffic cannot starve the operator.
     pub async fn issue(&self, signed: SignedRevocation) -> Result<bool, NoticeError> {
-        let new = self.accept(&signed)?;
+        let new = self.accept_from(&signed, None)?;
         self.flood(&signed, None).await;
         Ok(new)
     }
@@ -260,7 +333,7 @@ impl PeerControlSink for RevocationExchange {
     fn on_peer_control(
         &self,
         ctx: &PeerCtx,
-        _conn: u64,
+        conn: u64,
         payload: &serde_json::Value,
     ) -> Vec<serde_json::Value> {
         let signed: SignedRevocation = match serde_json::from_value(payload.clone()) {
@@ -270,7 +343,7 @@ impl PeerControlSink for RevocationExchange {
                 return Vec::new();
             }
         };
-        match self.accept(&signed) {
+        match self.accept_from(&signed, Some(conn)) {
             Ok(true) => {
                 // New here: pass it on. Done on a task: the sink is sync and
                 // the runtime is mid-dispatch.

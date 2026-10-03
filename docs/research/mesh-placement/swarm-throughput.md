@@ -77,12 +77,20 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
 
 ## Safety rules the swarm enforces
 
-- **Licence-gated cogs are not redistributed.** A package with Cognitum
-  provenance (a `cognitum.*` release-record attestation, or a `cognitum`
-  release URL) is marked not redistributable when its manifest is authorized.
-  This node may hold and run it, but never seeds it, advertises it
-  (`store.artifact.*`, `model.present`) or serves it to a peer. No licence or
-  same-operator check exists to relax that, so there is no exception.
+- **Sharing is opt-in and fails closed.** A package is redistributable only
+  when its signed manifest says `redistributable = true` (a field of the cog
+  manifest body, default false, part of the signed statement;
+  `weaver workload pack --redistributable` sets it). Even then a package with
+  Cognitum provenance (a `cognitum.*` attestation or a `cognitum` release URL)
+  is not. A package that is not redistributable is held and run by this node
+  but never seeded, advertised (`store.artifact.*`, `model.present`) or
+  served; an operator re-pack of a Cognitum binary that drops the attestation
+  is still not shared unless its signer opts in. One non-redistributable
+  package listing a content hash vetoes serving that hash for every package.
+  **Our own weftos cogs therefore need `redistributable = true` in their
+  manifests to be seeded.** Hashes recorded in a cog-sources `provenance.json`
+  with a Cognitum trust are not consulted yet (that file is on another branch):
+  follow-up.
 - **Sizes are checked before any piece is requested.** A descriptor with a
   piece size over `max_piece_size` (default 16 MiB), a total over
   `max_artifact_bytes` (default 64 GiB), or one that differs from the exact
@@ -102,8 +110,23 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   `ArtifactCache::unpin_package`. Bytes being downloaded count against the
   budget. `forget` only removes blobs this exchange created and nobody else
   has stored since (store reference count 1), and does not forget a pinned
-  entry. `apply_revocations` does evict pinned entries: a revoked package has
-  to stop running as well as stop seeding.
+  entry. The daemon opens its store with `ArtifactStore::open_file`, so blobs
+  left by installed workloads from earlier runs are indexed and the exchange
+  never takes ownership of them (with `new_file` it would have re-stored the
+  same bytes as its own and could evict them). `apply_revocations` does evict
+  pinned entries: the bytes are removed and serving is blocked. It does not
+  stop a workload that is already running: that instance continues until it
+  restarts, and placement does not yet react to `artifact.revoke`. Follow-up:
+  have placement tear down instances of a revoked package.
+- **Unverified facts cannot crowd the cache.** One connection holds at most 4
+  `Discovered` entries and the cache at most 512 in all; past that the
+  connection holding the most loses its oldest entry first, and `Paired` and
+  `Pinned` entries are never touched. Frames are budgeted on their whole size
+  before anything is parsed. Limitation: a connection that reconnects gets a
+  fresh id and quota (no remote address is available to charge), so a patient
+  attacker can still churn the `Discovered` class; it cannot displace verified
+  peers or an unverified peer that holds fewer entries than the attacker's
+  connections.
 - **Grants are per package.** Two packages listing the same content each keep
   a grant; revoking one leaves the content allowed by the other.
 
@@ -117,8 +140,19 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   re-flood. To lift a revocation, clear the list on every node or ship the
   package under a new key.
 - A signer key that is itself revoked cannot issue notices. Signatures are
-  checked strictly. A node accepts at most a burst of 10 notices, then 2 per
-  second, and a notice already on the list is not swept again.
+  checked strictly. Cheap checks come first and cost nothing (size, pinned
+  operator/WeftOS key, revoked signer, notice already applied); a notice that
+  passes spends a token from its own connection's bucket (burst 10, then 2 per
+  second) before the signature verify, so junk on one connection cannot starve
+  notices on another, and the operator's own `issue` is exempt. A known notice
+  is not swept again.
+- Not covered: a running instance. See the eviction note above.
+
+## Live facts
+
+The 60 s tick refreshes free memory only. Capability busy/free states are not
+produced by any probe; a delta carries them only when the workload host marks
+one.
 
 ## Daemon wiring
 

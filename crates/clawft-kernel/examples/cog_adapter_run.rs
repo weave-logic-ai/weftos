@@ -179,6 +179,7 @@ fn signed(dir: &Path, o: &Opts, id: &str) -> Result<VerifiedWorkload, String> {
             release_url: Some("https://storage.googleapis.com/cognitum-apps/cogs".into()),
         },
         cognitum_record: None,
+        redistributable: true,
     };
     let pkg = dir.join("pkg");
     let mut env = pack_cog(&input, &pkg).map_err(|e| e.to_string())?;

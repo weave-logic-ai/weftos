@@ -78,6 +78,7 @@ pub(crate) fn package(dir: &std::path::Path, k: &SigningKey) -> std::path::PathB
             release_url: None,
         },
         cognitum_record: None,
+        redistributable: true,
     };
     let pkg = dir.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();

@@ -82,6 +82,7 @@ fn fixture_arches(record: Option<&Value>, arches: &[&str]) -> Fixture {
             release_url: None,
         },
         cognitum_record,
+        redistributable: false,
     };
     let pkg = root.join("pkg");
     let env = pack_cog(&input, &pkg).unwrap();
@@ -268,6 +269,7 @@ fn pack_refuses_non_empty_output_and_unknown_arch() {
             ..Default::default()
         },
         cognitum_record: None,
+        redistributable: false,
     };
     assert!(matches!(
         pack_cog(&input, &fx.pkg),

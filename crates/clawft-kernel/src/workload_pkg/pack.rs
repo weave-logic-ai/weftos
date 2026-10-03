@@ -30,6 +30,9 @@ pub struct CogPackInput {
     pub source: PackageSource,
     /// Optional Cognitum ADR-154/155 release record to carry.
     pub cognitum_record: Option<PathBuf>,
+    /// Sign the package as redistributable (see
+    /// [`CogPackageBody::redistributable`]). Default for a packer: false.
+    pub redistributable: bool,
 }
 
 /// Packing failure.
@@ -173,6 +176,7 @@ pub fn pack_cog(input: &CogPackInput, out_dir: &Path) -> Result<ManifestEnvelope
         binaries,
         source: input.source.clone(),
         attestations,
+        redistributable: input.redistributable,
     };
     body.validate()?;
     let value = serde_json::to_value(&body).map_err(|e| ManifestError::Parse(e.to_string()))?;

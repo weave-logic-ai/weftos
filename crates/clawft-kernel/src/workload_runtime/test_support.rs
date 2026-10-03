@@ -45,6 +45,7 @@ pub fn signed_workload(cog_toml: &str, binaries: &[(&str, &[u8])]) -> SignedFixt
             release_url: None,
         },
         cognitum_record: None,
+        redistributable: true,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();

@@ -248,6 +248,12 @@ pub struct CogPackageBody {
     /// Optional external attestations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attestations: Vec<AttestationRef>,
+    /// The signer states this package may be handed to other nodes (seeded,
+    /// advertised, served over the swarm). Absent means false: sharing is
+    /// opt-in, so an operator re-pack of a licence-gated binary is never
+    /// redistributed by accident. It is part of the signed statement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redistributable: bool,
 }
 
 impl CogPackageBody {
