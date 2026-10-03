@@ -15,7 +15,7 @@ use clawft_services::api::{
     AgentAccess, AgentInfo, ApiState, BusAccess, ChannelAccess, ChannelStatusInfo, ConfigAccess,
     InMemoryKernelFacade, MemoryAccess, MemoryEntryInfo, SessionAccess, SessionDetail, SessionInfo,
     SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess, TtsProviderInfo, VoiceAccess,
-    VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo, auth::TokenStore,
+    VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo, auth::MemoryTokenValidator,
     broadcaster::TopicBroadcaster, build_router,
 };
 use tower::ServiceExt;
@@ -140,8 +140,8 @@ impl VoiceAccess for StubVoice {
     }
 }
 
-fn make_state() -> (ApiState, Arc<TokenStore>) {
-    let auth = Arc::new(TokenStore::new());
+fn make_state() -> (ApiState, Arc<MemoryTokenValidator>) {
+    let auth = Arc::new(MemoryTokenValidator::new());
     let state = ApiState {
         tools: Arc::new(StubTools),
         sessions: Arc::new(StubSessions),
@@ -159,6 +159,7 @@ fn make_state() -> (ApiState, Arc<TokenStore>) {
             clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 100)),
+        health_cache: Default::default(),
     };
     (state, auth)
 }
@@ -225,23 +226,28 @@ async fn auth_middleware_allows_health_without_token() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// ADR-102 D5: the mint route is gone. It must not be public, and it must
+/// not mint for an authenticated caller either (404 both ways).
 #[tokio::test]
-async fn auth_middleware_allows_token_endpoint_without_token() {
-    let (state, _auth) = make_state();
+async fn token_mint_route_is_gone() {
+    let (state, auth) = make_state();
+    let token = auth.generate_token(3600).unwrap();
     let app = build_router(state, &[], None);
 
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/api/auth/token")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
+    for bearer in [None, Some(token)] {
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/auth/token");
+        if let Some(t) = bearer {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        let resp = app
+            .clone()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 }
 
 /// WEFT-570: `POST /api/auth/revoke` must require a valid Bearer

@@ -1,8 +1,9 @@
 /**
  * use-auth — token lifecycle hook for the ClawFT dashboard (WEFT-309).
  *
- * The clawft gateway hands out 24h bearer tokens via `POST /api/auth/token`.
- * `weft ui` opens the browser at `https://<host>/#token=<uuid>` so the user
+ * Bearer tokens are issued by the kernel daemon (`weft token issue`); the
+ * gateway has no mint route (ADR-102 D5). The CLI prints a link
+ * `https://<host>/#token=<token>` and the dashboard reads it. `weft ui` opens the browser at `https://<host>/#token=<uuid>` so the user
  * never has to copy-paste; the dashboard then talks to the API with that
  * token via `Authorization: Bearer …`.
  *
@@ -23,7 +24,7 @@
  *
  *   3. **Logout is terminal AND server-acknowledged** (WEFT-570). We POST
  *      `/api/auth/revoke` with the current bearer so the server-side
- *      `TokenStore::revoke_token` marks the entry. Only after the revoke
+ *      the daemon's `auth.token.revoke` marks the token. Only after the revoke
  *      attempt do we clear localStorage and arm the per-tab logout flag.
  *      Network failures during revoke fall through to local clear so the
  *      user is never stuck "looking logged in" — but the server is the
@@ -101,7 +102,7 @@ export function readStoredToken(): string | null {
   return localStorage.getItem(STORAGE_KEY);
 }
 
-/** Persist a token (e.g. after `POST /api/auth/token`). */
+/** Persist a token (e.g. pasted from `weft token issue`). */
 export function writeStoredToken(token: string): void {
   if (typeof window === "undefined") return;
   // A successful explicit token write counts as "logged in again" — clear
@@ -119,7 +120,7 @@ export function clearStoredToken(): void {
 
 /**
  * POST `/api/auth/revoke` with the given bearer so the server-side
- * `TokenStore::revoke_token` marks the entry. Best-effort — a network
+ * the daemon's `auth.token.revoke` marks the token. Best-effort — a network
  * failure falls through to a local clear so the user is never stuck
  * "looking logged in", but the server is the source of truth and a
  * successful revoke prevents the token from being reused even if it
@@ -152,7 +153,7 @@ export interface UseAuthValue {
   token: string | null;
   /** True after the URL bootstrap pass has run at least once. */
   ready: boolean;
-  /** Replace the token (e.g. after a fresh `POST /api/auth/token`). */
+  /** Replace the token (e.g. pasted from `weft token issue`). */
   setToken: (token: string) => void;
   /**
    * Revoke server-side, then clear local state and prevent silent re-auth

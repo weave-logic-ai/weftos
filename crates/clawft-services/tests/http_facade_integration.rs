@@ -26,7 +26,7 @@ use clawft_services::api::{
     InMemoryKernelFacade, KernelFacadeBackend, MemoryAccess, MemoryEntryInfo, SessionAccess,
     SessionDetail, SessionInfo, SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess,
     TtsProviderInfo, VoiceAccess, VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo,
-    auth::TokenStore, broadcaster::TopicBroadcaster, build_router,
+    auth::MemoryTokenValidator, broadcaster::TopicBroadcaster, build_router,
 };
 use clawft_types::config::{
     KernelConfig, PairingConfig, ProfilesConfig, VectorBackendKind, VectorConfig,
@@ -171,14 +171,15 @@ impl VoiceAccess for StubVoice {
     }
 }
 
-fn make_state() -> (ApiState, Arc<TokenStore>, Arc<InMemoryKernelFacade>) {
-    let auth = Arc::new(TokenStore::new());
+fn make_state() -> (ApiState, Arc<MemoryTokenValidator>, Arc<InMemoryKernelFacade>) {
+    let auth = Arc::new(MemoryTokenValidator::new());
     let facade = Arc::new(InMemoryKernelFacade::new());
     let state = ApiState {
         routing_history: Arc::new(
             clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0)),
+        health_cache: Default::default(),
         tools: Arc::new(StubTools),
         sessions: Arc::new(StubSessions),
         agents: Arc::new(StubAgents),
@@ -271,7 +272,6 @@ async fn config_api_surfaces_profiles_and_pairing() {
 
 /// Full facade RPC route table (HTTP method, path, expected RPC method).
 const FACADE_RPC_ROUTES: &[(&str, &str, &str)] = &[
-    ("GET", "/api/status", "kernel.status"),
     ("GET", "/api/processes", "kernel.ps"),
     ("GET", "/api/services", "kernel.services"),
     ("GET", "/api/chain/status", "chain.status"),
@@ -293,8 +293,9 @@ async fn integration_all_rpc_routes_map_and_return_ok() {
 
     assert_eq!(
         FACADE_RPC_ROUTES.len(),
-        12,
-        "route table must stay in sync with http_facade match_facade_route"
+        11,
+        "route table must stay in sync with http_facade match_facade_route \
+         (12 kernel routes minus `/api/status`, served by tiered /api/health, ADR-102 D1)"
     );
 
     for (method, path, expected_method) in FACADE_RPC_ROUTES {

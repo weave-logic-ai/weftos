@@ -62,14 +62,14 @@ cargo run --bin clawft -- --api-port 3100 --ui-dir ./clawft-ui/dist
 # Health check
 curl http://localhost:18789/api/health
 
+# Issue a token from the local daemon (the gateway has no mint route)
+TOKEN=$(weft token issue | sed -n 's/^token: *//p')
+
 # List agents
-curl http://localhost:18789/api/agents
+curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/agents
 
 # List sessions
-curl http://localhost:18789/api/sessions
-
-# Create a bearer token (for future auth)
-curl -X POST http://localhost:18789/api/auth/token
+curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/sessions
 ```
 
 ### Connecting via WebSocket
@@ -158,46 +158,49 @@ Each endpoint is annotated with its implementation status:
 
 ## Authentication
 
-Authentication uses in-memory bearer tokens managed by `TokenStore`. Tokens are
-UUID v4 strings with a configurable TTL (default: 24 hours / 86400 seconds).
+Every `/api/*` route and `/ws` needs a bearer token, except `GET /api/health`
+(see [Health](#health)). The kernel daemon is the only token authority
+(ADR-102): `weft token issue` mints a `wft_` secret over the local socket,
+shows it once, and records the grant on the chain. The gateway keeps no token
+store. It validates each bearer through the daemon's `auth.token.validate`,
+caching a positive answer for at most 30 seconds.
 
-**Important:** The auth middleware exists in `auth.rs` but is **intentionally
-disabled** for the development workflow. When enabled, it checks the
-`Authorization: Bearer <token>` header on all `/api/*` routes except
-`/api/auth/token` and `/api/health`.
+- There is **no** `POST /api/auth/token`. It returns 404.
+- Only owner tokens are accepted. A project token (ADR-103) is a child
+  kernel's credential and is refused with 401.
+- Daemon down: authenticated requests return `503` with
+  `{"error":"daemon unavailable","remedy":"start the daemon: weft kernel start"}`.
+  A missing or unknown token is `401` with `WWW-Authenticate: Bearer`.
+- `/ws` also accepts `?token=<token>`, since browsers cannot set the header on
+  an upgrade.
+- A token expires after its TTL (default 15 minutes, at most 24 hours).
+  `weft token list` shows live tokens and `weft token revoke <id>` kills one.
 
-### Create Token
+### Revoke Token
 
 ```
-POST /api/auth/token
+POST /api/auth/revoke
 ```
 
-Generates a new bearer token with a 24-hour TTL. No authentication required.
+Revokes the bearer that authenticated the request (logout). It forwards the
+token's own id to the daemon's `auth.token.revoke`, so a caller cannot revoke
+anyone else's token. The cache is bypassed, so the token is refused on its
+next use.
 
-**Status:** Live
-
-**Request body:** None
-
-**Response:**
-
-```json
-{
-  "token": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-}
-```
-
-**Example:**
+**Status:** Live. **Response:** `204 No Content`; `503` if the daemon is
+down (the token is then still live).
 
 ```bash
-curl -X POST http://localhost:18789/api/auth/token
+curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/auth/revoke
 ```
 
-**Notes:**
+### Plain HTTP off loopback
 
-- The token is a UUID v4 string (not prefixed).
-- Tokens are stored in-memory and are lost on server restart.
-- When auth middleware is enabled, include the token as:
-  `Authorization: Bearer a1b2c3d4-e5f6-7890-abcd-ef1234567890`
+A bearer token is owner-equivalent, so on a LAN it is as good as shell
+access. The gateway has no TLS of its own and **refuses to bind a
+non-loopback address** unless the operator says TLS is terminated in front of
+it: `weft gateway --dangerously-plain-http`, or `gateway.dangerously_plain_http`
+in the config. Loopback binds need nothing.
 
 ### Client-side token lifecycle (`use-auth`)
 
@@ -205,19 +208,19 @@ The dashboard ships a `useAuth()` React hook in
 `clawft-ui/src/lib/use-auth.ts` that owns the bearer token end-to-end.
 Two security properties are enforced (WEFT-309):
 
-1. **Single-use URL tokens.** When `weft ui` opens the browser at
-   `https://<host>/?token=<uuid>`, the hook reads the value once on
+1. **Single-use URL tokens.** When the browser is opened at
+   `https://<host>/#token=<token>` (the link `weft token issue` prints),
+   the hook reads the value once on
    first paint, persists it to `localStorage["clawft-token"]`, and
-   immediately strips `?token` from the address bar via
+   immediately strips `#token` from the address bar via
    `history.replaceState`. Reload, share, or screenshot of the URL
    never leaks the token.
 
 2. **Terminal logout.** `logout()` clears `localStorage` *and* sets a
    per-tab `sessionStorage["clawft-logged-out"]` latch. A stale
-   `?token=` left in the address bar (e.g. from the back button) does
+   `#token=` left in the address bar (e.g. from the back button) does
    not silently re-auth the user; the latch is cleared only when a
-   fresh token is explicitly written via `setToken()` or
-   `POST /api/auth/token`.
+   fresh token is explicitly written via `setToken()`.
 
 `api-client.ts` reads the token via the shared helpers
 (`readStoredToken` / `writeStoredToken` / `clearStoredToken`) so all
@@ -244,30 +247,61 @@ function NavBar() {
 GET /api/health
 ```
 
-Returns basic server health information including uptime and crate version.
+Tiered by token (ADR-102 D1). This is the only route that answers without one.
 
 **Status:** Live
 
-**Response:**
+**No token, or an invalid one.** Liveness only, so load balancers and uptime
+checks learn nothing else:
+
+```json
+{ "status": "ok" }
+```
+
+`200` while the daemon answers. `503` with `{"status":"degraded"}` when the
+daemon cannot be reached.
+
+**Valid owner token.** The full status document. Fields are an explicit
+allow-list; daemon replies are never passed through, and no key, credentialed
+URL or runtime path appears.
 
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
-  "uptime_secs": 3600
+  "version": "0.8.1",
+  "uptime_secs": 3600,
+  "build": { "version": "0.8.1", "binary": "/path/to/weft" },
+  "gateway": { "uptime_secs": 3600 },
+  "daemon": { "reachable": true, "state": "running", "version": "0.8.1",
+              "git_sha": "abc1234", "built_at": "...", "uptime_secs": 3590.2,
+              "version_skew": false },
+  "kernel": { "processes": [{ "pid": 1, "agent_id": "kernel", "state": "running" }],
+              "services":  [{ "name": "chain", "service_type": "core", "state": "running", "health": "ok" }] },
+  "chain": { "available": true, "sequence": 41, "head": "<hash>",
+             "checkpoint_count": 1, "events_since_checkpoint": 2,
+             "verify": { "valid": true, "event_count": 42, "signature_verified": true, "error_count": 0 } },
+  "mcp": { "mounted": false },
+  "channels": [{ "name": "web", "type": "web", "status": "connected" }],
+  "providers": [{ "name": "anthropic", "configured": true }],
+  "token": { "id": "...", "label": "...", "issued_at": "...", "expires_at": "..." }
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `status` | `string` | Always `"ok"` if the server is running |
-| `version` | `string` | `CARGO_PKG_VERSION` at compile time |
-| `uptime_secs` | `u64` | Seconds since server process start |
+| Field | Description |
+|-------|-------------|
+| `status` | `"ok"`, or `"degraded"` (HTTP 503) when the daemon is unreachable; `daemon` is then `{"reachable": false}` and `kernel`/`chain` are `null` |
+| `version`, `uptime_secs` | Kept at top level for the dashboard |
+| `daemon.version_skew` | `true` when the daemon's version differs from the gateway's |
+| `chain.verify` | `chain.verify` result, reused for 60 s rather than recomputed per request |
+| `providers[].configured` | A key is set. Never the key or base URL |
+
+`GET /api/status` (a stub) was removed; this route replaces it.
 
 **Example:**
 
 ```bash
-curl http://localhost:18789/api/health
+curl http://localhost:18789/api/health                                   # liveness
+curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/health # full status
 ```
 
 ---
@@ -2233,8 +2267,8 @@ Or for boolean-result operations:
 
 | # | Method | Path | Status | Description |
 |---|--------|------|--------|-------------|
-| 1 | `POST` | `/api/auth/token` | Live | Create bearer token |
-| 2 | `GET` | `/api/health` | Live | Health check |
+| 1 | `POST` | `/api/auth/revoke` | Live | Revoke the caller's own token |
+| 2 | `GET` | `/api/health` | Live | Liveness; full status with a token |
 | 3 | `GET` | `/api/agents` | Live | List agents |
 | 4 | `GET` | `/api/agents/{name}` | Live | Get agent detail |
 | 5 | `POST` | `/api/agents/{name}/start` | Stub | Start agent |

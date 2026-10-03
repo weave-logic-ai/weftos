@@ -339,7 +339,6 @@ export const handlers = [
   ),
 
   // Auth
-  http.post("/api/auth/token", () => HttpResponse.json({ token: "mock-dev-token-1234" })),
 
   // Skills
   http.get("/api/skills", () => HttpResponse.json(mockSkills)),

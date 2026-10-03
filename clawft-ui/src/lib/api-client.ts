@@ -113,10 +113,6 @@ export const api = {
   system: {
     health: () => apiFetch<SystemHealth>("/api/health"),
   },
-  auth: {
-    createToken: () =>
-      apiFetch<{ token: string }>("/api/auth/token", { method: "POST" }),
-  },
   skills: {
     list: () => apiFetch<SkillData[]>("/api/skills"),
     install: (id: string) =>

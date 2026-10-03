@@ -147,7 +147,8 @@ section you do not need.
     "host": "127.0.0.1",
     "port": 18790,
     "heartbeat_interval_minutes": 0,
-    "heartbeat_prompt": "heartbeat"
+    "heartbeat_prompt": "heartbeat",
+    "dangerously_plain_http": false
   },
 
   "routing": {
@@ -313,10 +314,25 @@ HTTP server and heartbeat settings.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `host` | string | `"0.0.0.0"` | Bind address for the HTTP server. |
+| `host` | string | `"127.0.0.1"` | Bind address for the HTTP server and API. Loopback by default; see `dangerously_plain_http` for anything else. |
 | `port` | integer | `18790` | Listen port. |
+| `api_enabled` | boolean | `false` | Serve the REST/WebSocket API. |
+| `api_port` | integer | `18789` | API listen port. |
+| `cors_origins` | string[] | `["http://localhost:5173"]` | Allowed CORS origins for the API. |
+| `dangerously_plain_http` | boolean | `false` | Allow the API on a non-loopback `host` over plain HTTP. Same as `weft gateway --dangerously-plain-http`. |
 | `heartbeat_interval_minutes` | integer | `0` | Minutes between heartbeat messages. `0` disables heartbeats. |
 | `heartbeat_prompt` | string | `"heartbeat"` | Prompt text sent on each heartbeat tick. |
+
+**API authentication.** Every API route except `GET /api/health` needs a
+bearer token issued by the kernel daemon (`weft token issue`, ADR-102); the
+daemon must be running. See
+[API reference: Authentication](../ui/api-reference.md#authentication).
+
+**TLS guard.** A bearer token is owner-equivalent, and the gateway has no TLS
+of its own. With the API enabled, a non-loopback `host` (for example
+`0.0.0.0`) is refused at startup unless `dangerously_plain_http` is set or
+`--dangerously-plain-http` is passed, which states that TLS is terminated in
+front of the gateway (a reverse proxy). Loopback binds are unaffected.
 
 ### channels
 

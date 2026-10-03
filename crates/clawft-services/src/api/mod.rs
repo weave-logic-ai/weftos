@@ -13,6 +13,7 @@ pub mod cron_api;
 pub mod daemon_facade;
 pub mod delegation;
 pub mod handlers;
+pub mod health;
 pub mod http_facade_api;
 pub mod memory_api;
 pub mod middleware;
@@ -44,8 +45,8 @@ pub struct ApiState {
     pub agents: Arc<dyn AgentAccess>,
     /// Message bus for WebSocket broadcasting.
     pub bus: Arc<dyn BusAccess>,
-    /// Auth token store.
-    pub auth: Arc<auth::TokenStore>,
+    /// Bearer-token validator (the daemon in production; see [`auth`]).
+    pub auth: Arc<dyn auth::TokenValidator>,
     /// Skills access.
     pub skills: Arc<dyn SkillAccess>,
     /// Memory access.
@@ -60,7 +61,7 @@ pub struct ApiState {
     pub broadcaster: Arc<broadcaster::TopicBroadcaster>,
     /// WeftOS kernel HTTP facade backend (WEFT-122).
     ///
-    /// Drives `/api/status`, chain/vectors/ecc RPC routes, `/events` SSE
+    /// Drives the chain/vectors/ecc RPC routes, `/events` SSE
     /// (`poll_events`), and `/custody/witness`.
     pub kernel_facade: Arc<dyn KernelFacadeBackend>,
     /// WEFT-40: shared last-N pipeline routing decision history.
@@ -76,6 +77,8 @@ pub struct ApiState {
     /// active so admin metrics reflect live traffic. Fresh instance when
     /// the API runs without a shared limiter (tests/stubs/static mode).
     pub rate_limiter: Arc<clawft_core::pipeline::rate_limiter::RateLimiter>,
+    /// Cache for the expensive parts of the tokened `/api/health` view.
+    pub health_cache: Arc<health::HealthCache>,
 }
 
 /// Trait for tool registry access (decouples API from Platform generics).
@@ -318,11 +321,6 @@ pub async fn serve(
     static_dir: Option<&str>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    // WEFT-102: kick off the periodic token-store sweep so revoked
-    // and expired tokens do not accumulate over the server's lifetime.
-    // The handle is detached -- the task observes the store via a
-    // Weak ref and self-terminates when ApiState drops its Arc.
-    let _cleanup = auth::spawn_cleanup_task(state.auth.clone(), auth::TOKEN_CLEANUP_INTERVAL_SECS);
     let mut router = build_router(state, cors_origins, static_dir);
     // Loopback binds are exposed to DNS rebinding; pin the Host header.
     if listener.local_addr().is_ok_and(|a| a.ip().is_loopback()) {
@@ -352,6 +350,7 @@ pub async fn serve(
 /// fallback is added so that the built frontend is served for any path
 /// not matched by the API or WebSocket routes.
 pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option<&str>) -> Router {
+    health::mark_start();
     let cors = middleware::build_cors_layer(cors_origins);
     let rate_limit_state = Arc::new(middleware::RateLimitState::new());
 

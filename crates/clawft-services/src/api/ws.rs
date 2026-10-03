@@ -368,7 +368,7 @@ mod tests {
     //! [`handle_socket_with_heartbeat`] so the assertions run in
     //! roughly half a second.
     use super::*;
-    use crate::api::auth::TokenStore;
+    use crate::api::auth::MemoryTokenValidator;
     use crate::api::broadcaster::TopicBroadcaster;
     use crate::api::{
         AgentAccess, AgentInfo, ApiState, BusAccess, ChannelAccess, ChannelStatusInfo,
@@ -500,11 +500,12 @@ mod tests {
             rate_limiter: std::sync::Arc::new(
                 clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0),
             ),
+            health_cache: Default::default(),
             tools: stub.clone(),
             sessions: stub.clone(),
             agents: stub.clone(),
             bus: stub.clone(),
-            auth: Arc::new(TokenStore::new()),
+            auth: Arc::new(MemoryTokenValidator::new()),
             skills: stub.clone(),
             memory: stub.clone(),
             config: stub.clone(),

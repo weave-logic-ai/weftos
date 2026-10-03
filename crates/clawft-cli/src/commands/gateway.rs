@@ -75,6 +75,14 @@ pub struct GatewayArgs {
     /// Enable intelligent routing (requires vector-memory feature).
     #[arg(long)]
     pub intelligent_routing: bool,
+
+    /// Serve the API over plain HTTP on a non-loopback address.
+    ///
+    /// A bearer token grants the full API, so a non-loopback bind is
+    /// refused unless TLS is terminated in front of the gateway and this
+    /// is set (or `gateway.dangerously_plain_http`).
+    #[arg(long)]
+    pub dangerously_plain_http: bool,
 }
 
 /// Resolve the cron JSONL storage path.
@@ -122,7 +130,8 @@ pub async fn run(args: GatewayArgs) -> anyhow::Result<()> {
 #[cfg(feature = "channels")]
 async fn run_with_channels(args: GatewayArgs) -> anyhow::Result<()> {
     let platform = Arc::new(NativePlatform::new());
-    let loaded = super::load_config_layered(&*platform, args.config.as_deref()).await?;
+    let mut loaded = super::load_config_layered(&*platform, args.config.as_deref()).await?;
+    loaded.config.gateway.dangerously_plain_http |= args.dangerously_plain_http;
     // Prefer explicit `--config` / CLAWFT_CONFIG, else discovery chain.
     let config_watch_path = args
         .config
@@ -291,6 +300,11 @@ pub async fn run_with_config(
         let cors_origins = config.gateway.cors_origins.clone();
         let api_host = config.gateway.host.clone();
         let port = config.gateway.api_port;
+        clawft_services::api::auth::validate_bind_policy(
+            &api_host,
+            config.gateway.dangerously_plain_http,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
         let addr = format!("{api_host}:{port}");
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
@@ -750,7 +764,10 @@ fn build_api_state(
     config: &clawft_types::config::Config,
     broadcaster: Arc<TopicBroadcaster>,
 ) -> ApiState {
-    use clawft_services::api::auth::TokenStore;
+    use clawft_services::api::auth::DaemonTokenValidator;
+
+    // One daemon facade serves kernel routes and token validation (ADR-102).
+    let facade = Arc::new(clawft_services::api::DaemonKernelFacade::new());
 
     let tool_bridge = ToolBridge::new(ctx.tools_arc());
     let session_bridge = SessionBridge::new(ctx.sessions().clone());
@@ -821,7 +838,7 @@ fn build_api_state(
         sessions: Arc::new(session_bridge),
         agents: Arc::new(agent_bridge),
         bus: Arc::new(bus_bridge),
-        auth: Arc::new(TokenStore::new()),
+        auth: Arc::new(DaemonTokenValidator::new(facade.clone())),
         skills: Arc::new(skill_bridge),
         memory: Arc::new(memory_bridge),
         config: Arc::new(config_bridge),
@@ -829,7 +846,7 @@ fn build_api_state(
         voice: Arc::new(voice_bridge),
         broadcaster,
         // ADR-102 D6: facade routes forward to the kernel daemon; 503 when it is down.
-        kernel_facade: Arc::new(clawft_services::api::DaemonKernelFacade::new()),
+        kernel_facade: facade,
         // WEFT-40: empty ring unless wired to PipelineRegistry::decision_history.
         routing_history: Arc::new(
             clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
@@ -842,6 +859,7 @@ fn build_api_state(
             config.routing.rate_limiting.window_seconds,
             config.routing.rate_limiting.global_rate_limit_rpm,
         )),
+        health_cache: Default::default(),
     }
 }
 
@@ -854,6 +872,7 @@ mod tests {
         let args = GatewayArgs {
             config: None,
             intelligent_routing: false,
+            dangerously_plain_http: false,
         };
         assert!(args.config.is_none());
     }
@@ -863,6 +882,7 @@ mod tests {
         let args = GatewayArgs {
             config: Some("/tmp/gw-config.json".into()),
             intelligent_routing: false,
+            dangerously_plain_http: false,
         };
         assert_eq!(args.config.as_deref(), Some("/tmp/gw-config.json"));
     }

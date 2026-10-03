@@ -15,7 +15,7 @@ import type {
   ToolInfo,
   MemoryEntry,
 } from "../backend-adapter.ts";
-import { api, setAuthToken, getAuthToken } from "../api-client.ts";
+import { api, setAuthToken } from "../api-client.ts";
 import { WsClient } from "../ws-client.ts";
 
 export class AxumAdapter implements BackendAdapter {
@@ -49,15 +49,9 @@ export class AxumAdapter implements BackendAdapter {
   }
 
   async init(): Promise<void> {
-    // Verify auth token exists, create one if needed
-    if (!getAuthToken()) {
-      try {
-        const { token } = await api.auth.createToken();
-        setAuthToken(token);
-      } catch {
-        // Auth may not be required in dev mode
-      }
-    }
+    // Tokens are issued by the daemon (`weft token issue`) and arrive via
+    // the URL fragment or the constructor; the gateway no longer mints them
+    // (ADR-102 D5). Without one, API calls fail with 401.
 
     // Connect WebSocket
     this.ws.connect();

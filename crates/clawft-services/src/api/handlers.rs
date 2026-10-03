@@ -29,11 +29,11 @@ pub fn api_routes() -> Router<ApiState> {
         // Tool endpoints
         .route("/tools", get(list_tools))
         .route("/tools/{name}/schema", get(get_tool_schema))
-        // Auth
-        .route("/auth/token", post(create_token))
+        // Auth: tokens are minted by the daemon (`weft token issue`), never
+        // over HTTP (ADR-102 D5); only self-revoke is exposed here.
         .route("/auth/revoke", post(revoke_token))
-        // Health check
-        .route("/health", get(health_check))
+        // Health check (tiered by token, ADR-102 D1)
+        .route("/health", get(super::health::health_check))
         // Delegation monitoring
         .merge(super::delegation::delegation_routes())
         // System monitoring
@@ -109,63 +109,27 @@ async fn get_tool_schema(
     Json(state.tools.tool_schema(&name))
 }
 
-async fn create_token(
-    State(state): State<ApiState>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let token = state
-        .auth
-        .generate_token(86400) // 24h TTL
-        .ok_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "token": token })))
-}
-
 /// `POST /api/auth/revoke` — server-side logout for the bearer used to
-/// authenticate this very request. WEFT-570.
+/// authenticate this very request. WEFT-570, ADR-102 D5.
 ///
-/// The auth middleware already validated the `Authorization: Bearer
-/// <token>` header before this handler runs, so we know the caller
-/// holds the token they're asking us to revoke. We pull the token back
-/// out of the request headers, mark it revoked in the `TokenStore`, and
-/// return 204 No Content. Subsequent uses of the same token return 401
-/// from the auth middleware on their next request.
-///
-/// This route is NOT in `auth::PUBLIC_PATHS` — anonymous callers cannot
-/// hit it. The "you must already be authenticated to revoke yourself"
-/// invariant means there is no way for one user to revoke another
-/// user's token through this endpoint.
+/// The auth middleware already validated the bearer and left its
+/// [`TokenMeta`](super::auth::TokenMeta) in the request extensions; the
+/// handler forwards that token's own id to the daemon's `auth.token.revoke`.
+/// There is no way to name another token here, so one caller cannot revoke
+/// another's. Returns 204 on success and 503 when the daemon is down (the
+/// token is then still live, and the caller is told so).
 async fn revoke_token(
     State(state): State<ApiState>,
-    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
 ) -> axum::http::StatusCode {
-    let token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .map(str::to_string);
-
-    match token {
-        Some(t) if state.auth.revoke_token(&t) => axum::http::StatusCode::NO_CONTENT,
-        // Unknown / already-revoked / missing bearer: treat as no-op.
-        // The middleware that admitted this request already validated
-        // the bearer, so the only way `revoke_token` returns false here
-        // is a race with cleanup (token expired between admission and
-        // handler) — semantically still "your session is gone".
-        _ => axum::http::StatusCode::NO_CONTENT,
+    use super::auth::{RevokeOutcome, TokenMeta};
+    let Some(meta) = request.extensions().get::<TokenMeta>() else {
+        return axum::http::StatusCode::UNAUTHORIZED;
+    };
+    match state.auth.revoke(&meta.id).await {
+        RevokeOutcome::Revoked => axum::http::StatusCode::NO_CONTENT,
+        RevokeOutcome::Unavailable => axum::http::StatusCode::SERVICE_UNAVAILABLE,
     }
-}
-
-/// Server start time, set once at process start.
-static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-
-/// Returns basic health status, version, and uptime.
-async fn health_check() -> Json<serde_json::Value> {
-    let start = START_TIME.get_or_init(std::time::Instant::now);
-    let uptime_secs = start.elapsed().as_secs();
-    Json(serde_json::json!({
-        "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
-        "uptime_secs": uptime_secs
-    }))
 }
 
 // CSP, CORS deny-by-default, per-IP rate limiting, and Bearer-token
