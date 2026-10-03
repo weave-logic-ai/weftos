@@ -85,9 +85,10 @@ this order:
 
 ### 3. Auth model: Bearer today, Tailscale tomorrow
 
-The clawft gateway (axum) hands out a 24h UUID-v4 bearer token via
-`POST /api/auth/token`. `weft ui` opens the browser at
-`https://<host>/?token=<uuid>` so the user does not have to copy
+The clawft gateway (axum) validates bearer tokens issued by the kernel
+daemon (`weft token issue`, ADR-102); the earlier `POST /api/auth/token`
+mint route was removed. The browser is opened at
+`https://<host>/#token=<token>` so the user does not have to copy
 anything. The dashboard handles the token via
 `clawft-ui/src/lib/use-auth.ts` (WEFT-309):
 

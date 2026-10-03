@@ -834,6 +834,15 @@ pub struct GatewayConfig {
     /// Whether the REST/WS API is enabled.
     #[serde(default, alias = "apiEnabled")]
     pub api_enabled: bool,
+
+    /// Allow the API on a non-loopback address over plain HTTP (ADR-102).
+    ///
+    /// The gateway has no TLS of its own. A bearer token grants the full
+    /// API, so it is refused on a non-loopback bind unless TLS is
+    /// terminated in front (reverse proxy) and this is set, or
+    /// `--dangerously-plain-http` is passed.
+    #[serde(default, alias = "dangerouslyPlainHttp")]
+    pub dangerously_plain_http: bool,
 }
 
 fn default_gateway_host() -> String {
@@ -863,6 +872,7 @@ impl Default for GatewayConfig {
             api_port: default_api_port(),
             cors_origins: default_cors_origins(),
             api_enabled: false,
+            dangerously_plain_http: false,
         }
     }
 }
@@ -1435,6 +1445,15 @@ mod tests {
         let cfg = GatewayConfig::default();
         assert_eq!(cfg.heartbeat_interval_minutes, 0);
         assert_eq!(cfg.heartbeat_prompt, "heartbeat");
+    }
+
+    #[test]
+    fn gateway_plain_http_is_off_by_default_and_parses_both_spellings() {
+        assert!(!GatewayConfig::default().dangerously_plain_http);
+        let a: GatewayConfig = serde_json::from_str(r#"{"dangerously_plain_http": true}"#).unwrap();
+        let b: GatewayConfig = serde_json::from_str(r#"{"dangerouslyPlainHttp": true}"#).unwrap();
+        assert!(a.dangerously_plain_http && b.dangerously_plain_http);
+        assert!(!serde_json::from_str::<GatewayConfig>("{}").unwrap().dangerously_plain_http);
     }
 
     #[test]

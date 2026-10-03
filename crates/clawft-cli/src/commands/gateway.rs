@@ -75,6 +75,14 @@ pub struct GatewayArgs {
     /// Enable intelligent routing (requires vector-memory feature).
     #[arg(long)]
     pub intelligent_routing: bool,
+
+    /// Serve the API over plain HTTP on a non-loopback address.
+    ///
+    /// A bearer token grants the full API, so a non-loopback bind is
+    /// refused unless TLS is terminated in front of the gateway and this
+    /// is set (or `gateway.dangerously_plain_http`).
+    #[arg(long)]
+    pub dangerously_plain_http: bool,
 }
 
 /// Resolve the cron JSONL storage path.
@@ -122,7 +130,8 @@ pub async fn run(args: GatewayArgs) -> anyhow::Result<()> {
 #[cfg(feature = "channels")]
 async fn run_with_channels(args: GatewayArgs) -> anyhow::Result<()> {
     let platform = Arc::new(NativePlatform::new());
-    let loaded = super::load_config_layered(&*platform, args.config.as_deref()).await?;
+    let mut loaded = super::load_config_layered(&*platform, args.config.as_deref()).await?;
+    loaded.config.gateway.dangerously_plain_http |= args.dangerously_plain_http;
     // Prefer explicit `--config` / CLAWFT_CONFIG, else discovery chain.
     let config_watch_path = args
         .config
@@ -138,6 +147,23 @@ async fn run_with_channels(args: GatewayArgs) -> anyhow::Result<()> {
         config_watch_path,
     )
     .await
+}
+
+/// Refuse to serve the API on a non-loopback address over plain HTTP unless
+/// the operator opted in (ADR-102). Runs first in [`run_with_config`].
+#[cfg(feature = "channels")]
+fn check_api_bind(config: &clawft_types::config::Config) -> anyhow::Result<()> {
+    #[cfg(feature = "api")]
+    if config.gateway.api_enabled {
+        clawft_services::api::auth::validate_bind_policy(
+            &config.gateway.host,
+            config.gateway.dangerously_plain_http,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+    }
+    #[cfg(not(feature = "api"))]
+    let _ = config;
+    Ok(())
 }
 
 /// Run the gateway with a pre-loaded [`Config`].
@@ -161,6 +187,9 @@ pub async fn run_with_config(
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
     config_watch_path: Option<PathBuf>,
 ) -> anyhow::Result<()> {
+    // Refuse an unsafe API bind before anything is started or touched.
+    check_api_bind(&config)?;
+
     info!("starting weft gateway");
 
     let platform = Arc::new(NativePlatform::new());
@@ -287,7 +316,8 @@ pub async fn run_with_config(
     #[cfg(feature = "api")]
     let api_handle: Option<tokio::task::JoinHandle<()>> = if config.gateway.api_enabled {
         let broadcaster = api_broadcaster.clone().expect("broadcaster created above");
-        let api_state = build_api_state(&ctx, &config, broadcaster);
+        let mut api_state = build_api_state(&ctx, &config, broadcaster);
+        api_state.mcp = super::mcp_server::build_gateway_mount(&config, platform.clone()).await;
         let cors_origins = config.gateway.cors_origins.clone();
         let api_host = config.gateway.host.clone();
         let port = config.gateway.api_port;
@@ -750,7 +780,10 @@ fn build_api_state(
     config: &clawft_types::config::Config,
     broadcaster: Arc<TopicBroadcaster>,
 ) -> ApiState {
-    use clawft_services::api::auth::TokenStore;
+    use clawft_services::api::auth::DaemonTokenValidator;
+
+    // One daemon facade serves kernel routes and token validation (ADR-102).
+    let facade = Arc::new(clawft_services::api::DaemonKernelFacade::new());
 
     let tool_bridge = ToolBridge::new(ctx.tools_arc());
     let session_bridge = SessionBridge::new(ctx.sessions().clone());
@@ -821,7 +854,7 @@ fn build_api_state(
         sessions: Arc::new(session_bridge),
         agents: Arc::new(agent_bridge),
         bus: Arc::new(bus_bridge),
-        auth: Arc::new(TokenStore::new()),
+        auth: Arc::new(DaemonTokenValidator::new(facade.clone())),
         skills: Arc::new(skill_bridge),
         memory: Arc::new(memory_bridge),
         config: Arc::new(config_bridge),
@@ -829,7 +862,7 @@ fn build_api_state(
         voice: Arc::new(voice_bridge),
         broadcaster,
         // ADR-102 D6: facade routes forward to the kernel daemon; 503 when it is down.
-        kernel_facade: Arc::new(clawft_services::api::DaemonKernelFacade::new()),
+        kernel_facade: facade,
         // WEFT-40: empty ring unless wired to PipelineRegistry::decision_history.
         routing_history: Arc::new(
             clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
@@ -842,6 +875,8 @@ fn build_api_state(
             config.routing.rate_limiting.window_seconds,
             config.routing.rate_limiting.global_rate_limit_rpm,
         )),
+        health_cache: Default::default(),
+        mcp: None,
     }
 }
 
@@ -854,8 +889,46 @@ mod tests {
         let args = GatewayArgs {
             config: None,
             intelligent_routing: false,
+            dangerously_plain_http: false,
         };
         assert!(args.config.is_none());
+    }
+
+    fn bind_config(host: &str, plain: bool) -> clawft_types::config::Config {
+        let mut c = clawft_types::config::Config::default();
+        c.gateway.api_enabled = true;
+        c.gateway.host = host.into();
+        c.gateway.dangerously_plain_http = plain;
+        c
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn api_bind_guard_classifies_loopback_by_ip() {
+        for h in ["127.0.0.1", "127.0.0.2", "::1", "[::1]", "::ffff:127.0.0.1", "localhost"] {
+            assert!(check_api_bind(&bind_config(h, false)).is_ok(), "{h}");
+        }
+        for h in ["0.0.0.0", "::", "192.0.2.10", "::ffff:192.0.2.10", "gw.example"] {
+            let e = check_api_bind(&bind_config(h, false)).unwrap_err().to_string();
+            assert!(e.contains("--dangerously-plain-http"), "{h}: {e}");
+            assert!(check_api_bind(&bind_config(h, true)).is_ok(), "{h}");
+        }
+        // Not serving the API: nothing to guard.
+        let mut off = bind_config("0.0.0.0", false);
+        off.gateway.api_enabled = false;
+        assert!(check_api_bind(&off).is_ok());
+    }
+
+    /// `run_with_config` itself enforces the guard, before it boots anything
+    /// (so this touches no state): an unsafe bind returns the refusal.
+    #[cfg(feature = "api")]
+    #[tokio::test]
+    async fn run_with_config_refuses_plain_http_off_loopback() {
+        let err = run_with_config(bind_config("0.0.0.0", false), false, None, None, None, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("plain HTTP") && err.contains("--dangerously-plain-http"), "{err}");
     }
 
     #[test]
@@ -863,6 +936,7 @@ mod tests {
         let args = GatewayArgs {
             config: Some("/tmp/gw-config.json".into()),
             intelligent_routing: false,
+            dangerously_plain_http: false,
         };
         assert_eq!(args.config.as_deref(), Some("/tmp/gw-config.json"));
     }

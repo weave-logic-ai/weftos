@@ -11,7 +11,7 @@ use clawft_services::api::{
     AgentAccess, AgentInfo, ApiState, BusAccess, ChannelAccess, ChannelStatusInfo, ConfigAccess,
     DaemonKernelFacade, MemoryAccess, MemoryEntryInfo, SessionAccess, SessionDetail, SessionInfo,
     SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess, TtsProviderInfo, VoiceAccess,
-    VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo, auth::TokenStore,
+    VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo, auth::MemoryTokenValidator,
     broadcaster::TopicBroadcaster, build_router,
 };
 use http_body_util::BodyExt;
@@ -137,13 +137,15 @@ impl VoiceAccess for StubVoice {
     }
 }
 
-fn make_state(socket: &std::path::Path) -> (ApiState, Arc<TokenStore>) {
-    let auth = Arc::new(TokenStore::new());
+fn make_state(socket: &std::path::Path) -> (ApiState, Arc<MemoryTokenValidator>) {
+    let auth = Arc::new(MemoryTokenValidator::new());
     let state = ApiState {
         routing_history: Arc::new(
             clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0)),
+        health_cache: Default::default(),
+        mcp: None,
         tools: Arc::new(StubTools),
         sessions: Arc::new(StubSessions),
         agents: Arc::new(StubAgents),

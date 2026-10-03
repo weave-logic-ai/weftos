@@ -15,7 +15,7 @@ import type {
   ToolInfo,
   MemoryEntry,
 } from "../backend-adapter.ts";
-import { api, setAuthToken, getAuthToken } from "../api-client.ts";
+import { api, setAuthToken } from "../api-client.ts";
 import { WsClient } from "../ws-client.ts";
 
 export class AxumAdapter implements BackendAdapter {
@@ -49,15 +49,10 @@ export class AxumAdapter implements BackendAdapter {
   }
 
   async init(): Promise<void> {
-    // Verify auth token exists, create one if needed
-    if (!getAuthToken()) {
-      try {
-        const { token } = await api.auth.createToken();
-        setAuthToken(token);
-      } catch {
-        // Auth may not be required in dev mode
-      }
-    }
+    // The gateway no longer mints tokens (ADR-102 D5). A token reaches the
+    // dashboard through the constructor or the `#token=` URL fragment that
+    // `weft ui` and `weft token issue` print; `use-auth.ts` consumes it.
+    // Without one, API calls fail with 401.
 
     // Connect WebSocket
     this.ws.connect();

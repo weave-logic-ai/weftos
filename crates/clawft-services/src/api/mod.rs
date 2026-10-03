@@ -13,7 +13,10 @@ pub mod cron_api;
 pub mod daemon_facade;
 pub mod delegation;
 pub mod handlers;
+pub mod health;
 pub mod http_facade_api;
+pub mod mcp_mount;
+pub mod openapi;
 pub mod memory_api;
 pub mod middleware;
 pub mod monitoring;
@@ -44,8 +47,8 @@ pub struct ApiState {
     pub agents: Arc<dyn AgentAccess>,
     /// Message bus for WebSocket broadcasting.
     pub bus: Arc<dyn BusAccess>,
-    /// Auth token store.
-    pub auth: Arc<auth::TokenStore>,
+    /// Bearer-token validator (the daemon in production; see [`auth`]).
+    pub auth: Arc<dyn auth::TokenValidator>,
     /// Skills access.
     pub skills: Arc<dyn SkillAccess>,
     /// Memory access.
@@ -60,7 +63,7 @@ pub struct ApiState {
     pub broadcaster: Arc<broadcaster::TopicBroadcaster>,
     /// WeftOS kernel HTTP facade backend (WEFT-122).
     ///
-    /// Drives `/api/status`, chain/vectors/ecc RPC routes, `/events` SSE
+    /// Drives the chain/vectors/ecc RPC routes, `/events` SSE
     /// (`poll_events`), and `/custody/witness`.
     pub kernel_facade: Arc<dyn KernelFacadeBackend>,
     /// WEFT-40: shared last-N pipeline routing decision history.
@@ -76,6 +79,10 @@ pub struct ApiState {
     /// active so admin metrics reflect live traffic. Fresh instance when
     /// the API runs without a shared limiter (tests/stubs/static mode).
     pub rate_limiter: Arc<clawft_core::pipeline::rate_limiter::RateLimiter>,
+    /// Cache for the expensive parts of the tokened `/api/health` view.
+    pub health_cache: Arc<health::HealthCache>,
+    /// MCP shell served at `POST /mcp`; `None` leaves the route unmounted.
+    pub mcp: Option<Arc<mcp_mount::McpMount>>,
 }
 
 /// Trait for tool registry access (decouples API from Platform generics).
@@ -318,11 +325,6 @@ pub async fn serve(
     static_dir: Option<&str>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    // WEFT-102: kick off the periodic token-store sweep so revoked
-    // and expired tokens do not accumulate over the server's lifetime.
-    // The handle is detached -- the task observes the store via a
-    // Weak ref and self-terminates when ApiState drops its Arc.
-    let _cleanup = auth::spawn_cleanup_task(state.auth.clone(), auth::TOKEN_CLEANUP_INTERVAL_SECS);
     let mut router = build_router(state, cors_origins, static_dir);
     // Loopback binds are exposed to DNS rebinding; pin the Host header.
     if listener.local_addr().is_ok_and(|a| a.ip().is_loopback()) {
@@ -352,6 +354,7 @@ pub async fn serve(
 /// fallback is added so that the built frontend is served for any path
 /// not matched by the API or WebSocket routes.
 pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option<&str>) -> Router {
+    health::mark_start();
     let cors = middleware::build_cors_layer(cors_origins);
     let rate_limit_state = Arc::new(middleware::RateLimitState::new());
 
@@ -380,6 +383,13 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
         .merge(ws_router)
         .merge(facade_top);
 
+    // ADR-102 D2: MCP at `/mcp`, same daemon-token auth as `/api/*`.
+    if state.mcp.is_some() {
+        router = router.merge(mcp_mount::mcp_routes().route_layer(
+            axum::middleware::from_fn_with_state(state.clone(), auth::auth_middleware),
+        ));
+    }
+
     // Serve built UI as SPA fallback when a static directory is provided.
     if let Some(dir) = static_dir {
         use tower_http::services::ServeDir;
@@ -392,10 +402,66 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
             rate_limit_state,
             middleware::rate_limit_middleware,
         ))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .layer(cors)
         // CSP outermost so every response (including 401/429/static)
         // carries the header.
         .layer(axum::middleware::from_fn(middleware::csp_middleware))
         .with_state(state)
+}
+
+/// Span for one request. It records the method and the path only: the full
+/// URI can carry `?token=` on `/ws`, and a secret must not reach the logs.
+fn request_span(req: &axum::http::Request<axum::body::Body>) -> tracing::Span {
+    tracing::info_span!("request", method = %req.method(), path = %req.uri().path())
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::request_span;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+
+    /// Collects every recorded field value of every span it sees.
+    struct Capture(Arc<Mutex<String>>);
+
+    struct Out<'a>(&'a mut String);
+    impl Visit for Out<'_> {
+        fn record_debug(&mut self, f: &Field, v: &dyn std::fmt::Debug) {
+            self.0.push_str(&format!("{}={v:?};", f.name()));
+        }
+    }
+
+    impl Subscriber for Capture {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, a: &Attributes<'_>) -> Id {
+            a.record(&mut Out(&mut self.0.lock().unwrap()));
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, _: &Event<'_>) {}
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+    }
+
+    #[test]
+    fn request_span_has_the_path_but_never_the_query() {
+        let seen = Arc::new(Mutex::new(String::new()));
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/ws?token=wft_supersecret&x=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        tracing::subscriber::with_default(Capture(seen.clone()), || {
+            let _ = request_span(&req);
+        });
+        let out = seen.lock().unwrap().clone();
+        assert!(out.contains("/ws"), "{out}");
+        assert!(!out.contains("wft_supersecret") && !out.contains("token"), "{out}");
+    }
 }

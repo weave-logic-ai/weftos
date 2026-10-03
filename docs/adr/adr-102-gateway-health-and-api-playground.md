@@ -1,6 +1,6 @@
 # ADR-102: Gateway health detail, daemon-issued tokens, and the API playground
 
-- **Status**: Proposed (2026-09-29; decisions D1–D5 set by the user 2026-09-29, implementation tracked on cards api-playground-01..09)
+- **Status**: Partially implemented (decisions D1–D5 set by the user 2026-09-29). Done: D1 tiered `/api/health` and `/status` removal, D3 gateway validation through the daemon, D5 mint route and `TokenStore` removed, the non-loopback TLS guard (cards 01-05, 09 in part). Also done: `/mcp` mounted in the gateway (card 06, POST only, no SSE). Not done: the `/playground` page (card 08), upstream MCP servers and bind-address/client-count fields in `/api/health`, `weft mcp-server --issue-token` change.
 - **Date**: 2026-09-29
 - **Deciders**: Platform / ops
 - **Depends-On**: ADR-022 (mandatory ExoChain audit), ADR-075 (Grok ↔ WeftOS MCP bridge, session capability tokens), ADR-076 (MCP tool surface and profiles)
@@ -88,7 +88,7 @@ The `InMemoryKernelFacade` stub is replaced by a `DaemonKernelFacade` over `claw
 
 ## Security notes
 
-- The gateway binds to loopback by default. Binding a non-loopback address with auth enabled must also require TLS (or an explicit `--dangerously-plain-http` flag), because a full-scope bearer over plain HTTP on a LAN is equivalent to handing out shell access.
+- The gateway binds to loopback by default. Binding a non-loopback address with auth enabled must also require TLS (or an explicit `--dangerously-plain-http` flag), because a full-scope bearer over plain HTTP on a LAN is equivalent to handing out shell access. Implemented: the gateway has no TLS of its own, so a non-loopback API bind is refused at startup unless `--dangerously-plain-http` / `gateway.dangerously_plain_http` states that TLS is terminated in front.
 - CORS on `/mcp` and `/api` is same-origin only unless `gateway.cors_origins` is set.
 - Every authenticated call is audit-logged with token id and label `playground`; shell/process/file-write calls are additionally appended to the chain under their existing tool-audit kinds.
 

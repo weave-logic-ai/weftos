@@ -62,14 +62,14 @@ cargo run --bin clawft -- --api-port 3100 --ui-dir ./clawft-ui/dist
 # Health check
 curl http://localhost:18789/api/health
 
+# Issue a token from the local daemon (the gateway has no mint route)
+TOKEN=$(weft token issue | sed -n 's/^token: *//p')
+
 # List agents
-curl http://localhost:18789/api/agents
+curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/agents
 
 # List sessions
-curl http://localhost:18789/api/sessions
-
-# Create a bearer token (for future auth)
-curl -X POST http://localhost:18789/api/auth/token
+curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/sessions
 ```
 
 ### Connecting via WebSocket
@@ -158,46 +158,70 @@ Each endpoint is annotated with its implementation status:
 
 ## Authentication
 
-Authentication uses in-memory bearer tokens managed by `TokenStore`. Tokens are
-UUID v4 strings with a configurable TTL (default: 24 hours / 86400 seconds).
+Every `/api/*` route and `/ws` needs a bearer token, except `GET /api/health`
+(see [Health](#health)). The kernel daemon is the only token authority
+(ADR-102): `weft token issue` mints a `wft_` secret over the local socket,
+shows it once, and records the grant on the chain. The gateway keeps no token
+store. It validates each bearer through the daemon's `auth.token.validate`,
+caching a positive answer for at most 30 seconds.
 
-**Important:** The auth middleware exists in `auth.rs` but is **intentionally
-disabled** for the development workflow. When enabled, it checks the
-`Authorization: Bearer <token>` header on all `/api/*` routes except
-`/api/auth/token` and `/api/health`.
+- There is **no** `POST /api/auth/token`. It returns 404.
+- Only owner tokens are accepted. A project token (ADR-103) is a child
+  kernel's credential and is refused with 401.
+- Daemon down: authenticated requests return `503` with
+  `{"error":"daemon unavailable","remedy":"start the daemon: weft kernel start"}`.
+  A missing or unknown token is `401` with `WWW-Authenticate: Bearer`.
+- `/ws` also accepts `?token=<token>`, since browsers cannot set the header on
+  an upgrade.
+- A token expires after its TTL (default 15 minutes, at most 24 hours).
+  `weft token list` shows live tokens and `weft token revoke <id>` kills one.
+- **Revocation latency.** `POST /api/auth/revoke` takes effect at once. A
+  token revoked with `weft token revoke` can keep working on a running gateway
+  for up to 30 seconds (the positive cache). An unknown or revoked bearer is
+  remembered for about 3 seconds so a flood of bad tokens is one daemon call.
+- **Rate limits and flood bounds.** Per client IP per minute: `/api/*` 60,
+  tokened `/api/health` 30, `/mcp` 120, `/ws` 10; anonymous health is exempt.
+  Separately, the gateway lets at most about 50 daemon token checks per second
+  (burst 100) through, whatever the path; beyond that a request with an
+  unrecognised bearer gets `429` with `Retry-After: 1`. Cached tokens are
+  unaffected.
+- **Open WebSockets are not closed** when their token is revoked or expires;
+  the check happens once, at upgrade.
+- Only the path is logged for a request, never the query string, so a
+  `?token=` on `/ws` stays out of the logs. Every response carries
+  `Referrer-Policy: no-referrer`. The `Bearer` scheme is matched case-insensitively.
+- `weft token issue` and `weft ui` print a sign-in link of the form
+  `http://<host>:<api_port>/#token=<token>`. The fragment is never sent to the
+  server. `weft ui` prints it rather than passing it to the browser, so the
+  secret is not on a command line.
 
-### Create Token
+### Revoke Token
 
 ```
-POST /api/auth/token
+POST /api/auth/revoke
 ```
 
-Generates a new bearer token with a 24-hour TTL. No authentication required.
+Revokes the bearer that authenticated the request (logout). It forwards the
+token's own id to the daemon's `auth.token.revoke`, so a caller cannot revoke
+anyone else's token. The cache is bypassed, so the token is refused on its
+next use.
 
-**Status:** Live
-
-**Request body:** None
-
-**Response:**
-
-```json
-{
-  "token": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-}
-```
-
-**Example:**
+**Status:** Live. **Response:** `204 No Content`; `503` if the daemon is
+down (the token is then still live).
 
 ```bash
-curl -X POST http://localhost:18789/api/auth/token
+curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/auth/revoke
 ```
 
-**Notes:**
+### Plain HTTP off loopback
 
-- The token is a UUID v4 string (not prefixed).
-- Tokens are stored in-memory and are lost on server restart.
-- When auth middleware is enabled, include the token as:
-  `Authorization: Bearer a1b2c3d4-e5f6-7890-abcd-ef1234567890`
+A bearer token is owner-equivalent, so on a LAN it is as good as shell
+access. The gateway has no TLS of its own and **refuses to bind a
+non-loopback address** unless the operator says TLS is terminated in front of
+it: `weft gateway --dangerously-plain-http`, or `gateway.dangerously_plain_http`
+in the config. Loopback means `localhost` or any loopback IP address
+(`127.0.0.0/8`, `::1`, and their IPv4-mapped forms); the check runs before the
+gateway starts anything.
 
 ### Client-side token lifecycle (`use-auth`)
 
@@ -205,19 +229,19 @@ The dashboard ships a `useAuth()` React hook in
 `clawft-ui/src/lib/use-auth.ts` that owns the bearer token end-to-end.
 Two security properties are enforced (WEFT-309):
 
-1. **Single-use URL tokens.** When `weft ui` opens the browser at
-   `https://<host>/?token=<uuid>`, the hook reads the value once on
+1. **Single-use URL tokens.** When the browser is opened at
+   `https://<host>/#token=<token>` (the link `weft token issue` prints),
+   the hook reads the value once on
    first paint, persists it to `localStorage["clawft-token"]`, and
-   immediately strips `?token` from the address bar via
+   immediately strips `#token` from the address bar via
    `history.replaceState`. Reload, share, or screenshot of the URL
    never leaks the token.
 
 2. **Terminal logout.** `logout()` clears `localStorage` *and* sets a
    per-tab `sessionStorage["clawft-logged-out"]` latch. A stale
-   `?token=` left in the address bar (e.g. from the back button) does
+   `#token=` left in the address bar (e.g. from the back button) does
    not silently re-auth the user; the latch is cleared only when a
-   fresh token is explicitly written via `setToken()` or
-   `POST /api/auth/token`.
+   fresh token is explicitly written via `setToken()`.
 
 `api-client.ts` reads the token via the shared helpers
 (`readStoredToken` / `writeStoredToken` / `clearStoredToken`) so all
@@ -244,30 +268,108 @@ function NavBar() {
 GET /api/health
 ```
 
-Returns basic server health information including uptime and crate version.
+Tiered by token (ADR-102 D1). This is the only route that answers without one.
 
 **Status:** Live
 
-**Response:**
+**No token, or an invalid one.** Liveness only, so load balancers and uptime
+checks learn nothing else:
+
+```json
+{ "status": "ok" }
+```
+
+`200` while the daemon answers. `503` with `{"status":"degraded"}` when the
+daemon cannot be reached.
+
+**Valid owner token.** The full status document. Fields are an explicit
+allow-list; daemon replies are never passed through, and no key, credentialed
+URL or runtime path appears.
 
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
-  "uptime_secs": 3600
+  "version": "0.8.1",
+  "uptime_secs": 3600,
+  "build": { "version": "0.8.1", "binary": "/path/to/weft" },
+  "gateway": { "uptime_secs": 3600 },
+  "daemon": { "reachable": true, "state": "running", "version": "0.8.1",
+              "git_sha": "abc1234", "built_at": "...", "uptime_secs": 3590.2,
+              "version_skew": false },
+  "kernel": { "processes": [{ "pid": 1, "agent_id": "kernel", "state": "running" }],
+              "services":  [{ "name": "chain", "service_type": "core", "state": "running", "health": "ok" }] },
+  "chain": { "available": true, "sequence": 41, "head": "<hash>",
+             "checkpoint_count": 1, "events_since_checkpoint": 2,
+             "verify": { "valid": true, "event_count": 42, "signature_verified": true, "error_count": 0 } },
+  "mcp": { "mounted": true, "path": "/mcp", "profile": "full", "tool_count": 42 },
+  "channels": [{ "name": "web", "type": "web", "status": "connected" }],
+  "providers": [{ "name": "anthropic", "configured": true }],
+  "token": { "id": "...", "label": "...", "issued_at": "...", "expires_at": "..." }
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `status` | `string` | Always `"ok"` if the server is running |
-| `version` | `string` | `CARGO_PKG_VERSION` at compile time |
-| `uptime_secs` | `u64` | Seconds since server process start |
+| Field | Description |
+|-------|-------------|
+| `status` | `"ok"`, or `"degraded"` (HTTP 503) when the daemon is unreachable; `daemon` is then `{"reachable": false}` and `kernel`/`chain` are `null` |
+| `version`, `uptime_secs` | Kept at top level for the dashboard |
+| `daemon.version_skew` | `true` when the daemon's version differs from the gateway's |
+| `chain.verify` | `chain.verify` result, reused for 60 s rather than recomputed per request |
+| `mcp` | This gateway's `/mcp` surface: `{"mounted":false}` when not mounted. Upstream servers are not listed (their definitions carry commands and URLs) |
+| `build.binary` | File name of the gateway binary, never its directory |
+| `providers[].configured` | A key is set. Never the key or base URL |
+
+`GET /api/status` (a stub) was removed; this route replaces it.
 
 **Example:**
 
 ```bash
-curl http://localhost:18789/api/health
+curl http://localhost:18789/api/health                                   # liveness
+curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/health # full status
+```
+
+---
+
+## OpenAPI
+
+```
+GET /api/openapi.json
+```
+
+OpenAPI 3.1 description of every REST, WebSocket, SSE and MCP route. It needs
+a bearer token like everything but health: it holds no secrets, but it maps the
+whole surface (admin routes included), and a client has a token before it needs
+the spec. The document is a hand-maintained asset
+(`crates/clawft-services/src/api/openapi.json`); bodies are mostly untyped.
+A unit test in `api/openapi.rs` fails when a served route is missing from the
+spec or the spec lists one that is gone, so add new routes there.
+
+---
+
+## MCP
+
+```
+POST /mcp
+```
+
+JSON-RPC over HTTP (`initialize`, `tools/list`, `tools/call`, notifications) for
+the `full` MCP profile, on the gateway's own origin. It needs the same bearer
+token as `/api/*` and returns 401 (or 503 if the daemon is down) without one.
+A token is owner-equivalent, so every tool is reachable, including shell,
+process, file-write and spawn tools. Notifications get `202`; malformed JSON
+gets `400`. There is no SSE stream here; `weft mcp-server --listen` remains
+for headless use with its own static tokens.
+
+Control tools attach to the live daemon when the gateway starts (and reconnect
+if it restarts); if no daemon answered at start they are omitted until the
+gateway restarts. Calls run one at a time: a caller waits at most 10 s for its
+turn (503, JSON-RPC error -32002) and a call is cancelled after 120 s
+(JSON-RPC error -32003). `/mcp` is rate-limited to 120 calls per minute per
+client. See [MCP guide](../guides/mcp.md) for what an owner token can do.
+
+```bash
+curl -X POST http://localhost:18789/mcp \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 ---
@@ -2233,8 +2335,8 @@ Or for boolean-result operations:
 
 | # | Method | Path | Status | Description |
 |---|--------|------|--------|-------------|
-| 1 | `POST` | `/api/auth/token` | Live | Create bearer token |
-| 2 | `GET` | `/api/health` | Live | Health check |
+| 1 | `POST` | `/api/auth/revoke` | Live | Revoke the caller's own token |
+| 2 | `GET` | `/api/health` | Live | Liveness; full status with a token |
 | 3 | `GET` | `/api/agents` | Live | List agents |
 | 4 | `GET` | `/api/agents/{name}` | Live | Get agent detail |
 | 5 | `POST` | `/api/agents/{name}/start` | Stub | Start agent |

@@ -15,7 +15,7 @@ use clawft_services::api::bridge::VoiceBridge;
 use clawft_services::api::{
     AgentAccess, AgentInfo, ApiState, BusAccess, ChannelAccess, ChannelStatusInfo, ConfigAccess,
     InMemoryKernelFacade, MemoryAccess, MemoryEntryInfo, SessionAccess, SessionDetail, SessionInfo,
-    SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess, auth::TokenStore,
+    SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess, auth::MemoryTokenValidator,
     broadcaster::TopicBroadcaster, build_router,
 };
 use clawft_types::config::ProvidersConfig;
@@ -109,8 +109,8 @@ impl ChannelAccess for StubChannels {
     }
 }
 
-fn make_state_with_voice() -> (ApiState, Arc<TokenStore>, Arc<VoiceBridge>) {
-    let auth = Arc::new(TokenStore::new());
+fn make_state_with_voice() -> (ApiState, Arc<MemoryTokenValidator>, Arc<VoiceBridge>) {
+    let auth = Arc::new(MemoryTokenValidator::new());
     let voice = Arc::new(VoiceBridge::new(
         VoiceConfig::default(),
         ProvidersConfig::default(),
@@ -120,6 +120,8 @@ fn make_state_with_voice() -> (ApiState, Arc<TokenStore>, Arc<VoiceBridge>) {
             clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0)),
+        health_cache: Default::default(),
+        mcp: None,
         tools: Arc::new(StubTools),
         sessions: Arc::new(StubSessions),
         agents: Arc::new(StubAgents),

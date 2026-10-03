@@ -50,6 +50,11 @@ pub enum TokenAction {
     },
 
     /// Revoke a token by id.
+    ///
+    /// The daemon refuses the token at once. A running gateway caches a good
+    /// validation for up to 30 seconds, so the token can still work there for
+    /// that long (revoking through the gateway's own `/api/auth/revoke` takes
+    /// effect immediately). Open WebSocket connections are not closed.
     Revoke {
         /// Token id (first 16 hex characters of its hash, from `weft token list`).
         id: String,
@@ -78,14 +83,32 @@ pub fn parse_ttl(s: &str) -> Result<u64, String> {
     n.checked_mul(mult).ok_or_else(|| "ttl too large".into())
 }
 
-/// The playground link for `secret`. The fragment is never sent to the
-/// server, so the token stays out of access logs and `Referer`.
-pub fn playground_link(host: &str, port: u16, secret: &str) -> String {
+/// The dashboard link for `secret`, on the API port. The dashboard reads
+/// `#token=` once and strips it. The fragment is never sent to the server,
+/// so the token stays out of access logs and `Referer`.
+pub fn dashboard_link(host: &str, api_port: u16, secret: &str) -> String {
     let host = match host {
-        "0.0.0.0" | "::" | "" => "localhost",
-        h => h,
+        "0.0.0.0" | "::" | "" => "localhost".to_owned(),
+        h if h.contains(':') && !h.starts_with('[') => format!("[{h}]"),
+        h => h.to_owned(),
     };
-    format!("http://{host}:{port}/playground#t={secret}")
+    format!("http://{host}:{api_port}/#token={secret}")
+}
+
+/// Default lifetime of a token issued for the dashboard.
+pub const DASHBOARD_TTL_SECS: u64 = 15 * 60;
+
+/// Ask the daemon for an owner token and return the dashboard link and the
+/// token's expiry. Used by `weft ui`.
+pub async fn issue_dashboard_link(host: &str, api_port: u16) -> anyhow::Result<(String, String)> {
+    let v = daemon_call(
+        "auth.token.issue",
+        issue_params(DASHBOARD_TTL_SECS, "dashboard", None),
+    )
+    .await?;
+    let secret = v["secret"].as_str().context("daemon returned no secret")?;
+    let expires = v["expires_at"].as_str().unwrap_or("?").to_owned();
+    Ok((dashboard_link(host, api_port, secret), expires))
 }
 
 /// Request params for `auth.token.issue`.
@@ -135,7 +158,7 @@ pub async fn run<P: clawft_platform::Platform>(
             if let Ok(cfg) = super::load_config(platform, config.as_deref()).await {
                 println!(
                     "link:    {}",
-                    playground_link(&cfg.gateway.host, cfg.gateway.port, secret)
+                    dashboard_link(&cfg.gateway.host, cfg.gateway.api_port, secret)
                 );
             }
         }
@@ -239,15 +262,16 @@ mod tests {
     }
 
     #[test]
-    fn link_uses_fragment_and_localhost_for_wildcard() {
+    fn link_uses_the_token_fragment_the_dashboard_reads() {
         assert_eq!(
-            playground_link("0.0.0.0", 18790, "wft_s"),
-            "http://localhost:18790/playground#t=wft_s"
+            dashboard_link("0.0.0.0", 18789, "wft_s"),
+            "http://localhost:18789/#token=wft_s"
         );
-        assert_eq!(
-            playground_link("gw.lan", 80, "t"),
-            "http://gw.lan:80/playground#t=t"
-        );
+        assert_eq!(dashboard_link("gw.lan", 80, "t"), "http://gw.lan:80/#token=t");
+        assert_eq!(dashboard_link("::1", 18789, "t"), "http://[::1]:18789/#token=t");
+        assert_eq!(dashboard_link("[::1]", 18789, "t"), "http://[::1]:18789/#token=t");
+        // The fragment is client-side only: nothing after `#` is a query.
+        assert!(!dashboard_link("h", 1, "t").contains("?token"));
     }
 
     #[test]

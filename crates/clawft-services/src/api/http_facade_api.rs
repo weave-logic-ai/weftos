@@ -143,7 +143,6 @@ impl KernelFacadeBackend for InMemoryKernelFacade {
 /// path before calling [`match_facade_route`].
 pub fn kernel_facade_api_routes() -> Router<ApiState> {
     Router::new()
-        .route("/status", get(rpc_get))
         .route("/processes", get(rpc_get))
         .route("/services", get(rpc_get))
         .route("/chain/status", get(rpc_get))

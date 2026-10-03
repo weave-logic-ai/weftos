@@ -66,6 +66,27 @@ pub async fn run(args: UiArgs) -> anyhow::Result<()> {
         info!(url = %url, "starting web dashboard");
         eprintln!("starting web dashboard at {url}");
 
+        // The API needs a daemon-issued token (ADR-102). Print the link
+        // rather than put the secret on a browser command line, where other
+        // local users could read it from the process list.
+        match super::token_cmd::issue_dashboard_link(&host, port).await {
+            Ok((link, expires)) => {
+                eprintln!("sign in (token expires {expires}): {link}");
+                if plain_http_off_loopback(&link) {
+                    eprintln!(
+                        "warning: this link is plain http:// to a non-loopback host; \
+                         anyone on the network path can read the token. Put TLS in front."
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "no dashboard token issued ({e}); start the daemon and run \
+                     `weft token issue` for a sign-in link"
+                );
+            }
+        }
+
         // Spawn a background task to open the browser after a short delay.
         if !args.no_open {
             let open_url = url.clone();
@@ -96,6 +117,21 @@ pub async fn run(args: UiArgs) -> anyhow::Result<()> {
     }
 }
 
+/// Is `link` plain `http://` to a host that is not loopback? Such a link
+/// carries a full-power token across the network in the clear.
+fn plain_http_off_loopback(link: &str) -> bool {
+    let Some(rest) = link.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '#', '?']).next().unwrap_or(rest);
+    let host = match authority.rsplit_once(':') {
+        // `[::1]:18789` / `host:18789`; a bare IPv6 has no port to strip.
+        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => authority,
+    };
+    clawft_services::mcp::classify_bind_host(host) == clawft_services::mcp::BindKind::Public
+}
+
 /// Attempt to open a URL in the user's default browser.
 ///
 /// This is best-effort -- failures are silently ignored because the user
@@ -114,6 +150,27 @@ fn open_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warns_only_for_plain_http_off_loopback() {
+        for l in [
+            "http://localhost:18789/#token=t",
+            "http://127.0.0.1:18789/#token=t",
+            "http://127.0.0.2:1/#token=t",
+            "http://[::1]:18789/#token=t",
+            "http://[::ffff:127.0.0.1]:18789/#token=t",
+            "https://gw.example/#token=t",
+        ] {
+            assert!(!plain_http_off_loopback(l), "{l}");
+        }
+        for l in [
+            "http://192.0.2.10:18789/#token=t",
+            "http://gw.lan:18789/#token=t",
+            "http://[2001:db8::1]:18789/#token=t",
+        ] {
+            assert!(plain_http_off_loopback(l), "{l}");
+        }
+    }
 
     #[test]
     fn ui_args_defaults() {

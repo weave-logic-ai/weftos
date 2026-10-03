@@ -10,8 +10,7 @@
 //!
 //! Least privilege: `DaemonClient::call` upgrades an absent `auth` to
 //! `admin`, so every request here carries an explicit `read` scope. All
-//! gateway tokens are equal today, so mutating routes are disabled (501)
-//! until gateway auth can prove a stronger principal (ADR-102 card 04).
+//! gateway tokens are equal today, so mutating routes stay disabled (501).
 //!
 //! Failure mapping (bodies are generic; detail goes to `tracing`):
 //! - connect failure / connect timeout: `503` with the remedy text
@@ -47,6 +46,7 @@ const READ_METHODS: &[&str] = &[
     "kernel.ps",
     "kernel.services",
     "chain.status",
+    "chain.verify",
     "chain.tail",
     "ecc.status",
     "ecc.search",
@@ -59,6 +59,10 @@ const DISABLED_MUTATING: &[&str] = &["agent.spawn", "agent.stop", "custody.attes
 /// `/chain/events` limits (`?count=`).
 const CHAIN_EVENTS_DEFAULT: u64 = 100;
 const CHAIN_EVENTS_MAX: u64 = 1000;
+
+/// The daemon could not be reached or did not answer in time.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DaemonUnavailable;
 
 /// [`KernelFacadeBackend`] that forwards RPC calls to the kernel daemon.
 pub struct DaemonKernelFacade {
@@ -130,6 +134,32 @@ impl DaemonKernelFacade {
             Err(e) => {
                 tracing::warn!(error = %e, "daemon connect failed");
                 None
+            }
+        }
+    }
+
+    /// One raw daemon RPC with an explicit auth scope, for the gateway's own
+    /// token validation (ADR-102 D3). `Unavailable` when the daemon cannot be
+    /// reached or the call times out before a reply.
+    pub(super) async fn auth_call(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        scope: &str,
+    ) -> Result<clawft_rpc::Response, DaemonUnavailable> {
+        let Ok(Some(mut client)) = tokio::time::timeout(self.timeout, self.connect()).await else {
+            return Err(DaemonUnavailable);
+        };
+        let request = Request::with_params(method, params).with_auth(scope);
+        match tokio::time::timeout(self.timeout, client.call(request)).await {
+            Ok(Ok(resp)) => Ok(resp),
+            Ok(Err(e)) => {
+                tracing::warn!(method, error = %e, "daemon RPC failed");
+                Err(DaemonUnavailable)
+            }
+            Err(_) => {
+                tracing::warn!(method, "daemon call timed out");
+                Err(DaemonUnavailable)
             }
         }
     }

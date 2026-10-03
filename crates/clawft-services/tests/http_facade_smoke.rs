@@ -15,7 +15,7 @@ use clawft_services::api::{
     InMemoryKernelFacade, KernelFacadeBackend, MemoryAccess, MemoryEntryInfo, SessionAccess,
     SessionDetail, SessionInfo, SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess,
     TtsProviderInfo, VoiceAccess, VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo,
-    auth::TokenStore, broadcaster::TopicBroadcaster, build_router,
+    auth::MemoryTokenValidator, broadcaster::TopicBroadcaster, build_router,
 };
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -140,14 +140,16 @@ impl VoiceAccess for StubVoice {
     }
 }
 
-fn make_state() -> (ApiState, Arc<TokenStore>, Arc<InMemoryKernelFacade>) {
-    let auth = Arc::new(TokenStore::new());
+fn make_state() -> (ApiState, Arc<MemoryTokenValidator>, Arc<InMemoryKernelFacade>) {
+    let auth = Arc::new(MemoryTokenValidator::new());
     let facade = Arc::new(InMemoryKernelFacade::new());
     let state = ApiState {
         routing_history: Arc::new(
             clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0)),
+        health_cache: Default::default(),
+        mcp: None,
         tools: Arc::new(StubTools),
         sessions: Arc::new(StubSessions),
         agents: Arc::new(StubAgents),
@@ -173,7 +175,6 @@ async fn json_body(resp: axum::response::Response) -> serde_json::Value {
 
 /// Each entry: (method, path, expected RPC method name in stub body).
 const RPC_ROUTES: &[(&str, &str, &str)] = &[
-    ("GET", "/api/status", "kernel.status"),
     ("GET", "/api/processes", "kernel.ps"),
     ("GET", "/api/services", "kernel.services"),
     ("GET", "/api/chain/status", "chain.status"),
@@ -340,7 +341,7 @@ async fn facade_routes_require_auth() {
     let (state, _auth, _) = make_state();
     let app = build_router(state, &[], None);
 
-    for path in ["/api/status", "/events", "/custody/witness"] {
+    for path in ["/api/processes", "/events", "/custody/witness"] {
         let method = if path == "/custody/witness" {
             Method::POST
         } else {

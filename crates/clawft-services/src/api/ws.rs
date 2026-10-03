@@ -24,6 +24,13 @@
 //! - `{"type":"ping"}` -- server-initiated heartbeat (client must reply
 //!   with `{"type":"pong"}` within [`HEARTBEAT_TIMEOUT`] or be evicted)
 //!
+//! # Authentication lifetime
+//!
+//! The bearer (or `?token=`) is checked once, when the socket upgrades. An
+//! open socket is **not** closed when its token later expires or is revoked;
+//! it lives until the client disconnects or misses its heartbeat. Revoking a
+//! token stops new connections and REST calls, not sockets already open.
+//!
 //! # Heartbeat (WEFT-300)
 //!
 //! The server pings each socket every [`HEARTBEAT_INTERVAL`]. If a client
@@ -356,7 +363,7 @@ fn spawn_heartbeat_task(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! WEFT-300: heartbeat + dead-connection cleanup.
     //!
     //! These tests boot a real `ws_handler` against an in-process axum
@@ -368,7 +375,7 @@ mod tests {
     //! [`handle_socket_with_heartbeat`] so the assertions run in
     //! roughly half a second.
     use super::*;
-    use crate::api::auth::TokenStore;
+    use crate::api::auth::MemoryTokenValidator;
     use crate::api::broadcaster::TopicBroadcaster;
     use crate::api::{
         AgentAccess, AgentInfo, ApiState, BusAccess, ChannelAccess, ChannelStatusInfo,
@@ -491,7 +498,7 @@ mod tests {
         }
     }
 
-    fn stub_state() -> ApiState {
+    pub(crate) fn stub_state() -> ApiState {
         let stub: Arc<Stub> = Arc::new(Stub);
         ApiState {
             routing_history: std::sync::Arc::new(
@@ -500,11 +507,13 @@ mod tests {
             rate_limiter: std::sync::Arc::new(
                 clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0),
             ),
+            health_cache: Default::default(),
+            mcp: None,
             tools: stub.clone(),
             sessions: stub.clone(),
             agents: stub.clone(),
             bus: stub.clone(),
-            auth: Arc::new(TokenStore::new()),
+            auth: Arc::new(MemoryTokenValidator::new()),
             skills: stub.clone(),
             memory: stub.clone(),
             config: stub.clone(),
