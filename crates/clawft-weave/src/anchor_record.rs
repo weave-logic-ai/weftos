@@ -63,11 +63,12 @@ pub(super) fn seal(
 /// the old key's signature on a later statement is not the daemon's. The
 /// date alone is not evidence (whoever holds the old private key can
 /// backdate); only the daemon appends to the reserved chain source.
-fn seal_ok(env: &CertEnv, a: &Accepted) -> bool {
-    let Some(sig) = hex_decode::<64>(&a.rec_sig) else { return false };
-    let Ok(history) = crate::project_cert_rpc::user_history(env) else { return false };
+fn seal_ok(env: &CertEnv, a: &Accepted) -> Seal {
+    let bad = Seal::Bad;
+    let Some(sig) = hex_decode::<64>(&a.rec_sig) else { return bad };
+    let Ok(history) = crate::project_cert_rpc::user_history(env) else { return bad };
     let Some(at) = DateTime::parse_from_rfc3339(&a.statement.at).ok().map(|t| t.with_timezone(&Utc)) else {
-        return false;
+        return bad;
     };
     let bytes = record_bytes(&a.statement.hash(), a.user_seq, &a.user_event_hash, a.epoch);
     let sig = Signature::from_bytes(&sig);
@@ -76,9 +77,29 @@ fn seal_ok(env: &CertEnv, a: &Accepted) -> bool {
         .filter(|pk| history.accepts(pk, at))
         .find(|pk| VerifyingKey::from_bytes(pk).is_ok_and(|vk| vk.verify_strict(&bytes, &sig).is_ok()))
     else {
-        return false;
+        return bad;
     };
-    signer == *history.current() || retired_seal_corroborated(env, a, &signer)
+    if signer == *history.current() || retired_seal_corroborated(env, a, &signer) {
+        Seal::Ok
+    } else {
+        Seal::Uncorroborated
+    }
+}
+
+/// Outcome of [`seal_ok`].
+#[derive(Debug, PartialEq, Eq)]
+enum Seal {
+    Ok,
+    /// Not signed by a key that may have sealed it.
+    Bad,
+    /// Signed by a retired user key but the chain does not vouch for it.
+    Uncorroborated,
+}
+
+/// Marker the daemon leaves beside an ignored retired-key record so that
+/// `weaver doctor` (which holds no keys) can say so.
+pub(super) fn ignored_marker(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("{id}.anchor-ignored.txt"))
 }
 
 /// The chain holds the anchor event `a` names, below the rotation of `signer`.
@@ -97,14 +118,14 @@ fn retired_seal_corroborated(env: &CertEnv, a: &Accepted, signer: &[u8; 32]) -> 
                 && e.sequence == a.user_seq
                 && e.sequence < r
                 && ident::hex(&e.hash) == a.user_event_hash
+                // Bind the event to THIS record: a genuine event for one
+                // statement must not vouch for another sealed with the old key.
+                && e.payload.as_ref().is_some_and(|p| {
+                    p.get("statement_hash").and_then(|v| v.as_str()) == Some(a.statement.hash().as_str())
+                        && p.get("project_id").and_then(|v| v.as_str()) == Some(a.statement.project_id.as_str())
+                })
         })
     });
-    if !found {
-        warn!(
-            project = %a.statement.project_id,
-            "anchor record sealed by a retired user key is not corroborated by the user chain; ignored"
-        );
-    }
     found
 }
 
@@ -128,8 +149,20 @@ pub(super) fn read_file(env: &CertEnv, id: &str, view: &RevocationView) -> Optio
             return None;
         }
     };
-    let ok = a.statement.project_id == id && seal_ok(env, &a) && statement_ok(view, &a);
-    if !ok {
+    let marker = ignored_marker(&env.manifests_dir, id);
+    let seal = if a.statement.project_id == id { seal_ok(env, &a) } else { Seal::Bad };
+    let ok = seal == Seal::Ok && statement_ok(view, &a);
+    if seal == Seal::Uncorroborated {
+        let msg = "retired-key seal not corroborated by the user chain";
+        // Warn and mark once: the file is re-read on every anchor call.
+        if !marker.exists() {
+            warn!(project = id, "anchor record ignored: {msg}");
+            let _ = ident::write_private_atomic(&marker, msg.as_bytes(), false);
+        }
+    } else if ok {
+        let _ = std::fs::remove_file(&marker);
+    }
+    if !ok && seal != Seal::Uncorroborated {
         warn!(project = id, "anchor record fails its signature checks; ignored");
     }
     ok.then_some(a)
@@ -138,7 +171,10 @@ pub(super) fn read_file(env: &CertEnv, id: &str, view: &RevocationView) -> Optio
 pub(super) fn write_file(env: &CertEnv, a: &Accepted) -> Result<(), AnchorError> {
     let bytes = serde_json::to_vec_pretty(a).map_err(|e| AnchorError::Store(e.to_string()))?;
     ident::write_private_atomic(&anchor_file(&env.manifests_dir, &a.statement.project_id), &bytes, false)
-        .map_err(|e: IdentityError| AnchorError::Store(format!("record accepted anchor: {e}")))
+        .map_err(|e: IdentityError| AnchorError::Store(format!("record accepted anchor: {e}")))?;
+    // A fresh record supersedes whatever was ignored.
+    let _ = std::fs::remove_file(ignored_marker(&env.manifests_dir, &a.statement.project_id));
+    Ok(())
 }
 
 pub(super) fn append_event(env: &CertEnv, stmt: &ProjectAnchorStmt, recovered: Option<&Accepted>, epoch: u64) -> Accepted {

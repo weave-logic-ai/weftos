@@ -143,6 +143,43 @@ pub fn user_profile_active() -> bool {
         .is_some()
 }
 
+/// Is this process a test? Any of: this crate's own `cfg(test)`; the
+/// `WEFTOS_TEST` marker (set by `scripts/test-runtime-wrap.sh`); `NEXTEST`
+/// (set by nextest); the executable living in a cargo `deps` directory (every
+/// integration-test and unit-test binary, however it was started: IDE, CI
+/// `cargo test`, nextest); or a `rustdoctest*` path (doctest executables).
+/// A library built for an integration test has no `cfg(test)`, which is why
+/// the others exist.
+pub fn running_under_test() -> bool {
+    if cfg!(test) || std::env::var_os("WEFTOS_TEST").is_some() || std::env::var_os("NEXTEST").is_some() {
+        return true;
+    }
+    let Ok(exe) = std::env::current_exe() else { return false };
+    exe.parent().and_then(|p| p.file_name()).is_some_and(|d| d == "deps")
+        || exe.components().any(|c| c.as_os_str().to_string_lossy().starts_with("rustdoctest"))
+}
+
+/// Panic when a test would use a real runtime root: a test process, no
+/// `WEFTOS_RUNTIME_DIR` override (`overridden`), and `root` not under the
+/// temp dir (the real `~/.weftos/run` or `~/.clawft` holds live files:
+/// `cluster_peers.json`, `node.key`, chains). A test that points `HOME` at a
+/// tempdir passes. `WEFTOS_ALLOW_REAL_HOME_IN_TESTS=1` opts out.
+pub fn refuse_real_runtime_in_tests(root: &Path, overridden: bool) {
+    if overridden || std::env::var_os("WEFTOS_ALLOW_REAL_HOME_IN_TESTS").is_some() || !running_under_test() {
+        return;
+    }
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let tmp = std::env::temp_dir();
+    if !(root.starts_with(&tmp) || canon(root).starts_with(canon(&tmp))) {
+        panic!(
+            "a test resolved the runtime root {} without a WEFTOS_RUNTIME_DIR override; \
+             that is a real runtime dir. Pin the root (WEFTOS_RUNTIME_DIR, \
+             set_user_profile_at, or an explicit RuntimePaths) or point HOME at a tempdir",
+            root.display()
+        );
+    }
+}
+
 /// `<home>/.weftos`, the per-user state directory (ADR-103 D4).
 pub fn user_weftos_dir(home: &Path) -> PathBuf {
     home.join(".weftos")
@@ -282,37 +319,9 @@ impl RuntimePaths {
         paths
     }
 
-    /// Test guard: a test binary (it lives in a cargo `deps` dir) that
-    /// resolves a root with no `WEFTOS_RUNTIME_DIR` override must land under
-    /// the temp dir (a test that points `HOME` at a tempdir does). Resolving
-    /// the real `~/.weftos/run` or `~/.clawft` from a test would write the
-    /// developer's live runtime files (`cluster_peers.json`, `node.key`, ...),
-    /// so it panics instead. `WEFTOS_ALLOW_REAL_HOME_IN_TESTS=1` opts out.
+    /// Test guard, see [`refuse_real_runtime_in_tests`].
     fn refuse_real_home_in_tests(&self, overridden: bool) {
-        if overridden || std::env::var_os("WEFTOS_ALLOW_REAL_HOME_IN_TESTS").is_some() {
-            return;
-        }
-        let in_test_binary = std::env::current_exe()
-            .ok()
-            .is_some_and(|e| e.parent().and_then(|p| p.file_name()).is_some_and(|d| d == "deps"));
-        if !in_test_binary {
-            return;
-        }
-        let tmp = std::env::temp_dir();
-        let under = |base: &Path| {
-            self.root.starts_with(base)
-                || std::fs::canonicalize(base).is_ok_and(|b| {
-                    std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone()).starts_with(b)
-                })
-        };
-        if !under(&tmp) {
-            panic!(
-                "a test resolved the runtime root {} without a WEFTOS_RUNTIME_DIR override; \
-                 that is a real runtime dir. Pin the root (WEFTOS_RUNTIME_DIR, \
-                 set_user_profile_at, or an explicit RuntimePaths) or point HOME at a tempdir",
-                self.root.display()
-            );
-        }
+        refuse_real_runtime_in_tests(&self.root, overridden);
     }
 
     /// The runtime root directory.

@@ -136,6 +136,7 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable, fix: bool, all_runtimes: bool) 
         }
         dirs_data.push(entry);
     }
+    out.extend(super::chain_locks::ignored_anchor_records(&crate::resolve::manifests_dir(&env.home)));
     out.extend(key_findings(&keys));
     let key_data: Vec<Value> = keys
         .iter()

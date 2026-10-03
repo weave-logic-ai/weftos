@@ -208,7 +208,7 @@ impl Supervisor {
                     false
                 } else {
                     // A busy last beat earns the long ceiling, not immunity.
-                    let need = if lost { self.cfg.lost_heartbeat_grace } else { self.cfg.lost_heartbeat_busy_ceiling };
+                    let need = if lost { self.cfg.lost_heartbeat_grace } else { self.busy_ceiling(&id) };
                     let since = *st.expired_since.get_or_insert(now);
                     now.saturating_duration_since(since) >= need
                 }
@@ -221,6 +221,19 @@ impl Supervisor {
             }
         }
         acted
+    }
+
+    /// The busy-skip ceiling for `id`: its manifest's
+    /// `[serve] lost_heartbeat_busy_ceiling_secs`, else the daemon default;
+    /// never below the plain grace.
+    fn busy_ceiling(&self, id: &str) -> std::time::Duration {
+        let own = clawft_types::project::find_by_id(&self.cfg.manifests_dir, id)
+            .ok()
+            .flatten()
+            .and_then(|m| m.serve)
+            .and_then(|s| s.lost_heartbeat_busy_ceiling_secs)
+            .map(std::time::Duration::from_secs);
+        own.unwrap_or(self.cfg.lost_heartbeat_busy_ceiling).max(self.cfg.lost_heartbeat_grace)
     }
 
     async fn restart_lost(self: &Arc<Self>, id: &str, slot: &Arc<Slot>) -> bool {

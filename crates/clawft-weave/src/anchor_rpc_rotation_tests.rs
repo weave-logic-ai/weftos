@@ -110,6 +110,34 @@ fn an_old_key_record_without_a_chain_event_below_the_rotation_is_refused() {
     assert!(read_file(&env, &f.id, &view).is_none(), "an event above the rotation is not corroboration");
 }
 
+/// A genuine anchor event for statement A must not vouch for a record that
+/// claims statement B with A's sequence and hash (sealed with the old key),
+/// and the refusal leaves a marker for doctor, once.
+#[test]
+fn a_genuine_event_does_not_corroborate_a_different_statement() {
+    let f = fixture();
+    submit(&f.env, &stmt(&f, 1, None, 10, later(5)), later(10)).unwrap();
+    let genuine = append_event(&f.env, &stmt(&f, 1, None, 10, later(50)), None, 0);
+    let env = rotated(&f);
+    let old_env = CertEnv { chain: env.chain.clone(), user_key: user_key(), manifests_dir: env.manifests_dir.clone() };
+    let view = current_view(&env).unwrap();
+    // Control: the genuine record is read.
+    write_file(&env, &genuine).unwrap();
+    assert!(read_file(&env, &f.id, &view).is_some());
+    // Statement B (another head_seq), A's chain coordinates, old-key seal.
+    let other = stmt(&f, 1, None, 99, later(50));
+    assert_ne!(other.hash(), genuine.statement.hash());
+    let forged = seal(&old_env, other, genuine.user_seq, genuine.user_event_hash.clone(), 0);
+    write_file(&env, &forged).unwrap();
+    assert!(read_file(&env, &f.id, &view).is_none(), "the event is for another statement");
+    let marker = super::record::ignored_marker(&env.manifests_dir, &f.id);
+    assert!(marker.exists(), "doctor is told");
+    // A later valid record clears the marker.
+    write_file(&env, &genuine).unwrap();
+    assert!(!marker.exists());
+    assert!(read_file(&env, &f.id, &view).is_some());
+}
+
 #[test]
 fn a_certificate_the_old_key_issues_after_the_rotation_point_is_dropped() {
     let f = fixture();

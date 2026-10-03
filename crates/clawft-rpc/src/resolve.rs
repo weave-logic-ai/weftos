@@ -200,7 +200,12 @@ fn nonempty(v: &Option<String>) -> Option<&str> {
 
 /// Resolve from the process environment.
 pub fn resolve(flags: &ResolveFlags) -> Result<Resolution, ResolveError> {
-    resolve_with(&ResolveInputs::from_process(flags.clone()))
+    let inputs = ResolveInputs::from_process(flags.clone());
+    let r = resolve_with(&inputs)?;
+    // A test must not resolve the real home's runtime root implicitly.
+    let pinned = matches!(r.source, ResolveSource::Flag | ResolveSource::Env);
+    clawft_types::runtime_paths::refuse_real_runtime_in_tests(&r.runtime_root, pinned);
+    Ok(r)
 }
 
 /// The socket the resolver picks for `i`, or the legacy default when

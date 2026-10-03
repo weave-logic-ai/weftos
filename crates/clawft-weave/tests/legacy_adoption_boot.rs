@@ -24,6 +24,28 @@ use nix::unistd::Pid;
 const WEAVER: &str = env!("CARGO_BIN_EXE_weaver");
 const EX_CONFIG: i32 = 78;
 
+/// A spawned weaver that is killed and reaped if the test panics.
+struct Kid(Option<Child>);
+
+impl Kid {
+    fn get(&mut self) -> &mut Child {
+        self.0.as_mut().expect("child already taken")
+    }
+
+    fn take(mut self) -> Child {
+        self.0.take().expect("child already taken")
+    }
+}
+
+impl Drop for Kid {
+    fn drop(&mut self) {
+        if let Some(c) = self.0.as_mut() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
 struct Home {
     _t: tempfile::TempDir,
     home: PathBuf,
@@ -31,7 +53,8 @@ struct Home {
 
 impl Home {
     fn new() -> Self {
-        let t = tempfile::tempdir().unwrap();
+        // Short: `<home>/.clawft/kernel.sock` must fit macOS's 104-byte sun_path.
+        let t = tempfile::Builder::new().prefix("wlab").tempdir_in("/tmp").unwrap();
         let home = t.path().join("h");
         std::fs::create_dir_all(&home).unwrap();
         Self { home: home.canonicalize().unwrap(), _t: t }
@@ -43,9 +66,9 @@ impl Home {
 
     /// `weaver kernel start --foreground [extra]` as a cleared-env child whose
     /// stderr goes to a file (read back with [`Self::log`]).
-    fn start(&self, extra: &[&str]) -> Child {
+    fn start(&self, extra: &[&str]) -> Kid {
         let log = std::fs::File::create(self.home.join("boot.log")).unwrap();
-        Command::new(WEAVER)
+        Kid(Some(Command::new(WEAVER)
             .args(["kernel", "start", "--foreground"])
             .args(extra)
             .current_dir(&self.home)
@@ -55,14 +78,15 @@ impl Home {
             .stdout(Stdio::null())
             .stderr(log)
             .spawn()
-            .expect("start weaver")
+            .expect("start weaver")))
     }
 
     fn log(&self) -> String {
         std::fs::read_to_string(self.home.join("boot.log")).unwrap_or_default()
     }
 
-    fn wait_serving(&self, child: &mut Child) {
+    fn wait_serving(&self, kid: &mut Kid) {
+        let child = kid.get();
         let sock = self.legacy().join("kernel.sock");
         let end = Instant::now() + Duration::from_secs(60);
         while !sock.exists() {
@@ -77,7 +101,8 @@ impl Home {
 
 /// SIGTERM our own child (a graceful shutdown that checkpoints the chain) and
 /// wait for it; escalate only if it will not exit.
-fn stop(mut child: Child, log: &Path) {
+fn stop(kid: Kid, log: &Path) {
+    let mut child = kid.take();
     kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM).unwrap();
     let end = Instant::now() + Duration::from_secs(90);
     loop {
@@ -107,6 +132,7 @@ fn a_lock_unaware_legacy_chain_is_refused_until_adopted_explicitly() {
     let mut first = h.start(&[]);
     h.wait_serving(&mut first);
     stop(first, &h.home.join("boot.log"));
+    assert!(!h.legacy().join("kernel.sock").exists(), "the first kernel is gone: its socket cannot satisfy step 4");
     let rvf = h.legacy().join("chain.rvf");
     assert!(rvf.exists(), "the first boot left a chain: {:?}", std::fs::read_dir(h.legacy()).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>());
 
@@ -123,7 +149,7 @@ fn a_lock_unaware_legacy_chain_is_refused_until_adopted_explicitly() {
     let mut refused = h.start(&[]);
     let end = Instant::now() + Duration::from_secs(60);
     let status = loop {
-        if let Some(st) = refused.try_wait().unwrap() {
+        if let Some(st) = refused.get().try_wait().unwrap() {
             break st;
         }
         assert!(Instant::now() < end, "the refused boot kept running:\n{}", h.log());

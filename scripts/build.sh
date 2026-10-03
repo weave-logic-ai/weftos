@@ -649,16 +649,21 @@ trap cleanup_test_runtime EXIT
 
 isolate_test_runtime() {
     [ -n "${WEFTOS_RUNTIME_DIR:-}" ] && return 0
+    NEXTEST_CONFIG=(--config-file "$ROOT/config/nextest.toml")
     if [ -z "${WEFTOS_TEST_RUNTIME_ROOT:-}" ]; then
         WEFTOS_TEST_RUNTIME_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/weftos-test-runtime.XXXXXX")"
         export WEFTOS_TEST_RUNTIME_ROOT
         TEST_RUNTIME_CLEANUP="$WEFTOS_TEST_RUNTIME_ROOT"
     fi
     # `cargo test` runs each test binary through the wrapper as its runner.
-    local triple var
+    export "$(cargo_runner_var)=$ROOT/scripts/test-runtime-wrap.sh"
+}
+
+# Name of the cargo `target.<host>.runner` env var.
+cargo_runner_var() {
+    local triple
     triple="$(rustc -vV | sed -n 's/^host: //p')"
-    var="CARGO_TARGET_$(printf '%s' "$triple" | tr 'a-z-' 'A-Z_')_RUNNER"
-    export "$var=$ROOT/scripts/test-runtime-wrap.sh"
+    printf 'CARGO_TARGET_%s_RUNNER' "$(printf '%s' "$triple" | tr 'a-z-' 'A-Z_')"
 }
 
 # Doctests run through rustdoc, which ignores the cargo runner: give them one
@@ -672,8 +677,10 @@ doctest_runtime() {
     fi
 }
 
-# nextest config: per-test runtime dirs (see config/nextest.toml).
-NEXTEST_CONFIG=(--config-file "$ROOT/config/nextest.toml")
+# nextest config: per-test runtime dirs (see config/nextest.toml). Set by
+# isolate_test_runtime only when it made a root: the wrapper refuses to run
+# without one, so a caller-pinned WEFTOS_RUNTIME_DIR runs without it.
+NEXTEST_CONFIG=()
 
 workspace_test() {
     isolate_test_runtime
@@ -701,7 +708,7 @@ workspace_test() {
     # ${arr[@]+…} guard: macOS bash 3.2 + `set -u` errors on expanding an
     # empty array without it.
     if command -v cargo-nextest >/dev/null 2>&1; then
-        cargo nextest run "${NEXTEST_CONFIG[@]}" "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
+        env -u "$(cargo_runner_var)" cargo nextest run ${NEXTEST_CONFIG[@]+"${NEXTEST_CONFIG[@]}"} "${scope[@]}" ${extra[@]+"${extra[@]}"} ${filter[@]+"${filter[@]}"} \
             && { [ ${#filter[@]} -gt 0 ] || doctest_runtime cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}; }
     else
         cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} ${cfilter[@]+"${cfilter[@]}"}
@@ -1618,7 +1625,7 @@ check_kernel_diskann_and_bench_matrix() {
 cmd_pipeline_pass_impl() {
     isolate_test_runtime
     if cargo nextest --version >/dev/null 2>&1; then
-        cargo nextest run "${NEXTEST_CONFIG[@]}" -p clawft-core -E 'test(pipeline)'
+        env -u "$(cargo_runner_var)" cargo nextest run ${NEXTEST_CONFIG[@]+"${NEXTEST_CONFIG[@]}"} -p clawft-core -E 'test(pipeline)'
     else
         # Fallback when nextest is missing: cargo test path filter (slower,
         # less precise than nextest, but still package-scoped).

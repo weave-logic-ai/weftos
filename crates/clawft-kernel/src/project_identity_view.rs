@@ -160,12 +160,22 @@ impl RevocationView {
 
     fn ingest_cert(&mut self, c: &ProjectCert) {
         if let Some(cause) = self.rejection_cause(c) {
-            tracing::warn!(
-                project = %c.project_id,
-                user_key = %c.user_key_id,
-                serial = c.serial,
-                "project certificate rejected: {cause}"
-            );
+            // The view is rebuilt on every identity call: warn once per
+            // (project, serial, cause), not on each rebuild.
+            static SEEN: std::sync::Mutex<Option<HashSet<(String, u64, String)>>> = std::sync::Mutex::new(None);
+            let first = SEEN
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_or_insert_with(HashSet::new)
+                .insert((c.project_id.clone(), c.serial, cause.clone()));
+            if first {
+                tracing::warn!(
+                    project = %c.project_id,
+                    user_key = %c.user_key_id,
+                    serial = c.serial,
+                    "project certificate rejected: {cause}"
+                );
+            }
             self.rejected += 1;
             return;
         }

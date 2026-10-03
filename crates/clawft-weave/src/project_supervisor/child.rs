@@ -523,12 +523,15 @@ impl Launcher {
         registry().note_pid(id, pid);
         self.spawns.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = watch::channel(None);
+        // Before the waiter exists: if the child dies at once, the waiter's
+        // prune must find the group already noted (else it would be noted
+        // after its own prune, and stay until the next accept).
+        note_group(pid);
         std::thread::spawn(move || {
             let info = child.wait().map(exit_info).unwrap_or_default();
             prune_if_gone(pid);
             let _ = tx.send(Some(info));
         });
-        note_group(pid);
         self.procs().insert(
             id.to_owned(),
             Entry { proc: Proc::Owned { pid, exit: rx }, stop: Arc::new(AtomicBool::new(false)) },

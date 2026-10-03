@@ -224,10 +224,12 @@ pub fn a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_bud
 pub fn a_child_wedged_while_busy_is_restarted_after_the_ceiling() {
     let fx = Fixture::new();
     fx.behavior("serve");
+    fx.set_serve(|s| s.lost_heartbeat_busy_ceiling_secs = Some(10));
     rt().block_on(async {
         let mut cfg = fx.cfg();
         cfg.lost_heartbeat_grace = Duration::from_millis(100);
-        cfg.lost_heartbeat_busy_ceiling = Duration::from_secs(10);
+        // The daemon default is far away; the project's own knob wins.
+        cfg.lost_heartbeat_busy_ceiling = Duration::from_secs(3600);
         let sup = Supervisor::new(cfg, fx.deps());
         let first = sup.ensure_running(&fx.id).await.unwrap();
         let t0 = Instant::now();
@@ -242,6 +244,26 @@ pub fn a_child_wedged_while_busy_is_restarted_after_the_ceiling() {
         let st = sup.status(&fx.id).await;
         assert!(st.pid.is_some_and(|p| p != first.pid) && !pid_alive(first.pid), "the wedged child was replaced");
         assert!(fx.events("project.kernel.exited").iter().any(|e| e.payload.as_ref().unwrap()["reason"] == "heartbeat lost"));
+        sup.stop_all().await;
+    });
+}
+
+/// The plain (non-busy) lost path still restarts at the short grace, with the
+/// busy ceiling far away.
+pub fn a_plain_lost_child_is_restarted_at_the_short_grace_not_the_busy_ceiling() {
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    rt().block_on(async {
+        let mut cfg = fx.cfg();
+        cfg.lost_heartbeat_grace = Duration::from_millis(100);
+        cfg.lost_heartbeat_busy_ceiling = Duration::from_secs(3600);
+        let sup = Supervisor::new(cfg, fx.deps());
+        let first = sup.ensure_running(&fx.id).await.unwrap();
+        let t0 = Instant::now();
+        fx.activity.set_lost(true);
+        assert!(sup.liveness_pass(t0).await.is_empty(), "first sighting");
+        assert_eq!(sup.liveness_pass(t0 + Duration::from_millis(200)).await, vec![fx.id.clone()]);
+        assert!(sup.status(&fx.id).await.pid.is_some_and(|p| p != first.pid));
         sup.stop_all().await;
     });
 }

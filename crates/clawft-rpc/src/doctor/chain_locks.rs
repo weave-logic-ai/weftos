@@ -122,6 +122,32 @@ pub(super) fn legacy_adoption(
     (out, data)
 }
 
+/// Anchor records the user daemon ignored because a retired user key sealed
+/// them and the chain does not vouch for them (it leaves
+/// `<id>.anchor-ignored.txt` in the manifest store). Doctor holds no keys, so
+/// the daemon's marker is the evidence.
+pub(super) fn ignored_anchor_records(manifests_dir: &Path) -> Vec<Finding> {
+    let Ok(rd) = std::fs::read_dir(manifests_dir) else { return Vec::new() };
+    let mut ids: Vec<String> = rd
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.strip_suffix(".anchor-ignored.txt").map(str::to_owned))
+        .collect();
+    ids.sort();
+    ids.into_iter()
+        .map(|id| {
+            Finding::new(
+                Component::Runtime,
+                format!("anchor_ignored:{id}"),
+                Severity::Warn,
+                format!("anchor record for project {id} ignored: retired-key seal not corroborated by the user chain"),
+            )
+            .remedy(format!(
+                "the project anchors again from its next statement; if the user chain was lost or reset, check {id}.anchor.json in the manifest store"
+            ))
+        })
+        .collect()
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -188,5 +214,17 @@ mod tests {
         let (f, _) = check(&env, &ProcTable::load(&env), false, false);
         let l = f.iter().find(|x| x.id.starts_with("chain_lock:")).unwrap();
         assert!(l.message.contains("not running"), "{}", l.message);
+    }
+
+    #[test]
+    fn an_ignored_retired_key_anchor_record_is_a_warn() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(ignored_anchor_records(d.path()).is_empty());
+        std::fs::write(d.path().join("01JB8Z3Q0V6X9KQ4M2N7T5R1WA.anchor-ignored.txt"), "x").unwrap();
+        std::fs::write(d.path().join("01JB8Z3Q0V6X9KQ4M2N7T5R1WA.anchor.json"), "{}").unwrap();
+        let f = ignored_anchor_records(d.path());
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].severity, Severity::Warn);
+        assert!(f[0].message.contains("ignored: retired-key seal not corroborated"), "{}", f[0].message);
     }
 }
