@@ -441,7 +441,7 @@ pub async fn start(
                     .entry(p.clone())
                     .or_default()
                     .extend(r.controllers.iter().cloned());
-                router.with_project(p, fwd)
+                router.with_project_route(p, fwd)
             }
             (_, Some(c)) => router.with_controller(c, fwd),
             _ => router,

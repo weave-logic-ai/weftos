@@ -345,7 +345,7 @@ impl StaticDirectory {
     }
 
     /// Register a project's store.
-    pub fn with_project(self, project_id: &str, store: Arc<dyn IngestStore>) -> Self {
+    pub fn with_project_store(self, project_id: &str, store: Arc<dyn IngestStore>) -> Self {
         if let Ok(mut m) = self.projects.lock() {
             m.insert(project_id.to_string(), store);
         }

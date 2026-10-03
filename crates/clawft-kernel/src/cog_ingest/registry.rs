@@ -216,7 +216,7 @@ impl StaticRouter {
     }
 
     /// Route a project's batches.
-    pub fn with_project(self, project_id: &str, f: Arc<dyn Forwarder>) -> Self {
+    pub fn with_project_route(self, project_id: &str, f: Arc<dyn Forwarder>) -> Self {
         if let Ok(mut m) = self.projects.lock() {
             m.insert(project_id.to_string(), f);
         }

@@ -372,11 +372,11 @@ async fn project_less_placements_fall_back_to_the_controllers_store() {
     let dir: Arc<dyn StoreDirectory> = Arc::new(
         StaticDirectory::new()
             .with_fallback(ctl_store.clone())
-            .with_project(PROJECT, proj_store.clone()),
+            .with_project_store(PROJECT, proj_store.clone()),
     );
     let fwd: Arc<dyn Forwarder> = Arc::new(LocalForwarder::new("node-a", dir));
     let router = StaticRouter::new()
-        .with_project(PROJECT, fwd.clone())
+        .with_project_route(PROJECT, fwd.clone())
         .with_controller("ctl", fwd);
     let (bridge, reg) = bridge_over(router, RateBudget::default());
     let tp = register(&reg, "with-project", Some(PROJECT), "ctl");

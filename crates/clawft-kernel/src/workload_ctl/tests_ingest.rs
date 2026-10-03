@@ -116,14 +116,14 @@ async fn rig(o: RigOpts) -> Rig {
     );
     let dir: Arc<dyn StoreDirectory> = Arc::new(
         StaticDirectory::new()
-            .with_project(PROJECT, proj_store.clone())
-            .with_project(OTHER, proj_store.clone())
+            .with_project_store(PROJECT, proj_store.clone())
+            .with_project_store(OTHER, proj_store.clone())
             .with_fallback(ctl_store.clone()),
     );
     let fwd = Arc::new(LocalForwarder::new("host", dir));
     let mut router = StaticRouter::new();
     for p in &o.routed {
-        router = router.with_project(p, fwd.clone());
+        router = router.with_project_route(p, fwd.clone());
     }
     if o.ctl_route {
         router = router.with_controller(&node(&o.ctl), fwd.clone());

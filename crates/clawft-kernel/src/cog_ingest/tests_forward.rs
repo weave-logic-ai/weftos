@@ -30,7 +30,7 @@ fn two_nodes(budget: RateBudget) -> TwoNodes {
     let (proj_store, ctl_store) = (mem(), mem());
     let dir: Arc<dyn StoreDirectory> = Arc::new(
         StaticDirectory::new()
-            .with_project(PROJECT, proj_store.clone())
+            .with_project_store(PROJECT, proj_store.clone())
             .with_fallback(ctl_store.clone()),
     );
     let owner = Arc::new(StoreOwnerService::new(
@@ -49,8 +49,8 @@ fn two_nodes(budget: RateBudget) -> TwoNodes {
         conn,
     ));
     let router = StaticRouter::new()
-        .with_project(PROJECT, fwd.clone())
-        .with_project("01J9ZXW0PRJCTBBBBBBBBBBBBB", fwd.clone())
+        .with_project_route(PROJECT, fwd.clone())
+        .with_project_route("01J9ZXW0PRJCTBBBBBBBBBBBBB", fwd.clone())
         .with_controller("ctl", fwd);
     let (bridge, reg) = bridge_over(router, budget);
     TwoNodes {
@@ -215,7 +215,7 @@ fn a_project_restricted_key_cannot_forward_for_other_projects_or_project_less() 
     let store = mem();
     let dir: Arc<dyn StoreDirectory> = Arc::new(
         StaticDirectory::new()
-            .with_project(PROJECT, store.clone())
+            .with_project_store(PROJECT, store.clone())
             .with_fallback(store.clone()),
     );
     let owner = StoreOwnerService::new(
