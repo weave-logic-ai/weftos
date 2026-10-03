@@ -36,7 +36,9 @@ Three layers, each with a different job:
 
 **What ±100 ns buys:** about 0.15 mm of acoustic path in water (sonar fusion is far beyond adequate), and plenty for event fusion across CSI, mmWave, UWB and LoRa. It is **not** RF phase coherence: 100 ns is about 30 m of radio path. [I, arithmetic]
 
-**Measured on our hardware: not yet.** On 2026-10-02 the Pi 5 (`cog0`, now running the Cognitum Seed image) had **no `eth0` at all**: interfaces were `usb0`/`usb1` (gadget), `wlan0`, `wlan0_ap` and `tailscale0`, and there was no `/dev/ptp*`. `ethtool` and `linuxptp` are now installed there. Testing PTP needs either a plain Raspberry Pi OS card or the Seed image's Ethernet enabled, plus a cable. [V]
+**Measured, STM32N6 node (2026-10-02).** The NUCLEO-N657 node firmware (`crates/weftos-n6-node`) runs a PTPv2 E2E two-step UDP slave on the ETH1 MAC clock, which is HSE-referenced and measured at −1.41 ±1.14 ppm against host time. It was synced to `ptp4l` 3.1.1 (master-only, software timestamps) running in an OrbStack Debian VM, with the Mac's USB gigabit adapter passed through and cabled direct to the Nucleo. Result: one step at boot, then slewing only. Over 51 samples after 40 s the mean offset was **+0.4 µs**, median |offset| 12.6 µs, σ 18.8 µs, max 62.6 µs. Path delay sat around 270 µs, with a lucky-packet filter dropping 52 of 119 exchanges. The scatter is the software-timestamp floor of a VM + USB-NIC master plus software stamping on the node. Hardware timestamps on both ends (a Pi 5/CM5 master, and N6 descriptor timestamps) are the path to the ±100 ns class. [V]
+
+**Measured on the Pi 5: not yet.** On 2026-10-02 the Pi 5 (`cog0`, now running the Cognitum Seed image) had **no `eth0` at all**: interfaces were `usb0`/`usb1` (gadget), `wlan0`, `wlan0_ap` and `tailscale0`, and there was no `/dev/ptp*`. `ethtool` and `linuxptp` are now installed there. Testing PTP needs either a plain Raspberry Pi OS card or the Seed image's Ethernet enabled, plus a cable. [V]
 
 ## 3. Synced antennas
 
