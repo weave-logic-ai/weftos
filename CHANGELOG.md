@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Changed — `weaver update` is sha256-checked, all-binary and install-method aware
+
+- `weaver update` checks every archive's sha256 against the published `.sha256`
+  (and `sha256.sum`) and `dist-manifest.json`, failing closed, then replaces
+  `weft`, `weaver` and `weftos` together with per-file atomic renames and full
+  rollback. The sha256 check gives integrity, not authenticity: it does not
+  protect against a compromised release or account (signature and attestation
+  verification are not done yet).
+- Archives are unpacked in-process: links, `..` and absolute paths are
+  refused and unpacked size is capped. Downloads ignore `.curlrc` and CA
+  environment overrides, accept https only, and follow at most 5 redirects.
+- Homebrew, `cargo install`, source builds and system package paths are
+  refused with the owning channel's command. An install with no cargo-dist
+  receipt needs a confirmation or `--force`.
+- New flags: `--check`, `--dry-run`, `--restart`, `--no-restart`. The daemon
+  restart goes through launchd or systemd when the daemon runs under them and is
+  never done under `sudo`. The `sudo cp` fallback is gone.
+
 ### Changed — gateway auth uses daemon tokens; no HTTP token mint (ADR-102)
 
 - **Breaking:** `POST /api/auth/token` is gone (404). The gateway no longer

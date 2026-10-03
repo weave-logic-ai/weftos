@@ -43,6 +43,8 @@ pub mod update_release;
 mod update_test_support;
 #[cfg(test)]
 mod update_tests;
+#[cfg(test)]
+mod update_tests_hardening;
 pub mod vault_cmd;
 pub mod workload_cmd;
 #[cfg(all(feature = "ecc", feature = "exochain"))]

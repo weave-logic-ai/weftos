@@ -16,7 +16,7 @@ use clawft_rpc::doctor::install::scan;
 use clawft_rpc::doctor::probe::parse_semver;
 
 use super::daemon_restart::{Host, Inputs, restart_with};
-use super::update_install::{self as install, Decision, Method, Plan};
+use super::update_install::{self as install, Decision, Inject, Method, Plan};
 use super::update_release::{self as release, Release, Source};
 use crate::service_units::{LAUNCHD_LABEL, SYSTEMD_UNIT};
 
@@ -50,8 +50,10 @@ pub struct Ctx<'a> {
     /// stdin and stdout are terminals, so a question can be asked.
     pub interactive: bool,
     pub prompt: &'a dyn Fn(&str) -> bool,
-    /// Tests: inject an install failure before the n-th swap.
-    pub fail_swap_at: Option<usize>,
+    /// Running as root through `sudo`: `HOME` and the uid are root's, not the user's.
+    pub sudo_root: bool,
+    /// Tests: inject install failures.
+    pub inject: Inject,
 }
 
 /// How the run ended.
@@ -101,7 +103,10 @@ fn restart_step(ctx: &Ctx<'_>, opts: &Opts, weaver: &Path, out: &mut dyn Write) 
         }
         return Ok(false);
     };
-    let go = if opts.no_restart {
+    let go = if ctx.sudo_root {
+        writeln!(out, "Not restarting: this is running as root via sudo, so the daemon found is root's, not yours.")?;
+        false
+    } else if opts.no_restart {
         false
     } else if opts.restart {
         true
@@ -189,6 +194,7 @@ pub fn execute(ctx: &Ctx<'_>, opts: &Opts, out: &mut dyn Write) -> anyhow::Resul
             return Ok(Outcome::Refused { command });
         }
     };
+    let ahead = matches!((&cur, &new), (Some(c), Some(n)) if c > n);
     if opts.check {
         writeln!(out, "Update available: v{} -> v{}. Run: weaver update", ctx.current_version, rel.version)?;
         return Ok(Outcome::Available { version: rel.version });
@@ -199,6 +205,20 @@ pub fn execute(ctx: &Ctx<'_>, opts: &Opts, out: &mut dyn Write) -> anyhow::Resul
         writeln!(out, "Dry run: nothing downloaded or installed.")?;
         return Ok(Outcome::DryRun);
     }
+    if ahead {
+        writeln!(out, "warning: downgrading from v{} to v{}", ctx.current_version, rel.version)?;
+    }
+    if plan.method == Method::Unmanaged && !opts.force {
+        let q = format!(
+            "No install receipt found, so nothing records who installed the binaries in {}. Overwrite them?",
+            plan.dir.display()
+        );
+        if !(ctx.interactive && (ctx.prompt)(&q)) {
+            writeln!(out, "Not updating: no install receipt; the binaries in {} may belong to something else.", plan.dir.display())?;
+            writeln!(out, "If you installed them from a release archive, re-run:\n  weaver update --force")?;
+            return Ok(Outcome::Refused { command: "weaver update --force".into() });
+        }
+    }
     install::check_writable(&plan.dir)?;
     writeln!(out)?;
     let staging = tempfile::tempdir()?;
@@ -208,7 +228,7 @@ pub fn execute(ctx: &Ctx<'_>, opts: &Opts, out: &mut dyn Write) -> anyhow::Resul
             bail!("release did not provide {}", d.name);
         }
     }
-    let replaced = install::apply(&plan, &staged, ctx.fail_swap_at)?;
+    let replaced = install::apply(&plan, &staged, ctx.inject)?;
     if let Method::Receipt(p) = &plan.method
         && let Err(e) = install::update_receipt_version(p, &rel.version)
     {

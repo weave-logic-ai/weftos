@@ -7,14 +7,26 @@
 //! 2. Every archive is hashed and compared with its published `.sha256`
 //!    (and with `sha256.sum` when the manifest declares one). A missing,
 //!    malformed or disagreeing checksum aborts the update.
-//! 3. The archive listing is checked for absolute or `..` entries before
-//!    extraction, and each binary is run once (`--version`) so a wrong-arch or
+//! 3. Archives are extracted by [`extract`], never by `tar`: only regular
+//!    files and directories are written; symlinks, hardlinks, devices,
+//!    absolute and `..` paths are refused, and total size and entry count are
+//!    capped. Each binary is then run once (`--version`) so a wrong-arch or
 //!    wrong-version payload is caught before anything is installed.
+//!
+//! **sha256 gives integrity, not authenticity.** The checksums and the
+//! manifest come from the same GitHub release as the archives, so they catch
+//! corruption and a tampered archive, but not a compromised release or
+//! account. Signature or attestation verification is not done here yet.
+//!
+//! Downloads use `curl -q` (no `.curlrc`), https only, at most 5 redirects.
+//! CA-bundle overrides (`CURL_CA_BUNDLE`, `SSL_CERT_FILE`, `SSL_CERT_DIR`) are
+//! dropped; standard proxy variables (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`)
+//! still apply, so a proxy you configured is used.
 //!
 //! Nothing here writes outside the staging directory it is handed.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -28,6 +40,9 @@ use serde_json::Value;
 pub const KNOWN_BINARIES: [&str; 3] = ["weft", "weaver", "weftos"];
 
 const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
+/// Most bytes one archive may extract to (the three binaries are ~100 MB together).
+pub const MAX_EXTRACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ENTRIES: usize = 10_000;
 
 /// Where releases are fetched from.
 #[derive(Debug, Clone)]
@@ -36,12 +51,21 @@ pub struct Source {
     pub base: String,
     /// Allow plain `http://` (loopback mock servers in tests only).
     pub allow_http: bool,
+    /// Extraction size cap per archive.
+    pub max_extract_bytes: u64,
+    /// Extra environment for `curl` (tests: a temp `HOME` with a hostile `.curlrc`).
+    pub curl_env: Vec<(String, String)>,
 }
 
 impl Source {
     /// The real GitHub Releases of this project.
     pub fn github() -> Self {
-        Self { base: "https://github.com/weave-logic-ai/weftos/releases".into(), allow_http: false }
+        Self {
+            base: "https://github.com/weave-logic-ai/weftos/releases".into(),
+            allow_http: false,
+            max_extract_bytes: MAX_EXTRACT_BYTES,
+            curl_env: Vec::new(),
+        }
     }
 
     fn manifest_url(&self) -> String {
@@ -106,6 +130,13 @@ pub fn parse_manifest(text: &str, triple: &str) -> anyhow::Result<Release> {
     let version = tag.strip_prefix('v').unwrap_or(tag).to_string();
     if parse_semver(&version).is_none() {
         bail!("manifest tag {tag:?} is not a version");
+    }
+    for r in v["releases"].as_array().into_iter().flatten() {
+        if let Some(av) = r["app_version"].as_str()
+            && av.strip_prefix('v').unwrap_or(av) != version
+        {
+            bail!("manifest tag {tag} does not match release version {av}");
+        }
     }
     let arts = v["artifacts"].as_object().ok_or_else(|| anyhow!("manifest has no artifacts"))?;
     let mut artifacts: Vec<ReleaseArtifact> = Vec::new();
@@ -200,11 +231,16 @@ fn curl(src: &Source, url: &str, dest: &Path) -> anyhow::Result<()> {
     if !src.allow_http && !url.starts_with("https://") {
         bail!("refusing non-https URL {url}");
     }
+    // `-q` must be the first argument: it makes curl ignore any `.curlrc`.
     let mut c = Command::new("curl");
-    c.args(["-fsSL", "--max-time", "300", "--max-filesize", "1073741824"]);
+    c.args(["-q", "-fsSL", "--max-redirs", "5", "--max-time", "300", "--max-filesize", "1073741824"]);
     if !src.allow_http {
         c.args(["--proto", "=https", "--proto-redir", "=https"]);
     }
+    for k in ["CURL_CA_BUNDLE", "SSL_CERT_FILE", "SSL_CERT_DIR"] {
+        c.env_remove(k);
+    }
+    c.envs(src.curl_env.iter().map(|(k, v)| (k, v)));
     let status = c.arg("-o").arg(dest).arg(url).status().context("cannot run curl")?;
     if !status.success() {
         bail!("download failed ({status}): {url}");
@@ -237,18 +273,45 @@ fn smoke_check(path: &Path, version: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn unsafe_entry(entry: &str) -> bool {
-    entry.starts_with('/') || entry.split(['/', '\\']).any(|c| c == "..")
+fn unsafe_path(p: &Path) -> bool {
+    p.as_os_str().is_empty() || p.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
-fn archive_is_safe(tarball: &Path) -> anyhow::Result<()> {
-    let out = Command::new("tar").arg("tzf").arg(tarball).output().context("cannot run tar")?;
-    if !out.status.success() {
-        bail!("{} is not a readable archive", tarball.display());
-    }
-    for entry in String::from_utf8_lossy(&out.stdout).lines() {
-        if unsafe_entry(entry) {
-            bail!("archive entry {entry:?} escapes the extraction directory");
+/// Extract `tarball` into `dest`: regular files and directories only, bounded
+/// in entries and bytes. Nothing is ever created as a link, so no entry can
+/// redirect a later write.
+pub fn extract(tarball: &Path, dest: &Path, max_bytes: u64) -> anyhow::Result<()> {
+    let gz = flate2::read::GzDecoder::new(std::fs::File::open(tarball)?);
+    let mut ar = tar::Archive::new(gz);
+    let mut total = 0u64;
+    for (n, entry) in ar.entries()?.enumerate() {
+        let mut entry = entry.context("corrupt archive")?;
+        if n >= MAX_ENTRIES {
+            bail!("archive has more than {MAX_ENTRIES} entries");
+        }
+        let path = entry.path()?.into_owned();
+        if unsafe_path(&path) {
+            bail!("archive entry {} escapes the extraction directory", path.display());
+        }
+        let target = dest.join(&path);
+        let kind = entry.header().entry_type();
+        if kind.is_dir() {
+            std::fs::create_dir_all(&target)?;
+        } else if kind.is_file() {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&target)?;
+            let room = max_bytes.saturating_sub(total);
+            let copied = std::io::copy(&mut (&mut entry).take(room + 1), &mut f)?;
+            total += copied;
+            if copied > room {
+                bail!("archive extracts to more than {max_bytes} bytes");
+            }
+        } else if kind.is_pax_global_extensions() || kind.is_pax_local_extensions() || kind.is_gnu_longname() {
+            continue;
+        } else {
+            bail!("archive entry {} is a {kind:?}; only files and directories are allowed", path.display());
         }
     }
     Ok(())
@@ -260,7 +323,14 @@ fn find_binary(dir: &Path, name: &str) -> Option<PathBuf> {
     if plain(&top) {
         return Some(top);
     }
-    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path().join(name)).find(|p| plain(p))
+    let real_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|d| real_dir(d))
+        .map(|d| d.join(name))
+        .find(|p| plain(p))
 }
 
 /// Download, verify and extract every archive in `release` under `staging`.
@@ -295,14 +365,11 @@ pub fn stage(
                 None => bail!("sha256.sum does not list {}", art.name),
             }
         }
-        writeln!(out, "  verified sha256 {}", &got[..16])?;
-        archive_is_safe(&tarball)?;
+        writeln!(out, "  sha256 verified {}", &got[..16])?;
         let dir = staging.join(format!("x-{}", art.name));
         std::fs::create_dir_all(&dir)?;
-        let st = Command::new("tar").arg("xzf").arg(&tarball).arg("-C").arg(&dir).status()?;
-        if !st.success() {
-            bail!("failed to extract {}", art.name);
-        }
+        extract(&tarball, &dir, src.max_extract_bytes)
+            .with_context(|| format!("refusing {}", art.name))?;
         for bin in &art.binaries {
             let path = find_binary(&dir, bin).ok_or_else(|| anyhow!("{bin} is not in {}", art.name))?;
             #[cfg(unix)]
@@ -333,12 +400,34 @@ mod tests {
     }
 
     #[test]
-    fn archive_entries_must_stay_inside() {
-        assert!(unsafe_entry("/etc/passwd"));
-        assert!(unsafe_entry("../x"));
-        assert!(unsafe_entry("a/../../x"));
-        assert!(!unsafe_entry("weaver-x/weaver"));
-        assert!(!unsafe_entry("weaver-x/..hidden"));
+    fn archive_paths_must_stay_inside() {
+        for bad in ["/etc/passwd", "../x", "a/../../x", ""] {
+            assert!(unsafe_path(Path::new(bad)), "{bad}");
+        }
+        for ok in ["weaver-x/weaver", "weaver-x/..hidden", "./weaver"] {
+            assert!(!unsafe_path(Path::new(ok)), "{ok}");
+        }
+    }
+
+    #[test]
+    fn plain_http_is_refused_unless_allowed() {
+        let d = tempfile::tempdir().unwrap();
+        let src = Source::github();
+        let e = curl(&src, "http://127.0.0.1:9/x", &d.path().join("o")).unwrap_err();
+        assert!(e.to_string().contains("non-https"), "{e}");
+        assert!(curl(&src, "ftp://example.invalid/x", &d.path().join("o")).is_err());
+    }
+
+    #[test]
+    fn manifest_tag_and_version_must_agree() {
+        let m = |app: &str| {
+            format!(
+                r#"{{"announcement_tag":"v1.2.3","releases":[{{"app_name":"a","app_version":"{app}"}}],"artifacts":{{"a.tar.gz":{{"kind":"executable-zip","name":"a.tar.gz","target_triples":["t"],"assets":[{{"kind":"executable","name":"weaver"}}]}}}}}}"#
+            )
+        };
+        assert!(parse_manifest(&m("1.2.3"), "t").is_ok());
+        let e = parse_manifest(&m("1.2.4"), "t").unwrap_err();
+        assert!(e.to_string().contains("does not match"), "{e}");
     }
 
     #[test]

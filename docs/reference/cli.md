@@ -299,7 +299,7 @@ The daemon side is `kernel.mesh.service = "auto" | "required" | "off"` in
 
 ## weaver update
 
-Verified self-update from GitHub Releases. Replaces `weft`, `weaver` and
+Self-update from GitHub Releases with sha256 verification (integrity, not authenticity). Replaces `weft`, `weaver` and
 `weftos` together with rollback, honours the install method, and handles the
 per-user daemon restart. Full behaviour: [Updating](../deployment/install.md#updating).
 
@@ -315,7 +315,7 @@ weaver update [--check] [--dry-run] [--force] [--restart | --no-restart]
 |---|---|
 | `--check` | Report the latest version and how it would be applied; install nothing. |
 | `--dry-run` | Print the binaries that would be replaced; download and install nothing. |
-| `--force` | Reinstall even when already on the latest release. |
+| `--force` | Reinstall even when already on the latest release; also confirms overwriting an install with no receipt, and allows a downgrade (with a warning). |
 | `--restart` | Restart the per-user daemon after installing, without asking. |
 | `--no-restart` | Never ask; print the restart command. |
 

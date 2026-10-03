@@ -82,11 +82,21 @@ weaver update --force      # reinstall even when already on the latest release
 ```
 
 `weaver update` reads `dist-manifest.json` from the latest GitHub Release,
-downloads the archive for this platform, and checks each archive against its
-published `.sha256` (and `sha256.sum`, when the release has one) before
-anything is installed. A missing, malformed or mismatching checksum aborts the
-update with nothing changed. Each extracted binary is also run once with
-`--version` to confirm it matches the release.
+downloads the archive for this platform, and checks each archive's sha256
+against the published `.sha256` (and `sha256.sum`, when the release has one)
+before anything is installed. A missing, malformed or mismatching checksum
+aborts the update with nothing changed. Archives are unpacked by `weaver`
+itself: only regular files and directories are written, links, `..` and
+absolute paths are refused, and the unpacked size is capped. Each extracted
+binary is also run once with `--version` to confirm it matches the release.
+
+**The sha256 check gives integrity, not authenticity.** The checksums come
+from the same GitHub release as the archives, so they catch corruption and a
+tampered download, not a compromised release or account. Signature and
+attestation verification are not done yet. Downloads use `curl -q` (your
+`.curlrc` is ignored), https only, at most 5 redirects, and ignore
+`CURL_CA_BUNDLE`, `SSL_CERT_FILE` and `SSL_CERT_DIR`. Standard proxy variables
+(`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) still apply.
 
 All binaries in the release (`weft`, `weaver`, `weftos`) are replaced
 together. Each file is swapped with an atomic same-directory rename, and if
@@ -97,16 +107,17 @@ It only updates installs it owns:
 | Install | What `weaver update` does |
 |---|---|
 | Release installer (cargo-dist receipt at `~/.config/weftos/weftos-receipt.json`) | Updates all binaries in the receipt's install directory and records the new version in the receipt. |
-| No receipt (for example a hand-copied release tarball) | Updates the binaries next to the running `weaver`; any that are missing there are skipped. |
+| No receipt (for example a hand-copied release tarball) | Updates the binaries next to the running `weaver`; any that are missing there are skipped. Because nothing records who installed them, it asks first on a terminal and otherwise needs `--force`. |
+| System package manager (`/usr/bin`, `/usr/lib`, `/bin`, `/nix/store`, `/snap`) | Refuses and points at the package manager. Detected by path only; dpkg and rpm databases are not consulted. |
 | Homebrew | Refuses and prints `brew upgrade weave-logic-ai/tap/<formula>`. |
 | `cargo install` | Refuses and prints the matching command. |
 | Source build (`scripts/build.sh install`, a `-dirty` build) | Refuses and prints `scripts/build.sh install`. |
 
 A refused update exits non-zero. A refusal also happens when any binary in the
 install directory belongs to one of the channels above, or when the running
-`weaver` is not the copy the receipt manages. When `/usr/local/bin` or
-another install directory is not writable, the update stops before changing
-anything and tells you to fix the permissions or re-run with `sudo`.
+`weaver` is not the copy the receipt manages. When the install
+directory is not writable, the update stops before changing anything and tells
+you to fix its permissions or reinstall as the user who owns it.
 
 After installing, `weaver update` looks for the per-user daemon. On a
 terminal it asks whether to restart it; in a script it prints the command
@@ -114,7 +125,8 @@ instead, unless you pass `--restart`. When the daemon runs under launchd or a
 systemd user unit, the restart goes through that service manager and the
 printed command is the matching `launchctl kickstart -k` or
 `systemctl --user restart`. A daemon started from a different binary path is
-reported, not restarted. The machine mesh service is never touched; the
+reported, not restarted. Under `sudo` (root with `SUDO_USER` set) it never
+restarts a daemon, because the home directory and uid would be root's. The machine mesh service is never touched; the
 command to refresh it is printed. Finally, any other copies of the binaries
 found on this machine are listed with the command that updates them.
 

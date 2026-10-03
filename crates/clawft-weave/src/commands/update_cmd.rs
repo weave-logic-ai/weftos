@@ -75,6 +75,18 @@ fn ask(question: &str) -> bool {
     std::io::stdin().read_line(&mut line).is_ok() && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// root reached through `sudo` (`SUDO_USER` set): HOME and uid are root's.
+fn running_as_sudo_root() -> bool {
+    #[cfg(unix)]
+    {
+        nix::unistd::geteuid().is_root() && std::env::var_os("SUDO_USER").is_some()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
     let ctx = Ctx {
@@ -88,7 +100,8 @@ fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
         host: &RealHost,
         interactive: std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
         prompt: &ask,
-        fail_swap_at: None,
+        sudo_root: running_as_sudo_root(),
+        inject: Default::default(),
     };
     let opts = Opts {
         check: flags.check,

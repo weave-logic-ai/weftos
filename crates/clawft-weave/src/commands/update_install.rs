@@ -11,6 +11,7 @@
 //! kept (hard link, else copy) until every binary has been swapped; any
 //! failure restores all of them.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -73,6 +74,26 @@ fn channel_name(c: &Channel) -> &'static str {
     }
 }
 
+/// Advice when `dir` belongs to a system package manager (checked by path
+/// prefix; dpkg/rpm databases are not consulted).
+pub fn system_path_advice(dir: &Path) -> Option<&'static str> {
+    const TABLE: [(&str, &str); 6] = [
+        ("/nix/store", "update it through Nix (nix profile upgrade, or your NixOS / home-manager configuration)"),
+        ("/snap", "update it with: snap refresh"),
+        ("/usr/bin", "update it with your system package manager (apt upgrade, dnf upgrade, pacman -Syu)"),
+        ("/usr/sbin", "update it with your system package manager (apt upgrade, dnf upgrade, pacman -Syu)"),
+        ("/usr/lib", "update it with your system package manager (apt upgrade, dnf upgrade, pacman -Syu)"),
+        ("/bin", "update it with your system package manager (apt upgrade, dnf upgrade, pacman -Syu)"),
+    ];
+    let sbin = (Path::new("/sbin"), TABLE[2].1);
+    TABLE
+        .iter()
+        .map(|(p, a)| (Path::new(*p), *a))
+        .chain([sbin])
+        .find(|(p, _)| dir.starts_with(p))
+        .map(|(_, a)| a)
+}
+
 struct ReceiptInfo {
     path: PathBuf,
     prefix: PathBuf,
@@ -111,6 +132,12 @@ pub fn decide(env: &DoctorEnv, exe: &Path, dirty: bool, names: &[String]) -> Dec
     let Some(dir) = canon.parent().map(Path::to_path_buf) else {
         return refuse(format!("cannot locate the directory of {}", canon.display()), "weaver doctor install".into());
     };
+    if let Some(advice) = system_path_advice(&dir) {
+        return refuse(
+            format!("{} belongs to the system package manager; weaver update will not overwrite it", dir.display()),
+            advice.to_string(),
+        );
+    }
     let method = match ch.kind {
         ChannelKind::Homebrew | ChannelKind::DevBuild | ChannelKind::CargoInstall => {
             return refuse(
@@ -175,14 +202,48 @@ pub fn decide(env: &DoctorEnv, exe: &Path, dirty: bool, names: &[String]) -> Dec
     Decision::Proceed(Plan { method, dir, dests, notes })
 }
 
+/// Create an empty file that must not exist yet (never follows a planted link).
+fn create_new(p: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o755);
+    }
+    o.open(p)
+}
+
+/// Copy `src` to a new file `dst` (fails if `dst` exists), flushed to disk.
+fn copy_new(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let mut out = create_new(dst)?;
+    let r = std::io::copy(&mut std::fs::File::open(src)?, &mut out).and_then(|_| out.sync_all());
+    if r.is_err() {
+        let _ = std::fs::remove_file(dst);
+    }
+    r
+}
+
 /// A directory the update can create files in.
 pub fn check_writable(dir: &Path) -> anyhow::Result<()> {
     let probe = dir.join(format!(".weaver-update-probe-{}", std::process::id()));
-    std::fs::write(&probe, b"").with_context(|| {
-        format!("{} is not writable by this user; fix its permissions or re-run `sudo weaver update`", dir.display())
+    create_new(&probe).with_context(|| {
+        format!(
+            "{} is not writable by this user; fix its permissions or reinstall as the user who owns it",
+            dir.display()
+        )
     })?;
     let _ = std::fs::remove_file(&probe);
     Ok(())
+}
+
+/// Test-only failure injection.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Inject {
+    /// Fail before the n-th swap.
+    pub swap_at: Option<usize>,
+    /// Make the first rollback step fail.
+    pub rollback: bool,
 }
 
 /// One replaced binary.
@@ -209,7 +270,7 @@ fn swap_in(dest: &Path, new: &Path, backup: Option<&Path>) -> std::io::Result<()
     if let Some(b) = backup {
         let _ = std::fs::remove_file(b);
         if std::fs::hard_link(dest, b).is_err() {
-            std::fs::copy(dest, b)?;
+            copy_new(dest, b)?;
         }
     }
     std::fs::rename(new, dest)
@@ -229,12 +290,16 @@ fn swap_in(dest: &Path, new: &Path, backup: Option<&Path>) -> std::io::Result<()
     std::fs::rename(new, dest)
 }
 
-fn rollback(done: &[Pending]) -> Vec<String> {
+fn rollback(done: &[Pending], inject_failure: bool) -> Vec<String> {
     let mut failures = Vec::new();
-    for p in done.iter().rev() {
-        let r = match &p.backup {
-            Some(b) => std::fs::rename(b, &p.dest),
-            None => std::fs::remove_file(&p.dest),
+    for (i, p) in done.iter().rev().enumerate() {
+        let r = if inject_failure && i == 0 {
+            Err(std::io::Error::other("injected rollback failure"))
+        } else {
+            match &p.backup {
+                Some(b) => std::fs::rename(b, &p.dest),
+                None => std::fs::remove_file(&p.dest),
+            }
         };
         if let Err(e) = r {
             failures.push(format!("{}: {e}", p.dest.display()));
@@ -243,9 +308,8 @@ fn rollback(done: &[Pending]) -> Vec<String> {
     failures
 }
 
-/// Replace every destination from `staged`, all or nothing. `fail_at` (tests)
-/// injects an I/O error before the n-th swap.
-pub fn apply(plan: &Plan, staged: &[Staged], fail_at: Option<usize>) -> anyhow::Result<Vec<Replaced>> {
+/// Replace every destination from `staged`, all or nothing.
+pub fn apply(plan: &Plan, staged: &[Staged], inject: Inject) -> anyhow::Result<Vec<Replaced>> {
     check_writable(&plan.dir)?;
     // `weaver` last: if anything earlier fails the running binary was never touched.
     let mut order: Vec<&Dest> = plan.dests.iter().collect();
@@ -254,14 +318,7 @@ pub fn apply(plan: &Plan, staged: &[Staged], fail_at: Option<usize>) -> anyhow::
     for d in &order {
         let src = staged.iter().find(|s| s.name == d.name).with_context(|| format!("{} was not staged", d.name))?;
         let new = side(&d.path, "new");
-        let r = std::fs::copy(&src.path, &new).and_then(|_| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755))?;
-            }
-            std::fs::File::open(&new)?.sync_all()
-        });
+        let r = copy_new(&src.path, &new);
         if let Err(e) = r {
             let _ = std::fs::remove_file(&new);
             for p in &pending {
@@ -274,7 +331,7 @@ pub fn apply(plan: &Plan, staged: &[Staged], fail_at: Option<usize>) -> anyhow::
     let mut done: Vec<Pending> = Vec::new();
     let mut queue = pending.into_iter().enumerate();
     while let Some((i, p)) = queue.next() {
-        let r = if fail_at == Some(i) {
+        let r = if inject.swap_at == Some(i) {
             Err(std::io::Error::other("injected failure"))
         } else {
             swap_in(&p.dest, &p.new, p.backup.as_deref())
@@ -289,7 +346,7 @@ pub fn apply(plan: &Plan, staged: &[Staged], fail_at: Option<usize>) -> anyhow::
                 for (_, rest) in queue.by_ref() {
                     let _ = std::fs::remove_file(&rest.new);
                 }
-                let failed = rollback(&done);
+                let failed = rollback(&done, inject.rollback);
                 if failed.is_empty() {
                     bail!("could not install {}: {e}; every binary was restored to its previous version", p.dest.display());
                 }
@@ -306,10 +363,21 @@ pub fn apply(plan: &Plan, staged: &[Staged], fail_at: Option<usize>) -> anyhow::
             let _ = std::fs::remove_file(b);
         }
     }
+    sync_dir(&plan.dir);
     Ok(order
         .iter()
         .map(|d| Replaced { name: d.name.clone(), path: d.path.clone(), from: d.installed.clone() })
         .collect())
+}
+
+/// Flush directory entries so the renames survive a crash.
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 /// Record the new version in the cargo-dist receipt (atomic; other keys kept).
@@ -317,9 +385,32 @@ pub fn update_receipt_version(receipt: &Path, version: &str) -> anyhow::Result<(
     let mut v: Value = serde_json::from_str(&std::fs::read_to_string(receipt)?)?;
     v["version"] = Value::String(version.into());
     let tmp = side(receipt, "new");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&v)?)?;
+    create_new(&tmp)?.write_all(&serde_json::to_vec_pretty(&v)?)?;
     std::fs::rename(&tmp, receipt).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_package_paths_are_recognised() {
+        for (p, hint) in [
+            ("/usr/bin", "package manager"),
+            ("/usr/lib/weftos", "package manager"),
+            ("/bin", "package manager"),
+            ("/sbin", "package manager"),
+            ("/nix/store/abc-weftos/bin", "Nix"),
+            ("/snap/weftos/current/bin", "snap refresh"),
+        ] {
+            let a = system_path_advice(Path::new(p)).unwrap_or_else(|| panic!("{p}"));
+            assert!(a.contains(hint), "{p}: {a}");
+        }
+        for p in ["/usr/local/bin", "/opt/homebrew/bin", "/home/u/.local/bin", "/usr/binary", "/bin2"] {
+            assert!(system_path_advice(Path::new(p)).is_none(), "{p}");
+        }
+    }
 }

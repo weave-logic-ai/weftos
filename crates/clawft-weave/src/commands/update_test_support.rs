@@ -47,7 +47,12 @@ impl Mock {
     }
 
     pub fn source(&self) -> Source {
-        Source { base: format!("http://127.0.0.1:{}/r", self.port), allow_http: true }
+        Source {
+            base: format!("http://127.0.0.1:{}/r", self.port),
+            allow_http: true,
+            max_extract_bytes: super::update_release::MAX_EXTRACT_BYTES,
+            curl_env: Vec::new(),
+        }
     }
 
     pub fn asset_requests(&self) -> usize {
@@ -83,8 +88,55 @@ pub fn script(bin: &str, version: &str) -> String {
     format!("#!/bin/sh\necho \"{bin} {version}\"\n")
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum Evil {
+    Symlink,
+    Hardlink,
+    DotDot,
+    Big,
+}
+
+fn evil_tar(path: &Path, kind: Evil) {
+    let gz = flate2::write::GzEncoder::new(std::fs::File::create(path).unwrap(), flate2::Compression::fast());
+    let mut b = tar::Builder::new(gz);
+    let good = script("weftos", "0.9.0");
+    let mut h = tar::Header::new_gnu();
+    h.set_size(good.len() as u64);
+    h.set_mode(0o755);
+    h.set_path(format!("weftos-{TRIPLE}/weftos")).unwrap();
+    h.set_cksum();
+    b.append(&h, good.as_bytes()).unwrap();
+    let mut h = tar::Header::new_gnu();
+    h.set_mode(0o755);
+    match kind {
+        Evil::Symlink | Evil::Hardlink => {
+            h.set_entry_type(if kind == Evil::Symlink { tar::EntryType::Symlink } else { tar::EntryType::Link });
+            h.set_path(format!("weftos-{TRIPLE}/link")).unwrap();
+            h.set_link_name(if kind == Evil::Symlink { "/etc/passwd" } else { "weftos-test-triple/weftos" }).unwrap();
+            h.set_size(0);
+            h.set_cksum();
+            b.append(&h, std::io::empty()).unwrap();
+        }
+        Evil::DotDot => {
+            h.as_old_mut().name[..7].copy_from_slice(b"../evil");
+            h.set_size(1);
+            h.set_cksum();
+            b.append(&h, &b"x"[..]).unwrap();
+        }
+        Evil::Big => {
+            h.set_path(format!("weftos-{TRIPLE}/big")).unwrap();
+            h.set_size(8192);
+            h.set_cksum();
+            b.append(&h, std::io::repeat(0).take(8192)).unwrap();
+        }
+    }
+    b.into_inner().unwrap().finish().unwrap();
+}
+
 #[derive(Default, Clone)]
 pub struct Rel {
+    /// Make the `weftos` archive hostile (checksums are still published and valid).
+    pub evil: Option<Evil>,
     /// Version the binaries inside the archives report (defaults to the release's).
     pub payload_version: Option<&'static str>,
     /// Replace this archive's bytes after its checksum was published.
@@ -115,6 +167,9 @@ pub fn publish(mock: &Mock, work: &Path, version: &str, rel: &Rel) {
             .status()
             .unwrap();
         assert!(st.success());
+        if stem == "weftos" && let Some(k) = rel.evil {
+            evil_tar(&tarball, k);
+        }
         let sha = sha256_file(&tarball).unwrap();
         let mut bytes = std::fs::read(&tarball).unwrap();
         if rel.corrupt == Some(stem) {

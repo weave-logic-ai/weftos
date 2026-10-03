@@ -27,7 +27,7 @@ plan only. Nothing on the machine or in the code was modified.
   Windows run remain open.
 - **Deferred:** protocol-version integer and skew check in
   `DaemonClient::connect`; service-unit binary resolution from the install
-  prefix; GitHub attestation verification of downloaded archives;
+  prefix; GitHub attestation and minisign verification of downloaded archives (sha256 is integrity only);
   end-to-end run on a clean VM against a real prerelease tag.
 
 ## 1. Summary

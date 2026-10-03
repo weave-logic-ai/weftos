@@ -12,9 +12,10 @@ use clawft_rpc::doctor::env::RuntimeSource;
 
 use super::daemon_restart::{Action, DaemonStatus, Host, Inputs};
 use super::update_flow::{Ctx, Opts, Outcome, execute};
+use super::update_install::Inject;
 use super::update_test_support::{Mock, Rel, publish, script, TRIPLE};
 
-fn env_for(root: &Path) -> DoctorEnv {
+pub(super) fn env_for(root: &Path) -> DoctorEnv {
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
     DoctorEnv {
@@ -32,7 +33,7 @@ fn env_for(root: &Path) -> DoctorEnv {
     }
 }
 
-fn install_old(dir: &Path, version: &str, names: &[&str]) {
+pub(super) fn install_old(dir: &Path, version: &str, names: &[&str]) {
     std::fs::create_dir_all(dir).unwrap();
     for n in names {
         let p = dir.join(n);
@@ -45,7 +46,7 @@ fn install_old(dir: &Path, version: &str, names: &[&str]) {
     }
 }
 
-fn write_receipt(env: &DoctorEnv, prefix: &Path) -> PathBuf {
+pub(super) fn write_receipt(env: &DoctorEnv, prefix: &Path) -> PathBuf {
     let p = env.config_dir.join("weftos/weftos-receipt.json");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     let r = serde_json::json!({"binaries": ["weft", "weaver", "weftos"], "install_layout": "flat",
@@ -54,18 +55,18 @@ fn write_receipt(env: &DoctorEnv, prefix: &Path) -> PathBuf {
     p
 }
 
-fn version_of(p: &Path) -> String {
+pub(super) fn version_of(p: &Path) -> String {
     let out = Command::new(p).output().unwrap();
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 #[derive(Default)]
-struct Fake {
-    alive: Vec<u32>,
-    exe: Option<PathBuf>,
-    launchd: Option<u32>,
-    performed: RefCell<Vec<Action>>,
-    asked_status: RefCell<u32>,
+pub(super) struct Fake {
+    pub(super) alive: Vec<u32>,
+    pub(super) exe: Option<PathBuf>,
+    pub(super) launchd: Option<u32>,
+    pub(super) performed: RefCell<Vec<Action>>,
+    pub(super) asked_status: RefCell<u32>,
 }
 
 impl Host for Fake {
@@ -93,17 +94,17 @@ impl Host for Fake {
     fn settle(&self) {}
 }
 
-struct World {
-    _dir: tempfile::TempDir,
-    root: PathBuf,
-    mock: Mock,
-    env: DoctorEnv,
-    prefix: PathBuf,
+pub(super) struct World {
+    pub(super) _dir: tempfile::TempDir,
+    pub(super) root: PathBuf,
+    pub(super) mock: Mock,
+    pub(super) env: DoctorEnv,
+    pub(super) prefix: PathBuf,
 }
 
 impl World {
     /// A receipt-managed install of `old` in `<root>/prefix`, release `new` published.
-    fn receipt_install(old: &str, new: &str, rel: &Rel) -> Self {
+    pub(super) fn receipt_install(old: &str, new: &str, rel: &Rel) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let mock = Mock::start();
@@ -115,7 +116,7 @@ impl World {
         World { _dir: dir, root, mock, env, prefix }
     }
 
-    fn ctx<'a>(&self, exe: PathBuf, host: &'a Fake, prompt: &'a dyn Fn(&str) -> bool) -> Ctx<'a> {
+    pub(super) fn ctx<'a>(&self, exe: PathBuf, host: &'a Fake, prompt: &'a dyn Fn(&str) -> bool) -> Ctx<'a> {
         let rt = self.root.join("run");
         std::fs::create_dir_all(&rt).unwrap();
         Ctx {
@@ -136,19 +137,20 @@ impl World {
             host,
             interactive: false,
             prompt,
-            fail_swap_at: None,
+            sudo_root: false,
+            inject: Inject::default(),
         }
     }
 
-    fn weaver(&self) -> PathBuf {
+    pub(super) fn weaver(&self) -> PathBuf {
         self.prefix.join("weaver")
     }
 
-    fn versions(&self) -> Vec<String> {
+    pub(super) fn versions(&self) -> Vec<String> {
         ["weft", "weaver", "weftos"].iter().map(|n| version_of(&self.prefix.join(n))).collect()
     }
 
-    fn leftovers(&self) -> Vec<String> {
+    pub(super) fn leftovers(&self) -> Vec<String> {
         std::fs::read_dir(&self.prefix)
             .unwrap()
             .flatten()
@@ -158,17 +160,23 @@ impl World {
     }
 }
 
-fn no(_: &str) -> bool {
+pub(super) fn no(_: &str) -> bool {
     false
 }
 
-fn run(ctx: &Ctx<'_>, opts: Opts) -> (anyhow::Result<Outcome>, String) {
+pub(super) fn run(ctx: &Ctx<'_>, opts: Opts) -> (anyhow::Result<Outcome>, String) {
     let mut out = Vec::new();
     let r = execute(ctx, &opts, &mut out);
     (r, String::from_utf8(out).unwrap())
 }
 
-const OLD: [&str; 3] = ["weft 0.8.0", "weaver 0.8.0", "weftos 0.8.0"];
+pub(super) const OLD: [&str; 3] = ["weft 0.8.0", "weaver 0.8.0", "weftos 0.8.0"];
+
+pub(super) fn with_daemon(w: &World, host_launchd: Option<u32>) -> Fake {
+    std::fs::create_dir_all(w.root.join("run")).unwrap();
+    std::fs::write(w.root.join("run/kernel.pid"), "4242\n").unwrap();
+    Fake { alive: vec![4242], exe: Some(w.weaver()), launchd: host_launchd, ..Fake::default() }
+}
 
 #[test]
 fn receipt_install_updates_every_binary_and_the_receipt() {
@@ -210,7 +218,7 @@ fn failure_mid_swap_restores_every_binary() {
     let host = Fake::default();
     for at in [0, 1, 2] {
         let mut ctx = w.ctx(w.weaver(), &host, &no);
-        ctx.fail_swap_at = Some(at);
+        ctx.inject = Inject { swap_at: Some(at), rollback: false };
         let (r, _) = run(&ctx, Opts::default());
         let msg = r.unwrap_err().to_string();
         assert!(msg.contains("restored"), "{msg}");
@@ -291,7 +299,7 @@ fn no_receipt_updates_only_binaries_next_to_weaver() {
     std::fs::remove_file(w.env.config_dir.join("weftos/weftos-receipt.json")).unwrap();
     std::fs::remove_file(w.prefix.join("weftos")).unwrap();
     let host = Fake::default();
-    let (r, out) = run(&w.ctx(w.weaver(), &host, &no), Opts::default());
+    let (r, out) = run(&w.ctx(w.weaver(), &host, &no), Opts { force: true, ..Opts::default() });
     assert!(matches!(r.unwrap(), Outcome::Installed { .. }), "{out}");
     assert_eq!(version_of(&w.prefix.join("weft")), "weft 0.9.0");
     assert_eq!(version_of(&w.prefix.join("weaver")), "weaver 0.9.0");
@@ -330,11 +338,6 @@ fn up_to_date_and_newer_builds_do_nothing_unless_forced() {
     assert!(matches!(run(&ctx, Opts { force: true, ..Opts::default() }).0.unwrap(), Outcome::Installed { .. }));
 }
 
-fn with_daemon(w: &World, host_launchd: Option<u32>) -> Fake {
-    std::fs::create_dir_all(w.root.join("run")).unwrap();
-    std::fs::write(w.root.join("run/kernel.pid"), "4242\n").unwrap();
-    Fake { alive: vec![4242], exe: Some(w.weaver()), launchd: host_launchd, ..Fake::default() }
-}
 
 #[test]
 fn restart_flag_uses_the_service_manager_through_the_host() {
@@ -399,3 +402,4 @@ fn untouched_copies_are_reported_with_their_own_update_command() {
     assert!(out.contains(stale.join("weftos").to_str().unwrap()), "{out}");
     assert_eq!(version_of(&stale.join("weftos")), "weftos 0.7.0");
 }
+
