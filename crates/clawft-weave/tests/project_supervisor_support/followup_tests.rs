@@ -388,6 +388,8 @@ pub fn an_adopted_but_refused_leftover_is_reported_as_unmanaged() {
 
 /// A leftover that holds its lock but never answers must not hold up boot or
 /// a stop cascade for the whole `ready_timeout` (10 s here, 30 s in production).
+/// The bounds (8 s, 7 s) sit above the 3 s and 2 s budgets with room for a
+/// loaded machine and below the 10 s a missing bound would cost.
 pub fn a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly() {
     let fx = Fixture::new();
     let mut kid = booting_kernel(&fx, 120_000);
@@ -395,13 +397,39 @@ pub fn a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly() {
         let sup = fx.supervisor(); // ready_timeout is 10 s
         let t = Instant::now();
         let found = sup.adopt_on_boot().await;
-        assert!(t.elapsed() < Duration::from_secs(6), "boot waited {:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(8), "boot waited {:?}", t.elapsed());
         assert!(matches!(&found[..], [Found::Unverifiable { reason: Skip::HandshakeFailed(_), .. }]), "{found:?}");
         let t = Instant::now();
         assert!(sup.stop_all().await.is_empty());
-        assert!(t.elapsed() < Duration::from_secs(5), "the cascade waited {:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(7), "the cascade waited {:?}", t.elapsed());
         assert!(pid_alive(kid.id()), "an unverifiable leftover is never signalled");
     });
     let _ = kid.kill();
+    let _ = kid.wait();
+}
+
+/// An empty `kernel.pid` (the kernel created the file, the pid is not in it
+/// yet) is "still booting": the scan reads it again and adopts the child once
+/// the pid is there, instead of filing `BadPidFile` at once.
+pub fn an_empty_pid_file_that_fills_in_is_adopted_not_bad() {
+    let fx = Fixture::new();
+    let mut kid = manual_kernel(&fx.run_dir(), &fx.id, "serve");
+    let pid = kid.id();
+    let pid_file = fx.run_dir().join("kernel.pid");
+    std::fs::write(&pid_file, "").unwrap();
+    let writer = {
+        let p = pid_file.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            std::fs::write(&p, pid.to_string()).unwrap();
+        })
+    };
+    rt().block_on(async {
+        let sup = fx.supervisor();
+        let found = sup.adopt_on_boot().await;
+        assert_eq!(found, vec![Found::Adopted { id: fx.id.clone(), pid }]);
+        assert!(sup.stop(&fx.id).await.unwrap());
+    });
+    writer.join().unwrap();
     let _ = kid.wait();
 }

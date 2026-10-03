@@ -80,6 +80,7 @@ fn tests() -> Vec<(&'static str, TestFn)> {
         ("an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed", followup_tests::an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed),
         ("an_adopted_but_refused_leftover_is_reported_as_unmanaged", followup_tests::an_adopted_but_refused_leftover_is_reported_as_unmanaged),
         ("a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly", followup_tests::a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly),
+        ("an_empty_pid_file_that_fills_in_is_adopted_not_bad", followup_tests::an_empty_pid_file_that_fills_in_is_adopted_not_bad),
         // Last: installs the process-wide supervisor.
         ("lifecycle_rpc_end_to_end", rpc_test::lifecycle_rpc_end_to_end),
     ]
