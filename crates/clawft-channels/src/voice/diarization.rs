@@ -233,13 +233,11 @@ pub fn label_transcript(text: impl Into<String>, diarization: DiarizationResult)
         };
         // Prefer splitting on whitespace so words don't tear mid-token.
         let mut end = cursor + share;
-        if end < n && end > cursor {
-            if let Some(rel) = chars[cursor..end].iter().rposition(|c| c.is_whitespace()) {
-                if rel > 0 {
+        if end < n && end > cursor
+            && let Some(rel) = chars[cursor..end].iter().rposition(|c| c.is_whitespace())
+                && rel > 0 {
                     end = cursor + rel + 1;
                 }
-            }
-        }
         if i + 1 == diarization.segments.len() {
             end = n;
         }
@@ -457,12 +455,11 @@ impl DiarizationBackend for EnergyGapDiarizer {
                 as usize;
         let mut merged: Vec<(usize, usize)> = Vec::new();
         for (s, e) in islands {
-            if let Some(last) = merged.last_mut() {
-                if s.saturating_sub(last.1) <= min_gap_frames {
+            if let Some(last) = merged.last_mut()
+                && s.saturating_sub(last.1) <= min_gap_frames {
                     last.1 = e;
                     continue;
                 }
-            }
             merged.push((s, e));
         }
 
@@ -697,8 +694,8 @@ impl DiarizationBackend for EmbeddingDiarizer {
                 // Confidence = mean cosine to final centroid.
                 let mut scores = 0.0_f32;
                 let mut n = 0_u32;
-                for k in i..j {
-                    scores += cosine(&windows[k].emb, &centroids[spk]);
+                for w in &windows[i..j] {
+                    scores += cosine(&w.emb, &centroids[spk]);
                     n += 1;
                 }
                 segments.push(DiarizationSegment {

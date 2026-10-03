@@ -67,7 +67,7 @@ impl ProviderRouter {
 
         // Sort by prefix length descending for greedy matching
         // (e.g. "openai/o1/" should match before "openai/")
-        prefix_map.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        prefix_map.sort_by_key(|b| std::cmp::Reverse(b.0.len()));
 
         Self {
             providers,

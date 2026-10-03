@@ -206,22 +206,22 @@ impl FourConditionRollbackGate {
         let mut mean_dz = zero_latent();
         let n = self.probe_buf.len() as f32;
         for p in &self.probe_buf {
-            for i in 0..LATENT_DIM {
-                mean_dz[i] += (p.z_tp1[i] - p.z_t[i]) / n;
+            for (i, m) in mean_dz.iter_mut().enumerate() {
+                *m += (p.z_tp1[i] - p.z_t[i]) / n;
             }
         }
         let mut correct = 0u64;
         let mut total = 0u64;
         for p in &self.probe_buf {
-            for i in 0..LATENT_DIM {
+            for (i, &mean_i) in mean_dz.iter().enumerate() {
                 let dz = p.z_tp1[i] - p.z_t[i];
                 // Skip near-zero dims (no signal).
-                if dz.abs() < 1e-6 && mean_dz[i].abs() < 1e-6 {
+                if dz.abs() < 1e-6 && mean_i.abs() < 1e-6 {
                     continue;
                 }
                 total = total.saturating_add(1);
-                if dz.signum() == mean_dz[i].signum()
-                    || (dz.abs() < 1e-6 && mean_dz[i].abs() < 1e-6)
+                if dz.signum() == mean_i.signum()
+                    || (dz.abs() < 1e-6 && mean_i.abs() < 1e-6)
                 {
                     correct = correct.saturating_add(1);
                 }

@@ -497,7 +497,7 @@ fn cross_file_surprises(
         });
     }
 
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|b| std::cmp::Reverse(b.score));
 
     if candidates.is_empty() {
         return cross_community_surprises(kg, communities, top_n);

@@ -61,6 +61,10 @@
 //! `shared.reload` (operator only; a token holder is refused) drops the
 //! cached limits.
 
+// `clawft_rpc::Response` is the ready-made refusal returned as the `Err` early-out of these
+// handlers; it is built once per refused request, so its size is not on a hot path.
+#![allow(clippy::result_large_err)]
+
 use std::time::Instant;
 
 use clawft_kernel::token_authority::SECRET_PREFIX;

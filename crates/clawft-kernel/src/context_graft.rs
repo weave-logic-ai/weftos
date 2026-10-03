@@ -422,15 +422,11 @@ impl SessionView {
     /// unchanged in that case).
     pub fn transition(&self, chain_seq: u64, next: NodeState) -> bool {
         match self.chunks.get_mut(&chain_seq) {
-            Some(mut e) => {
-                if e.state.can_transition_to(next) {
-                    e.state = next;
-                    true
-                } else {
-                    false
-                }
+            Some(mut e) if e.state.can_transition_to(next) => {
+                e.state = next;
+                true
             }
-            None => false,
+            _ => false,
         }
     }
 

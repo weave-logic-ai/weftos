@@ -310,7 +310,7 @@ impl MeshStream for FaultyStream {
         let n = self.drop_every_n.load(Ordering::SeqCst);
         if n > 0 {
             let c = self.msg_counter.fetch_add(1, Ordering::SeqCst) + 1;
-            if c % u64::from(n) == 0 {
+            if c.is_multiple_of(u64::from(n)) {
                 // Silently drop.
                 return Ok(());
             }
@@ -462,18 +462,12 @@ impl MockPeer {
         let inbox = Arc::clone(&self.inbox);
         let handle = tokio::spawn(async move {
             let _ = ready_tx.send(());
-            match listener.accept().await {
-                Ok((mut stream, _)) => loop {
-                    match stream.recv().await {
-                        Ok(data) => {
-                            if let Ok(mut guard) = inbox.lock() {
-                                guard.push(data);
-                            }
-                        }
-                        Err(_) => break,
+            if let Ok((mut stream, _)) = listener.accept().await {
+                while let Ok(data) = stream.recv().await {
+                    if let Ok(mut guard) = inbox.lock() {
+                        guard.push(data);
                     }
-                },
-                Err(_) => {}
+                }
             }
         });
         Ok((handle, ready_rx))
@@ -510,11 +504,7 @@ pub async fn two_node_streams(
     let mut listener = fabric.listen(&peer_a.address).await?;
     let connect_fut = fabric.connect(&peer_a.address);
     let accept_fut = listener.accept();
-    let (client, (server, _)) = tokio::try_join!(connect_fut, async {
-        accept_fut
-            .await
-            .map_err(|e| e)
-    })?;
+    let (client, (server, _)) = tokio::try_join!(connect_fut, accept_fut)?;
     Ok((peer_a, peer_b, client, server))
 }
 

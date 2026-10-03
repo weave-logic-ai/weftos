@@ -356,8 +356,8 @@ fn short_path(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
 }
 
-fn normalize_entity_ids(ids: &mut Vec<EntityId>) {
-    ids.sort_by(|a, b| a.0.cmp(&b.0));
+fn normalize_entity_ids(ids: &mut [EntityId]) {
+    ids.sort_by_key(|a| a.0);
 }
 
 fn kind_of(he: &Hyperedge) -> String {

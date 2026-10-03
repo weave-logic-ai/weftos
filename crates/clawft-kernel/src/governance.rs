@@ -156,10 +156,10 @@ impl GovernanceRule {
     /// - Tool selector: matches `context["tool"]`, else `context["gate_action"]`.
     /// - Both set → both must match (AND).
     pub fn selectors_match(&self, request: &GovernanceRequest) -> bool {
-        if let Some(sel) = self.action_selector.as_deref() {
-            if !selector_matches(sel, &request.action) {
-                return false;
-            }
+        if let Some(sel) = self.action_selector.as_deref()
+            && !selector_matches(sel, &request.action)
+        {
+            return false;
         }
         if let Some(sel) = self.tool_selector.as_deref() {
             let tool = request
@@ -1615,7 +1615,7 @@ impl TrajectoryRecorder {
             }
         }
         let mut patterns: Vec<_> = action_counts.into_iter().collect();
-        patterns.sort_by(|a, b| b.1.cmp(&a.1));
+        patterns.sort_by_key(|b| std::cmp::Reverse(b.1));
         patterns
     }
 

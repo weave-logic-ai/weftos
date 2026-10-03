@@ -83,7 +83,7 @@ pub fn sase_partition(
 
     // Deterministic node order.
     let mut sorted: Vec<EntityId> = nodes.to_vec();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    sorted.sort_by_key(|a| a.0);
     let index: HashMap<&EntityId, usize> = sorted.iter().enumerate().map(|(i, id)| (id, i)).collect();
 
     // Sparse undirected adjacency (unique neighbors).
@@ -147,7 +147,13 @@ pub fn sase_partition(
         .min(n)
         .max(1);
     let labels = if n <= MODULARITY_SEARCH_MAX_N && k_hi >= 2 {
-        pick_kmeans_by_modularity(kg, &sorted, &z, n, m, k_hi, config.kmeans_iters, &mut rng)
+        let sweep = KmeansSweep {
+            n,
+            dim: m,
+            k_hi,
+            iters: config.kmeans_iters,
+        };
+        pick_kmeans_by_modularity(kg, &sorted, &z, sweep, &mut rng)
     } else {
         let k = heuristic_k(n, k_hi);
         kmeans(&z, n, m, k, config.kmeans_iters, &mut rng)
@@ -176,17 +182,29 @@ fn heuristic_k(n: usize, max_k: usize) -> usize {
     est.clamp(1, max_k.max(1))
 }
 
+/// Shape of the embedded point set and the k-means search bounds.
+#[derive(Clone, Copy)]
+struct KmeansSweep {
+    n: usize,
+    dim: usize,
+    k_hi: usize,
+    iters: usize,
+}
+
 /// Try k ∈ 2..=k_hi (and 1), pick labels with highest Newman modularity.
 fn pick_kmeans_by_modularity(
     kg: &KnowledgeGraph,
     nodes: &[EntityId],
     z: &[f64],
-    n: usize,
-    dim: usize,
-    k_hi: usize,
-    iters: usize,
+    sweep: KmeansSweep,
     rng: &mut Lcg,
 ) -> Vec<usize> {
+    let KmeansSweep {
+        n,
+        dim,
+        k_hi,
+        iters,
+    } = sweep;
     let mut best_labels = vec![0usize; n];
     let mut best_q = f64::NEG_INFINITY;
 
@@ -314,9 +332,7 @@ fn kmeans(z: &[f64], n: usize, dim: usize, k: usize, max_iters: usize, rng: &mut
     // Farthest-point centroid initialization for determinism + spread.
     let mut centroids = vec![0.0f64; k * dim];
     // First centroid: node 0 (sorted order).
-    for d in 0..dim {
-        centroids[d] = z[d];
-    }
+    centroids[..dim].copy_from_slice(&z[..dim]);
     let mut chosen = vec![0usize];
     for c in 1..k {
         let mut best_i = 0usize;

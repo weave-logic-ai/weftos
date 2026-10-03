@@ -222,11 +222,13 @@ pub struct MppiWarmPlanner {
 
 impl Default for MppiWarmPlanner {
     fn default() -> Self {
-        let mut inner = CemPlanner::default();
-        inner.kind = PlannerKind::MppiWarm;
-        inner.iterations = 2;
-        inner.init_std = 1.0;
-        inner.population = 48;
+        let inner = CemPlanner {
+            kind: PlannerKind::MppiWarm,
+            iterations: 2,
+            init_std: 1.0,
+            population: 48,
+            ..CemPlanner::default()
+        };
         Self { inner }
     }
 }

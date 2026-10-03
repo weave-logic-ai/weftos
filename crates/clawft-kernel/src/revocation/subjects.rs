@@ -28,6 +28,9 @@ pub const AUDIT_UNREVOKE_KIND: &str = "workload.unrevoke";
 /// Records an audit event: `(kind, payload)`.
 pub type AuditSink = std::sync::Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
+/// Per-call audit override that takes precedence over the installed [`AuditSink`].
+type AuditOverride<'a> = Option<&'a dyn Fn(&str, serde_json::Value)>;
+
 /// Maximum package id length.
 pub const MAX_PACKAGE_ID_LEN: usize = 128;
 
@@ -224,7 +227,7 @@ impl RevocationList {
         self.audit.set(sink).is_ok()
     }
 
-    fn emit(&self, over: Option<&dyn Fn(&str, serde_json::Value)>, kind: &str, p: serde_json::Value) {
+    fn emit(&self, over: AuditOverride<'_>, kind: &str, p: serde_json::Value) {
         match (over, self.audit.get()) {
             (Some(f), _) => f(kind, p),
             (None, Some(sink)) => sink(kind, p),
@@ -268,7 +271,7 @@ impl RevocationList {
         id: &str,
         reason: &str,
         by: &str,
-        sink: Option<&dyn Fn(&str, serde_json::Value)>,
+        sink: AuditOverride<'_>,
     ) -> Result<bool, RevocationError> {
         let id = kind.normalize(id)?;
         // `Some(None)`: added and saved; `Some(Some(e))`: added, save failed.
@@ -335,7 +338,7 @@ impl RevocationList {
         kind: RevocationKind,
         id: &str,
         by: &str,
-        sink: Option<&dyn Fn(&str, serde_json::Value)>,
+        sink: AuditOverride<'_>,
     ) -> Result<bool, RevocationError> {
         let id = kind.normalize(id)?;
         let removed: Option<Option<String>> = self.with_subjects(|s| {

@@ -156,14 +156,13 @@ fn paint_topic_hulls(
     let mut by_topic: std::collections::HashMap<String, Vec<Pos2>> =
         std::collections::HashMap::new();
     for n in &model.nodes {
-        if let Some(topic) = n.classification.topic.as_ref() {
-            if let Some(&(x, y)) = pos.get(&n.id) {
+        if let Some(topic) = n.classification.topic.as_ref()
+            && let Some(&(x, y)) = pos.get(&n.id) {
                 by_topic
                     .entry(topic.clone())
                     .or_default()
                     .push(origin + Vec2::new(x, y));
             }
-        }
     }
     for (topic, pts) in by_topic {
         if pts.len() < 2 {

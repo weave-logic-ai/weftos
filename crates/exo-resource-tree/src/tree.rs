@@ -363,7 +363,7 @@ impl ResourceTree {
         }
 
         // Deepest first (leaves before parents)
-        id_depth.sort_by(|a, b| b.1.cmp(&a.1));
+        id_depth.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         let count = id_depth.len();
         for (id, _) in &id_depth {
@@ -448,7 +448,7 @@ impl ResourceTree {
             .collect();
 
         // Sort deepest first (leaves before parents)
-        id_depth.sort_by(|a, b| b.1.cmp(&a.1));
+        id_depth.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         // Recompute in order: aggregate children's scoring, then hash
         for (id, _) in &id_depth {

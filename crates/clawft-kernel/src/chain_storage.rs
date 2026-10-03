@@ -273,7 +273,6 @@ fn choose_default_chain_inner(
             transient: false,
         }
     };
-    let migrated_refusal = |dir: &Path| migrated_refusal(dir, adopt_legacy);
     // Rooted at ~/.clawft itself (any non-project cwd, e.g. $HOME): the
     // resolved chain IS the legacy chain, so the first-adoption guard applies
     // (Phase 0 review R1), plus the migration marker. `--new-chain` cannot

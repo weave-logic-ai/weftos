@@ -69,6 +69,8 @@ pub enum SubscribeError {
 
 /// One item of a subscription.
 #[derive(Debug, Clone)]
+// Public fan-out item cloned per subscriber; boxing the event would change the public API and add an allocation per event.
+#[allow(clippy::large_enum_variant)]
 pub enum ChainItem {
     /// A chain event matching the filter.
     Event(ChainEvent),

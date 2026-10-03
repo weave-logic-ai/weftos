@@ -195,7 +195,7 @@ impl RoutingDecisionHistory {
         let Ok(guard) = self.entries.lock() else {
             return Vec::new();
         };
-        let limit = filter.limit.unwrap_or(self.capacity).max(0);
+        let limit = filter.limit.unwrap_or(self.capacity);
         guard
             .iter()
             .rev()

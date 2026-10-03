@@ -205,16 +205,14 @@ fn extract_definitions_json(content: &str, rel_str: &str, findings: &mut Vec<Fin
 
         if let Some(name) = extract_json_string_field(trimmed, "name") {
             match section {
-                "exchanges" => {
-                    if !name.is_empty() {
-                        findings.push(Finding {
-                            severity: "info".into(),
-                            category: "messaging".into(),
-                            file: rel_str.to_string(),
-                            line: None,
-                            message: format!("RabbitMQ exchange: {name}"),
-                        });
-                    }
+                "exchanges" if !name.is_empty() => {
+                    findings.push(Finding {
+                        severity: "info".into(),
+                        category: "messaging".into(),
+                        file: rel_str.to_string(),
+                        line: None,
+                        message: format!("RabbitMQ exchange: {name}"),
+                    });
                 }
                 "queues" => {
                     findings.push(Finding {

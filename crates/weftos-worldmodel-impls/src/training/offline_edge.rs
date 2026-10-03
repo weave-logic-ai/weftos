@@ -60,14 +60,14 @@ impl OfflineEdgePipeline {
     /// Unpack weight bytes back into a residual latent (zeros on short input).
     pub fn unpack_residual(weights: &[u8]) -> Latent {
         let mut z = zero_latent();
-        for i in 0..LATENT_DIM {
+        for (i, zi) in z.iter_mut().enumerate() {
             let start = i * 4;
             if start + 4 > weights.len() {
                 break;
             }
             let mut buf = [0u8; 4];
             buf.copy_from_slice(&weights[start..start + 4]);
-            z[i] = f32::from_le_bytes(buf);
+            *zi = f32::from_le_bytes(buf);
         }
         z
     }
@@ -82,16 +82,16 @@ impl OfflineEdgePipeline {
                 continue;
             }
             let r = s.residual();
-            for i in 0..LATENT_DIM {
-                acc[i] += w * r[i];
+            for (a, ri) in acc.iter_mut().zip(r.iter()) {
+                *a += w * ri;
             }
             w_sum += w;
         }
         if w_sum <= 0.0 {
             return None;
         }
-        for i in 0..LATENT_DIM {
-            acc[i] /= w_sum;
+        for a in acc.iter_mut() {
+            *a /= w_sum;
         }
         Some(acc)
     }

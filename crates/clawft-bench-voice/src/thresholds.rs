@@ -20,6 +20,7 @@ use crate::wer::WerResult;
 
 /// Full set of voice-bench thresholds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct VoiceBenchThresholds {
     /// Latency bounds.
     pub latency: LatencyThresholds,
@@ -29,15 +30,6 @@ pub struct VoiceBenchThresholds {
     pub cpu: CpuThresholds,
 }
 
-impl Default for VoiceBenchThresholds {
-    fn default() -> Self {
-        Self {
-            latency: LatencyThresholds::default(),
-            wer: WerThresholds::default(),
-            cpu: CpuThresholds::default(),
-        }
-    }
-}
 
 impl VoiceBenchThresholds {
     /// Parse thresholds from a JSON string.

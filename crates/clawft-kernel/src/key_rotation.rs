@@ -67,7 +67,7 @@ fn bytes_to_hex(data: &[u8]) -> String {
 }
 
 fn hex_to_bytes(s: &str) -> Result<Vec<u8>, KeyRotationError> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(KeyRotationError::BadPublicKey(
             "hex string has odd length".into(),
         ));

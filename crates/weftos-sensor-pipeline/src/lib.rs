@@ -407,9 +407,7 @@ impl SensorTopicSink for InMemorySensorBus {
         timestamp_ms: u64,
         cbor: &[u8],
     ) -> Result<u64, PipelineError> {
-        let full = if cluster.is_empty() {
-            topic.to_string()
-        } else if topic.ends_with(cluster) {
+        let full = if cluster.is_empty() || topic.ends_with(cluster) {
             topic.to_string()
         } else {
             format!("{topic}.{cluster}")
@@ -418,11 +416,10 @@ impl SensorTopicSink for InMemorySensorBus {
             q.push(cbor.to_vec());
         }
         // Also deliver on bare topic when cluster-suffixed.
-        if full != topic {
-            if let Some(q) = self.subs.get_mut(topic) {
+        if full != topic
+            && let Some(q) = self.subs.get_mut(topic) {
                 q.push(cbor.to_vec());
             }
-        }
         let seq = self.next_seq;
         self.next_seq = self.next_seq.saturating_add(1);
         self.records.push(SensorBusRecord {
@@ -458,6 +455,8 @@ impl<E: Encoder> SensorPipeline<E> {
     ///
     /// Wire-level integration helper for WEFT-526: encoded (from buffer),
     /// consensus, and control — each signed, published, and indexed.
+    // Public wire-integration helper with a single test caller; a params struct would change the public API.
+    #[allow(clippy::too_many_arguments)]
     pub fn publish_all_topics<S: SensorTopicSink>(
         &mut self,
         sink: &mut S,

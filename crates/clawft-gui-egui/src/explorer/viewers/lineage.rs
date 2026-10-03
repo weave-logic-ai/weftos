@@ -177,14 +177,13 @@ fn build_lineage_graph(
             "actor",
         );
         // Prefer a human label on the actor node.
-        if let Some(node) = nodes.iter_mut().find(|n| n.get("id").and_then(Value::as_str) == Some(aid.as_str())) {
-            if let Some(obj) = node.as_object_mut() {
+        if let Some(node) = nodes.iter_mut().find(|n| n.get("id").and_then(Value::as_str) == Some(aid.as_str()))
+            && let Some(obj) = node.as_object_mut() {
                 obj.insert(
                     "label".into(),
                     Value::String(via_actor.unwrap_or("actor").to_owned()),
                 );
             }
-        }
     }
 
     if let Some(tgt) = target {

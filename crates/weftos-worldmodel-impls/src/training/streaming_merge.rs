@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use weftos_worldmodel_core::{
     zero_latent, GateVerdict, Latent, ModelCheckpoint, RollbackGate, SensorClass, SmallModelKind,
     StreamingMergeTrainer, StreamingTrainResult, TrainingSample, TrainingSurfaceKind,
-    WorldModelError, WorldModelResult, LATENT_DIM,
+    WorldModelError, WorldModelResult,
 };
 
 use crate::rollback_gate::FourConditionRollbackGate;
@@ -123,8 +123,8 @@ impl StreamingMergePipeline {
                 continue;
             }
             let r = s.residual();
-            for i in 0..LATENT_DIM {
-                mean[i] += w * r[i];
+            for (m, ri) in mean.iter_mut().zip(r.iter()) {
+                *m += w * ri;
             }
             w_sum += w;
         }
@@ -132,17 +132,17 @@ impl StreamingMergePipeline {
             return;
         }
         let lr = self.learning_rate;
-        for i in 0..LATENT_DIM {
-            let target = mean[i] / w_sum;
-            self.residual[i] = (1.0 - lr) * self.residual[i] + lr * target;
+        for (res, m) in self.residual.iter_mut().zip(mean.iter()) {
+            let target = m / w_sum;
+            *res = (1.0 - lr) * *res + lr * target;
         }
     }
 
     /// Predict `ẑ_{t+1} = z_t + residual` (stub dynamics for gate VoE).
     pub fn predict_residual(&self, z_t: &Latent) -> Latent {
         let mut out = *z_t;
-        for i in 0..LATENT_DIM {
-            out[i] += self.residual[i];
+        for (o, res) in out.iter_mut().zip(self.residual.iter()) {
+            *o += res;
         }
         out
     }
@@ -235,7 +235,7 @@ impl StreamingMergeTrainer for StreamingMergePipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use weftos_worldmodel_core::{GateCondition, StreamingMergeTrainer};
+    use weftos_worldmodel_core::{GateCondition, LATENT_DIM, StreamingMergeTrainer};
 
     fn good_sample(t: u64) -> TrainingSample {
         // Straight residual + perfect match for residual predictor after train.

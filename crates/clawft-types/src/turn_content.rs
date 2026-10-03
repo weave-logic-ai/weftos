@@ -171,10 +171,10 @@ pub mod voice_meta {
 /// object or the flattened `audio_substrate_path` + optional mime/duration
 /// keys used by thin STT adapters.
 pub fn audio_from_metadata(meta: &serde_json::Map<String, serde_json::Value>) -> Option<AudioRef> {
-    if let Some(v) = meta.get(voice_meta::AUDIO) {
-        if let Some(a) = AudioRef::from_value(v) {
-            return Some(a);
-        }
+    if let Some(v) = meta.get(voice_meta::AUDIO)
+        && let Some(a) = AudioRef::from_value(v)
+    {
+        return Some(a);
     }
     let path = meta.get(voice_meta::AUDIO_PATH)?.as_str()?;
     if path.is_empty() {

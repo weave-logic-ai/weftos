@@ -138,11 +138,10 @@ impl DelegationCert {
         if self.revoked {
             return Err(DelegationError::Revoked);
         }
-        if let Some(exp) = self.expires_at {
-            if now > exp {
+        if let Some(exp) = self.expires_at
+            && now > exp {
                 return Err(DelegationError::Expired);
             }
-        }
         self.verify_signature()
     }
 }

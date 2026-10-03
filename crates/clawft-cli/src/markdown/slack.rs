@@ -70,11 +70,10 @@ impl MarkdownConverter for SlackMarkdownConverter {
                     output.push_str(&code);
                     output.push('`');
                 }
-                Event::SoftBreak | Event::HardBreak => {
-                    if !in_code_block {
+                Event::SoftBreak | Event::HardBreak
+                    if !in_code_block => {
                         output.push('\n');
                     }
-                }
                 _ => {}
             }
         }

@@ -178,12 +178,10 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
         if ui
             .add_enabled(can_del, egui::Button::new("Delete"))
             .clicked()
-        {
-            if let Some(id) = session.doc.selected.clone() {
+            && let Some(id) = session.doc.selected.clone() {
                 session.doc.remove_node(&id);
                 session.sync_inspector_from_selection();
             }
-        }
 
         if ui
             .add_enabled(session.doc.dirty, egui::Button::new("Reset"))
@@ -299,7 +297,7 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
         return;
     }
 
-    let canvas_w = ui.available_width().max(MIN_CANVAS_WIDTH).min(520.0);
+    let canvas_w = ui.available_width().clamp(MIN_CANVAS_WIDTH, 520.0);
     let desired = egui::vec2(canvas_w, CANVAS_HEIGHT);
     let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -309,9 +307,9 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     let mut positions = layout_session(&session.doc, rect);
 
     // Drag selected node.
-    if resp.dragged() {
-        if let Some(id) = session.doc.selected.clone() {
-            if let Some(&old) = positions.get(&id) {
+    if resp.dragged()
+        && let Some(id) = session.doc.selected.clone()
+            && let Some(&old) = positions.get(&id) {
                 let mut pos = old + resp.drag_delta();
                 // Clamp inside canvas with inset.
                 let inset = NODE_RADIUS + 4.0;
@@ -324,8 +322,6 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
                     .set_node_pos(&id, (local.x, local.y));
                 positions.insert(id, pos);
             }
-        }
-    }
 
     // Edges under nodes.
     for edge in &session.doc.edges {
@@ -339,11 +335,10 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     // Hit-test + draw nodes.
     let pointer = resp.interact_pointer_pos();
     let mut clicked_id: Option<String> = None;
-    if resp.clicked() {
-        if let Some(p) = pointer {
+    if resp.clicked()
+        && let Some(p) = pointer {
             clicked_id = hit_test(&session.doc.nodes, &positions, p);
         }
-    }
 
     for node in &session.doc.nodes {
         let Some(pos) = positions.get(&node.id) else {

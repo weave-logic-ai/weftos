@@ -87,11 +87,10 @@ pub fn sanitize_rel_type(relation: &str) -> String {
 }
 
 fn entity_id_display(entity: &crate::model::Entity) -> String {
-    if let Some(legacy) = entity.legacy_id.as_deref() {
-        if !legacy.is_empty() {
+    if let Some(legacy) = entity.legacy_id.as_deref()
+        && !legacy.is_empty() {
             return legacy.to_string();
         }
-    }
     entity.id.to_hex()
 }
 
@@ -198,8 +197,8 @@ fn file_type_str(ft: FileType) -> &'static str {
 /// Export the knowledge graph to a Neo4j Cypher script file.
 pub fn to_cypher(kg: &KnowledgeGraph, output: &Path) -> Result<(), GraphifyError> {
     let body = to_cypher_string(kg);
-    if let Some(parent) = output.parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent).map_err(|e| {
                 GraphifyError::ExportError(format!(
                     "create parent {}: {e}",
@@ -207,7 +206,6 @@ pub fn to_cypher(kg: &KnowledgeGraph, output: &Path) -> Result<(), GraphifyError
                 ))
             })?;
         }
-    }
     fs::write(output, body).map_err(|e| {
         GraphifyError::ExportError(format!("Failed to write {}: {e}", output.display()))
     })?;

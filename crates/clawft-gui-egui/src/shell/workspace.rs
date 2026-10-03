@@ -200,11 +200,10 @@ impl AgentWorkspace {
     /// Rate-limited attention signal. Returns true if accepted.
     pub fn signal_attention(&mut self, id: &PaneId, reason: &str) -> bool {
         let now = Instant::now();
-        if let Some(last) = self.attention_last.get(id.as_str()) {
-            if now.duration_since(*last) < ATTENTION_COOLDOWN {
+        if let Some(last) = self.attention_last.get(id.as_str())
+            && now.duration_since(*last) < ATTENTION_COOLDOWN {
                 return false;
             }
-        }
         self.attention_last.insert(id.0.clone(), now);
         self.attention_until
             .insert(id.0.clone(), now + ATTENTION_HOLD);
@@ -239,8 +238,8 @@ impl AgentWorkspace {
                     _ => false,
                 }
             });
-            if pressed {
-                if let Some(intent) = intent_from_key(mods, key, focused.as_ref()) {
+            if pressed
+                && let Some(intent) = intent_from_key(mods, key, focused.as_ref()) {
                     // Fill demo agent title for spawn chord.
                     let intent = match intent {
                         WindowIntent::Spawn {
@@ -268,7 +267,6 @@ impl AgentWorkspace {
                     };
                     self.bus.push(intent, IntentSource::Keyboard);
                 }
-            }
         }
     }
 }
@@ -419,31 +417,26 @@ fn paint_toolbar(ui: &mut egui::Ui, rect: egui::Rect, ws: &mut AgentWorkspace, t
         .button("Summarize")
         .on_hover_text("Summarize focused agent wall")
         .clicked()
-    {
-        if let Some(id) = ws.wm.focused.clone() {
+        && let Some(id) = ws.wm.focused.clone() {
             ws.push_gui(WindowIntent::Summarize {
                 id,
                 max_chars: Some(120),
             });
         }
-    }
     if child
         .button("⚠ Attention")
         .on_hover_text("Signal needs-human on focused pane (rate-limited)")
         .clicked()
-    {
-        if let Some(id) = ws.wm.focused.clone() {
+        && let Some(id) = ws.wm.focused.clone() {
             ws.signal_attention(&id, "manual demo");
         }
-    }
-    if child.button("Close").on_hover_text("Mod+W").clicked() {
-        if let Some(id) = ws.wm.focused.clone() {
+    if child.button("Close").on_hover_text("Mod+W").clicked()
+        && let Some(id) = ws.wm.focused.clone() {
             ws.push_gui(WindowIntent::Close {
                 id,
                 cancel_agent: false,
             });
         }
-    }
 
     child.add_space(8.0);
     child.label(
@@ -566,13 +559,12 @@ fn paint_pane(
     );
     let drag_id = egui::Id::new(("ws-drag", pane.id.as_str()));
     let drag_resp = ui.interact(drag_rect, drag_id, egui::Sense::click_and_drag());
-    if drag_resp.drag_started() {
-        if let Some(pos) = drag_resp.interact_pointer_pos() {
+    if drag_resp.drag_started()
+        && let Some(pos) = drag_resp.interact_pointer_pos() {
             // grab_offset is pointer relative to pane min
             let grab = pos - abs.min;
             ws.wm.begin_drag(pane.id.clone(), grab);
         }
-    }
     if drag_resp.clicked() {
         ws.push_gui(WindowIntent::Focus {
             id: pane.id.clone(),

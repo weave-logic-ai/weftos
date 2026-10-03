@@ -220,15 +220,15 @@ fn spectral_embedding_layout(adjacency: &[Vec<(usize, f64)>]) -> Option<Vec<[f64
     // (eigenvector sign is free). Make the first non-near-zero component positive.
     for axis in 0..2 {
         let mut flip = false;
-        for i in 0..n {
-            if pos[i][axis].abs() > 1e-12 {
-                flip = pos[i][axis] < 0.0;
+        for p in pos.iter().take(n) {
+            if p[axis].abs() > 1e-12 {
+                flip = p[axis] < 0.0;
                 break;
             }
         }
         if flip {
-            for i in 0..n {
-                pos[i][axis] = -pos[i][axis];
+            for p in pos.iter_mut().take(n) {
+                p[axis] = -p[axis];
             }
         }
     }
@@ -246,6 +246,8 @@ fn spectral_embedding_layout(adjacency: &[Vec<(usize, f64)>]) -> Option<Vec<[f64
 ///
 /// Returns `(eigenvalues, eigenvectors)` where `eigenvectors[j]` is the
 /// j-th eigenvector (length m).
+// Index loops over a dense symmetric matrix touch a[i][j], a[r][p] and a[p][r] together; iterator forms would not read as the algorithm.
+#[allow(clippy::needless_range_loop)]
 fn dense_jacobi_eigen(mat: &[Vec<f64>], m: usize, max_iter: usize) -> (Vec<f64>, Vec<Vec<f64>>) {
     if m == 0 {
         return (Vec::new(), Vec::new());
@@ -256,8 +258,8 @@ fn dense_jacobi_eigen(mat: &[Vec<f64>], m: usize, max_iter: usize) -> (Vec<f64>,
 
     let mut a = mat.to_vec();
     let mut v = vec![vec![0.0f64; m]; m];
-    for i in 0..m {
-        v[i][i] = 1.0;
+    for (i, row) in v.iter_mut().enumerate() {
+        row[i] = 1.0;
     }
 
     for _ in 0..max_iter {
@@ -306,11 +308,11 @@ fn dense_jacobi_eigen(mat: &[Vec<f64>], m: usize, max_iter: usize) -> (Vec<f64>,
             }
         }
 
-        for r in 0..m {
-            let vp = v[r][p];
-            let vq = v[r][q];
-            v[r][p] = c * vp - s * vq;
-            v[r][q] = s * vp + c * vq;
+        for row in v.iter_mut() {
+            let vp = row[p];
+            let vq = row[q];
+            row[p] = c * vp - s * vq;
+            row[q] = s * vp + c * vq;
         }
     }
 

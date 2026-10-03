@@ -100,7 +100,7 @@ fn generate_one(
         }
     }
     let mut rel_pairs: Vec<(String, usize)> = rel_counts.into_iter().collect();
-    rel_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    rel_pairs.sort_by_key(|b| std::cmp::Reverse(b.1));
     let key_relationships: Vec<String> = rel_pairs
         .into_iter()
         .take(5)
@@ -117,7 +117,7 @@ fn generate_one(
         }
     }
     let mut type_pairs: Vec<(String, usize)> = type_counts.into_iter().collect();
-    type_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    type_pairs.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Build description.
     let description = build_description(

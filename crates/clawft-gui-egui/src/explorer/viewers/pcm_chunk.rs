@@ -148,11 +148,7 @@ impl SubstrateViewer for PcmChunkViewer {
         let start_ts_ms = obj.get("start_ts_ms").and_then(Value::as_u64).unwrap_or(0);
         let data_str = obj.get("data").and_then(Value::as_str).unwrap_or("");
         let data_len = data_str.len();
-        let chunk_ms = if sample_rate > 0 {
-            samples * 1000 / sample_rate
-        } else {
-            0
-        };
+        let chunk_ms = (samples * 1000).checked_div(sample_rate).unwrap_or(0);
 
         ui.label(
             egui::RichText::new(format!("pcm_chunk · {path}"))

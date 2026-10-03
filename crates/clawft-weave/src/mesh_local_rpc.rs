@@ -27,6 +27,10 @@
 //! 7. the acknowledgement is signed with the user key over a value the child
 //!    chose, so a socket squatting at the parent's path cannot forge one.
 
+// `clawft_rpc::Response` is the ready-made refusal returned as the `Err` early-out of these
+// handlers; it is built once per refused request, so its size is not on a hot path.
+#![allow(clippy::result_large_err)]
+
 use std::time::Instant;
 
 use clawft_kernel::project_identity as ident;
@@ -44,7 +48,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::mesh_local_registry::{
-    HEARTBEAT_SECS, NewSession, RegistryError, SessionState, consume_spawn, now_unix, peek_spawn,
+    HEARTBEAT_SECS, NewSession, RegistryError, SessionProof, SessionState, consume_spawn, now_unix, peek_spawn,
     registry, spawn_expected,
 };
 use crate::project_cert_rpc::{
@@ -343,12 +347,14 @@ fn heartbeat(p: Value) -> Response {
         Err(r) => return r,
     };
     if let Err(e) = registry().verify_proof_at(
-        "heartbeat",
-        &req.session,
-        req.pid,
-        req.at_unix,
-        &activity_digest(&req.activity),
-        &req.sig,
+        &SessionProof {
+            op: "heartbeat",
+            session: &req.session,
+            pid: req.pid,
+            at_unix: req.at_unix,
+            extra: &activity_digest(&req.activity),
+            sig_hex: &req.sig,
+        },
         now_unix(),
         Instant::now(),
     ) {
@@ -366,12 +372,14 @@ fn unregister(p: Value) -> Response {
         Err(r) => return r,
     };
     if let Err(e) = registry().verify_proof_at(
-        "unregister",
-        &req.session,
-        req.pid,
-        req.at_unix,
-        "",
-        &req.sig,
+        &SessionProof {
+            op: "unregister",
+            session: &req.session,
+            pid: req.pid,
+            at_unix: req.at_unix,
+            extra: "",
+            sig_hex: &req.sig,
+        },
         now_unix(),
         Instant::now(),
     ) {

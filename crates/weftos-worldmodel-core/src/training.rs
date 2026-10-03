@@ -218,8 +218,8 @@ impl TrainingSample {
     /// Residual `z_tp1 - z_t` (used by stub trainers).
     pub fn residual(&self) -> Latent {
         let mut r = self.z_tp1;
-        for i in 0..r.len() {
-            r[i] -= self.z_t[i];
+        for (ri, zt) in r.iter_mut().zip(self.z_t.iter()) {
+            *ri -= *zt;
         }
         r
     }

@@ -4,6 +4,7 @@
 //! - W0: `SPLAT_SCENE` shell + scene AABB.
 //! - W1: geometric partition → non-zero surfaces/objects/volumes when a
 //!   point cloud is available (ADR-078 / splat-to-world-model.md).
+//!
 //! BVH publish stays deferred (`bvh_published: false`) until live insert.
 //! Leaf records always set `vector: null` (ADR-088).
 
@@ -110,11 +111,10 @@ pub fn build_world_model(
 /// Load scene points from COLMAP sparse model, else ASCII PLY.
 pub fn load_scene_points(dirs: &JobDirs) -> Vec<Point3> {
     let model0 = dirs.sparse().join("0");
-    if let Some(pts) = points_from_colmap_model(&model0) {
-        if !pts.is_empty() {
+    if let Some(pts) = points_from_colmap_model(&model0)
+        && !pts.is_empty() {
             return pts;
         }
-    }
     points_from_ply(&dirs.artifacts().join("splat.ply")).unwrap_or_default()
 }
 

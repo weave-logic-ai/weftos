@@ -334,8 +334,8 @@ impl<P: Platform + 'static> IdentityProvider for FileIdentityProvider<P> {
         let stale = self.stale.load(Ordering::Acquire);
 
         // Watch mode + fresh cache → skip disk.
-        if watch_mode && !stale {
-            if let Some(cached) = self.cached.read().await.clone() {
+        if watch_mode && !stale
+            && let Some(cached) = self.cached.read().await.clone() {
                 debug!(
                     hash = %cached.hash,
                     "identity provider: serving cache (watch mode)"
@@ -343,7 +343,6 @@ impl<P: Platform + 'static> IdentityProvider for FileIdentityProvider<P> {
                 return Ok(cached);
             }
             // Cache empty — fall through to disk.
-        }
 
         let loader = IdentityLoader::new(self.workspace.clone(), Arc::clone(&self.platform));
         match loader.current().await {

@@ -360,11 +360,10 @@ fn map_quads_to_graph(
                     if let Some(e) = pending.get_mut(&t.subject) {
                         e.kind = ResourceKind::Class;
                     }
-                    if let Some(e) = pending.get_mut(obj) {
-                        if e.kind == ResourceKind::Unknown {
+                    if let Some(e) = pending.get_mut(obj)
+                        && e.kind == ResourceKind::Unknown {
                             e.kind = ResourceKind::Class;
                         }
-                    }
                 } else if let Some(e) = pending.get_mut(&t.subject) {
                     e.kind = ResourceKind::Property;
                 }
@@ -411,11 +410,10 @@ fn map_quads_to_graph(
                 if let Some(e) = pending.get_mut(&t.subject) {
                     e.kind = ResourceKind::Property;
                 }
-                if let Some(e) = pending.get_mut(obj) {
-                    if e.kind == ResourceKind::Unknown {
+                if let Some(e) = pending.get_mut(obj)
+                    && e.kind == ResourceKind::Unknown {
                         e.kind = ResourceKind::Class;
                     }
-                }
                 let role = if t.predicate == RDFS_DOMAIN {
                     "rdfs:domain"
                 } else {

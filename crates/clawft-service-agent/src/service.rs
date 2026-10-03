@@ -852,13 +852,12 @@ fn inbound_from_params(
 
     // WEFT-350: promote message-level audio onto metadata so the loop
     // can populate TurnContent::Audio / Mixed via sink_append_user.
-    if let Some(audio) = last_user_audio(&params.messages) {
-        if let Ok(v) = serde_json::to_value(&audio) {
+    if let Some(audio) = last_user_audio(&params.messages)
+        && let Ok(v) = serde_json::to_value(&audio) {
             metadata
                 .entry(clawft_types::turn_content::voice_meta::AUDIO.into())
                 .or_insert(v);
         }
-    }
     let media = last_user_audio(&params.messages)
         .map(|a| vec![a.substrate_path])
         .unwrap_or_default();

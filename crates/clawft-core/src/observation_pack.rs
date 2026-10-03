@@ -506,15 +506,14 @@ pub async fn remove_observations_dir<P: clawft_platform::Platform>(
         }
     }
     #[cfg(feature = "native")]
-    if let Err(e) = tokio::fs::remove_dir_all(dir).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
+    if let Err(e) = tokio::fs::remove_dir_all(dir).await
+        && e.kind() != std::io::ErrorKind::NotFound {
             warn!(
                 path = %dir.display(),
                 error = %e,
                 "observation pack: failed to remove observations dir"
             );
         }
-    }
 }
 
 /// Remove `.observations/` dirs whose sibling `.jsonl` is gone.

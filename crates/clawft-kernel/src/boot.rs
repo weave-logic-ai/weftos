@@ -1038,13 +1038,13 @@ impl<P: Platform> Kernel<P> {
                     #[cfg(unix)]
                     if key_path.file_name().is_some_and(|n| n == "user.key") {
                         use std::os::unix::fs::PermissionsExt;
-                        if let Ok(m) = std::fs::symlink_metadata(&key_path) {
-                            if !m.file_type().is_file() || m.permissions().mode() & 0o077 != 0 {
-                                return Err(KernelError::Boot(format!(
-                                    "{} must be a regular file readable only by its owner (chmod 600); refusing to sign the chain with it",
-                                    key_path.display()
-                                )));
-                            }
+                        if let Ok(m) = std::fs::symlink_metadata(&key_path)
+                            && (!m.file_type().is_file() || m.permissions().mode() & 0o077 != 0)
+                        {
+                            return Err(KernelError::Boot(format!(
+                                "{} must be a regular file readable only by its owner (chmod 600); refusing to sign the chain with it",
+                                key_path.display()
+                            )));
                         }
                     }
                     match crate::chain::ChainManager::load_or_create_key(&key_path) {

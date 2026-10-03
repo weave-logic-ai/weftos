@@ -448,13 +448,12 @@ impl CapabilityChecker {
     /// Returns the number of certs removed.
     pub fn revoke_delegation(&self, resource: &ResourceId, grantee: &Principal) -> usize {
         let mut removed = 0;
-        if let Ok(mut map) = self.delegations.lock() {
-            if let Some(certs) = map.get_mut(resource) {
+        if let Ok(mut map) = self.delegations.lock()
+            && let Some(certs) = map.get_mut(resource) {
                 let before = certs.len();
                 certs.retain(|c| c.grantee != grantee.as_str());
                 removed = before - certs.len();
             }
-        }
         if removed > 0 {
             self.cache.invalidate_principal(grantee);
             self.cache.invalidate_resource(resource);
@@ -492,11 +491,10 @@ impl CapabilityChecker {
                     if c.revoked {
                         return false;
                     }
-                    if let Some(exp) = c.expires_at {
-                        if now > exp {
+                    if let Some(exp) = c.expires_at
+                        && now > exp {
                             return false;
                         }
-                    }
                     true
                 });
                 pruned += before - certs.len();
@@ -580,6 +578,8 @@ impl CapabilityChecker {
     /// 2. Leaf grantee must match `principal`
     /// 3. Leaf resource scope must cover `resource`
     /// 4. On success → [`Decision::Delegate`]; else fall through to ACL.
+    // Public API with positional inputs mirroring `check_permission_at` plus chain/anchor; a params struct would break callers.
+    #[allow(clippy::too_many_arguments)]
     pub fn check_with_delegation_chain(
         &self,
         principal: &Principal,

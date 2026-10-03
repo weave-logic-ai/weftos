@@ -18,10 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use weftos_worldmodel::{
-    attest_frame, Action, ActionEncoder, ActionPlan, AttestationError, CemPlanner, ChainSink,
+    attest_frame, Action, ActionEncoder, ActionPlan, AttestationError, ChainSink,
     DefaultWorldModel, GateVerdict, HashActionEncoder, HashEncoder, Latent, LatentPlanner,
-    LatticeApi, LinearPredPhi, MemoryChainSink, NullActionEncoder, ObservationFrame,
-    ObservationTuple, PlannerKind, Predictor, SigRegHealth, WelfordSigRegMonitor, Encoder as _,
+    LatticeApi, MemoryChainSink, NullActionEncoder, ObservationFrame,
+    ObservationTuple, Predictor, SigRegHealth, Encoder as _,
     EVENT_KIND_ROLLBACK_GATE, EVENT_KIND_SIGREG_HEALTH, LATENT_DIM_U16,
     SIGREG_HEALTH_ROLLBACK_THRESHOLD, SIGREG_HEALTH_WINDOW_SECS,
 };
@@ -199,7 +199,7 @@ impl WorldModelService {
     pub fn boot(&mut self) -> Result<BootReport, String> {
         self.config.validate()?;
         // Touch the lattice so single-node mode proves the facade is live.
-        let _ = self
+        self
             .model
             .lattice
             .subscribe_surprise(weftos_worldmodel::SubscriptionId(0))
@@ -310,7 +310,7 @@ impl WorldModelService {
             self.sigreg_rollbacks = self.sigreg_rollbacks.saturating_add(1);
         }
         // Log on rollback or every sample once warm — keep payload tiny JSON.
-        let should_log = rolled || self.model.sigreg.sample_count() % 8 == 0;
+        let should_log = rolled || self.model.sigreg.sample_count().is_multiple_of(8);
         if !should_log {
             return Ok(());
         }
@@ -335,7 +335,7 @@ impl WorldModelService {
     /// Log four-condition AND gate evaluation to the ExoChain sink (WEFT-530).
     fn log_rollback_gate(&mut self, gate: GateVerdict) -> Result<(), ServiceError> {
         // Always log vetoes; sample promotes to keep the chain compact.
-        let should_log = !gate.promote || self.frames % 8 == 0;
+        let should_log = !gate.promote || self.frames.is_multiple_of(8);
         if !should_log {
             return Ok(());
         }
@@ -374,11 +374,10 @@ impl WorldModelService {
         if !self.booted {
             return Err(ServiceError::NotBooted);
         }
-        if let Some(last) = self.last_plan_ms {
-            if timestamp_ms.saturating_sub(last) < PLANNER_PERIOD_MS {
+        if let Some(last) = self.last_plan_ms
+            && timestamp_ms.saturating_sub(last) < PLANNER_PERIOD_MS {
                 return Ok(None);
             }
-        }
         let plan = self
             .model
             .planner
@@ -437,8 +436,8 @@ impl WorldModelService {
         if !self.booted {
             return Err(ServiceError::NotBooted);
         }
-        let hash_enc = HashEncoder::default();
-        let hash_act = HashActionEncoder::default();
+        let hash_enc = HashEncoder;
+        let hash_act = HashActionEncoder;
         let null_act = NullActionEncoder;
         let mut out = Vec::with_capacity(n as usize);
         let base_ms = now_ms();
@@ -550,7 +549,8 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use weftos_worldmodel::{
-        AttestationPayload, EVENT_KIND_LEWM_FRAME_ATTESTATION, LATENT_DIM,
+        AttestationPayload, CemPlanner, EVENT_KIND_LEWM_FRAME_ATTESTATION, LATENT_DIM,
+        LinearPredPhi, PlannerKind, WelfordSigRegMonitor,
     };
 
     #[test]

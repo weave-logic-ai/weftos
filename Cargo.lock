@@ -1542,6 +1542,7 @@ dependencies = [
  "rvf-types",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2",
  "snow",
  "tempfile",
@@ -2021,6 +2022,7 @@ version = "0.8.1"
 dependencies = [
  "async-trait",
  "clawft-channels",
+ "clawft-types",
  "futures-util",
  "ort",
  "reqwest",

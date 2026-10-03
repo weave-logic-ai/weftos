@@ -250,11 +250,10 @@ impl GraphDocument {
 
         let mut max_n = 0u64;
         for n in &nodes {
-            if let Some(rest) = n.id.strip_prefix('n') {
-                if let Ok(v) = rest.parse::<u64>() {
+            if let Some(rest) = n.id.strip_prefix('n')
+                && let Ok(v) = rest.parse::<u64>() {
                     max_n = max_n.max(v + 1);
                 }
-            }
         }
 
         Self {

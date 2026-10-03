@@ -156,11 +156,9 @@ pub fn resolve_target_path(value: &Value, selected_path: &str) -> Option<String>
         .as_object()
         .and_then(|o| o.get("target_path"))
         .and_then(Value::as_str)
-    {
-        if !t.is_empty() {
+        && !t.is_empty() {
             return Some(t.to_owned());
         }
-    }
     strip_meta_lineage_suffix(selected_path)
 }
 
@@ -168,11 +166,10 @@ pub fn resolve_target_path(value: &Value, selected_path: &str) -> Option<String>
 pub fn strip_meta_lineage_suffix(path: &str) -> Option<String> {
     let trimmed = path.trim_end_matches('/');
     const SUFFIX: &str = "/meta/lineage";
-    if let Some(base) = trimmed.strip_suffix(SUFFIX) {
-        if !base.is_empty() {
+    if let Some(base) = trimmed.strip_suffix(SUFFIX)
+        && !base.is_empty() {
             return Some(base.to_owned());
         }
-    }
     None
 }
 

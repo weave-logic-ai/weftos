@@ -167,11 +167,11 @@ fn align_counts(reference: &[String], hypothesis: &[String]) -> (usize, usize, u
     // dist[i][j] = edit distance for ref[..i] vs hyp[..j]
     let mut dist = vec![vec![0usize; m + 1]; n + 1];
     // op: 0=match/sub, 1=del, 2=ins — only needed via backtrace comparison
-    for i in 0..=n {
-        dist[i][0] = i;
+    for (i, row) in dist.iter_mut().enumerate() {
+        row[0] = i;
     }
-    for j in 0..=m {
-        dist[0][j] = j;
+    for (j, cell) in dist[0].iter_mut().enumerate() {
+        *cell = j;
     }
     for i in 1..=n {
         for j in 1..=m {

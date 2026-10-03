@@ -10,6 +10,10 @@
 //! child only. A rejected update or reload leaves the running rules as they
 //! were and appends `governance.overlay.rejected`.
 
+// `clawft_rpc::Response` is the ready-made refusal returned as the `Err` early-out of these
+// handlers; it is built once per refused request, so its size is not on a hot path.
+#![allow(clippy::result_large_err)]
+
 use std::path::Path;
 
 use clawft_rpc::Response;
@@ -95,7 +99,7 @@ mod imp {
     };
     use clawft_rpc::{DaemonClient, Request, Response};
     use clawft_types::config::overlay::Limits;
-    use clawft_types::runtime_paths::{PARENT_POLICY_FILE, RuntimePaths, SOCKET_NAME};
+    use clawft_types::runtime_paths::{PARENT_POLICY_FILE, SOCKET_NAME};
     use ed25519_dalek::SigningKey;
     use serde_json::{Value, json};
 

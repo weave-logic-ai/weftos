@@ -187,6 +187,24 @@ pub struct ProjectRegistry {
     inner: Mutex<HashMap<String, SessionInfo>>,
 }
 
+
+/// The fields of a heartbeat/unregister proof as received over RPC.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionProof<'a> {
+    /// `"heartbeat"` or `"unregister"`.
+    pub op: &'a str,
+    /// Session id the proof names.
+    pub session: &'a str,
+    /// Pid the caller claims.
+    pub pid: u32,
+    /// Caller timestamp (unix seconds) the signature covers.
+    pub at_unix: u64,
+    /// Op-specific extra signed payload (activity digest, or empty).
+    pub extra: &'a str,
+    /// Hex signature by the certified key.
+    pub sig_hex: &'a str,
+}
+
 impl ProjectRegistry {
     /// A registry whose sessions expire after [`MISSED_BEATS`] x `beat`.
     pub fn new(beat: Duration) -> Self {
@@ -258,21 +276,24 @@ impl ProjectRegistry {
         Ok(())
     }
 
-    /// Check a heartbeat/unregister proof: the session exists and beats,
+    /// Check a heartbeat/unregister proof (see [`SessionProof`]): the session exists and beats,
     /// `pid` is the registered one, `at_unix` is within the window of
     /// `now_unix`, and `sig` is the certified key's signature over
     /// [`clawft_rpc::mesh_local::session_signed_bytes`].
     pub fn verify_proof_at(
         &self,
-        op: &str,
-        session: &str,
-        pid: u32,
-        at_unix: u64,
-        extra: &str,
-        sig_hex: &str,
+        proof: &SessionProof<'_>,
         now_unix: u64,
         now: Instant,
     ) -> Result<(), RegistryError> {
+        let SessionProof {
+            op,
+            session,
+            pid,
+            at_unix,
+            extra,
+            sig_hex,
+        } = *proof;
         use clawft_rpc::mesh_local::{SESSION_PROOF_WINDOW_SECS, session_signed_bytes};
         let (pubkey, want_pid, state) = {
             let map = self.lock();

@@ -314,7 +314,7 @@ pub(crate) async fn build_shell(
     let mut registry = ToolRegistry::new();
     super::register_core_tools_with(
         &mut registry,
-        &config,
+        config,
         platform.clone(),
         CoreToolRegisterOpts {
             // Proxied external MCP: full **and** --reexport-mcp (ADR-076 §8).
@@ -332,7 +332,7 @@ pub(crate) async fn build_shell(
     );
 
     // ── Convert registry → defs, profile-filter, public wire renames ─
-    let mut tool_defs = filter_tools_by_profile(build_tool_definitions(&registry), &profiles);
+    let mut tool_defs = filter_tools_by_profile(build_tool_definitions(&registry), profiles);
     apply_public_wire_renames(&mut tool_defs);
     if attach_provider.is_some() {
         tool_defs = strip_attach_owned_names(tool_defs);

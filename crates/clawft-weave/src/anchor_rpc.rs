@@ -444,11 +444,10 @@ pub fn restore(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Valu
         .ok_or_else(|| AnchorError::NotCertified(stmt.project_id.clone()))?;
     stmt.verify(&pk).map_err(cert_error)?;
     let last = cached_last(&mut guard, env, &stmt.project_id, &view)?;
-    if let Some(l) = &last {
-        if l.statement.seq > stmt.seq || (l.statement.seq == stmt.seq && l.statement != stmt) {
+    if let Some(l) = &last
+        && (l.statement.seq > stmt.seq || (l.statement.seq == stmt.seq && l.statement != stmt)) {
             return Err(bad("the daemon's record is already at or beyond this statement; restore never rewinds"));
         }
-    }
     let epoch = guard.as_ref().and_then(|i| i.epochs.get(&key).copied()).unwrap_or(0);
     let sealed = record::seal(env, stmt, user_seq, hash.to_owned(), epoch);
     write_file(env, &sealed)?;

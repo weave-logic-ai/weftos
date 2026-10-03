@@ -24,7 +24,6 @@ use clawft_rpc::Response;
 use clawft_types::project::{list_manifests, read_project_toml, validate_id};
 use clawft_types::runtime_paths::{RootSource, RuntimePaths};
 
-use crate::capability::{Capability, required_capability};
 use crate::rpc_ext::{ExtCall, ExtFuture};
 
 const BUILD_SHA: &str = env!("BUILD_GIT_HASH");
@@ -302,6 +301,7 @@ fn warn_legacy_once() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::{Capability, required_capability};
 
     const A: &str = "01J0000000000000000000000A";
     const B: &str = "01J0000000000000000000000B";

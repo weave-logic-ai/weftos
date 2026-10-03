@@ -253,11 +253,11 @@ impl BarnesHutTree {
             }
         };
         let mut children = [None; 4];
-        for i in 0..4 {
+        for (i, slot) in children.iter_mut().enumerate() {
             let child_bounds = bounds.child(i);
             let idx = self.nodes.len();
             self.nodes.push(BhNode::empty(child_bounds));
-            children[i] = Some(idx);
+            *slot = Some(idx);
         }
         let node = &mut self.nodes[node_idx];
         node.children = children;
@@ -274,13 +274,16 @@ impl BarnesHutTree {
         &self,
         node_idx: usize,
         i: usize,
-        bodies: &[Body],
-        theta: f64,
-        repulsion: f64,
-        scale: f64,
+        ctx: &RepulsionCtx<'_>,
         fx: &mut f64,
         fy: &mut f64,
     ) {
+        let RepulsionCtx {
+            bodies,
+            theta,
+            repulsion,
+            scale,
+        } = *ctx;
         let node = &self.nodes[node_idx];
         if node.mass == 0.0 {
             return;
@@ -334,7 +337,7 @@ impl BarnesHutTree {
         if dist < 1e-12 {
             // Body coincides with COM of a cluster — recurse to avoid NaN.
             for child in node.children.iter().flatten() {
-                self.accumulate_repulsion(*child, i, bodies, theta, repulsion, scale, fx, fy);
+                self.accumulate_repulsion(*child, i, ctx, fx, fy);
             }
             return;
         }
@@ -355,9 +358,18 @@ impl BarnesHutTree {
         }
 
         for child in node.children.iter().flatten() {
-            self.accumulate_repulsion(*child, i, bodies, theta, repulsion, scale, fx, fy);
+            self.accumulate_repulsion(*child, i, ctx, fx, fy);
         }
     }
+}
+
+/// Read-only inputs shared by every step of one repulsion traversal.
+#[derive(Clone, Copy)]
+struct RepulsionCtx<'a> {
+    bodies: &'a [Body],
+    theta: f64,
+    repulsion: f64,
+    scale: f64,
 }
 
 /// Repulsive force on body A from a mass at B (Coulomb-like 1/r²).
@@ -450,16 +462,13 @@ pub fn layout(
                 for i in 0..n {
                     let mut fx = 0.0;
                     let mut fy = 0.0;
-                    tree.accumulate_repulsion(
-                        0,
-                        i,
-                        &bodies,
+                    let ctx = RepulsionCtx {
+                        bodies: &bodies,
                         theta,
-                        config.repulsion,
-                        alpha_decay,
-                        &mut fx,
-                        &mut fy,
-                    );
+                        repulsion: config.repulsion,
+                        scale: alpha_decay,
+                    };
+                    tree.accumulate_repulsion(0, i, &ctx, &mut fx, &mut fy);
                     bodies[i].vx += fx;
                     bodies[i].vy += fy;
                 }

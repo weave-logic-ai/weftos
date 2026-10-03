@@ -263,13 +263,14 @@ pub fn intent_from_key(
             _ => None,
         };
     }
-    if modifiers.mod_key && key == "w" {
-        if let Some(id) = focused {
-            return Some(WindowIntent::Close {
-                id: id.clone(),
-                cancel_agent: false,
-            });
-        }
+    if modifiers.mod_key
+        && key == "w"
+        && let Some(id) = focused
+    {
+        return Some(WindowIntent::Close {
+            id: id.clone(),
+            cancel_agent: false,
+        });
     }
     None
 }

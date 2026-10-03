@@ -661,7 +661,7 @@ impl<P: Platform> SessionManager<P> {
     fn maybe_emit_append_event(&self, key: &str, role: &str, turn_count: usize) {
         let every_n = self.append_event_every_n() as u64;
         let seq = self.append_event_counter.fetch_add(1, Ordering::Relaxed) + 1;
-        if seq % every_n != 0 {
+        if !seq.is_multiple_of(every_n) {
             return;
         }
         // Bare identifiers (not "key") so stringify! yields clean JSON keys

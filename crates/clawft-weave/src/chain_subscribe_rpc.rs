@@ -238,6 +238,8 @@ mod stream {
         stream_local(chain, p)
     }
 
+    // `Response` is the ready-made RPC refusal returned as the early-out; this is a cold path.
+    #[allow(clippy::result_large_err)]
     fn stream_local(chain: Arc<ChainManager>, p: SubscribeParams) -> Result<StreamHookup, Response> {
         let mut sub = chain
             .subscribe(ChainFilter {
