@@ -19,6 +19,8 @@ weaver workload pack --cog-dir <cogs checkout>/src/cogs/anomaly-detect \
 
 The package directory holds the unmodified `cog.toml`, one binary per arch, optional attestations, and `cogpkg.json` pinning each file by BLAKE3 and size. `--cognitum-record <file>` carries a Cognitum release record as an attestation; `--release-url` records where upstream binaries came from (provenance, never trust). An upstream binary is usable only after you hash and sign it here.
 
+**Sharing over the mesh.** A package is seeded, advertised and served to other nodes only if it was packed with `--redistributable` (a signed manifest field, default off). Pass it for your own cogs that you want shared. Never pass it for a binary whose `provenance.json` says `trust = "cognitum-sha256"` (a licensed Cognitum install); pack such a binary with `--release-url <the Cognitum URL>` or `--cognitum-record <file>`, which marks the package Cognitum-origin so the swarm never redistributes it. `pack` does not read `provenance.json` yet, so this is on you. Nodes built before this change reject manifests packed with `--redistributable`; upgrade every node before using it. The full rules: [swarm throughput, "Safety rules the swarm enforces"](../research/mesh-placement/swarm-throughput.md#safety-rules-the-swarm-enforces).
+
 ## Sign
 
 ```sh
@@ -61,4 +63,4 @@ Placement picks real ARM hardware over a Mac container over emulation, prefers t
 
 Revocation is by package id, signer key or artifact hash (`RevocationKind::{Package, SignerKey, ArtifactHash}`), persisted in `revoked_subjects.json` beside the host ban list and recorded as a `workload.revoke` chain event by `revoke_and_record`. A revoked package, or a package signed by a revoked key, is refused at verify and place time. Revoking a signer key is how you respond to a leaked package key; also remove its pin from `workload-trust.json` (or the compiled set in a release). For a private-repo key, revoking is on the consumer side: remove or replace the key in each project's source (`weaver cog source remove` then `add --key <new>`).
 
-**Not built:** an operator CLI verb for revocation (a revoke verb under the workload group) and revocation gossip with forced unload on every node are on the placement cards, not in this tree. Today a revocation is a kernel-side call, and a running instance is stopped with `weaver workload stop` / `unload`.
+**Built:** signed mesh-wide revocation notices. The daemon runs `RevocationExchange`, so a notice signed by a pinned operator or WeftOS key spreads to every node, which stops serving the revoked artifacts and removes their bytes. **Not built:** an operator CLI verb or RPC to issue a notice (there is no revoke verb under the workload group; today a revocation is a kernel-side call), and forced unload of running instances. A running instance keeps going until you stop it with `weaver workload stop` / `unload` or it restarts.

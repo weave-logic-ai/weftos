@@ -94,6 +94,7 @@ expires = "2027-01-31"                    # YYYY-MM-DD, valid through that UTC d
 - Licence expired: `licence_expired`. A valid second licence for the same cog still allows it.
 - This is a declaration kept in the project, not proof of purchase. Treat it like a record your own team keeps honest. If you need proof, keep the Cognitum contract and invoices; a signed entitlement is an open question in ADR-105.
 - A licensed install is `placement_eligible = false`. Cognitum's binaries are not signed by us, and ADR-100 section 6.3 says an upstream binary is used in governed placement only after an operator hashes and signs it. See the operator guide, "Pack".
+- A licensed Cognitum cog is never shared over the mesh. When you pack one for placement, do not pass `--redistributable`, and pass `--release-url` or `--cognitum-record` so the package is marked Cognitum-origin. See the operator guide, "Pack" (Sharing over the mesh).
 
 ## 4. Create and publish a private repo
 

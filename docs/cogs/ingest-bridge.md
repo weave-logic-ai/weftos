@@ -79,7 +79,7 @@ The project id travels with the placement:
    still runs in this state, so a degraded record never carries an
    unverified project id. The orders have no "require ingest" flag yet; a
    caller that needs ingest must read `ingest` in the result.
-4. Native cogs get the shared loopback listener's URL. Container routes get
+7. Native cogs get the shared loopback listener's URL. Container routes get
    their own token-scoped listener (when `bridge.container_bind` is set),
    passed to the adapter as the relay's `ingest_upstream`; that listener
    accepts only that instance's token (another instance's valid token is

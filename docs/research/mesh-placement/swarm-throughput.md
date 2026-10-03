@@ -89,8 +89,8 @@ NEXTEST_SUCCESS_OUTPUT=immediate scripts/build.sh test clawft-kernel \
   package listing a content hash vetoes serving that hash for every package.
   **Our own weftos cogs therefore need `redistributable = true` in their
   manifests to be seeded.** Hashes recorded in a cog-sources `provenance.json`
-  with a Cognitum trust are not consulted yet (that file is on another branch):
-  follow-up.
+  with a Cognitum trust are not consulted yet, by the swarm or by
+  `weaver workload pack`: follow-up.
 - **Sizes are checked before any piece is requested.** A descriptor with a
   piece size over `max_piece_size` (default 16 MiB), a total over
   `max_artifact_bytes` (default 64 GiB), or one that differs from the exact
