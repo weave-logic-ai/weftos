@@ -53,7 +53,7 @@ fn params() -> RegisterParams {
 async fn connect_negotiate_register_and_get_a_verified_cert() {
     let e = env(501);
     let c = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.unwrap();
-    assert_eq!(c.proto(), clawft_mesh_local::PROTO_MAX);
+    assert_eq!(c.proto(), 2);
     assert_eq!(c.hello_ack().uid, 501, "uid comes from the injected peer credential");
     assert_eq!(c.register_ack().bind, BindState::New);
     assert_eq!(c.register_ack().accepted.addresses, vec!["01ARZ3NDEKTSV4RRFFQ69G5FAV"]);

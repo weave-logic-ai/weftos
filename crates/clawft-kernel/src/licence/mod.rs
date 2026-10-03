@@ -80,7 +80,7 @@ pub use grant::{
 };
 pub use policy::MeshCheckoutPolicy;
 pub use relay::{
-    CheckoutCaller, CheckoutRefusal, CheckoutRelay, EVENT_KIND_CHECKOUT_GRANTED,
+    CheckoutCaller, CheckoutRefusal, CheckoutRelay, RelayLimits, EVENT_KIND_CHECKOUT_GRANTED,
     EVENT_KIND_CHECKOUT_REFUSED, GATE_ACTION, GrantFlood, NoFlood, install_grant,
 };
 pub use request::{

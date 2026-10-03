@@ -1016,24 +1016,29 @@ cmd_check_daemon_no_mesh_testing() {
         timer_end
         return 0
     fi
-    local tree rc=0 hits
-    tree="$(cargo tree -p clawft-weave -e normal,features -i clawft-mesh-local 2>&1)" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        fail "cargo tree failed for clawft-weave"
-        printf '%s\n' "$tree" | tail -20
-        return 1
-    fi
-    # The inverted tree must still reach the crate, or the check proves nothing.
-    case "$tree" in *"clawft-mesh-local v"*) ;; *)
-        fail "clawft-mesh-local is not in clawft-weave's dependency graph; update cmd_check_daemon_no_mesh_testing"
-        return 1 ;;
-    esac
-    hits="$(printf '%s\n' "$tree" | grep -E 'clawft-mesh-local feature "testing"' || true)"
-    if [ -n "$hits" ]; then
-        fail "the daemon's dependency graph enables clawft-mesh-local's testing feature (it fakes the service peer check):"
-        printf '%s\n' "$tree" | sed 's/^/        /'
-        return 1
-    fi
+    # Default features, every feature, and none: a shipped feature set must not enable it.
+    local flags tree rc hits
+    for flags in "" "--all-features" "--no-default-features"; do
+        rc=0
+        # shellcheck disable=SC2086
+        tree="$(cargo tree -p clawft-weave $flags -e normal,features -i clawft-mesh-local 2>&1)" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            fail "cargo tree ${flags:-(default features)} failed for clawft-weave"
+            printf '%s\n' "$tree" | tail -20
+            return 1
+        fi
+        # The inverted tree must still reach the crate, or the check proves nothing.
+        case "$tree" in *"clawft-mesh-local v"*) ;; *)
+            fail "clawft-mesh-local is not in clawft-weave's dependency graph (${flags:-default}); update cmd_check_daemon_no_mesh_testing"
+            return 1 ;;
+        esac
+        hits="$(printf '%s\n' "$tree" | grep -E 'clawft-mesh-local feature "testing"' || true)"
+        if [ -n "$hits" ]; then
+            fail "the daemon's dependency graph (${flags:-default features}) enables clawft-mesh-local's testing feature (it fakes the service peer check):"
+            printf '%s\n' "$tree" | sed 's/^/        /'
+            return 1
+        fi
+    done
     pass "clawft-mesh-local's testing feature is not enabled in the daemon's dependency graph"
     timer_end
 }

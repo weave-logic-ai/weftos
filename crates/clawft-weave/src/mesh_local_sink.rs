@@ -62,7 +62,7 @@ impl MeshSink {
 
     /// The peer context for a delivery, from the service-stamped origin and
     /// nothing else. Only an `AdmittedPeer` is verified, and only its class
-    /// `node` (or `leaf`, which no handler serves) keeps that; `LocalTenant`,
+    /// `node` keeps that (a `leaf` is classed but not verified); `LocalTenant`,
     /// `Unadmitted`, an unknown class, a missing stamp and an old protocol
     /// are all unauthenticated, with `source_node` as a mere claim.
     fn peer_ctx(&self, d: &Deliver) -> PeerCtx {
@@ -76,9 +76,11 @@ impl MeshSink {
                     src_scope: None,
                 }
             }
+            // A leaf is a device, not a node: it is never `node_verified`, so
+            // nothing that serves or floods licensed content treats it as one.
             DeliverOrigin::AdmittedPeer { node_id, class: OriginClass::Leaf } => PeerCtx {
                 peer_id: node_id,
-                node_verified: true,
+                node_verified: false,
                 class: PeerClass::Leaf,
                 remote_static: None,
                 src_scope: None,
@@ -286,11 +288,12 @@ mod tests {
 
     #[tokio::test]
     async fn only_an_admitted_node_stamp_makes_a_verified_peer() {
-        let v = clawft_mesh_local::proto::PROTO_ORIGIN;
+        let v = 2;
+        assert_eq!(clawft_mesh_local::proto::PROTO_ORIGIN, 2, "the version that adds the stamp is pinned");
         let (id, verified, class) = seen_with(v, Some(admitted(OriginClass::Node))).await;
         assert_eq!((id.as_str(), verified, class), ("vouched-node", true, PeerClass::Node));
         let (_, verified, class) = seen_with(v, Some(admitted(OriginClass::Leaf))).await;
-        assert!(verified && class == PeerClass::Leaf, "a leaf is verified as a leaf, never as a node");
+        assert!(!verified && class == PeerClass::Leaf, "a leaf is classed as a leaf and is not a verified node");
         for origin in [
             Some(DeliverOrigin::LocalTenant),
             Some(DeliverOrigin::Unadmitted),
@@ -306,7 +309,7 @@ mod tests {
     async fn the_stamp_is_ignored_below_the_protocol_version_that_adds_it() {
         // A stamp that arrives on a link that negotiated the old protocol is
         // not from a service that writes stamps: it is just a field.
-        let old = clawft_mesh_local::proto::PROTO_ORIGIN - 1;
+        let old = 1;
         let (id, verified, _) = seen_with(old, Some(admitted(OriginClass::Node))).await;
         assert_eq!((id.as_str(), verified), ("claimed-node", false));
         // And a sink that was never told a version defaults to the oldest.

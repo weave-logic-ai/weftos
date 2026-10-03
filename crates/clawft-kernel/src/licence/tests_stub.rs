@@ -38,6 +38,8 @@ pub(super) enum Mode {
     WrongSigner,
     WrongBytes,
     SeedAhead,
+    /// The grant commits to a registry sha256 the bytes do not have.
+    WrongSha,
 }
 
 struct State {
@@ -109,6 +111,9 @@ impl StubLicence {
         let mut rec = grant_rec(seq, issued, 72 * 3600, &names);
         for a in &mut rec.artifacts {
             a.size = bytes_of(&a.arch).len() as u64;
+            if mode == Mode::WrongSha {
+                a.sha256 = sha256_hex(b"not these bytes");
+            }
         }
         let key = if mode == Mode::WrongSigner { sk(77) } else { grant_key() };
         let signed = sign_grant(&rec, &key).unwrap();

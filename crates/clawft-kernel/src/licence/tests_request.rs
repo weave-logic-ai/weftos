@@ -109,6 +109,22 @@ fn unsigned_wrong_node_stale_malformed_and_oversized_requests_are_refused() {
 }
 
 #[test]
+fn the_replay_memory_evicts_by_timestamp_and_refuses_when_full_never_forgetting_everything() {
+    let mut g = ReplayGuard::default();
+    let t0 = NOW_MS;
+    for i in 0..4096 {
+        assert!(g.first_use(&format!("n{i:020}"), t0, t0), "{i}");
+    }
+    // Full of live entries: a new nonce is refused, and the old ones are still remembered.
+    assert!(!g.first_use("fresh0000000000000", t0, t0 + 1));
+    assert!(!g.first_use(&format!("n{:020}", 7), t0, t0 + 1), "an old nonce is still a replay");
+    // Once they age out of the window the memory frees up by itself.
+    let later = t0 + REQUEST_WINDOW_MS + 1;
+    assert!(g.first_use("fresh0000000000000", later, later));
+    assert!(g.first_use(&format!("n{:020}", 7), later, later), "evicted by timestamp");
+}
+
+#[test]
 fn a_refused_request_does_not_use_up_a_nonce() {
     let good = signed("/p", b"x", NOW_MS);
     let mut forged = good.clone();

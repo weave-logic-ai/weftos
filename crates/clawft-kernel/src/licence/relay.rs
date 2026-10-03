@@ -11,10 +11,12 @@
 //! outcome and floods the grant through a [`GrantFlood`].
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, Semaphore};
 
 use super::client::{CheckoutWire, LicenceClient, LicenceClientError};
 use super::{
@@ -74,6 +76,12 @@ pub enum CheckoutRefusal {
     /// The returned bytes do not match the signed sizes or hashes.
     #[error("artifact does not match the grant: {0}")]
     ArtifactMismatch(String),
+    /// This member asked too often (the steward's per-member budget).
+    #[error("too many checkout requests from this member")]
+    RateLimited,
+    /// The steward has too many checkouts in flight.
+    #[error("the steward is busy")]
+    Busy,
     /// The node could not store the bytes.
     #[error("could not store the artifact: {0}")]
     Storage(String),
@@ -92,6 +100,8 @@ impl CheckoutRefusal {
             Self::SeedClockSkew => "seed_clock_skew".into(),
             Self::ArtifactMismatch(_) => "artifact_mismatch".into(),
             Self::Storage(_) => "storage_failed".into(),
+            Self::RateLimited => "rate_limited".into(),
+            Self::Busy => "busy".into(),
         }
     }
 }
@@ -144,6 +154,27 @@ pub fn install_grant(
     Ok(out)
 }
 
+/// Limits on what members can cost the steward (ADR-106 section 6): a request
+/// budget per member, and a bound on checkouts running at once. Over-limit
+/// refusals are not chained, so they cannot grow the chain either.
+#[derive(Debug, Clone)]
+pub struct RelayLimits {
+    /// Requests per member per window.
+    pub per_peer: u32,
+    /// The window.
+    pub window: Duration,
+    /// Checkouts in flight at once.
+    pub concurrent: usize,
+    /// Members remembered at once; the oldest windows are pruned.
+    pub max_peers: usize,
+}
+
+impl Default for RelayLimits {
+    fn default() -> Self {
+        Self { per_peer: 5, window: Duration::from_secs(60), concurrent: 8, max_peers: 1024 }
+    }
+}
+
 type Key = (String, String, String);
 type Shared = Arc<OnceCell<Result<SignedGrant, CheckoutRefusal>>>;
 
@@ -156,6 +187,9 @@ pub struct CheckoutRelay {
     flood: Arc<dyn GrantFlood>,
     chain: Option<Arc<ChainManager>>,
     inflight: Mutex<HashMap<Key, Shared>>,
+    limits: RelayLimits,
+    buckets: Mutex<HashMap<String, (Instant, u32)>>,
+    slots: Semaphore,
 }
 
 impl CheckoutRelay {
@@ -168,7 +202,48 @@ impl CheckoutRelay {
         flood: Arc<dyn GrantFlood>,
         chain: Option<Arc<ChainManager>>,
     ) -> Self {
-        Self { store, exchange, client, gate, flood, chain, inflight: Mutex::default() }
+        let limits = RelayLimits::default();
+        Self {
+            store,
+            exchange,
+            client,
+            gate,
+            flood,
+            chain,
+            inflight: Mutex::default(),
+            slots: Semaphore::new(limits.concurrent),
+            buckets: Mutex::default(),
+            limits,
+        }
+    }
+
+    /// Replace the limits (before the relay is shared).
+    pub fn with_limits(mut self, limits: RelayLimits) -> Self {
+        self.slots = Semaphore::new(limits.concurrent);
+        self.limits = limits;
+        self
+    }
+
+    /// Charge one request to `peer`; false when over its budget.
+    fn allow_peer(&self, peer: &str) -> bool {
+        let now = Instant::now();
+        let mut m = self.buckets.lock().unwrap_or_else(|p| p.into_inner());
+        if m.len() >= self.limits.max_peers && !m.contains_key(peer) {
+            let w = self.limits.window;
+            m.retain(|_, (start, _)| now.duration_since(*start) < w);
+            if m.len() >= self.limits.max_peers {
+                return false;
+            }
+        }
+        let e = m.entry(peer.to_owned()).or_insert((now, 0));
+        if now.duration_since(e.0) >= self.limits.window {
+            *e = (now, 0);
+        }
+        if e.1 >= self.limits.per_peer {
+            return false;
+        }
+        e.1 += 1;
+        true
     }
 
     /// Handle one checkout request. Admission, then the gate, then the merged
@@ -188,6 +263,14 @@ impl CheckoutRelay {
                 self.chain_refused(req, "unadmitted", &e);
                 return Err(e);
             }
+        };
+        // Limits come before the gate and the chain: a flood of requests
+        // costs a counter, not a chain event.
+        if matches!(caller, CheckoutCaller::Peer(_)) && !self.allow_peer(&who) {
+            return Err(CheckoutRefusal::RateLimited);
+        }
+        let Ok(_slot) = self.slots.try_acquire() else {
+            return Err(CheckoutRefusal::Busy);
         };
         let r = self.checked(&who, req).await;
         if let Err(e) = &r {
@@ -212,9 +295,11 @@ impl CheckoutRelay {
             let mut m = self.inflight.lock().unwrap_or_else(|p| p.into_inner());
             m.entry(key.clone()).or_default().clone()
         };
+        let ran = AtomicBool::new(false);
         let out = cell
             .get_or_init(|| async {
-                let r = self.relay(who, req).await;
+                ran.store(true, Ordering::Relaxed);
+                let r = self.relay(req).await;
                 // Later requests start a fresh relay call; waiters on this
                 // cell still read the stored result.
                 let mut m = self.inflight.lock().unwrap_or_else(|p| p.into_inner());
@@ -224,10 +309,17 @@ impl CheckoutRelay {
                 r
             })
             .await;
+        // Every caller is chained as a grantee, the merged ones too.
+        if let Ok(signed) = out
+            && let Ok(g) = serde_json::from_str::<CheckoutGrant>(&signed.payload)
+        {
+            let b3 = g.artifact(&req.arch).map(|a| a.blake3.clone()).unwrap_or_default();
+            self.chain_granted(who, req, &g, &b3, !ran.load(Ordering::Relaxed));
+        }
         out.clone()
     }
 
-    async fn relay(&self, who: &str, req: &CheckoutWire) -> Result<SignedGrant, CheckoutRefusal> {
+    async fn relay(&self, req: &CheckoutWire) -> Result<SignedGrant, CheckoutRefusal> {
         let signed = self.client.checkout(req).await?;
         let binding = self
             .store
@@ -250,17 +342,37 @@ impl CheckoutRelay {
             .clone();
         let hash = hex_decode_exact::<32>(&art.blake3)
             .ok_or_else(|| CheckoutRefusal::BadGrant("artifact hash".into()))?;
-        let have = self.exchange.resolve(&ArtifactKey::Content(hash)).is_some();
-        if !have {
-            self.fetch_and_seed(&art.blake3, &art.sha256, art.size).await?;
+        match self.exchange.resolve(&ArtifactKey::Content(hash)) {
+            // Held already: the BLAKE3 was checked on the way in, but the grant
+            // also commits to the registry sha256 of these bytes.
+            Some(d) => self.check_held_sha256(&d, &art.sha256)?,
+            None => self.fetch_and_seed(&art.blake3, &art.sha256, art.size).await?,
         }
         install_grant(&self.store, &self.exchange, &signed).map_err(|e| match e {
             LicenceError::NotYetValid => CheckoutRefusal::SeedClockSkew,
             e => CheckoutRefusal::BadGrant(e.to_string()),
         })?;
-        self.chain_granted(who, req, &g, &art.blake3);
         self.flood.flood(&signed).await;
         Ok(signed)
+    }
+
+    fn check_held_sha256(
+        &self,
+        d: &crate::mesh_artifact_types::ArtifactDescriptor,
+        sha256: &str,
+    ) -> Result<(), CheckoutRefusal> {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        self.exchange
+            .read_to(&d.id(), &mut |b| {
+                h.update(b);
+                Ok(())
+            })
+            .map_err(|e| CheckoutRefusal::Storage(e.to_string()))?;
+        if hex_encode(&h.finalize()) != sha256 {
+            return Err(CheckoutRefusal::ArtifactMismatch("sha256 of the held bytes".into()));
+        }
+        Ok(())
     }
 
     async fn fetch_and_seed(&self, blake3: &str, sha256: &str, size: u64) -> Result<(), CheckoutRefusal> {
@@ -282,7 +394,7 @@ impl CheckoutRelay {
         Ok(())
     }
 
-    fn chain_granted(&self, who: &str, req: &CheckoutWire, g: &CheckoutGrant, blake3: &str) {
+    fn chain_granted(&self, who: &str, req: &CheckoutWire, g: &CheckoutGrant, blake3: &str, merged: bool) {
         if let Some(cm) = &self.chain {
             cm.append(
                 "licence",
@@ -290,6 +402,7 @@ impl CheckoutRelay {
                 Some(serde_json::json!({
                     "cog_id": g.cog_id, "version": g.version, "arch": req.arch,
                     "grant_id": g.grant_id, "seq": g.seq, "blake3": blake3, "requester": who,
+                    "merged": merged,
                 })),
             );
         }

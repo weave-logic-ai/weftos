@@ -208,7 +208,7 @@ async fn connections_per_principal_are_capped() {
 async fn version_mismatch_names_the_remedy_in_both_directions() {
     let h = Harness::start().await;
     let mut newer = Raw::connect(&h.socket()).await;
-    newer.send(hello(Role::User, clawft_mesh_local::PROTO_MAX + 1, clawft_mesh_local::PROTO_MAX + 1)).await;
+    newer.send(hello(Role::User, 3, 3)).await;
     match newer.recv().await.unwrap().msg {
         Message::Error(e) => {
             assert_eq!(e.kind, ErrorKind::ProtoMismatch);

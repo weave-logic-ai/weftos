@@ -255,6 +255,9 @@ impl Inner {
 
     fn claim_prefix(&mut self, user: &str, prefix: &str) -> Result<(), &'static str> {
         valid_prefix(prefix)?;
+        if clawft_mesh_local::proto::overlaps_reserved(prefix) {
+            return Err("prefix overlaps a topic reserved for the cluster owner's daemon");
+        }
         if self.prefixes.iter().any(|(p, o)| o != user && overlaps(p, prefix)) {
             return Err("prefix overlaps one claimed by another user");
         }

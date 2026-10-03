@@ -22,7 +22,7 @@
 //! Open: phase 2 will add `seed_device_id` (the audience) as one more signed
 //! line. Add it to [`signing_string`] and the client when that lands.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
@@ -136,20 +136,24 @@ pub enum RequestRefused {
     Replay,
 }
 
-/// Verifier-side replay memory.
+/// Verifier-side replay memory: nonce to its signed timestamp (ms). Entries
+/// older than the window are evicted by timestamp; when the memory is full of
+/// live entries a new request is refused, never the whole set forgotten.
 #[derive(Debug, Default)]
 pub struct ReplayGuard {
-    seen: HashSet<String>,
+    seen: HashMap<String, u64>,
 }
 
 impl ReplayGuard {
-    /// Record `nonce`; false when already seen. When full it is cleared: the
-    /// timestamp window still bounds any replay.
-    pub fn first_use(&mut self, nonce: &str) -> bool {
-        if self.seen.len() >= MAX_NONCES {
-            self.seen.clear();
+    /// Record `nonce` signed at `ts_ms`; false when already seen or when the
+    /// memory is full of entries still inside the window.
+    pub fn first_use(&mut self, nonce: &str, ts_ms: u64, now_ms: u64) -> bool {
+        self.seen.retain(|_, t| t.saturating_add(REQUEST_WINDOW_MS) >= now_ms);
+        if self.seen.contains_key(nonce) || self.seen.len() >= MAX_NONCES {
+            return false;
         }
-        self.seen.insert(nonce.to_owned())
+        self.seen.insert(nonce.to_owned(), ts_ms);
+        true
     }
 }
 
@@ -180,7 +184,7 @@ pub fn verify_request(
     let s = signing_string(&req.method, &req.path, &auth.node, auth.timestamp_ms, &auth.nonce, &req.body);
     vk.verify_strict(s.as_bytes(), &Signature::from_bytes(&sig))
         .map_err(|_| RequestRefused::BadSignature)?;
-    if !replay.first_use(&auth.nonce) {
+    if !replay.first_use(&auth.nonce, auth.timestamp_ms, now_ms) {
         return Err(RequestRefused::Replay);
     }
     Ok(())

@@ -67,7 +67,7 @@ async fn a_daemon_registers_in_service_mode_under_the_service_node_id() {
     let st = a.state.get().expect("handshake mesh state");
     assert_eq!((st.mode.as_str(), st.state.as_deref()), ("service", Some("connected")));
     assert_eq!(st.service_node_id.as_deref(), Some(svc.node_id().as_str()));
-    assert!(st.cert_serial.is_some() && st.proto == Some(clawft_mesh_local::PROTO_MAX));
+    assert!(st.cert_serial.is_some() && st.proto == Some(2));
     assert!(home.path().join(".weftos/user.key").exists(), "user key created in the daemon's home");
     assert!(home.path().join(".weftos/mesh/machine.pub").exists(), "machine key pinned on first contact");
 

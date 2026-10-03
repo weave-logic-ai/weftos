@@ -50,7 +50,7 @@ pub const MAX_SERVE_TOTAL: usize = 64;
 /// Most dialled sessions open at once.
 pub const MAX_DIAL_TOTAL: usize = 64;
 /// Frames queued per session before the sender is dropped.
-const SESSION_QUEUE: usize = 32;
+const SESSION_QUEUE: usize = 128;
 
 /// Sends one kernel message to a peer node through the machine mesh. The
 /// daemon implements it with its service link; tests with an in-memory net.
@@ -99,6 +99,8 @@ pub struct TunnelCounters {
     pub refused_other: AtomicU64,
     /// Serve sessions started.
     pub served_sessions: AtomicU64,
+    /// Sessions dropped because their queue was full (a slow consumer).
+    pub dropped_slow: AtomicU64,
 }
 
 struct Session {
@@ -204,7 +206,7 @@ impl ArtifactTunnel {
             Dir::Req => self.inbound_req(key, f).await,
             Dir::Rsp => {
                 if let Some(s) = self.dialled.get(&key).map(|s| s.clone()) {
-                    Self::feed(&s, &f).await;
+                    self.feed(&key, Dir::Rsp, &s, &f);
                 } else {
                     self.counters.refused_other.fetch_add(1, Ordering::Relaxed);
                 }
@@ -241,11 +243,14 @@ impl ArtifactTunnel {
                 s
             }
         };
-        Self::feed(&session, &f).await;
+        self.feed(&key, Dir::Req, &session, &f);
     }
 
     /// Reassemble `f` into whole stream frames and queue them for the session.
-    async fn feed(s: &Session, f: &TunnelFrame) {
+    /// Never waits: this runs on the daemon's single delivery worker, so a
+    /// session whose queue is full is dropped (counted) instead of stalling
+    /// every other delivery behind it.
+    fn feed(&self, key: &(String, String), dir: Dir, s: &Session, f: &TunnelFrame) {
         let Some(bytes) = hex_decode(&f.data) else { return };
         let whole = {
             let mut part = s.next_part.lock().unwrap_or_else(|p| p.into_inner());
@@ -264,8 +269,14 @@ impl ArtifactTunnel {
                 None
             }
         };
-        if let Some(w) = whole {
-            let _ = s.tx.send(w).await;
+        if let Some(w) = whole
+            && s.tx.try_send(w).is_err()
+        {
+            self.counters.dropped_slow.fetch_add(1, Ordering::Relaxed);
+            match dir {
+                Dir::Req => self.serving.remove(key),
+                Dir::Rsp => self.dialled.remove(key),
+            };
         }
     }
 }
@@ -393,5 +404,67 @@ impl Drop for TunnelStream {
         if !self.closed {
             self.registry_remove();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::artifact_store::ArtifactStore;
+    use crate::mesh_artifact::ExchangeConfig;
+
+    struct Null;
+
+    #[async_trait]
+    impl PeerSender for Null {
+        async fn send_to_node(&self, _: &str, _: KernelMessage) -> KernelResult<()> {
+            Ok(())
+        }
+    }
+
+    fn node_ctx(id: &str) -> PeerCtx {
+        PeerCtx {
+            peer_id: id.into(),
+            node_verified: true,
+            class: PeerClass::Node,
+            remote_static: None,
+            src_scope: None,
+        }
+    }
+
+    fn rsp(sid: &str, part: u32) -> KernelMessage {
+        KernelMessage::new(
+            0,
+            MessageTarget::Topic(TOPIC_TUNNEL.into()),
+            MessagePayload::Json(serde_json::json!({
+                "v": 1, "sid": sid, "dir": "rsp", "part": part, "last": true, "data": "00"
+            })),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_session_that_stops_reading_is_dropped_and_never_blocks_the_delivery_worker() {
+        let ex = Arc::new(
+            ArtifactExchange::new("x", Arc::new(ArtifactStore::new_memory()), ExchangeConfig::default())
+                .unwrap(),
+        );
+        let t = ArtifactTunnel::new(ex, Arc::new(Null));
+        // Dial a peer and never read: find the session id the tunnel made.
+        let _stream = t.dialer().dial("peer-a").await.unwrap();
+        let sid = t.dialled.iter().next().map(|e| e.key().1.clone()).unwrap();
+        // Far more whole frames than the queue holds, delivered inline: every
+        // call must return at once (a plain await on a full queue would hang
+        // this test, and the daemon's only delivery worker with it).
+        let all = tokio::time::timeout(Duration::from_secs(5), async {
+            for _ in 0..(SESSION_QUEUE + 10) {
+                t.on_message(&node_ctx("peer-a"), rsp(&sid, 0)).await;
+            }
+        })
+        .await;
+        assert!(all.is_ok(), "delivery blocked on a slow session");
+        assert_eq!(t.counters.dropped_slow.load(Ordering::Relaxed), 1);
+        assert!(t.dialled.is_empty(), "the slow session was dropped");
     }
 }

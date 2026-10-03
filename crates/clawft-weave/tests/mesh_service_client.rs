@@ -179,7 +179,7 @@ async fn service_mode_boot_registers_and_shows_the_handshake() {
     assert_eq!(s.mode, "service");
     assert_eq!(s.state.as_deref(), Some("connected"));
     assert_eq!(s.service_node_id.as_deref(), Some(id.node_id.as_str()));
-    assert_eq!(s.proto, Some(clawft_mesh_local::PROTO_MAX));
+    assert_eq!(s.proto, Some(2));
     assert!(s.cert_serial.is_some() && s.cert_not_after.is_some());
     assert_eq!(s.summary(), "service (connected)");
     assert!(state.is_service());

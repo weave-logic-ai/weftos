@@ -163,12 +163,14 @@ impl CogMesh {
     }
 
     async fn on_checkout(self: &Arc<Self>, from: &PeerCtx, msg: KernelMessage) {
-        let (Some(relay), MessagePayload::Json(v)) = (self.relay.clone(), msg.payload.clone()) else {
+        // Parse first: a reply is only worth sending to a request that names itself.
+        let MessagePayload::Json(v) = msg.payload.clone() else { return };
+        let Ok(req) = serde_json::from_value::<CheckoutWire>(v) else { return };
+        let Some(relay) = self.relay.clone() else {
             self.counters.no_steward.fetch_add(1, Ordering::Relaxed);
-            let _ = self.reply_refused(&from.peer_id, "", "no_steward").await;
+            let _ = self.reply_refused(&from.peer_id, &req.request_id, "no_steward").await;
             return;
         };
-        let Ok(req) = serde_json::from_value::<CheckoutWire>(v) else { return };
         let (me, peer, ctx) = (self.clone(), from.peer_id.clone(), from.clone());
         // The relay call can take a registry fetch: never hold the delivery path.
         tokio::spawn(async move {

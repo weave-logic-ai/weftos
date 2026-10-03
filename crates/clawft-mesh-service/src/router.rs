@@ -52,6 +52,8 @@ pub struct RouterCounters {
     pub dropped_full: AtomicU64,
     pub sent_remote: AtomicU64,
     pub sent_local: AtomicU64,
+    /// Reserved-topic sends refused, and reserved deliveries with no holder.
+    pub reserved_refused: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +116,15 @@ impl TenantRouter {
     fn miss(&self, why: ScopeMiss) {
         let _ = why;
         self.counters.unknown_scope.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The registration allowed to send and receive the reserved topics: the
+    /// cluster owner's, or, with no owner configured, the only registration.
+    fn reserved_holder(&self) -> Option<Arc<Registration>> {
+        match self.policy.owner_uid() {
+            Some(uid) => self.registry.by_principal(&clawft_mesh_local::Principal::Uid(uid)),
+            None => self.registry.sole(),
+        }
     }
 
     /// Choose the registration for an inbound message and the scope to report.
@@ -241,6 +252,15 @@ impl TenantRouter {
         if !dest.topic.is_empty() {
             msg.target = MessageTarget::Topic(dest.topic.clone());
         }
+        // Reserved topics speak for the machine: only the owner's daemon may send them.
+        if topic_of(&msg).is_some_and(clawft_mesh_local::proto::is_reserved_topic)
+            && !self.reserved_holder().is_some_and(|h| Arc::ptr_eq(&h, from))
+        {
+            self.counters.reserved_refused.fetch_add(1, Ordering::Relaxed);
+            return Err(SendError::Forbidden(
+                "this topic is reserved for the cluster owner's daemon".into(),
+            ));
+        }
         let node = match &dest.node {
             Node::Local => self.node_id.clone(),
             Node::Id(n) => n.clone(),
@@ -305,6 +325,18 @@ impl LocalDelivery for TenantRouter {
         dest_scope: Option<&WireScope>,
         msg: KernelMessage,
     ) -> KernelResult<()> {
+        // Reserved topics go only to the owner's registration, whatever the
+        // envelope's scope claims and whoever holds a prefix.
+        if topic_of(&msg).is_some_and(clawft_mesh_local::proto::is_reserved_topic) {
+            let Some(reg) = self.reserved_holder() else {
+                self.counters.reserved_refused.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            };
+            let scope = Scope { user_id: reg.user_id.clone(), project_id: None };
+            return self
+                .queue(&reg, &from.peer_id, scope, None, Self::origin_of(from), &msg)
+                .map_err(|e| KernelError::Mesh(format!("tenant {} queue: {e:?}", reg.user_id)));
+        }
         let Some((reg, scope)) = self.resolve(from, dest_scope, topic_of(&msg)) else {
             return Ok(());
         };

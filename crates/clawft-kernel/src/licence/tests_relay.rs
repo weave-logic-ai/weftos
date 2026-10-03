@@ -23,20 +23,33 @@ struct Rig {
 }
 
 fn rig(permit: bool, delay: Duration) -> Rig {
+    rig_with(permit, delay, None, None)
+}
+
+fn rig_with(
+    permit: bool,
+    delay: Duration,
+    chain: Option<Arc<crate::chain::ChainManager>>,
+    limits: Option<RelayLimits>,
+) -> Rig {
     let net = Arc::new(Net::default());
     let clock = Arc::new(std::sync::atomic::AtomicU64::new(T0));
     let stub = StubLicence::new(clock.clone(), delay);
     let gate = TestGate::new(permit);
     let flood = Arc::new(NetFlood { net: net.clone(), from: "a".into(), floods: Default::default() });
     let steward = add_member(&net, "a", |fx, ex| {
-        Some(Arc::new(CheckoutRelay::new(
+        let relay = CheckoutRelay::new(
             fx.store.clone(),
             ex.clone(),
             steward_client(&stub, &clock),
             gate.clone(),
             flood.clone(),
-            None,
-        )))
+            chain,
+        );
+        Some(Arc::new(match limits {
+            Some(l) => relay.with_limits(l),
+            None => relay,
+        }))
     });
     Rig { net, stub, steward, gate, flood }
 }
@@ -390,4 +403,110 @@ async fn an_admitted_leaf_gets_no_licensed_serve_no_checkout_and_is_not_a_flood_
     assert_eq!(r.steward.mesh.tunnel().counters.served_sessions.load(Ordering::SeqCst), 0);
     assert!(l.mesh.request_checkout("a", wire("aarch64"), Duration::from_millis(150)).await.is_err());
     assert_eq!(r.stub.checkouts.load(Ordering::SeqCst), 1, "only the steward's own checkout reached the licence");
+}
+
+fn chain_events(c: &crate::chain::ChainManager, kind: &str) -> Vec<serde_json::Value> {
+    crate::mesh_artifact_tests::events(c, kind)
+}
+
+#[tokio::test]
+async fn a_member_is_held_to_five_requests_a_minute_and_over_limit_refusals_are_not_chained() {
+    let chain = Arc::new(crate::chain::ChainManager::new(0, 1000));
+    let r = rig_with(true, Duration::ZERO, Some(chain.clone()), None);
+    let b = add_member(&r.net, "b", |_, _| None);
+    for i in 0..5 {
+        let mut w = wire("aarch64");
+        w.request_id = format!("r-{i}");
+        b.mesh.request_checkout("a", w, Duration::from_secs(5)).await.expect("within budget");
+    }
+    let granted = chain_events(&chain, "cog.checkout.granted").len();
+    let e = b.mesh.request_checkout("a", wire("aarch64"), Duration::from_secs(5)).await.unwrap_err();
+    assert_eq!(e, CheckoutRefusal::Licence("rate_limited".into()));
+    assert_eq!(chain_events(&chain, "cog.checkout.refused").len(), 0, "rate limiting is not chained");
+    assert_eq!(chain_events(&chain, "cog.checkout.granted").len(), granted);
+    // Another member has its own budget; the steward's own kernel is not a member.
+    let c = add_member(&r.net, "c", |_, _| None);
+    c.mesh.request_checkout("a", wire("aarch64"), Duration::from_secs(5)).await.expect("own budget");
+    r.steward.mesh.checkout_local(&wire("aarch64")).await.expect("kernel is exempt");
+}
+
+#[tokio::test]
+async fn checkouts_in_flight_are_bounded_before_the_gate() {
+    let chain = Arc::new(crate::chain::ChainManager::new(0, 1000));
+    let limits = RelayLimits { concurrent: 1, per_peer: 100, ..RelayLimits::default() };
+    let r = rig_with(true, Duration::from_millis(150), Some(chain.clone()), Some(limits));
+    let (m1, m2) = (r.steward.mesh.clone(), r.steward.mesh.clone());
+    let first = tokio::spawn(async move { m1.checkout_local(&wire("aarch64")).await });
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    let second = m2.checkout_local(&wire("x86_64")).await;
+    assert_eq!(second.unwrap_err(), CheckoutRefusal::Busy);
+    assert!(first.await.unwrap().is_ok());
+    assert_eq!(chain_events(&chain, "cog.checkout.refused").len(), 0, "busy is not chained");
+    // The gate was not even asked for the refused one.
+    assert_eq!(r.gate.asked.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn every_merged_caller_is_chained_as_a_grantee() {
+    let chain = Arc::new(crate::chain::ChainManager::new(0, 1000));
+    let r = rig(true, Duration::from_millis(80));
+    let clock = Arc::new(std::sync::atomic::AtomicU64::new(T0));
+    let relay = Arc::new(CheckoutRelay::new(
+        r.steward.fx.store.clone(),
+        r.steward.ex.clone(),
+        steward_client(&r.stub, &clock),
+        TestGate::new(true),
+        Arc::new(NoFlood),
+        Some(chain.clone()),
+    ));
+    let mut set = tokio::task::JoinSet::new();
+    for who in ["b", "c", "d"] {
+        let relay = relay.clone();
+        set.spawn(async move {
+            let ctx = admitted(who);
+            relay.handle(CheckoutCaller::Peer(&ctx), &wire("aarch64")).await
+        });
+    }
+    while let Some(x) = set.join_next().await {
+        assert!(x.unwrap().is_ok());
+    }
+    assert_eq!(r.stub.checkouts.load(Ordering::SeqCst), 1, "merged into one licence call");
+    let ev = chain_events(&chain, "cog.checkout.granted");
+    let mut who: Vec<&str> = ev.iter().map(|e| e["requester"].as_str().unwrap()).collect();
+    who.sort();
+    assert_eq!(who, ["b", "c", "d"], "all three are grantees on the chain");
+    assert_eq!(ev.iter().filter(|e| e["merged"] == false).count(), 1, "one ran it, two merged");
+}
+
+#[tokio::test]
+async fn bytes_already_held_are_checked_against_the_grants_sha256() {
+    let r = rig(true, Duration::ZERO);
+    // The exchange already holds bytes whose BLAKE3 the grant names, but the
+    // grant's registry sha256 is for different bytes.
+    r.steward.ex.seed_bytes(&bytes_of("aarch64")).unwrap();
+    r.stub.set_mode(Mode::WrongSha);
+    let e = r.steward.mesh.checkout_local(&wire("aarch64")).await.unwrap_err();
+    assert_eq!(e.code(), "artifact_mismatch", "{e:?}");
+    assert!(r.steward.fx.store.verified_grants().is_empty());
+    assert_eq!(r.stub.byte_transfers.load(Ordering::SeqCst), 0, "held bytes were not fetched again");
+    // With the right sha256 the held bytes are accepted without a transfer.
+    r.stub.set_mode(Mode::Good);
+    r.steward.mesh.checkout_local(&wire("aarch64")).await.expect("held bytes match");
+    assert_eq!(r.stub.byte_transfers.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_replayed_signed_request_is_refused_by_the_stub() {
+    let r = rig(true, Duration::ZERO);
+    let req = sign_request(
+        &sk(21),
+        STEWARD_NODE,
+        "GET",
+        &format!("{GRANTS_PATH}?since=0"),
+        vec![],
+        REQUEST_NOW_MS,
+        "replaynonce0123456789",
+    );
+    assert_eq!(r.stub.handle(req.clone()).unwrap().status, 200);
+    assert_eq!(r.stub.handle(req).unwrap().status, 401, "the same nonce twice is a replay");
 }

@@ -350,22 +350,24 @@ async fn a_checkout_from_an_admitted_peer_is_relayed_once_and_answered() {
 async fn a_local_tenant_is_neither_served_nor_accepted_for_checkout() {
     let r = rig(None).await;
     let hash = r.seed_and_grant();
-    // Y, another tenant on the steward's machine, sends the same messages
-    // through the service; the service stamps them as a local tenant.
+    // Y, another tenant on the steward's machine, tries the same messages
+    // through the service. Reserved topics are the owner daemon's alone, so the
+    // service refuses the send before anything is stamped.
     let fwd = r.y.handle.as_ref().unwrap().forwarder.clone();
     let to_x = |topic: &str| {
         <clawft_mesh_local::WeftAddr as std::str::FromStr>::from_str(&format!("weft://local/{}/_/{topic}", r.x.user_id))
             .unwrap()
     };
-    fwd.send_to(to_x("mesh.cog.checkout"), &checkout_msg("t-1")).await.expect("delivered");
-    fwd.send_to(to_x("mesh.artifact.tunnel"), &tunnel_meta_request("t1", hash)).await.expect("delivered");
+    assert!(fwd.send_to(to_x("mesh.cog.checkout"), &checkout_msg("t-1")).await.is_err());
+    assert!(fwd.send_to(to_x("mesh.artifact.tunnel"), &tunnel_meta_request("t1", hash)).await.is_err());
     fwd.send_to(to_x("plain"), &KernelMessage::text(0, MessageTarget::Topic("plain".into()), "hi")).await.unwrap();
     wait_until("the plain message arrives", || !r.x.received().is_empty()).await;
     let got = r.x.received().remove(0);
     assert!(!got.verified, "a local tenant never becomes a verified peer: {got:?}");
     assert_eq!(got.class, PeerClass::Legacy);
 
-    assert_eq!(r.cog.counters.refused_unverified.load(Ordering::SeqCst), 2);
+    assert_eq!(r.svc.running().state.router.counters.reserved_refused.load(Ordering::SeqCst), 2);
+    assert_eq!(r.cog.counters.refused_unverified.load(Ordering::SeqCst), 0, "they never reached the daemon");
     assert_eq!(r.licence.checkouts.load(Ordering::SeqCst), 0, "no checkout was relayed");
     assert_eq!(r.cog.tunnel().counters.served_sessions.load(Ordering::SeqCst), 0, "nothing was served");
     assert_eq!(r.sent.total(), 0, "nobody was answered");
@@ -388,8 +390,8 @@ async fn unadmitted_legacy_and_leaf_peers_are_refused_by_the_daemon() {
         r.x.received().iter().map(|g| (g.verified, g.class)).collect();
     assert_eq!(
         kinds,
-        vec![(false, PeerClass::Legacy), (false, PeerClass::Legacy), (true, PeerClass::Leaf)],
-        "a leaf is verified as a leaf only, and the others are unauthenticated"
+        vec![(false, PeerClass::Legacy), (false, PeerClass::Legacy), (false, PeerClass::Leaf)],
+        "a leaf is classed but never verified, and the others are unauthenticated"
     );
 }
 
@@ -445,4 +447,133 @@ async fn a_tenant_cannot_supply_an_origin_the_service_would_forward() {
     }
     assert!(r.x.received().is_empty());
     assert_eq!(r.licence.checkouts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn on_a_shared_machine_reserved_topics_reach_only_the_owner_daemon() {
+    let r = rig(None).await;
+    // A remote node scopes its checkout at Y (not the owner): the service
+    // routes it to the owner's daemon anyway, and Y sees nothing.
+    let scope_y = Scope { user_id: r.y.user_id.clone(), project_id: None };
+    r.svc
+        .running()
+        .state
+        .router
+        .deliver(&peer_ctx(true, PeerClass::Node), Some(&scope_y), checkout_msg("m-1"))
+        .await
+        .unwrap();
+    wait_until("the owner relays it", || r.licence.checkouts.load(Ordering::SeqCst) == 1).await;
+    // A plain message to Y still reaches Y, and only that one.
+    r.svc
+        .running()
+        .state
+        .router
+        .deliver(
+            &peer_ctx(true, PeerClass::Node),
+            Some(&scope_y),
+            KernelMessage::text(0, MessageTarget::Topic("plain".into()), "hi"),
+        )
+        .await
+        .unwrap();
+    wait_until("Y gets the plain one", || !r.y.received().is_empty()).await;
+    assert_eq!(r.y.received().len(), 1, "nothing reserved leaked to Y");
+    // (Prefix claims on reserved topics are refused by the registry; see
+    // the service router tests.)
+}
+
+/// The daemon's own wiring (`cog_swarm::{wrap, install, set_forwarder}`, which
+/// hold process-wide state, so this is the one test that uses them): the
+/// router wrapped around the inbox, the late install of the cog mesh, and the
+/// boot re-apply of grants already in the store.
+#[tokio::test]
+async fn the_daemons_cog_swarm_wiring_serves_after_a_restart_with_stored_grants() {
+    use clawft_kernel::mesh_swarm_state::{Audience, ServePeer};
+    use clawft_weave::cog_swarm;
+    let svc = Svc::with_config(Default::default(), |c| c.cluster_owner_uid = Some(OTHER_UID)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mesh = MeshId::derive(&[9; 32], &[7; 32]);
+    let mut anchors = TrustAnchors::default();
+    anchors.push_signer("operator-1", &pk(&sk(1)), KeyOrigin::Operator).unwrap();
+    let store = Arc::new(
+        CheckoutGrantStore::open(dir.path(), Arc::new(anchors), LocalMeshId::new(mesh), system_clock()).unwrap(),
+    );
+    let binding = BindingRecord {
+        v: 2,
+        device_id: "seed-e2e".into(),
+        device_pubkey: pk(&sk(20)),
+        mesh_id: mesh.to_hex(),
+        grant_pubkey: pk(&sk(2)),
+        steward_node_id: svc.node_id(),
+        steward_pubkey: pk(&sk(21)),
+        state: BindState::Bound,
+        seq: 1,
+        bound_at: now(),
+    };
+    let posture = AdmissionPosture { enforce: true, verdict_source_bound: true, open_membership: false };
+    store.accept_binding(&sign_binding(&binding, &sk(1)).unwrap(), posture, &NoExtraChecks).unwrap();
+    let ex = Arc::new(
+        ArtifactExchange::new(
+            "restarted-node",
+            Arc::new(clawft_kernel::artifact_store::ArtifactStore::new_memory()),
+            ExchangeConfig { redistribution: Arc::new(MeshCheckoutPolicy::new(store.clone())), ..ExchangeConfig::default() },
+        )
+        .unwrap(),
+    );
+    // A grant that was stored before this "restart", and the bytes it covers.
+    let b = bytes();
+    let hash = *blake3::hash(&b).as_bytes();
+    let d = ex.seed_bytes(&b).unwrap();
+    let g = CheckoutGrant {
+        v: 1,
+        grant_id: String::new(),
+        mesh_id: mesh.to_hex(),
+        seed_device_id: "seed-e2e".into(),
+        grant_key_id: String::new(),
+        source: "cognitum".into(),
+        registry: "registry.example".into(),
+        cog_id: "fall-detect".into(),
+        version: "1.2.0".into(),
+        artifacts: vec![GrantArtifact {
+            arch: ARCH.into(),
+            size: b.len() as u64,
+            sha256: sha256_hex(&b),
+            blake3: hex_encode(&hash),
+        }],
+        manifest_sha256: sha256_hex(b"manifest"),
+        licence: LicenceRef { ref_sha256: sha256_hex(b"licence"), expires: now() + 86_400 * 30 },
+        seq: 1,
+        issued_at: now(),
+        expires_at: now() + 72 * 3600,
+    };
+    store.accept_grant(&sign_grant(&g, &sk(2)).unwrap()).unwrap();
+    let node = ServePeer::verified("peer-node-p");
+    assert!(!ex.is_servable_to(&d, &Audience::Serve(&node)), "not shareable before the boot re-apply");
+
+    // The link comes up with the daemon's own wrap; placement installs later.
+    svc.next_uid.store(OTHER_UID, Ordering::SeqCst);
+    let cfg = svc.mesh_cfg(MeshServicePolicy::Required);
+    let ep = other_endpoint(&svc, key(2), Vec::new());
+    let wrap: Box<dyn FnOnce(Arc<Inbox>) -> Arc<dyn LocalDelivery>> = Box::new(cog_swarm::wrap_inbox);
+    let x = link_via(&cfg, ep, fast(), Some(wrap)).await;
+    svc.next_uid.store(REAL, Ordering::SeqCst);
+    assert!(cog_swarm::get().is_none(), "nothing installed yet");
+    cog_swarm::set_forwarder(x.handle.as_ref().unwrap().forwarder.clone());
+    let cog = cog_swarm::install(&ex, &store);
+    assert!(ex.is_servable_to(&d, &Audience::Serve(&node)), "the boot re-apply made stored grants shareable");
+    assert!(cog_swarm::get().is_some());
+
+    // A verified node's tunnel request now reaches the daemon's serve through
+    // the wrapped router; a checkout is answered `no_steward` (no relay yet).
+    let scope = Scope { user_id: x.user_id.clone(), project_id: None };
+    let router = &svc.running().state.router;
+    router.deliver(&peer_ctx(true, PeerClass::Node), Some(&scope), tunnel_meta_request("d1", hash)).await.unwrap();
+    router.deliver(&peer_ctx(true, PeerClass::Node), Some(&scope), checkout_msg("d-1")).await.unwrap();
+    wait_until("the daemon serves", || cog.tunnel().counters.served_sessions.load(Ordering::SeqCst) == 1).await;
+    wait_until("the daemon answers no_steward", || cog.counters.no_steward.load(Ordering::SeqCst) == 1).await;
+    // Another feature-less message still reaches the daemon's inbox.
+    router
+        .deliver(&peer_ctx(true, PeerClass::Node), Some(&scope), KernelMessage::text(0, MessageTarget::Topic("plain".into()), "hi"))
+        .await
+        .unwrap();
+    wait_until("plain reaches the router behind the wrap", || !x.received().is_empty()).await;
 }

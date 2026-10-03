@@ -22,6 +22,23 @@ pub const PROTO_MAX: u32 = 2;
 /// [`DeliverOrigin::Unadmitted`].
 pub const PROTO_ORIGIN: u32 = 2;
 
+/// Topic prefixes reserved for the cluster-owner (steward) daemon. The service
+/// lets only that registration send them and routes them only to it; no other
+/// tenant may send them or claim a prefix that overlaps them. `AdmittedPeer`
+/// vouches for a machine, so without this any tenant on a member could speak
+/// for it (ADR-106 5.3).
+pub const RESERVED_TOPIC_PREFIXES: [&str; 3] = ["mesh.cog.", "mesh.artifact.", "mesh.licence."];
+
+/// True when `topic` is under a reserved prefix.
+pub fn is_reserved_topic(topic: &str) -> bool {
+    RESERVED_TOPIC_PREFIXES.iter().any(|p| topic.starts_with(p))
+}
+
+/// True when claiming `prefix` could capture (or be captured by) a reserved topic.
+pub fn overlaps_reserved(prefix: &str) -> bool {
+    RESERVED_TOPIC_PREFIXES.iter().any(|r| prefix.starts_with(r) || r.starts_with(prefix))
+}
+
 /// Domain separator of the service's hello proof.
 pub const HELLO_DOMAIN: &[u8] = b"weftos/mesh-local/hello/v1\0";
 

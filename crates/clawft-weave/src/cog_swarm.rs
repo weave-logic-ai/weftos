@@ -11,10 +11,12 @@
 //! `no_steward`. Members can still fetch from peers and serve what a grant
 //! (from a reply, flood or sync) makes shareable.
 //!
-//! On a machine with several tenants the service routes an unscoped delivery
-//! by topic prefix, so a daemon that should receive these topics registers
-//! the `mesh.cog.` and `mesh.artifact.` prefixes. Single-user machines (one
-//! registration) need nothing.
+//! The service reserves the `mesh.cog.`, `mesh.artifact.` and `mesh.licence.`
+//! topics for the cluster owner's registration (the only one with no
+//! configured owner): it routes them only there, whatever scope or prefix a
+//! delivery or another tenant names, refuses other tenants' prefix claims on
+//! them, and refuses other tenants' sends of them. A daemon needs to register
+//! nothing to receive these topics, on a single-user or a shared machine.
 
 use std::sync::{Arc, OnceLock};
 
@@ -81,4 +83,9 @@ pub fn install(exchange: &Arc<ArtifactExchange>, store: &Arc<CheckoutGrantStore>
 /// The installed cog mesh, if placement has built it.
 pub fn get() -> Option<Arc<CogMesh>> {
     slot().get().cloned()
+}
+
+/// [`wrap`] for any concrete delivery (the daemon's router, or a test inbox).
+pub fn wrap_inbox<D: LocalDelivery>(delivery: Arc<D>) -> Arc<dyn LocalDelivery> {
+    wrap(delivery)
 }
