@@ -4,7 +4,8 @@
 //! folded from it ([`bindings`]). Package S is the service itself: the
 //! mesh-local server ([`local_server`]), registrations ([`registry`]), tenant
 //! routing ([`router`]), cluster-owner verdicts ([`verdicts`]), the admission
-//! gate ([`gate`]), signed facts ([`facts`]), the loopback health endpoint
+//! gate ([`gate`]), signed facts ([`facts`]), the licence control topics to
+//! the owner's daemon ([`licence_forward`]), the loopback health endpoint
 //! ([`health`]) and start-up ([`main_loop`]).
 //!
 //! # Must not own
@@ -31,6 +32,7 @@ pub mod force_revoked;
 mod fsutil;
 pub mod gate;
 pub mod journal;
+pub mod licence_forward;
 pub mod limits;
 mod lost;
 pub mod registry;

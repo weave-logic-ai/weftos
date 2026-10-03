@@ -91,16 +91,33 @@ pub(super) async fn session(
             },
             Some(cmd) = out_rx.recv() => {
                 let Ok(permit) = sends.clone().try_acquire_owned() else {
-                    let _ = cmd.reply.send(Err("too many sends in flight (busy)".into()));
+                    cmd.fail("too many sends in flight (busy)");
                     continue;
                 };
                 let (c, lost_tx) = (c.clone(), lost_tx.clone());
                 tasks.spawn(async move {
-                    let r = c.send(&cmd.dest, cmd.message).await;
-                    if let Some(why) = r.as_ref().err().filter(|e| dead(e)).map(ToString::to_string) {
-                        let _ = lost_tx.send(why);
+                    match cmd {
+                        OutCmd::Send { dest, message, reply } => {
+                            let r = c.send(&dest, message).await;
+                            if let Some(why) = r.as_ref().err().filter(|e| dead(e)).map(ToString::to_string) {
+                                let _ = lost_tx.send(why);
+                            }
+                            let _ = reply.send(r.map(|_| ()).map_err(|e| e.to_string()));
+                        }
+                        OutCmd::Peers { reply } => {
+                            let r = match c.request(Message::PeersList {}).await {
+                                Ok(Message::Reply { data }) => Ok(data),
+                                Ok(other) => Err(format!("unexpected peers.list reply {other:?}")),
+                                Err(e) => {
+                                    if dead(&e) {
+                                        let _ = lost_tx.send(e.to_string());
+                                    }
+                                    Err(e.to_string())
+                                }
+                            };
+                            let _ = reply.send(r);
+                        }
                     }
-                    let _ = cmd.reply.send(r.map(|_| ()).map_err(|e| e.to_string()));
                     drop(permit);
                 });
             }

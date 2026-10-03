@@ -32,6 +32,7 @@ mod exchange_types;
 mod floor;
 mod floor_preview;
 mod gate;
+mod links;
 mod mesh_config;
 mod persist;
 mod policy;
@@ -42,6 +43,7 @@ mod steward;
 mod store_accept;
 mod store_load;
 mod store_sync;
+mod service_links;
 
 #[cfg(test)]
 mod tests_common;
@@ -51,6 +53,8 @@ mod tests_exchange;
 mod tests_fixes;
 #[cfg(test)]
 mod tests_sync;
+#[cfg(test)]
+mod tests_service_links;
 #[cfg(test)]
 mod tests_policy;
 #[cfg(test)]
@@ -97,6 +101,11 @@ pub use exchange_sync::{GrantCursor, SYNC_MAX_BYTES, SYNC_MAX_ENTRIES, SyncMsg};
 pub use floor::FloorState;
 pub use floor_preview::{FloorPreview, RevivedGrant};
 pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
+pub use links::LicenceLinks;
+pub use service_links::{
+    LICENCE_TOPICS, PEER_REFRESH, PeerDirectory, PeerSnapshot, ServiceLicenceLinks, ServiceLinksCounters,
+    is_licence_topic,
+};
 pub use weft_licence_wire::{
     APPROVAL_DOMAIN, BINDING_DOMAIN, CheckoutGrant, FAR_FUTURE_CLAMP_SECS, GRANT_DOMAIN,
     GRANT_SKEW_SECS, GrantArtifact, LicenceError, LicenceRef, MAX_APPROVALS, MAX_GRANT_SLOTS,

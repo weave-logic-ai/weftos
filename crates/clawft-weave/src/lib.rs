@@ -206,6 +206,9 @@ pub mod workload_revoke_rpc;
 /// Seed licence path at daemon boot: mesh id, checkout policy, binder (ADR-106).
 #[cfg(all(feature = "placement", unix))]
 pub mod licence_boot;
+// ADR-106 phase 3: the placement signer (node key, or the service-mode control key).
+#[cfg(all(feature = "placement", unix))]
+pub mod placement_boot;
 /// `workload.node.bind | unbind | binding` (ADR-106 phase 1d).
 #[cfg(all(feature = "placement", unix))]
 pub mod licence_rpc;

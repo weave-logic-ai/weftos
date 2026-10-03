@@ -18,7 +18,7 @@ impl PeerAdmission for AdmitAll {
         true
     }
 
-    fn peer_admitted(&self, _: &MeshRuntime, _: &str) -> bool {
+    fn peer_admitted(&self, _: &dyn super::links::LicenceLinks, _: &str) -> bool {
         true
     }
 }

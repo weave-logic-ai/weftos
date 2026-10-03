@@ -45,9 +45,8 @@ use super::{
 };
 use crate::ipc::{KernelMessage, MessagePayload, MessageTarget};
 use crate::mesh_delivery::PeerCtx;
-use crate::mesh_runtime::{
-    COG_BINDING_TOPIC, COG_GRANT_TOPIC, COG_SYNC_TOPIC, MeshRuntime, PeerControlSink,
-};
+use super::links::LicenceLinks;
+use crate::mesh_runtime::{COG_BINDING_TOPIC, COG_GRANT_TOPIC, COG_SYNC_TOPIC, PeerControlSink};
 use crate::workload_pkg::TrustAnchors;
 
 type Seen = (std::collections::HashSet<[u8; 32]>, std::collections::VecDeque<[u8; 32]>);
@@ -57,7 +56,7 @@ pub struct LicenceExchange {
     pub(super) store: Arc<CheckoutGrantStore>,
     pub(super) approvals: Arc<ApprovalStore>,
     pub(super) anchors: Arc<TrustAnchors>,
-    pub(super) runtime: Arc<MeshRuntime>,
+    pub(super) runtime: Arc<dyn LicenceLinks>,
     pub(super) posture: PostureFn,
     pub(super) admission: Arc<dyn PeerAdmission>,
     pub(super) sink: Arc<dyn LicenceEventSink>,
@@ -79,9 +78,9 @@ pub struct LicenceExchange {
 }
 
 impl LicenceExchange {
-    /// Start the exchange: install the control sinks on the runtime and
-    /// begin the periodic and on-connect catch-up sync (when inside a tokio
-    /// runtime).
+    /// Start the exchange: install the control sinks on the mesh (the
+    /// kernel runtime or the service links) and begin the periodic and
+    /// on-connect catch-up sync (when inside a tokio runtime).
     pub fn start(p: LicenceExchangeParts) -> Arc<Self> {
         let rt = p.runtime.clone();
         let me = Arc::new_cyclic(|w| Self {
@@ -306,7 +305,7 @@ impl LicenceExchange {
 
     async fn send_all(&self, topic: &str, value: serde_json::Value, except: Option<&str>) {
         for peer in self.runtime.peer_ids() {
-            if Some(peer.as_str()) == except || !self.admission.peer_admitted(&self.runtime, &peer) {
+            if Some(peer.as_str()) == except || !self.admission.peer_admitted(self.runtime.as_ref(), &peer) {
                 continue;
             }
             self.flooded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

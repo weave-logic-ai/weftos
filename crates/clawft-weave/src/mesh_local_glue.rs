@@ -410,7 +410,7 @@ fn sync_chain_counts(deps: &LinkDeps) {
 /// Fail every outbound message still queued when the link drops.
 fn fail_pending(out_rx: &mut mpsc::Receiver<OutCmd>) {
     while let Ok(cmd) = out_rx.try_recv() {
-        let _ = cmd.reply.send(Err("the mesh service link dropped".into()));
+        cmd.fail("the mesh service link dropped");
     }
 }
 

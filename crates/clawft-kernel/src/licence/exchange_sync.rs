@@ -215,7 +215,8 @@ impl LicenceExchange {
         if !self.config.sync_on_connect {
             return;
         }
-        let (w, mut rx) = (self.me.clone(), self.runtime.subscribe_peer_events());
+        let Some(mut rx) = self.runtime.subscribe_peer_events() else { return };
+        let w = self.me.clone();
         handle.spawn(async move {
             while let Ok(ev) = rx.recv().await {
                 if let MeshPeerEvent::Joined { node_id, .. } = ev {

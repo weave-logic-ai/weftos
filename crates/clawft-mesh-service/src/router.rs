@@ -54,6 +54,10 @@ pub struct RouterCounters {
     pub sent_local: AtomicU64,
     /// Reserved-topic sends refused, and reserved deliveries with no holder.
     pub reserved_refused: AtomicU64,
+    /// Licence control records from a licensed peer handed to the owner.
+    pub licence_forwarded: AtomicU64,
+    /// Licence control records from anything but a licensed peer (dropped).
+    pub licence_unlicensed: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +356,22 @@ impl TenantRouter {
     }
 }
 
+impl TenantRouter {
+    /// Deliver a reserved-topic message: only to the owner's registration,
+    /// whatever the envelope's scope claims and whoever holds a prefix,
+    /// stamped with the origin `from` carries. Synchronous, so a runtime
+    /// control sink can call it in arrival order.
+    pub fn deliver_reserved(&self, from: &PeerCtx, msg: &KernelMessage) -> KernelResult<()> {
+        let Some(reg) = self.reserved_holder() else {
+            self.counters.reserved_refused.fetch_add(1, Ordering::Relaxed);
+            return Ok(());
+        };
+        let scope = Scope { user_id: reg.user_id.clone(), project_id: None };
+        self.queue(&reg, &from.peer_id, scope, None, Self::origin_of(from), msg)
+            .map_err(|e| KernelError::Mesh(format!("tenant {} queue: {e:?}", reg.user_id)))
+    }
+}
+
 #[async_trait]
 impl LocalDelivery for TenantRouter {
     async fn deliver(
@@ -360,17 +380,8 @@ impl LocalDelivery for TenantRouter {
         dest_scope: Option<&WireScope>,
         msg: KernelMessage,
     ) -> KernelResult<()> {
-        // Reserved topics go only to the owner's registration, whatever the
-        // envelope's scope claims and whoever holds a prefix.
         if topic_of(&msg).is_some_and(clawft_mesh_local::proto::is_reserved_topic) {
-            let Some(reg) = self.reserved_holder() else {
-                self.counters.reserved_refused.fetch_add(1, Ordering::Relaxed);
-                return Ok(());
-            };
-            let scope = Scope { user_id: reg.user_id.clone(), project_id: None };
-            return self
-                .queue(&reg, &from.peer_id, scope, None, Self::origin_of(from), &msg)
-                .map_err(|e| KernelError::Mesh(format!("tenant {} queue: {e:?}", reg.user_id)));
+            return self.deliver_reserved(from, &msg);
         }
         let Some((reg, scope)) = self.resolve(from, dest_scope, topic_of(&msg)) else {
             return Ok(());
