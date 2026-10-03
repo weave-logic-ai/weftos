@@ -343,6 +343,11 @@ impl VerifiedWorkload {
                 Vec::new(),
                 Vec::new(),
             ),
+            WorkloadSource::Inference(_) => (
+                format!("inference.{}.{}", self.id, self.version),
+                Vec::new(),
+                Vec::new(),
+            ),
         }
     }
 
@@ -355,6 +360,9 @@ impl VerifiedWorkload {
             ))),
             WorkloadSource::Project(_) => Err(RuntimeError::AdmissionRefused(format!(
                 "{runtime} runs only signed packages; project workloads are not supported yet"
+            ))),
+            WorkloadSource::Inference(_) => Err(RuntimeError::AdmissionRefused(format!(
+                "{runtime} runs only signed packages; inference workloads go through the infer.* adapters"
             ))),
         }
     }

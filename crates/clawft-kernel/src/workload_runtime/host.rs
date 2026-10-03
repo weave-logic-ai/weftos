@@ -98,6 +98,15 @@ impl WorkloadHost {
             // `PackageTrust::ProjectCert`: matched only by a permit that
             // names it (the supervisor's, see `project_supervisor_permit`).
             WorkloadSource::Project(_) => ("project_cert", 0.25),
+            // Model weights are operator-attested hash manifests (ADR-101
+            // section 3). Cost is the share of a 128 GiB unified pool.
+            WorkloadSource::Inference(p) => {
+                let bytes = p.spec.memory.weights_bytes + p.spec.memory.kv_budget_bytes;
+                (
+                    "operator_attested",
+                    (bytes as f64 / (128.0 * 1024.0 * 1024.0 * 1024.0)).clamp(0.1, 1.0),
+                )
+            }
         };
         json!({ "workload": {
             "kind": kind,

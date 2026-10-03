@@ -152,8 +152,10 @@ impl Supervised {
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
             .env_clear()
-            .envs(spec.env.iter().cloned())
             .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            // After the default so a caller that must reach a toolchain
+            // outside the default PATH (model servers) can say so.
+            .envs(spec.env.iter().cloned())
             .current_dir(&spec.cwd)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
