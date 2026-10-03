@@ -42,6 +42,17 @@ fn order(pkg: &std::path::Path) -> PlaceOrder {
     }
 }
 
+/// Wait (bounded) for `path` to exist.
+async fn wait_for_file(path: &std::path::Path) {
+    for _ in 0..1_500 {
+        if path.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
 fn ctl_key() -> SigningKey {
     SigningKey::from_bytes(&[10; 32])
 }
@@ -49,7 +60,11 @@ fn ctl_key() -> SigningKey {
 #[tokio::test]
 async fn place_prefers_the_arm_board_over_the_dev_mac_and_explains_why() {
     let tmp = tempfile::tempdir().unwrap();
-    let pkg = package(tmp.path(), "probe-cog", SCRIPT, &[arch()]);
+    // The payload drops a marker file once it has printed: the test waits on
+    // that, not on a guess of how long a loaded host takes to exec it.
+    let printed = tmp.path().join("printed");
+    let script = format!("#!/bin/sh\necho placed-ok\n: > '{}'\nexec sleep 30\n", printed.display());
+    let pkg = package(tmp.path(), "probe-cog", &script, &[arch()]);
     let key = ctl_key();
     // The Mac's own adapter cannot run the payload (as macOS cannot run a
     // Linux ELF); the board's can.
@@ -133,7 +148,9 @@ async fn place_prefers_the_arm_board_over_the_dev_mac_and_explains_why() {
             .any(|(s, p)| s == "workload.host" && p["decision_id"] == r.decision_id.as_str())
     );
 
-    tokio::time::sleep(Duration::from_millis(500)).await; // let it print
+    // Stopping signals the process group, so it must have printed first
+    // (stdout is read back from the run's evidence at stop).
+    wait_for_file(&printed).await;
     plane
         .instance(method::STOP, &placed.instance_id)
         .await
