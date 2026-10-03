@@ -1,0 +1,176 @@
+//! Service configuration (`/etc/weft-licence/config.toml`).
+
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::SvcError;
+
+/// The build-time clock floor of the COG-011 bridge (`CLOCK_FLOOR_MS` in the
+/// bridge cog's `auth.rs`, 1_780_000_000_000 ms, 2026-05-28 UTC), in seconds:
+/// before this the Seed's clock (no RTC) is treated as not set. Keep equal to
+/// the bridge's constant.
+pub const CLOCK_FLOOR: u64 = weft_licence_wire::request::CLOCK_FLOOR_SECS;
+
+/// Load limits (ADR-106 section 6, 7). Every field is configurable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Limits {
+    /// Checkouts or transfers in flight at once.
+    pub in_flight: u32,
+    /// Steward requests per minute (charged after the signature verifies).
+    pub requests_per_min: u32,
+    /// Unsigned callers (identity, refused requests) per minute, all together.
+    pub unsigned_per_min: u32,
+    /// Largest artifact, bytes.
+    pub max_artifact_bytes: u64,
+    /// Transfer rate to the steward, bytes per second.
+    pub rate_bytes_per_sec: u64,
+    /// Byte transfers per (cog, version, arch) per steward key per 24 h.
+    pub serves_per_day: u32,
+    /// Artifact cache size, bytes (entries under an active grant are kept).
+    pub cache_bytes: u64,
+    /// Most grants in one renewal or listing batch.
+    pub renew_batch: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            in_flight: 1,
+            requests_per_min: 10,
+            unsigned_per_min: 30,
+            max_artifact_bytes: 64 * 1024 * 1024,
+            rate_bytes_per_sec: 4 * 1024 * 1024,
+            serves_per_day: 3,
+            cache_bytes: 256 * 1024 * 1024,
+            renew_batch: 256,
+        }
+    }
+}
+
+/// The service configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    /// State directory: key, binding, slots, cache. Mode 0700.
+    pub state_dir: PathBuf,
+    /// Addresses to listen on: the USB link-local and tailnet interfaces.
+    /// `0.0.0.0` and `::` are refused.
+    pub listen: Vec<SocketAddr>,
+    /// The Seed's device id (must match the binding).
+    pub device_id: String,
+    /// Pinned operator public keys, 64 hex each, for bindings, the licence
+    /// file and serve overrides. `init --operator-key` adds to the state dir.
+    pub operator_pubkeys: Vec<String>,
+    /// Operator-signed licence file.
+    pub licence_file: PathBuf,
+    /// Cognitum registry (`app-registry.json`) URL. https only.
+    pub registry_url: String,
+    /// Allow `listen` addresses outside the link-local, tailnet and loopback
+    /// ranges (a LAN address). Plain HTTP on a LAN needs this explicit opt-in.
+    pub allow_lan_listen: bool,
+    /// Host names (for example the MagicDNS name) a steward may use in the
+    /// `Host` header besides the listen addresses. Names only, no ports.
+    pub allowed_hosts: Vec<String>,
+    /// Lab only: allow a local path or http registry (tests, never the Seed).
+    pub allow_insecure_registry: bool,
+    /// Grant lifetime, seconds (default 72 h, at most 7 days).
+    pub grant_ttl_secs: u64,
+    /// Clock floor, unix seconds; see [`CLOCK_FLOOR`].
+    pub clock_floor: u64,
+    /// Signed-request replay window, seconds each side.
+    pub request_window_secs: u64,
+    /// Limits.
+    pub limits: Limits,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            state_dir: PathBuf::from("/var/lib/weft-licence"),
+            listen: Vec::new(),
+            device_id: String::new(),
+            operator_pubkeys: Vec::new(),
+            licence_file: PathBuf::from("/var/lib/weft-licence/licence.json"),
+            registry_url: String::new(),
+            allow_lan_listen: false,
+            allowed_hosts: Vec::new(),
+            allow_insecure_registry: false,
+            grant_ttl_secs: 72 * 3600,
+            clock_floor: CLOCK_FLOOR,
+            request_window_secs: weft_licence_wire::request::REQUEST_WINDOW_MS / 1000,
+            limits: Limits::default(),
+        }
+    }
+}
+
+impl Config {
+    /// Parse a TOML file and validate it.
+    pub fn load(path: &Path) -> Result<Self, SvcError> {
+        let text = std::fs::read_to_string(path).map_err(|e| SvcError::Config(e.to_string()))?;
+        let c: Config = toml::from_str(&text).map_err(|e| SvcError::Config(e.to_string()))?;
+        c.validate()?;
+        Ok(c)
+    }
+
+    /// Refuse a configuration that could expose the listener or break a rule.
+    pub fn validate(&self) -> Result<(), SvcError> {
+        let bad = |m: &str| Err(SvcError::Config(m.to_string()));
+        if self.listen.iter().any(|a| a.ip().is_unspecified()) {
+            return bad("listen: 0.0.0.0 and :: are refused; name the USB and tailnet addresses");
+        }
+        if !self.allow_lan_listen
+            && let Some(a) = self.listen.iter().find(|a| !listen_ip_allowed(a.ip()))
+        {
+            return Err(SvcError::Config(format!(
+                "listen {a} is outside the USB link-local, tailnet and loopback ranges; set allow_lan_listen to accept plain HTTP on a LAN"
+            )));
+        }
+        if !self.device_id.is_empty() && !weft_licence_wire::valid_token(&self.device_id) {
+            return bad("device_id must be 1 to 128 characters of [A-Za-z0-9._-+@/]");
+        }
+        let name_ok = |h: &String| {
+            !h.is_empty() && h.len() <= 253 && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        };
+        if !self.allowed_hosts.iter().all(name_ok) {
+            return bad("allowed_hosts entries must be host names ([A-Za-z0-9.-])");
+        }
+        if self.limits.rate_bytes_per_sec == 0 {
+            return bad("limits.rate_bytes_per_sec must be above 0");
+        }
+        if self.limits.cache_bytes < self.limits.max_artifact_bytes {
+            return bad("limits.cache_bytes must be at least max_artifact_bytes");
+        }
+        if self.grant_ttl_secs == 0 || self.grant_ttl_secs > weft_licence_wire::MAX_GRANT_TTL_SECS {
+            return bad("grant_ttl_secs must be between 1 s and 7 days");
+        }
+        if self.limits.max_artifact_bytes == 0 || self.limits.max_artifact_bytes > weft_licence_wire::MAX_ARTIFACT_BYTES {
+            return bad("limits.max_artifact_bytes must be between 1 byte and 1 GiB");
+        }
+        if self.limits.in_flight == 0 || self.limits.requests_per_min == 0 {
+            return bad("limits: in_flight and requests_per_min must be above 0");
+        }
+        if self.limits.renew_batch == 0 || self.limits.renew_batch > 256 {
+            return bad("limits.renew_batch must be 1 to 256");
+        }
+        Ok(())
+    }
+}
+
+/// Loopback, IPv4 link-local 169.254/16, IPv6 link-local fe80::/10, the
+/// tailnet CGNAT range 100.64/10 and the tailnet ULA fd7a:115c:a1e0::/48.
+pub fn listen_ip_allowed(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v) => {
+            let o = v.octets();
+            v.is_loopback() || (o[0] == 169 && o[1] == 254) || (o[0] == 100 && (o[1] & 0xc0) == 64)
+        }
+        IpAddr::V6(v) => {
+            let s = v.segments();
+            v.is_loopback() || (s[0] & 0xffc0) == 0xfe80 || (s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0)
+        }
+    }
+}

@@ -381,6 +381,11 @@ pub mod mesh_swarm_state;
 // ADR-106 phase 1a: Seed licence proxy, member side (checkout grants, approvals, policy).
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod licence;
+// ADR-106 phase 1c: artifact streams and the checkout relay over machine-mesh deliveries.
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_artifact_tunnel;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_cog;
 #[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 mod mesh_swarm_tests;
 #[cfg(feature = "mesh")]

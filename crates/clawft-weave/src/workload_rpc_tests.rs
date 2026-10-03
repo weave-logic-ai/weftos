@@ -162,3 +162,17 @@ fn unknown_method_refusals_are_budgeted_and_the_name_is_cut() {
         assert_eq!(p["method_bytes"], long.len());
     }
 }
+
+/// ADR-106 phase 1d: `workload.node.*` left `NOT_YET`; the plain router (no
+/// placement build) says why it cannot serve them, and never denies them as unknown.
+#[test]
+fn licence_verbs_are_not_in_not_yet_and_need_placement_in_the_plain_router() {
+    assert!(!NOT_YET.contains(&"workload.node.bind"));
+    let reg = WorkloadRegistry::new();
+    let rec = Recorder::default();
+    for m in NEEDS_PLACEMENT {
+        let r = route(m, json!({}), &reg, "n", None, &rec.sink());
+        assert!(r.error.unwrap().contains("placement feature"), "{m}");
+    }
+    assert!(rec.0.lock().unwrap().is_empty(), "not an unknown-method refusal");
+}

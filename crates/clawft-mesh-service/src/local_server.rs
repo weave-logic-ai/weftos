@@ -138,6 +138,8 @@ pub(crate) struct Conn {
     pub pid: u32,
     pub exe: String,
     pub conn_id: u64,
+    /// Negotiated mesh-local protocol version.
+    pub proto: u32,
     pub reg: Option<Arc<Registration>>,
     pub cert: Option<UserCert>,
 }
@@ -299,6 +301,7 @@ async fn run(st: &Arc<ServiceState>, stream: UnixStream, peer: &dyn PeerIdentity
         pid: sane_pid(pid),
         exe: sanitize_exe(&exe),
         conn_id: st.conn_seq.fetch_add(1, Ordering::Relaxed),
+        proto,
         reg: None,
         cert: None,
     };

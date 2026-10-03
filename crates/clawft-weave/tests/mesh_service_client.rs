@@ -179,7 +179,7 @@ async fn service_mode_boot_registers_and_shows_the_handshake() {
     assert_eq!(s.mode, "service");
     assert_eq!(s.state.as_deref(), Some("connected"));
     assert_eq!(s.service_node_id.as_deref(), Some(id.node_id.as_str()));
-    assert_eq!(s.proto, Some(1));
+    assert_eq!(s.proto, Some(2));
     assert!(s.cert_serial.is_some() && s.cert_not_after.is_some());
     assert_eq!(s.summary(), "service (connected)");
     assert!(state.is_service());
@@ -410,6 +410,7 @@ async fn inbound_delivery_reaches_the_router_and_other_users_are_refused() {
             scope: Scope { user_id: user.into(), project_id: None },
             envelope_id: "e".into(),
             message: serde_json::to_value(&m).unwrap(),
+            origin: None,
         }))
     };
     server.push(deliver(&"f".repeat(32), "not for us"));
@@ -566,6 +567,7 @@ async fn a_slow_inbox_does_not_hold_up_verdicts_or_sends() {
             scope: Scope { user_id: user_id(), project_id: None },
             envelope_id: "e".into(),
             message: serde_json::to_value(&m).unwrap(),
+            origin: None,
         })));
     }
     let peer = PeerInfo {

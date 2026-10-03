@@ -129,6 +129,9 @@ pub async fn start_link(
 ) -> LinkHandle {
     let k = kernel.read().await;
     let delivery: Arc<dyn clawft_kernel::mesh_delivery::LocalDelivery> = k.a2a_router().clone();
+    // The cog mesh takes its own topics from stamped deliveries; the rest go on.
+    #[cfg(all(feature = "ecc", feature = "exochain"))]
+    let delivery = crate::cog_swarm::wrap(delivery);
     #[cfg(feature = "exochain")]
     let chain = match k.chain_manager() {
         Some(cm) => ChainQueue::new(cm.clone()),
@@ -146,6 +149,8 @@ pub async fn start_link(
             timings: Timings::default(),
         },
     );
+    #[cfg(all(feature = "ecc", feature = "exochain"))]
+    crate::cog_swarm::set_forwarder(handle.forwarder.clone());
     k.a2a_router().set_remote_forwarder(handle.forwarder.clone());
     handle
 }

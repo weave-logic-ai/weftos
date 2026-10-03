@@ -320,6 +320,48 @@ fn reset_floor_restarts_the_high_water_mark_and_chains() {
     assert_eq!(fx.names(), ["floor_reset"]);
 }
 
+#[test]
+fn floor_preview_lists_what_a_reset_would_revive_and_changes_nothing() {
+    let fx = Fx::new();
+    assert!(fx.store.floor_preview().is_err(), "needs a binding in effect");
+    fx.bind();
+    put(&fx, &grant(1, T0, HOUR, &["aarch64"])).unwrap();
+    let p = fx.store.floor_preview().unwrap();
+    assert!(p.revived.is_empty(), "nothing is held expired by the floor yet");
+    fx.set_now(T0 + 5 * DAY);
+    fx.store.tick();
+    fx.set_now(T0 + 100);
+    let p = fx.store.floor_preview().unwrap();
+    assert_eq!((p.now, p.floor, p.floor_after), (T0 + 100, T0 + 5 * DAY, T0 + 100));
+    assert_eq!(p.revived.len(), 1);
+    assert_eq!(p.revived[0].cog_id, grant_rec(1, T0, HOUR, &["aarch64"]).cog_id);
+    // Looking changed nothing.
+    assert!(!covered(&fx, "aarch64"));
+    assert!(fx.names().is_empty());
+    fx.store.reset_floor().unwrap();
+    assert!(covered(&fx, "aarch64"));
+}
+
+#[test]
+fn reset_floor_checked_refuses_when_the_floor_moved_since_the_preview() {
+    let fx = Fx::new();
+    fx.bind();
+    put(&fx, &grant(1, T0, HOUR, &["aarch64"])).unwrap();
+    fx.set_now(T0 + 5 * DAY);
+    fx.store.tick();
+    fx.set_now(T0 + 100);
+    let shown = fx.store.floor_preview().unwrap();
+    assert_eq!(
+        fx.store.reset_floor_checked(Some(shown.floor + 1)),
+        Err(LicenceError::CheckFailed("floor_changed".into()))
+    );
+    assert!(!covered(&fx, "aarch64"), "a refused reset changed nothing");
+    let done = fx.store.reset_floor_checked(Some(shown.floor)).unwrap();
+    assert_eq!(done, shown);
+    assert!(covered(&fx, "aarch64"));
+    assert_eq!(fx.names(), ["floor_reset"]);
+}
+
 // ── persistence, fail closed ─────────────────────────────────────
 
 #[test]

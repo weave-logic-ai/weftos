@@ -66,6 +66,9 @@ pub mod mesh_local_sink;
 /// Boot glue: mesh mode and node identity before the kernel, the link after it.
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_boot;
+/// Cog mesh wiring: artifact tunnel and checkout handler over stamped deliveries (ADR-106 1c).
+#[cfg(all(unix, feature = "mesh", feature = "ecc", feature = "exochain"))]
+pub mod cog_swarm;
 /// `verdict.request` answered by the governance gate (P3-U).
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_local_verdict;
@@ -200,6 +203,15 @@ pub mod workload_gate;
 /// `workload.revoke`: operator revocation with forced unload.
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_revoke_rpc;
+/// Seed licence path at daemon boot: mesh id, checkout policy, binder (ADR-106).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_boot;
+/// `workload.node.bind | unbind | binding` (ADR-106 phase 1d).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_rpc;
+/// `weaver doctor` findings for the Seed licence path (ADR-106).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_doctor;
 /// This node's cog ingest bridge and store owner (mesh-placement-10).
 #[cfg(all(feature = "placement", unix))]
 pub mod cog_ingest_serve;

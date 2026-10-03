@@ -82,6 +82,9 @@ pub fn required_capability(method: &str) -> Capability {
         // changes, so Admin rather than Write.
         "workload.revoke" => Capability::Admin,
         "workload.node.bind" => Capability::Admin,
+        // ADR-106: withdrawing a Seed binding is the same trust change.
+        "workload.node.unbind" => Capability::Admin,
+        "workload.node.reset-floor" => Capability::Admin,
 
         // ── Write: state-mutating verbs ─────────────────────────────
         "agent.register" => Capability::Write,
@@ -189,7 +192,10 @@ pub fn required_capability(method: &str) -> Capability {
         | "app.list"
         | "app.inspect"
         | "workload.list"
-        | "workload.inspect" => Capability::Read,
+        | "workload.inspect"
+        // ADR-106: binding status (mesh id, held binding, orphaned or not);
+        // public facts, and what `weaver doctor` reads.
+        | "workload.node.binding" => Capability::Read,
 
         // ADR-099 default-deny posture: an unclassified `workload.*` verb
         // is treated as a mutation, never as anonymous-callable Read.
@@ -463,6 +469,7 @@ mod tests {
             "app.inspect",
             "workload.list",
             "workload.inspect",
+            "workload.node.binding",
         ] {
             assert_eq!(required_capability(m), Capability::Read, "{m}");
             assert!(anon.allows_method(m), "{m}");
@@ -488,7 +495,7 @@ mod tests {
             assert!(!anon.allows_method(m), "anonymous must not call {m}");
             assert!(write.allows_method(m), "{m}");
         }
-        for m in ["workload.revoke", "workload.node.bind"] {
+        for m in ["workload.revoke", "workload.node.bind", "workload.node.unbind", "workload.node.reset-floor"] {
             assert_eq!(required_capability(m), Capability::Admin, "{m}");
             assert!(!write.allows_method(m), "{m}");
         }

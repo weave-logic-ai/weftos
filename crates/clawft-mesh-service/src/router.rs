@@ -31,7 +31,7 @@ use clawft_kernel::mesh_admit::PeerClass;
 use clawft_kernel::mesh_delivery::{LocalDelivery, PeerCtx};
 use clawft_kernel::mesh_ipc::{MeshIpcEnvelope, Scope as WireScope};
 use clawft_kernel::mesh_runtime::MeshRuntime;
-use clawft_mesh_local::proto::{Deliver, Frame, Message, Scope};
+use clawft_mesh_local::proto::{Deliver, DeliverOrigin, Frame, Message, OriginClass, Scope, PROTO_ORIGIN};
 use clawft_mesh_local::{Node, WeftAddr};
 
 use crate::registry::{QueueError, Registration, Registry, ScopeMiss};
@@ -52,6 +52,8 @@ pub struct RouterCounters {
     pub dropped_full: AtomicU64,
     pub sent_remote: AtomicU64,
     pub sent_local: AtomicU64,
+    /// Reserved-topic sends refused, and reserved deliveries with no holder.
+    pub reserved_refused: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +73,10 @@ pub struct TenantRouter {
     policy: Arc<PolicyCell>,
     node_id: String,
     runtime: OnceLock<Weak<MeshRuntime>>,
+    /// The uid that holds the reserved topics when no `cluster_owner_uid` is
+    /// set: the service's own. Never "whoever registered first".
+    fallback_uid: OnceLock<u32>,
+    warned_no_holder: std::sync::atomic::AtomicBool,
     pub counters: RouterCounters,
 }
 
@@ -88,6 +94,8 @@ impl TenantRouter {
             policy,
             node_id,
             runtime: OnceLock::new(),
+            fallback_uid: OnceLock::new(),
+            warned_no_holder: std::sync::atomic::AtomicBool::new(false),
             counters: RouterCounters::default(),
         })
     }
@@ -114,6 +122,44 @@ impl TenantRouter {
     fn miss(&self, why: ScopeMiss) {
         let _ = why;
         self.counters.unknown_scope.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Set the uid that holds the reserved topics when no cluster owner is configured.
+    pub fn set_fallback_uid(&self, uid: u32) {
+        let _ = self.fallback_uid.set(uid);
+    }
+
+    /// The uid allowed to send and receive the reserved topics: the cluster
+    /// owner, else the service's own uid, else nobody. It is never inferred
+    /// from who registered (a squatter at boot, or a second registration,
+    /// must not move it).
+    pub fn reserved_holder_uid(&self) -> Option<u32> {
+        self.policy.owner_uid().or_else(|| self.fallback_uid.get().copied())
+    }
+
+    /// Where [`Self::reserved_holder_uid`] came from, for status and the doctor.
+    pub fn reserved_holder_source(&self) -> &'static str {
+        if self.policy.owner_uid().is_some() {
+            "cluster_owner_uid"
+        } else if self.fallback_uid.get().is_some() {
+            "service_uid"
+        } else {
+            "none"
+        }
+    }
+
+    /// The registration of [`Self::reserved_holder_uid`], if it is registered.
+    fn reserved_holder(&self) -> Option<Arc<Registration>> {
+        let Some(uid) = self.reserved_holder_uid() else {
+            if !self.warned_no_holder.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "cluster_owner_uid required for the licence/artifact mesh: no uid holds the \
+                     reserved mesh.cog./mesh.artifact. topics, so they are refused"
+                );
+            }
+            return None;
+        };
+        self.registry.by_principal(&clawft_mesh_local::Principal::Uid(uid))
     }
 
     /// Choose the registration for an inbound message and the scope to report.
@@ -181,21 +227,41 @@ impl TenantRouter {
         Some((default, scope))
     }
 
+    /// The origin the service vouches for, from the connection (never from
+    /// anything in the envelope). `node_verified` is set only by admission.
+    fn origin_of(from: &PeerCtx) -> DeliverOrigin {
+        if !from.node_verified {
+            return DeliverOrigin::Unadmitted;
+        }
+        let class = match from.class {
+            PeerClass::Node => OriginClass::Node,
+            PeerClass::Leaf => OriginClass::Leaf,
+            PeerClass::Legacy => OriginClass::Other,
+        };
+        DeliverOrigin::AdmittedPeer { node_id: from.peer_id.clone(), class }
+    }
+
+    /// Queue a `deliver` for `reg`. The origin stamp is written only when the
+    /// connection negotiated a protocol that has the field; an older daemon
+    /// never sees it, and reads every delivery as unadmitted.
     fn queue(
         &self,
         reg: &Registration,
         from_node: &str,
         scope: Scope,
         source_cert: Option<clawft_mesh_local::UserCert>,
+        origin: DeliverOrigin,
         msg: &KernelMessage,
     ) -> Result<(), QueueError> {
         let message = serde_json::to_value(msg).map_err(|_| QueueError::Closed)?;
+        let origin = (reg.proto() >= PROTO_ORIGIN).then_some(origin);
         let frame = Frame::new(Message::Deliver(Deliver {
             source_node: from_node.to_string(),
             source_cert,
             scope,
             envelope_id: msg.id.clone(),
             message,
+            origin,
         }));
         match reg.try_queue(frame) {
             Ok(()) => {
@@ -220,6 +286,15 @@ impl TenantRouter {
     ) -> Result<(), SendError> {
         if !dest.topic.is_empty() {
             msg.target = MessageTarget::Topic(dest.topic.clone());
+        }
+        // Reserved topics speak for the machine: only the owner's daemon may send them.
+        if topic_of(&msg).is_some_and(clawft_mesh_local::proto::is_reserved_topic)
+            && !self.reserved_holder().is_some_and(|h| Arc::ptr_eq(&h, from))
+        {
+            self.counters.reserved_refused.fetch_add(1, Ordering::Relaxed);
+            return Err(SendError::Forbidden(
+                "this topic is reserved for the cluster owner's daemon".into(),
+            ));
         }
         let node = match &dest.node {
             Node::Local => self.node_id.clone(),
@@ -269,7 +344,7 @@ impl TenantRouter {
                 reg.user_id
             )));
         }
-        self.queue(&reg, &self.node_id, scope, from.cert(), &msg)
+        self.queue(&reg, &self.node_id, scope, from.cert(), DeliverOrigin::LocalTenant, &msg)
             .map_err(|e| SendError::Failed(format!("{e:?}")))?;
         from.counters.sent.fetch_add(1, Ordering::Relaxed);
         self.counters.sent_local.fetch_add(1, Ordering::Relaxed);
@@ -285,10 +360,22 @@ impl LocalDelivery for TenantRouter {
         dest_scope: Option<&WireScope>,
         msg: KernelMessage,
     ) -> KernelResult<()> {
+        // Reserved topics go only to the owner's registration, whatever the
+        // envelope's scope claims and whoever holds a prefix.
+        if topic_of(&msg).is_some_and(clawft_mesh_local::proto::is_reserved_topic) {
+            let Some(reg) = self.reserved_holder() else {
+                self.counters.reserved_refused.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            };
+            let scope = Scope { user_id: reg.user_id.clone(), project_id: None };
+            return self
+                .queue(&reg, &from.peer_id, scope, None, Self::origin_of(from), &msg)
+                .map_err(|e| KernelError::Mesh(format!("tenant {} queue: {e:?}", reg.user_id)));
+        }
         let Some((reg, scope)) = self.resolve(from, dest_scope, topic_of(&msg)) else {
             return Ok(());
         };
-        self.queue(&reg, &from.peer_id, scope, None, &msg)
+        self.queue(&reg, &from.peer_id, scope, None, Self::origin_of(from), &msg)
             .map_err(|e| KernelError::Mesh(format!("tenant {} queue: {e:?}", reg.user_id)))
     }
 
@@ -312,3 +399,7 @@ impl LocalDelivery for TenantRouter {
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "router_origin_tests.rs"]
+mod origin_tests;

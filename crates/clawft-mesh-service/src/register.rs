@@ -143,6 +143,7 @@ impl Conn {
             req.capabilities.clone(),
             now,
         );
+        reg.set_proto(self.proto);
         let projects: Vec<String> = req.addresses.projects.iter().map(|p| p.project_id.clone()).collect();
         let outcome = match st.registry.register(&reg, &projects, &req.topic_prefixes) {
             Ok(o) => o,

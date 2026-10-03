@@ -264,6 +264,51 @@ pub struct SeedTarget {
     pub host: Arc<WorkloadHost>,
 }
 
+fn seed_runtime(
+    s: SeedEntry,
+    creds: Arc<FileCredentials>,
+) -> Result<(String, TrustTier, SeedApiRuntime), String> {
+    let tls = match (&s.tls_spki_sha256, &s.tls_sha256) {
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "{SEEDS_FILE}: {}: give tls_spki_sha256 or tls_sha256, not both",
+                s.node_id
+            ));
+        }
+        (Some(f), None) => SeedTls::pinned_spki(f).map_err(|e| format!("{SEEDS_FILE}: {e}"))?,
+        (None, Some(f)) => SeedTls::pinned(f).map_err(|e| format!("{SEEDS_FILE}: {e}"))?,
+        (None, None) => SeedTls::WebPki,
+    };
+    let mut transport = HttpSeedTransport::new(&s.url, tls)
+        .map_err(|e| format!("{SEEDS_FILE}: {}: {e}", s.node_id))?;
+    if s.allow_unpinned_lab_link {
+        transport = transport.allow_unpinned_lab_link();
+    }
+    let rt = SeedApiRuntime::new(
+        SeedConfig {
+            node_id: s.node_id.clone(),
+            pins: s.pins,
+            concurrency_cap: clawft_kernel::workload_runtime::seed::SEED_CONCURRENCY_CAP,
+        },
+        Arc::new(transport),
+        creds,
+    )
+    .map_err(|e| format!("{SEEDS_FILE}: {}: {e}", s.node_id))?;
+    Ok((s.node_id, s.tier, rt))
+}
+
+/// The adapter runtime of one Seed named in `workload-seeds.json`, for
+/// `workload.node.bind` (which needs the runtime itself, not a host around it).
+pub fn load_seed_runtime(dir: &Path, node_id: &str) -> Result<SeedApiRuntime, String> {
+    let seeds: Vec<SeedEntry> = parse(dir, SEEDS_FILE)?.unwrap_or_default();
+    let entry = seeds
+        .into_iter()
+        .find(|s| s.node_id == node_id)
+        .ok_or_else(|| format!("{SEEDS_FILE}: no Seed with node id {node_id:?}"))?;
+    let creds = Arc::new(FileCredentials::new(dir.join(SEED_SECRETS_SUBDIR)));
+    seed_runtime(entry, creds).map(|(_, _, rt)| rt)
+}
+
 /// Seeds from the runtime dir (none if the file is absent).
 pub fn load_seeds(
     dir: &Path,
@@ -278,46 +323,15 @@ pub fn load_seeds(
     seeds
         .into_iter()
         .map(|s| {
-            let tls = match (&s.tls_spki_sha256, &s.tls_sha256) {
-                (Some(_), Some(_)) => {
-                    return Err(format!(
-                        "{SEEDS_FILE}: {}: give tls_spki_sha256 or tls_sha256, not both",
-                        s.node_id
-                    ));
-                }
-                (Some(f), None) => {
-                    SeedTls::pinned_spki(f).map_err(|e| format!("{SEEDS_FILE}: {e}"))?
-                }
-                (None, Some(f)) => SeedTls::pinned(f).map_err(|e| format!("{SEEDS_FILE}: {e}"))?,
-                (None, None) => SeedTls::WebPki,
-            };
-            let mut transport = HttpSeedTransport::new(&s.url, tls)
-                .map_err(|e| format!("{SEEDS_FILE}: {}: {e}", s.node_id))?;
-            if s.allow_unpinned_lab_link {
-                transport = transport.allow_unpinned_lab_link();
-            }
-            let rt = SeedApiRuntime::new(
-                SeedConfig {
-                    node_id: s.node_id.clone(),
-                    pins: s.pins,
-                    concurrency_cap: clawft_kernel::workload_runtime::seed::SEED_CONCURRENCY_CAP,
-                },
-                Arc::new(transport),
-                creds.clone(),
-            )
-            .map_err(|e| format!("{SEEDS_FILE}: {}: {e}", s.node_id))?;
+            let (node_id, tier, rt) = seed_runtime(s, creds.clone())?;
             let host = WorkloadHost::new(
                 Arc::new(rt),
                 gate.clone(),
-                s.node_id.clone(),
-                governance_tier(s.tier),
+                node_id.clone(),
+                governance_tier(tier),
             )
             .with_chain(chain.clone());
-            Ok(SeedTarget {
-                node_id: s.node_id,
-                tier: s.tier,
-                host: Arc::new(host),
-            })
+            Ok(SeedTarget { node_id, tier, host: Arc::new(host) })
         })
         .collect()
 }

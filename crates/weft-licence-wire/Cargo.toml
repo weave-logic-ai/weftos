@@ -1,0 +1,16 @@
+[package]
+name = "weft-licence-wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Wire types of the ADR-106 Seed licence proxy (checkout grant, signed envelope, mesh id), shared by the kernel (member side) and weft-licence (Seed side, armv7/aarch64)."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }

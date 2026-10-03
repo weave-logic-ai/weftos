@@ -183,6 +183,7 @@ impl ServiceState {
             std::time::Duration::from_secs(cfg.stale_grace_s),
         );
         let router = TenantRouter::new(Arc::clone(&registry), Arc::clone(&policy), node_id.clone());
+        router.set_fallback_uid(crate::fsutil::euid());
         let facts = Facts::new(&cfg, machine_key.clone(), node_id.clone());
         let gate = ServiceGate::new(
             cfg.genesis_hash,
@@ -289,6 +290,11 @@ impl ServiceState {
             "admission": admission_str(self.policy.admission()),
             "bind_policy": self.cfg.bind_policy.as_str(),
             "cluster_owner_uid": self.policy.owner_uid(),
+            "reserved_topics": {
+                "holder_uid": self.router.reserved_holder_uid(),
+                "source": self.router.reserved_holder_source(),
+                "refused": self.router.counters.reserved_refused.load(std::sync::atomic::Ordering::Relaxed),
+            },
             "you": caller_uid,
             "registered": self.registry.len(),
             "force_revoked": if admin { self.force_revoked.list() } else { Vec::new() },

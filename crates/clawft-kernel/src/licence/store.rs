@@ -12,7 +12,7 @@ use super::persist::write_atomic;
 use super::store_load::{SlotFile, StoreFile, load};
 use super::{
     BindState, BindingRecord, CheckoutGrant, Clock, GRANT_SKEW_SECS, GrantArtifact, LicenceError,
-    LicenceEvent, LicenceEventSink, LocalMeshId, NoopSink, SignedEnvelope,
+    LicenceEvent, LicenceEventSink, LocalMeshId, NoopSink, Outcome, SignedEnvelope,
 };
 use crate::revocation::{RevocationKind, RevocationList};
 use crate::workload_pkg::TrustAnchors;
@@ -96,7 +96,7 @@ impl std::fmt::Debug for CheckoutGrantStore {
     }
 }
 
-fn grant_valid(g: &CheckoutGrant, eff_now: u64) -> bool {
+pub(super) fn grant_valid(g: &CheckoutGrant, eff_now: u64) -> bool {
     !g.is_withdrawal()
         && eff_now < g.expires_at
         && eff_now < g.licence.expires
@@ -172,7 +172,7 @@ impl CheckoutGrantStore {
         self.lock().poisoned.clone()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+    pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
@@ -241,15 +241,21 @@ impl CheckoutGrantStore {
         Ok(())
     }
 
-    /// Make `next` the state even if it cannot be saved (the save error is
-    /// still returned, and `tick` retries it). Only for records that
+    /// Make `next` the state even if it cannot be saved (the result is then
+    /// [`Outcome::AppliedUnsaved`], and `tick` retries the save). Only for records that
     /// *restrict*: an unbind, a withdrawal, a conflict. A disk fault must
     /// not leave a lapsed grant in force.
-    pub(super) fn commit_restrictive(&self, inner: &mut Inner, mut next: Inner) -> Result<(), LicenceError> {
+    pub(super) fn commit_restrictive(&self, inner: &mut Inner, mut next: Inner) -> Outcome {
         let saved = self.save(&mut next);
         next.dirty = saved.is_err();
         *inner = next;
-        saved
+        match saved {
+            Ok(()) => Outcome::Applied,
+            Err(e) => {
+                tracing::warn!(error = %e, "restrictive licence record applied but not saved; tick retries");
+                Outcome::AppliedUnsaved
+            }
+        }
     }
 
     /// The accepted binding, or why there is none in effect: not bound, bound
@@ -299,6 +305,20 @@ impl CheckoutGrantStore {
     /// The binding in effect, or the reason there is none.
     pub fn binding_status(&self) -> Result<BindingRecord, LicenceError> {
         self.run(|inner, ev| self.binding_in_effect(inner, ev))
+    }
+
+    /// The stored binding whatever its state (bound, unbound or orphaned), for
+    /// the steward's `seq` rule and for status. Not for gating anything.
+    pub fn held_binding(&self) -> Option<BindingRecord> {
+        self.lock().binding.as_ref().map(|h| h.body.clone())
+    }
+
+    /// The MEMBER profile against this store's anchors and local mesh id,
+    /// without storing anything (the steward verifies before it spends any
+    /// replay state).
+    pub fn verify_member(&self, signed: &super::SignedBinding) -> Result<BindingRecord, LicenceError> {
+        let local = self.local.get().ok_or(LicenceError::NoLocalMesh)?;
+        super::verify_binding_member(signed, &self.anchors, &local)
     }
 
     /// Run `f` over every currently valid grant (binding in effect, grant key
