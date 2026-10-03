@@ -12,12 +12,18 @@
 //!
 //! A refused mutation is chained as `workload.refuse`. Every `workload.*`
 //! mutation fails closed when no governance gate is configured (ADR-099
-//! section 4 default-deny). The placement family (`place`, `explain`,
-//! `status`, `stop`, `logs`, `unload {instance_id}`) is served by
-//! `workload_place_rpc` (card 12). `load` and `start` are target-side
-//! `workload.ctl` methods, and `migrate`, `revoke`, `node.bind` belong to
-//! later cards: they answer "not available on this node". Any other
-//! `workload.*` method is refused and the refusal chained (default deny).
+//! section 4 default-deny). On the daemon the gate is the [`WorkloadGate`]
+//! over the operator's `workload-permits.json` (see `workload_gate`): with
+//! no matching permit the action is denied and chained, with one it is
+//! permitted and chained, and a revoked package is denied either way. The
+//! placement family (`place`, `explain`, `status`, `stop`, `logs`,
+//! `revoke`, `unload {instance_id}`) is served by `workload_place_rpc`.
+//! `load` and `start` are target-side `workload.ctl` methods, and `migrate`
+//! and `node.bind` belong to later cards: they answer "not available on
+//! this node". Any other `workload.*` method is refused and the refusal
+//! chained (default deny).
+//!
+//! [`WorkloadGate`]: clawft_kernel::workload_governance::WorkloadGate
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -32,17 +38,16 @@ use crate::workload_registry::{
     InstallRequest, WorkloadRecord, WorkloadRegistry, WorkloadState, validate_name,
 };
 
-// Governance action and chain event names, verbatim from ADR-099
-// sections 4 and 7. Card 05 owns the kernel-side constants; switch to
-// those once it merges.
-/// `workload.install` action / event kind.
-pub const WORKLOAD_INSTALL: &str = "workload.install";
-/// `workload.unload` action / event kind.
-pub const WORKLOAD_UNLOAD: &str = "workload.unload";
-/// `workload.refuse` event kind.
-pub const WORKLOAD_REFUSE: &str = "workload.refuse";
+// Governance action and chain event names are the kernel's (ADR-099
+// sections 4 and 7): the action string and the chain kind are the same.
+use clawft_kernel::chain::{
+    EVENT_KIND_WORKLOAD_INSTALL as WORKLOAD_INSTALL, EVENT_KIND_WORKLOAD_REFUSE as WORKLOAD_REFUSE,
+    EVENT_KIND_WORKLOAD_UNLOAD as WORKLOAD_UNLOAD,
+};
 
-/// Verbs named by ADR-099 whose handlers belong to later cards.
+/// Verbs named by ADR-099 whose handlers belong to later cards or to the
+/// placement control plane (`workload.revoke` is served there; without it
+/// the verb is not available).
 const NOT_YET: &[&str] = &[
     "workload.load",
     "workload.start",
@@ -50,6 +55,36 @@ const NOT_YET: &[&str] = &[
     "workload.revoke",
     "workload.node.bind",
 ];
+
+/// The gate context for a catalog action. The catalog records what the
+/// caller says (a name, a kind and a manifest hash) and verifies nothing, so
+/// the package is `unsigned`: a permit has to say `min_package_trust =
+/// "unsigned"` to allow it. The package id is the catalog name (what an
+/// operator revokes with `--package`), and a `blake3:` manifest hash is also
+/// named as an artifact, so a revocation of either denies the install. The
+/// node is this one (`pinned`) and nothing here touches the network. The
+/// gate derives its own effect vector from these fields and ignores a
+/// hand-written `effect`.
+fn workload_ctx(kind: &str, name: &str, manifest_hash: Option<&str>) -> Value {
+    let hashes: Vec<&str> = manifest_hash
+        .and_then(|h| h.strip_prefix("blake3:"))
+        .into_iter()
+        .collect();
+    json!({
+        "kind": kind,
+        "workload": {
+            "kind": kind,
+            "package_trust": "unsigned",
+            "node_tier": "pinned",
+            "network": "none",
+            "secrets": false,
+            "emulated": false,
+            "resource_cost": 0.0,
+            "package_id": name,
+            "artifact_hashes": hashes,
+        },
+    })
+}
 
 static REGISTRY: OnceLock<Arc<WorkloadRegistry>> = OnceLock::new();
 
@@ -123,13 +158,11 @@ pub fn handle_install(
     if reg.contains(&req.name) {
         return Response::error(format!("workload '{}' is already installed", req.name));
     }
-    let ctx = json!({
-        "name": &req.name,
-        "kind": &req.kind,
-        "manifest_hash": &req.manifest_hash,
-        "node_id": node_id,
-        "effect": { "risk": 0.4, "security": 0.4 },
-    });
+    let mut ctx = workload_ctx(&req.kind, &req.name, Some(&req.manifest_hash));
+    ctx["name"] = json!(&req.name);
+    ctx["manifest_hash"] = json!(&req.manifest_hash);
+    ctx["node_id"] = json!(node_id);
+    ctx["effect"] = json!({ "risk": 0.4, "security": 0.4 });
     if let Err(reason) = decide(gate, WORKLOAD_INSTALL, &ctx, true) {
         return refuse(audit, WORKLOAD_INSTALL, &req.name, reason);
     }
@@ -172,13 +205,13 @@ pub fn handle_unload(
     let Some(rec) = reg.get(&name) else {
         return Response::error(format!("workload not found: {name}"));
     };
-    let ctx = json!({
-        "name": &rec.name,
-        "kind": &rec.kind,
-        "manifest_hash": &rec.manifest_hash,
-        "node_id": &rec.node_id,
-        "effect": { "risk": 0.2, "security": 0.1 },
-    });
+    // Taking a record out names no package: revocation never blocks teardown.
+    let mut ctx = workload_ctx(&rec.kind, &rec.name, None);
+    ctx["workload"]["package_id"] = Value::Null;
+    ctx["name"] = json!(&rec.name);
+    ctx["manifest_hash"] = json!(&rec.manifest_hash);
+    ctx["node_id"] = json!(&rec.node_id);
+    ctx["effect"] = json!({ "risk": 0.2, "security": 0.1 });
     if let Err(reason) = decide(gate, WORKLOAD_UNLOAD, &ctx, true) {
         return refuse(audit, WORKLOAD_UNLOAD, &name, reason);
     }
@@ -254,9 +287,50 @@ pub async fn dispatch(
     if crate::workload_place_rpc::handles(method, &params) {
         return crate::workload_place_rpc::dispatch(method, params, kernel).await;
     }
+    #[cfg(all(feature = "placement", unix))]
+    let policy_dir = crate::workload_place_rpc::runtime_dir();
+    #[cfg(not(all(feature = "placement", unix)))]
+    let policy_dir = None;
+    dispatch_in(method, params, kernel, policy_dir.as_deref()).await
+}
+
+/// [`dispatch`] with the operator's policy directory given (`None`: the
+/// kernel's own gate decides, which default-denies `workload.*`).
+#[cfg(any(unix, windows))]
+pub(crate) async fn dispatch_in(
+    method: &str,
+    params: Value,
+    kernel: Arc<
+        tokio::sync::RwLock<clawft_kernel::boot::Kernel<clawft_platform::NativePlatform>>,
+    >,
+    policy_dir: Option<&Path>,
+) -> Response {
+    // The catalog verbs are decided by the workload gate (default deny, the
+    // operator's permits, the revocation list). A broken permits file fails
+    // closed for them; the read-only verbs never need it.
+    #[cfg(all(feature = "placement", unix))]
+    let workload_gate: Option<Arc<dyn GateBackend>> = match (
+        matches!(method, "workload.install" | "workload.unload"),
+        policy_dir,
+    ) {
+        (true, Some(dir)) => match crate::workload_gate::from_kernel(&kernel, dir).await {
+            Ok(g) => Some(g as Arc<dyn GateBackend>),
+            Err(e) => {
+                return Response::error(format!(
+                    "governance denied '{method}': workload policy unavailable (fail closed): {e}"
+                ));
+            }
+        },
+        _ => None,
+    };
+    #[cfg(not(all(feature = "placement", unix)))]
+    let workload_gate: Option<Arc<dyn GateBackend>> = {
+        let _ = policy_dir;
+        None
+    };
     let k = kernel.read().await;
     let node_id = k.cluster_membership().local_node_id().to_owned();
-    let gate = k.governance_gate().cloned();
+    let gate = workload_gate.or_else(|| k.governance_gate().cloned());
     let chain = k.chain_manager().cloned();
     drop(k);
     let audit = |kind: &str, payload: Value| {
@@ -270,3 +344,7 @@ pub async fn dispatch(
 #[cfg(test)]
 #[path = "workload_rpc_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "placement", unix))]
+#[path = "workload_gate_daemon_tests.rs"]
+mod gate_daemon_tests;

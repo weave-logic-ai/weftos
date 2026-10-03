@@ -82,6 +82,12 @@ pub fn init(key: SigningKey, runtime_dir: PathBuf) {
     let _ = BOOT.set(Boot { key, runtime_dir });
 }
 
+/// The daemon's runtime directory (where the operator's policy files are),
+/// once [`init`] ran.
+pub fn runtime_dir() -> Option<PathBuf> {
+    BOOT.get().map(|b| b.runtime_dir.clone())
+}
+
 /// True for the methods this module serves (`unload` only with an instance id).
 pub fn handles(m: &str, params: &Value) -> bool {
     METHODS.contains(&m) || (m == "workload.unload" && params.get("instance_id").is_some())
