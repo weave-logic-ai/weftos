@@ -118,7 +118,7 @@ async fn full_status(state: &ApiState, meta: &TokenMeta, daemon: Option<Value>) 
         "daemon": daemon_section,
         "kernel": kernel,
         "chain": chain,
-        "mcp": { "mounted": false },
+        "mcp": mcp_section(state),
         "channels": channels_section(state),
         "providers": providers_section(state),
         "token": {
@@ -252,4 +252,18 @@ fn providers_section(state: &ApiState) -> Value {
             })
             .collect(),
     )
+}
+
+/// This gateway's `/mcp` surface. Upstream servers are not listed: their
+/// definitions carry commands, URLs and environment.
+fn mcp_section(state: &ApiState) -> Value {
+    match &state.mcp {
+        Some(m) => json!({
+            "mounted": true,
+            "path": "/mcp",
+            "profile": m.profile,
+            "tool_count": m.tool_count,
+        }),
+        None => json!({ "mounted": false }),
+    }
 }

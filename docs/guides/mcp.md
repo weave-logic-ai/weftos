@@ -151,6 +151,15 @@ weft mcp remove claude-flow
   every tool you want to expose has to match a glob there. Empty
   list = back-compat permissive behavior.
 
+## MCP served by the gateway
+
+With the API enabled, `weft gateway` also serves MCP at `POST /mcp` on the API
+port (the `full` profile), authenticated with the same daemon-issued bearer
+token as the REST API (`weft token issue`; see
+[API reference](../ui/api-reference.md#mcp)). Use it when one origin and one
+token should cover both. `weft mcp-server --listen` still serves MCP alone,
+with its own static `--token`.
+
 ## See also
 
 - [`mcp-integration.md`](./mcp-integration.md) — full integration

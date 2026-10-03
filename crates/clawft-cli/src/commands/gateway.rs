@@ -296,7 +296,8 @@ pub async fn run_with_config(
     #[cfg(feature = "api")]
     let api_handle: Option<tokio::task::JoinHandle<()>> = if config.gateway.api_enabled {
         let broadcaster = api_broadcaster.clone().expect("broadcaster created above");
-        let api_state = build_api_state(&ctx, &config, broadcaster);
+        let mut api_state = build_api_state(&ctx, &config, broadcaster);
+        api_state.mcp = super::mcp_server::build_gateway_mount(&config, platform.clone()).await;
         let cors_origins = config.gateway.cors_origins.clone();
         let api_host = config.gateway.host.clone();
         let port = config.gateway.api_port;
@@ -860,6 +861,7 @@ fn build_api_state(
             config.routing.rate_limiting.global_rate_limit_rpm,
         )),
         health_cache: Default::default(),
+        mcp: None,
     }
 }
 

@@ -226,6 +226,63 @@ pub async fn run(args: McpServerArgs) -> anyhow::Result<()> {
         None
     };
 
+    let platform = Arc::new(NativePlatform::new());
+    let config = load_config(&*platform, args.config.as_deref()).await?;
+    let BuiltShell {
+        mut shell,
+        audit_label,
+        listed_names,
+    } = build_shell(
+        &profiles,
+        reexport,
+        attach_provider,
+        &config,
+        platform,
+        args.listen.is_none(),
+    )
+    .await;
+
+    // ── HTTP/SSE listen mode (WEFT-696) ──────────────────────────────
+    if let Some(listen) = args.listen.as_deref() {
+        return run_listen_mode(&args, listen, shell, audit_label).await;
+    }
+
+    info!(
+        profile = %profiles.label(),
+        tools = listed_names.len(),
+        names = ?listed_names,
+        "MCP server ready, reading from stdin"
+    );
+
+    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let stdout = tokio::io::stdout();
+    shell.run(stdin, stdout).await?;
+
+    info!("stdin closed, MCP server shutting down");
+    Ok(())
+}
+
+/// A built MCP server shell plus what callers need to report on it.
+pub(crate) struct BuiltShell {
+    pub shell: McpServerShell,
+    /// Handle the HTTP layer writes the per-request client label into.
+    pub audit_label: Arc<std::sync::RwLock<String>>,
+    /// Public tool names the shell lists.
+    pub listed_names: Vec<String>,
+}
+
+/// Build the profile-filtered tool surface and middleware pipeline.
+///
+/// Shared by `weft mcp-server` and the gateway's `/mcp` mount (ADR-102 D2).
+/// `stdio` labels the audit client `unknown` for a local stdio attach.
+pub(crate) async fn build_shell(
+    profiles: &ProfileSet,
+    reexport: bool,
+    attach_provider: Option<AttachToolProvider>,
+    config: &clawft_types::config::Config,
+    platform: Arc<NativePlatform>,
+    stdio: bool,
+) -> BuiltShell {
     // ── WindowIntent tools (ADR-075 G3 / ADR-076 C4) ─────────────────
     // Always register when the profile allows any window_* tool. Headless
     // mcp-server still enqueues onto an in-process bus (submit_mcp) so
@@ -252,8 +309,6 @@ pub async fn run(args: McpServerArgs) -> anyhow::Result<()> {
         }
     };
 
-    let platform = Arc::new(NativePlatform::new());
-    let config = load_config(&*platform, args.config.as_deref()).await?;
 
     // ── Build tool registry (profile + flag gates MCP re-export) ─────
     let mut registry = ToolRegistry::new();
@@ -362,7 +417,7 @@ pub async fn run(args: McpServerArgs) -> anyhow::Result<()> {
     let audit = AuditLog::new();
     let audit_label = audit.label_handle();
     // stdio local attach: label as unknown (or process can set later).
-    if args.listen.is_none() {
+    if stdio {
         audit.set_client_label("unknown");
     }
 
@@ -379,24 +434,41 @@ pub async fn run(args: McpServerArgs) -> anyhow::Result<()> {
         shell.add_middleware(mw);
     }
 
-    // ── HTTP/SSE listen mode (WEFT-696) ──────────────────────────────
-    if let Some(listen) = args.listen.as_deref() {
-        return run_listen_mode(&args, listen, shell, audit_label).await;
+    BuiltShell {
+        shell,
+        audit_label,
+        listed_names,
     }
+}
 
-    info!(
-        profile = %profiles.label(),
-        tools = listed_names.len(),
-        names = ?listed_names,
-        "MCP server ready, reading from stdin"
-    );
-
-    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
-    let stdout = tokio::io::stdout();
-    shell.run(stdin, stdout).await?;
-
-    info!("stdin closed, MCP server shutting down");
-    Ok(())
+/// The `/mcp` surface the gateway mounts (ADR-102 D2): the `full` profile.
+///
+/// Control tools attach to the live daemon when one answers at startup; if
+/// none does they are left out (standalone), and a restart picks them up.
+/// Proxied external MCP stays off (`--reexport-mcp` semantics).
+#[cfg(feature = "api")]
+pub(crate) async fn build_gateway_mount(
+    config: &clawft_types::config::Config,
+    platform: Arc<NativePlatform>,
+) -> Option<Arc<clawft_services::api::mcp_mount::McpMount>> {
+    let profiles = ProfileSet::parse("full").ok()?;
+    let attach_provider = match DaemonAttachFacade::connect().await {
+        Ok(facade) => Some(AttachToolProvider::with_profile(Arc::new(facade), |name| {
+            profiles.allows_tool(name)
+        })),
+        Err(e) => {
+            tracing::warn!(error = %e, "gateway /mcp: daemon not attached; control tools omitted");
+            None
+        }
+    };
+    let built = build_shell(&profiles, false, attach_provider, config, platform, false).await;
+    info!(tools = built.listed_names.len(), "gateway /mcp mounted (full profile)");
+    Some(Arc::new(clawft_services::api::mcp_mount::McpMount::new(
+        built.shell,
+        built.audit_label,
+        profiles.label(),
+        built.listed_names.len(),
+    )))
 }
 
 /// Mint a capability token and print JSON (no secrets of other sessions).

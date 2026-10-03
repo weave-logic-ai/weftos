@@ -160,6 +160,7 @@ fn make_state() -> (ApiState, Arc<MemoryTokenValidator>) {
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 100)),
         health_cache: Default::default(),
+        mcp: None,
     };
     (state, auth)
 }

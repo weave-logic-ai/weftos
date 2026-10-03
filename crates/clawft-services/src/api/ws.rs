@@ -501,6 +501,7 @@ mod tests {
                 clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0),
             ),
             health_cache: Default::default(),
+        mcp: None,
             tools: stub.clone(),
             sessions: stub.clone(),
             agents: stub.clone(),

@@ -145,6 +145,7 @@ fn make_state(socket: &std::path::Path) -> (ApiState, Arc<MemoryTokenValidator>)
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0)),
         health_cache: Default::default(),
+        mcp: None,
         tools: Arc::new(StubTools),
         sessions: Arc::new(StubSessions),
         agents: Arc::new(StubAgents),

@@ -15,6 +15,7 @@ pub mod delegation;
 pub mod handlers;
 pub mod health;
 pub mod http_facade_api;
+pub mod mcp_mount;
 pub mod memory_api;
 pub mod middleware;
 pub mod monitoring;
@@ -79,6 +80,8 @@ pub struct ApiState {
     pub rate_limiter: Arc<clawft_core::pipeline::rate_limiter::RateLimiter>,
     /// Cache for the expensive parts of the tokened `/api/health` view.
     pub health_cache: Arc<health::HealthCache>,
+    /// MCP shell served at `POST /mcp`; `None` leaves the route unmounted.
+    pub mcp: Option<Arc<mcp_mount::McpMount>>,
 }
 
 /// Trait for tool registry access (decouples API from Platform generics).
@@ -378,6 +381,13 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
         .nest("/api", api_router)
         .merge(ws_router)
         .merge(facade_top);
+
+    // ADR-102 D2: MCP at `/mcp`, same daemon-token auth as `/api/*`.
+    if state.mcp.is_some() {
+        router = router.merge(mcp_mount::mcp_routes().route_layer(
+            axum::middleware::from_fn_with_state(state.clone(), auth::auth_middleware),
+        ));
+    }
 
     // Serve built UI as SPA fallback when a static directory is provided.
     if let Some(dir) = static_dir {

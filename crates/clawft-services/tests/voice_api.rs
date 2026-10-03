@@ -121,6 +121,7 @@ fn make_state_with_voice() -> (ApiState, Arc<MemoryTokenValidator>, Arc<VoiceBri
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0)),
         health_cache: Default::default(),
+        mcp: None,
         tools: Arc::new(StubTools),
         sessions: Arc::new(StubSessions),
         agents: Arc::new(StubAgents),

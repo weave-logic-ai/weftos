@@ -179,6 +179,7 @@ fn state_with(
         ),
         rate_limiter: Arc::new(clawft_core::pipeline::rate_limiter::RateLimiter::new(60, 0)),
         health_cache: Default::default(),
+        mcp: None,
     }
 }
 
@@ -577,5 +578,190 @@ mod daemon {
             assert_eq!(get(&app, "/api/health", Some("wft_good")).await.0, StatusCode::OK);
         }
         assert_eq!(fake.verify_calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+// ─── /mcp mounted in the gateway (ADR-102 D2) ───────────────────────────
+
+mod mcp {
+    use super::*;
+    use async_trait::async_trait;
+    use clawft_services::api::mcp_mount::McpMount;
+    use clawft_services::mcp::ToolDefinition;
+    use clawft_services::mcp::composite::CompositeToolProvider;
+    use clawft_services::mcp::middleware::AuditLog;
+    use clawft_services::mcp::provider::{CallToolResult, ToolError, ToolProvider};
+    use clawft_services::mcp::server::McpServerShell;
+    use serde_json::{Value, json};
+
+    struct Echo;
+
+    #[async_trait]
+    impl ToolProvider for Echo {
+        fn namespace(&self) -> &str {
+            ""
+        }
+        fn list_tools(&self) -> Vec<ToolDefinition> {
+            vec![ToolDefinition {
+                name: "echo".into(),
+                description: "e".into(),
+                input_schema: json!({"type": "object"}),
+            }]
+        }
+        async fn call_tool(&self, name: &str, _args: Value) -> Result<CallToolResult, ToolError> {
+            Ok(CallToolResult::text(format!("ok:{name}")))
+        }
+    }
+
+    fn mount() -> Arc<McpMount> {
+        let mut composite = CompositeToolProvider::new();
+        composite.register(Box::new(Echo));
+        let mut shell = McpServerShell::new(composite);
+        let audit = AuditLog::new();
+        let label = audit.label_handle();
+        shell.add_middleware(Box::new(audit));
+        Arc::new(McpMount::new(shell, label, "full", 1))
+    }
+
+    fn app(mounted: bool) -> (axum::Router, Arc<MemoryTokenValidator>) {
+        let auth = Arc::new(MemoryTokenValidator::new());
+        let mut state = state_with(auth.clone(), Arc::new(InMemoryKernelFacade::new()));
+        if mounted {
+            state.mcp = Some(mount());
+        }
+        (build_router(state, &[], None), auth)
+    }
+
+    async fn rpc(app: &axum::Router, bearer: Option<&str>, body: Value) -> (StatusCode, Value) {
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri("/mcp")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(t) = bearer {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        let resp = app
+            .clone()
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let code = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        (code, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    fn init() -> Value {
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},
+            "clientInfo":{"name":"t","version":"1"}}})
+    }
+
+    #[tokio::test]
+    async fn mcp_requires_a_token() {
+        let (app, _auth) = app(true);
+        for bearer in [None, Some("not-a-token")] {
+            let (code, body) = rpc(&app, bearer, init()).await;
+            assert_eq!(code, StatusCode::UNAUTHORIZED);
+            assert_eq!(body, Value::Null, "no JSON-RPC body for an unauthenticated caller");
+        }
+        // Other methods on the path are not an anonymous way in either.
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri("/mcp").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn initialize_list_and_call_pass_through_with_a_token() {
+        let (app, auth) = app(true);
+        let token = auth.generate_token(3600).unwrap();
+
+        let (code, v) = rpc(&app, Some(&token), init()).await;
+        assert_eq!(code, StatusCode::OK);
+        assert!(v["result"]["serverInfo"]["name"].is_string());
+
+        let (_, v) = rpc(&app, Some(&token), json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).await;
+        assert_eq!(v["result"]["tools"][0]["name"], "echo");
+
+        let (_, v) = rpc(
+            &app,
+            Some(&token),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{}}}),
+        )
+        .await;
+        assert!(v.to_string().contains("ok:echo"), "{v}");
+
+        let (code, _) = rpc(&app, Some(&token), json!({"jsonrpc":"2.0","method":"notifications/initialized"})).await;
+        assert_eq!(code, StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn malformed_json_is_400_for_an_authenticated_caller() {
+        let (app, auth) = app(true);
+        let token = auth.generate_token(3600).unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/mcp")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from("{not json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn revoked_token_is_refused_on_mcp() {
+        let (app, auth) = app(true);
+        let token = auth.generate_token(3600).unwrap();
+        assert_eq!(rpc(&app, Some(&token), init()).await.0, StatusCode::OK);
+        assert_eq!(post(&app, "/api/auth/revoke", &token).await, StatusCode::NO_CONTENT);
+        assert_eq!(rpc(&app, Some(&token), init()).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unmounted_gateway_has_no_mcp_route() {
+        let (app, auth) = app(false);
+        let token = auth.generate_token(3600).unwrap();
+        assert_eq!(rpc(&app, Some(&token), init()).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(rpc(&app, None, init()).await.0, StatusCode::NOT_FOUND);
+        let (_, body) = get(&app, "/api/health", Some(&token)).await;
+        assert_eq!(body["mcp"], json!({ "mounted": false }));
+    }
+
+    #[tokio::test]
+    async fn health_reports_the_mounted_surface_to_token_holders_only() {
+        let (app, auth) = app(true);
+        let token = auth.generate_token(3600).unwrap();
+        let (_, body) = get(&app, "/api/health", Some(&token)).await;
+        assert_eq!(
+            body["mcp"],
+            json!({ "mounted": true, "path": "/mcp", "profile": "full", "tool_count": 1 })
+        );
+        let (_, anon) = get(&app, "/api/health", None).await;
+        assert_eq!(anon, json!({ "status": "ok" }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn daemon_down_is_503_on_mcp() {
+        let dir = tempfile::tempdir().unwrap();
+        let facade = Arc::new(
+            DaemonKernelFacade::with_socket(dir.path().join("absent.sock"))
+                .with_timeout(std::time::Duration::from_secs(1)),
+        );
+        let auth = Arc::new(DaemonTokenValidator::new(facade.clone()));
+        let mut state = state_with(auth, facade);
+        state.mcp = Some(mount());
+        let app = build_router(state, &[], None);
+        let (code, body) = rpc(&app, Some("wft_any"), init()).await;
+        assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["remedy"], "start the daemon: weft kernel start");
     }
 }

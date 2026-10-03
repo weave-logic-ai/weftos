@@ -1,6 +1,6 @@
 # ADR-102: Gateway health detail, daemon-issued tokens, and the API playground
 
-- **Status**: Partially implemented (decisions D1–D5 set by the user 2026-09-29). Done: D1 tiered `/api/health` and `/status` removal, D3 gateway validation through the daemon, D5 mint route and `TokenStore` removed, the non-loopback TLS guard (cards 01-05, 09 in part). Not done: D2 `/playground` page and `/mcp` mount (cards 06-08), the `/api/health` `mcp` section and bind-address/client-count fields, `weft mcp-server --issue-token` change.
+- **Status**: Partially implemented (decisions D1–D5 set by the user 2026-09-29). Done: D1 tiered `/api/health` and `/status` removal, D3 gateway validation through the daemon, D5 mint route and `TokenStore` removed, the non-loopback TLS guard (cards 01-05, 09 in part). Also done: `/mcp` mounted in the gateway (card 06, POST only, no SSE). Not done: the `/playground` page (card 08), upstream MCP servers and bind-address/client-count fields in `/api/health`, `weft mcp-server --issue-token` change.
 - **Date**: 2026-09-29
 - **Deciders**: Platform / ops
 - **Depends-On**: ADR-022 (mandatory ExoChain audit), ADR-075 (Grok ↔ WeftOS MCP bridge, session capability tokens), ADR-076 (MCP tool surface and profiles)

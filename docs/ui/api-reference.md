@@ -280,7 +280,7 @@ URL or runtime path appears.
   "chain": { "available": true, "sequence": 41, "head": "<hash>",
              "checkpoint_count": 1, "events_since_checkpoint": 2,
              "verify": { "valid": true, "event_count": 42, "signature_verified": true, "error_count": 0 } },
-  "mcp": { "mounted": false },
+  "mcp": { "mounted": true, "path": "/mcp", "profile": "full", "tool_count": 42 },
   "channels": [{ "name": "web", "type": "web", "status": "connected" }],
   "providers": [{ "name": "anthropic", "configured": true }],
   "token": { "id": "...", "label": "...", "issued_at": "...", "expires_at": "..." }
@@ -293,6 +293,7 @@ URL or runtime path appears.
 | `version`, `uptime_secs` | Kept at top level for the dashboard |
 | `daemon.version_skew` | `true` when the daemon's version differs from the gateway's |
 | `chain.verify` | `chain.verify` result, reused for 60 s rather than recomputed per request |
+| `mcp` | This gateway's `/mcp` surface: `{"mounted":false}` when not mounted. Upstream servers are not listed (their definitions carry commands and URLs) |
 | `providers[].configured` | A key is set. Never the key or base URL |
 
 `GET /api/status` (a stub) was removed; this route replaces it.
@@ -302,6 +303,31 @@ URL or runtime path appears.
 ```bash
 curl http://localhost:18789/api/health                                   # liveness
 curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/health # full status
+```
+
+---
+
+## MCP
+
+```
+POST /mcp
+```
+
+JSON-RPC over HTTP (`initialize`, `tools/list`, `tools/call`, notifications) for
+the `full` MCP profile, on the gateway's own origin. It needs the same bearer
+token as `/api/*` and returns 401 (or 503 if the daemon is down) without one.
+A token is owner-equivalent, so every tool is reachable, including shell,
+process, file-write and spawn tools. Notifications get `202`; malformed JSON
+gets `400`. There is no SSE stream here; `weft mcp-server --listen` remains
+for headless use with its own static tokens.
+
+Control tools attach to the live daemon when the gateway starts; if no daemon
+answered then they are omitted until the gateway restarts.
+
+```bash
+curl -X POST http://localhost:18789/mcp \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 ---
