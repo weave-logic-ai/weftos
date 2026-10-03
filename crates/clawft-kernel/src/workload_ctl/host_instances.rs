@@ -82,6 +82,10 @@ impl WorkloadHostService {
         let host = self.routes[&p.route].clone();
         match req.method.as_str() {
             method::START => {
+                // ADR-106: a lapsed grant or a withdrawn approval stops a (re)start.
+                if let Some(lic) = &p.licence {
+                    self.licence_check_start(lic, &host, &p.handle, req).await?;
+                }
                 if let (Some(hk), Some(l)) = (&self.ingest, &p.ingest) {
                     hk.activate(l).map_err(|e| {
                         refuse(RefusalCode::Runtime, format!("ingest bridge: {e}"))

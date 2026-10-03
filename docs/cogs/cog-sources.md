@@ -96,6 +96,32 @@ expires = "2027-01-31"                    # YYYY-MM-DD, valid through that UTC d
 - A licensed install is `placement_eligible = false`. Cognitum's binaries are not signed by us, and ADR-100 section 6.3 says an upstream binary is used in governed placement only after an operator hashes and signs it. See the operator guide, "Pack".
 - A licensed Cognitum cog is never shared over the mesh. When you pack one for placement, do not pass `--redistributable`, and pass `--release-url` or `--cognitum-record` so the package is marked Cognitum-origin. See the operator guide, "Pack" (Sharing over the mesh).
 
+### In a mesh with a bound Seed (ADR-106)
+
+When a Cognitum Seed is bound to the mesh (`weaver workload node bind`), the per-project record above is not what lets a cog run on a member. The Seed's `weft-licence` holds the licence, one steward node talks to it, and the mesh shares the bytes. See [weft-licence.md](weft-licence.md) for the Seed side.
+
+```sh
+weaver cog checkout <cog>@<version> --arch aarch64       # e.g. fall-detect@1.2.0; asks the steward (or its own relay)
+weaver cog checkout approve fall-detect@1.2.0 --operator-key ~/.config/weftos/operator.seed   # shows the hashes and a content key
+weaver cog checkout approve fall-detect@1.2.0 --operator-key ~/.config/weftos/operator.seed --confirm <content-key>
+weaver cog checkout status --explain                      # grants, approvals, the run gate per artifact
+weaver cog checkout approve --reapprove-orphaned --operator-key <file> --confirm <digest>   # after a mesh_nonce change
+```
+
+- **Checkout** gets a signed grant from the Seed through the steward. The grant floods to every admitted node, and members fetch the bytes from peers. The Seed sends the bytes once.
+- **A grant alone never runs anything.** Before a Cognitum-origin cog is installed or started, the node needs a valid grant and an operator hash approval whose sha256 set covers the binary. The hashes are computed from the bytes that will run. The approval is signed with the operator key on the CLI side (`weft-licence-v1/approval`), then verified by the daemon, stored, and flooded to every node.
+- `approve` without `--confirm` prints the hashes it would approve and their content key, and signs nothing. Compare the hashes with the registry entry or the upstream release first, then pass that content key to `--confirm`; if the content prepared on the second run hashes differently (the grant changed in between), nothing is signed. `--sha256 <hex>` (repeatable) approves exactly those hashes instead of the held grant's set.
+- `--reapprove-orphaned` takes the orphaned approvals as signed envelopes from the daemon, keeps only those signed by your operator key for an earlier mesh id, prints how many and a batch digest, and signs only with `--confirm <digest>`.
+- On a user daemon outside a project, `checkout` and `approve` are allowed for an Admin caller (they are mesh-wide licence operations), and `status` and `weaver workload node status` are read-only and always allowed, so `weaver doctor` reports `licence.*` findings anywhere.
+- `weaver cog checkout` needs Admin: a checkout spends the Seed's licence and transfer budget. On the steward it is charged per caller (project, token or operator; 5 a minute) and node-wide (20 a minute), and the governance gate is asked as that caller.
+- **Refusals** carry a stable code: `no_grant`, `grant_lapsed`, `not_in_grant`, `no_approval`, `hash_revoked` or `binding_inactive`. `weaver workload place --explain` shows it as the attempt's reason, and the node chains it as `workload.refuse`. A permitted run is chained as `cog.run.permit` with the grant id and the approval id.
+- **Which binary.** The binary that runs is the one the node's runtime admits (native: the host arch; container: its own arch order); only it needs a grant and an approval, so checking out and approving just that arch is enough. A revoked binary of any other arch still refuses the package. A placement whose variant names a different arch is refused (`arch_mismatch`). At each start the staged file is hashed again from disk.
+- **Re-packed bytes.** A package that does not say Cognitum but carries a binary a held grant lists (or a revoked hash) is gated all the same, under its own id.
+- **A deleted licence store** does not turn the gate off: the first accepted binding writes `licence-bound.marker` beside the store, and a node with the marker (or with approvals) but no binding refuses (`binding_inactive`) until sync brings the binding back. Deleting the whole `licence/` directory does reset it (the node reads as never bound until a peer re-syncs); whoever can do that can already tamper with the daemon.
+- **A lapse** (an expired or withdrawn grant, or an unbind) refuses new starts and restarts. Running instances keep running.
+- **To withdraw an approval**, revoke the artifact hash: `weaver workload revoke --hash <blake3>`. That also evicts the bytes.
+- Signed WeftOS and private packages never reach this gate. A node that never held a Seed binding keeps the per-project path above.
+
 ## 4. Create and publish a private repo
 
 A private repo is a directory you sign with a key only you hold. Use `weft-cog-repo`.
@@ -171,5 +197,7 @@ One row per cog per source: arch coverage, hardware requirement, `[resources]`, 
 ## What is built, and what is not
 
 Built and tested: config parsing and the project/user merge; the three source kinds; licence check (presence, coverage, expiry; unlicensed refused before any download); private-repo `init/keygen/add/sign/verify/publish` and `--pin`; namespaced and bare resolution with explicit ambiguity; verified install into a cog-host root with `provenance.json`; the catalog; the four package-trust fixes in the kernel.
+
+Built for Seed-bound meshes (ADR-106 phase 3): `weaver cog checkout`, `approve`, `--reapprove-orphaned`, `status`; the run gate in the workload host; the steward relay.
 
 Designed, not built (ADR-105 open questions): moving the source list into the user-daemon project manifest and serving it from the daemon; chain events for resolve and install (the payload exists as `Provenance::chain_payload`); building a governed `cogpkg` straight from a registry artifact; signed licences; a default `weftos` registry URL; provisioning the first `WEFTOS_PINNED_SIGNERS` key; Cognitum release-record verification on the registry install path.

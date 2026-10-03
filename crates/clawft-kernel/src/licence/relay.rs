@@ -40,8 +40,12 @@ pub const EVENT_KIND_CHECKOUT_REFUSED: &str = "cog.checkout.refused";
 /// Who is asking.
 #[derive(Debug, Clone, Copy)]
 pub enum CheckoutCaller<'a> {
-    /// This node's own kernel.
+    /// This node's own kernel (internal callers; not rate limited).
     Kernel,
+    /// An RPC caller on this node, named by its principal (a project, a
+    /// token, or the local operator). Charged to its own budget and to the
+    /// node-wide local budget; the gate is asked as this principal.
+    Local(&'a str),
     /// A delivery from a mesh peer; the context is built from the service
     /// origin, so `node_verified` means `AdmittedPeer`.
     Peer(&'a PeerCtx),
@@ -167,11 +171,22 @@ pub struct RelayLimits {
     pub concurrent: usize,
     /// Members remembered at once; the oldest windows are pruned.
     pub max_peers: usize,
+    /// Requests per local principal per window.
+    pub per_local: u32,
+    /// Requests from all local principals together per window.
+    pub local_total: u32,
 }
 
 impl Default for RelayLimits {
     fn default() -> Self {
-        Self { per_peer: 5, window: Duration::from_secs(60), concurrent: 8, max_peers: 1024 }
+        Self {
+            per_peer: 5,
+            window: Duration::from_secs(60),
+            concurrent: 8,
+            max_peers: 1024,
+            per_local: 5,
+            local_total: 20,
+        }
     }
 }
 
@@ -189,6 +204,7 @@ pub struct CheckoutRelay {
     inflight: Mutex<HashMap<Key, Shared>>,
     limits: RelayLimits,
     buckets: Mutex<HashMap<String, (Instant, u32)>>,
+    local_total: Mutex<(Instant, u32)>,
     slots: Semaphore,
 }
 
@@ -213,6 +229,7 @@ impl CheckoutRelay {
             inflight: Mutex::default(),
             slots: Semaphore::new(limits.concurrent),
             buckets: Mutex::default(),
+            local_total: Mutex::new((Instant::now(), 0)),
             limits,
         }
     }
@@ -224,8 +241,26 @@ impl CheckoutRelay {
         self
     }
 
+    /// Charge one request to the node-wide local budget.
+    fn allow_local_total(&self) -> bool {
+        let now = Instant::now();
+        let mut t = self.local_total.lock().unwrap_or_else(|p| p.into_inner());
+        if now.duration_since(t.0) >= self.limits.window {
+            *t = (now, 0);
+        }
+        if t.1 >= self.limits.local_total {
+            return false;
+        }
+        t.1 += 1;
+        true
+    }
+
     /// Charge one request to `peer`; false when over its budget.
     fn allow_peer(&self, peer: &str) -> bool {
+        self.allow_key(peer, self.limits.per_peer)
+    }
+
+    fn allow_key(&self, peer: &str, budget: u32) -> bool {
         let now = Instant::now();
         let mut m = self.buckets.lock().unwrap_or_else(|p| p.into_inner());
         if m.len() >= self.limits.max_peers && !m.contains_key(peer) {
@@ -239,7 +274,7 @@ impl CheckoutRelay {
         if now.duration_since(e.0) >= self.limits.window {
             *e = (now, 0);
         }
-        if e.1 >= self.limits.per_peer {
+        if e.1 >= budget {
             return false;
         }
         e.1 += 1;
@@ -255,6 +290,7 @@ impl CheckoutRelay {
     ) -> Result<SignedGrant, CheckoutRefusal> {
         let who = match caller {
             CheckoutCaller::Kernel => "kernel".to_owned(),
+            CheckoutCaller::Local(p) => format!("local:{p}"),
             CheckoutCaller::Peer(p) if p.node_verified && p.class == PeerClass::Node => {
                 p.peer_id.clone()
             }
@@ -266,7 +302,13 @@ impl CheckoutRelay {
         };
         // Limits come before the gate and the chain: a flood of requests
         // costs a counter, not a chain event.
-        if matches!(caller, CheckoutCaller::Peer(_)) && !self.allow_peer(&who) {
+        let allowed = match caller {
+            CheckoutCaller::Kernel => true,
+            CheckoutCaller::Peer(_) => self.allow_peer(&who),
+            // Its own budget first, so one principal cannot use up the node's.
+            CheckoutCaller::Local(_) => self.allow_key(&who, self.limits.per_local) && self.allow_local_total(),
+        };
+        if !allowed {
             return Err(CheckoutRefusal::RateLimited);
         }
         let Ok(_slot) = self.slots.try_acquire() else {

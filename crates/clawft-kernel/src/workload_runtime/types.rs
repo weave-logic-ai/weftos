@@ -368,6 +368,13 @@ pub trait WorkloadRuntime: Send + Sync {
     async fn status(&self, h: &InstanceHandle) -> InstanceStatus;
     /// Managed or adopted.
     fn control_mode(&self) -> ControlMode;
+    /// The file an instance's binary was staged to, when the adapter runs it
+    /// from disk (the licence run gate rehashes it at each start). `None`:
+    /// not run from a file this node can read (a container image is tagged
+    /// by the binary's BLAKE3; a remote device holds its own copy).
+    async fn staged_payload(&self, _h: &InstanceHandle) -> Option<std::path::PathBuf> {
+        None
+    }
     /// How the link to a remote device is authenticated. Fails closed:
     /// only a remote adapter with a pinned transport says `Pinned`.
     fn link_security(&self) -> LinkSecurity {

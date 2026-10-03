@@ -134,6 +134,9 @@ pub(super) struct Placed {
     /// instances placed by another node: what this node controls itself
     /// is exempt.
     pub(super) requester: String,
+    /// A Cognitum-origin cog in a Seed-bound mesh: the run gate is asked
+    /// again on every start (ADR-106, phase 3).
+    pub(super) licence: Option<super::host_licence::LicensedRun>,
 }
 
 /// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
@@ -179,6 +182,8 @@ pub struct WorkloadHostService {
     pub(super) departed: Mutex<std::collections::VecDeque<(String, &'static str)>>,
     /// Last request from a controller other than this node itself (ms).
     pub(super) last_contact_ms: std::sync::atomic::AtomicU64,
+    /// The ADR-106 run gate for Cognitum-origin cogs (unset: not consulted).
+    pub(super) licence_gate: std::sync::OnceLock<Arc<dyn crate::licence::CognitumRunGate>>,
 }
 
 fn now_ms() -> u64 {
@@ -232,6 +237,7 @@ impl WorkloadHostService {
             lease: None,
             departed: Mutex::new(std::collections::VecDeque::new()),
             last_contact_ms: std::sync::atomic::AtomicU64::new(now_ms()),
+            licence_gate: std::sync::OnceLock::new(),
         }
     }
 
@@ -541,6 +547,8 @@ impl WorkloadHostService {
                 "package id differs from the placed name",
             ));
         }
+        // ADR-106 run gate: before anything of a Cognitum-origin cog is installed.
+        let licence = self.licence_check_place(&pkg.verified, &w, &b.variant, &host, req).await?;
         if let Some(p) = &b.project_id
             && !crate::cog_ingest::valid_project_id(p)
         {
@@ -634,6 +642,7 @@ impl WorkloadHostService {
                 desired_running: will_start,
                 lease_stopped: false,
                 requester: req.requester.clone(),
+                licence,
             },
         );
         if let (Some(list), Some(g0)) = (self.revocations.get(), list_at_start)

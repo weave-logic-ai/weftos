@@ -52,6 +52,19 @@ pub fn arch() -> &'static str {
 
 /// A signed cog package whose binary (for this host's arch) is `script`.
 pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf {
+    package_from(root, id, script, arches, None)
+}
+
+/// [`package`] with a release URL (one naming `cognitum` gives the package
+/// Cognitum origin, ADR-106).
+pub fn package_from(root: &Path, id: &str, script: &str, arches: &[&str], release_url: Option<&str>) -> PathBuf {
+    let per: Vec<(&str, &str)> = arches.iter().map(|a| (*a, script)).collect();
+    package_bins(root, id, &per, release_url)
+}
+
+/// [`package_from`] with its own bytes per arch.
+pub fn package_bins(root: &Path, id: &str, bins_in: &[(&str, &str)], release_url: Option<&str>) -> PathBuf {
+    let same = bins_in.windows(2).all(|w| w[0].1 == w[1].1);
     let src = root.join("src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(
@@ -60,13 +73,14 @@ pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf 
     )
     .unwrap();
     let mut bins = Vec::new();
-    for a in arches {
+    for (a, script) in bins_in {
         let p = root.join(format!("bin-{a}"));
         std::fs::write(&p, script).unwrap();
         bins.push((a.to_string(), p));
     }
-    // Every arch carries the same script bytes, so one provenance covers them all.
-    if let Some((_, first)) = bins.first() {
+    // With the same bytes on every arch one provenance covers them all;
+    // different bytes are packed without one (and not redistributable).
+    if let Some((_, first)) = bins.first().filter(|_| same) {
         crate::workload_pkg::write_source_build_provenance(&src, first).unwrap();
     }
     let input = CogPackInput {
@@ -75,12 +89,12 @@ pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf 
         source: PackageSource {
             repo: Some("cogs-fork".into()),
             commit: Some("0000000".into()),
-            release_url: None,
+            release_url: release_url.map(str::to_owned),
         },
         cognitum_record: None,
-        redistributable: true,
+        redistributable: same,
         provenance: None,
-        allow_no_provenance: false,
+        allow_no_provenance: !same,
     };
     let pkg = root.join("pkg");
     let mut env = pack_cog(&input, &pkg).unwrap();

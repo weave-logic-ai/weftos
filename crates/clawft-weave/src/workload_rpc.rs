@@ -65,6 +65,9 @@ const NEEDS_PLACEMENT: &[&str] =
     "workload.node.unbind",
     "workload.node.binding",
     "workload.node.reset-floor",
+    "workload.cog.checkout",
+    "workload.cog.checkout.approve",
+    "workload.cog.checkout.status",
 ];
 
 /// The gate context for a catalog action. The catalog records what the
@@ -303,6 +306,10 @@ pub async fn dispatch(
     #[cfg(all(feature = "placement", unix))]
     if crate::licence_rpc::handles(method) {
         return crate::licence_rpc::dispatch(method, params, kernel).await;
+    }
+    #[cfg(all(feature = "placement", unix))]
+    if crate::licence_checkout_rpc::handles(method) {
+        return crate::licence_checkout_rpc::dispatch(method, params, kernel).await;
     }
     #[cfg(all(feature = "placement", unix))]
     if crate::workload_place_rpc::handles(method, &params) {

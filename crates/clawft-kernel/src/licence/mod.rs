@@ -32,15 +32,21 @@ mod exchange_types;
 mod floor;
 mod floor_preview;
 mod gate;
+#[cfg(all(feature = "workload-runtime", unix))]
+mod http_transport;
 mod mesh_config;
 mod persist;
 mod policy;
 mod relay;
+mod renewal;
 mod request;
+mod run_gate;
 mod store;
 mod steward;
+mod steward_client;
 mod store_accept;
 mod store_load;
+mod store_status;
 mod store_sync;
 
 #[cfg(test)]
@@ -56,6 +62,8 @@ mod tests_policy;
 #[cfg(test)]
 mod tests_relay;
 #[cfg(test)]
+mod tests_relay_local;
+#[cfg(test)]
 mod tests_request;
 #[cfg(test)]
 mod tests_stub;
@@ -67,6 +75,16 @@ mod tests_seed_service;
 mod tests_store;
 #[cfg(test)]
 mod tests_types;
+#[cfg(test)]
+mod tests_run_gate;
+#[cfg(all(test, feature = "workload-runtime", unix))]
+mod tests_http;
+#[cfg(all(test, feature = "workload-runtime", unix))]
+mod tests_http_e2e;
+#[cfg(all(test, feature = "workload-runtime", unix))]
+mod tests_renewal;
+#[cfg(test)]
+mod tests_renewal_cursor;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -78,7 +96,7 @@ use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 
-pub use approval::{Approval, SignedApproval, sign_approval, verify_approval};
+pub use approval::{Approval, SignedApproval, sign_approval, verify_approval, verify_approval_signature};
 pub use approval_store::ApprovalStore;
 pub use binding::{
     AdmissionPosture, BindState, BindingExtraCheck, BindingRecord, NoExtraChecks, SignedBinding,
@@ -86,7 +104,7 @@ pub use binding::{
 };
 pub use chain_sink::{ChainLicenceSink, LICENCE_EVENT_PREFIX};
 pub use client::{
-    ARTIFACT_PATH, CHECKOUT_PATH, CheckoutWire, ClockMs, system_clock_ms, GRANTS_PATH, LicenceClient, LicenceClientError,
+    ARTIFACT_PATH, CHECKOUT_PATH, CheckoutWire, ClockMs, system_clock_ms, GRANTS_PATH, GrantsPage, RENEW_PATH, LicenceClient, LicenceClientError,
     LicenceResponse, LicenceTransport, SignedLicenceClient,
 };
 pub use exchange::{
@@ -97,6 +115,16 @@ pub use exchange_sync::{GrantCursor, SYNC_MAX_BYTES, SYNC_MAX_ENTRIES, SyncMsg};
 pub use floor::FloorState;
 pub use floor_preview::{FloorPreview, RevivedGrant};
 pub use gate::{RunDenied, RunPermit, RunRequest, may_run};
+#[cfg(all(feature = "workload-runtime", unix))]
+pub use http_transport::{
+    DEFAULT_MAX_ARTIFACT_BYTES, HttpLicenceTransport, LicenceLinkConfig, TransportLimits,
+};
+pub use renewal::{
+    EVENT_KIND_CHECKOUT_LAPSED, EVENT_KIND_CHECKOUT_RENEWED, RenewalConfig, RenewalReport, Renewer,
+};
+pub use run_gate::{CognitumRunGate, RunRefusal, RunVerdict, StoreRunGate, check_run};
+pub use steward_client::{SharedTransport, StewardLicenceClient};
+pub use store_status::{ApprovalRow, BOUND_MARKER, GrantRow};
 pub use weft_licence_wire::{
     APPROVAL_DOMAIN, BINDING_DOMAIN, CheckoutGrant, FAR_FUTURE_CLAMP_SECS, GRANT_DOMAIN,
     GRANT_SKEW_SECS, GrantArtifact, LicenceError, LicenceRef, MAX_APPROVALS, MAX_GRANT_SLOTS,

@@ -110,6 +110,12 @@ impl LicenceExchange {
         me
     }
 
+    /// The node's approval store (the run gate and `weaver cog checkout
+    /// status` read it).
+    pub fn approvals(&self) -> &Arc<ApprovalStore> {
+        &self.approvals
+    }
+
     /// The local mesh id, or [`LicenceError::NoLocalMesh`] (the exchange is
     /// inert while it is unset).
     pub(super) fn local(&self) -> Result<super::MeshId, LicenceError> {

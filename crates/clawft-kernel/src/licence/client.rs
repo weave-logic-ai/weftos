@@ -34,6 +34,19 @@ pub const CHECKOUT_PATH: &str = "/licence/v1/checkout";
 pub const ARTIFACT_PATH: &str = "/licence/v1/artifact/";
 /// Path of the renewal listing (`?since=<seq>`).
 pub const GRANTS_PATH: &str = "/licence/v1/grants";
+/// Path of the renewal call (signs a new grant for every active checkout).
+pub const RENEW_PATH: &str = "/licence/v1/renew";
+
+/// One page of `GET /licence/v1/grants?since=<ctr>`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GrantsPage {
+    /// The latest grant per checkout issued after the cursor.
+    pub grants: Vec<SignedGrant>,
+    /// The cursor for the next page (the Seed's issue counter).
+    pub next: u64,
+    /// More pages follow.
+    pub more: bool,
+}
 /// Largest response body the client reads, other than artifact bytes.
 pub const MAX_RESPONSE_BODY: usize = 256 * 1024;
 
@@ -116,6 +129,17 @@ pub trait LicenceClient: Send + Sync + 'static {
     async fn artifact(&self, blake3_hex: &str, max_len: u64) -> Result<Vec<u8>, LicenceClientError>;
     /// `GET /licence/v1/grants?since=<seq>`: renewal batch.
     async fn grants_since(&self, since: u64) -> Result<Vec<SignedGrant>, LicenceClientError>;
+    /// `POST /licence/v1/renew`: a new grant (or a withdrawal) for every
+    /// active checkout, at most one batch. `next` is the Seed's issue counter
+    /// after the renewal (the bound for the catch-up cursor).
+    async fn renew(&self) -> Result<GrantsPage, LicenceClientError> {
+        Err(LicenceClientError::BadResponse("renew is not supported by this client".into()))
+    }
+    /// [`Self::grants_since`] with the paging cursor.
+    async fn grants_page(&self, since: u64) -> Result<GrantsPage, LicenceClientError> {
+        let grants = self.grants_since(since).await?;
+        Ok(GrantsPage { grants, next: since, more: false })
+    }
 }
 
 #[derive(Deserialize)]
@@ -126,6 +150,10 @@ struct GrantBody {
 #[derive(Deserialize)]
 struct GrantsBody {
     grants: Vec<SignedGrant>,
+    #[serde(default)]
+    next: u64,
+    #[serde(default)]
+    more: bool,
 }
 
 #[derive(Deserialize)]
@@ -219,9 +247,20 @@ impl<T: LicenceTransport> LicenceClient for SignedLicenceClient<T> {
     }
 
     async fn grants_since(&self, since: u64) -> Result<Vec<SignedGrant>, LicenceClientError> {
+        Ok(self.grants_page(since).await?.grants)
+    }
+
+    async fn grants_page(&self, since: u64) -> Result<GrantsPage, LicenceClientError> {
         let path = format!("{GRANTS_PATH}?since={since}");
         let out = self.signed("GET", &path, Vec::new(), MAX_RESPONSE_BODY).await?;
-        Ok(serde_json::from_slice::<GrantsBody>(&out).map_err(bad)?.grants)
+        let b = serde_json::from_slice::<GrantsBody>(&out).map_err(bad)?;
+        Ok(GrantsPage { grants: b.grants, next: b.next, more: b.more })
+    }
+
+    async fn renew(&self) -> Result<GrantsPage, LicenceClientError> {
+        let out = self.signed("POST", RENEW_PATH, Vec::new(), MAX_RESPONSE_BODY).await?;
+        let b = serde_json::from_slice::<GrantsBody>(&out).map_err(bad)?;
+        Ok(GrantsPage { grants: b.grants, next: b.next, more: false })
     }
 }
 

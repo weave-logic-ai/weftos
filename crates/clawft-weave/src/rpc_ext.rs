@@ -426,6 +426,14 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::governance_push::handle_reload,
     },
+    // ADR-106 phase 3: Admin (a checkout spends licence budget); routed here
+    // so the relay rate-limits and gates the caller's own principal.
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "workload.cog.checkout",
+        capability: Capability::Admin,
+        handler: crate::licence_checkout_rpc::handle_ext,
+    },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.
     ExtRoute {
@@ -596,6 +604,14 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "governance.reload",
         capability: Capability::Admin,
         handler: crate::governance_push::handle_reload,
+    },
+    // ADR-106 phase 3: Admin (a checkout spends licence budget); routed here
+    // so the relay rate-limits and gates the caller's own principal.
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "workload.cog.checkout",
+        capability: Capability::Admin,
+        handler: crate::licence_checkout_rpc::handle_ext,
     },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.

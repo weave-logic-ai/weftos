@@ -212,6 +212,12 @@ pub mod licence_rpc;
 /// `weaver doctor` findings for the Seed licence path (ADR-106).
 #[cfg(all(feature = "placement", unix))]
 pub mod licence_doctor;
+/// The steward relay from `licence-link.json` (ADR-106 phase 3).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_steward;
+/// `workload.cog.checkout | approve | status` (ADR-106 phase 3).
+#[cfg(all(feature = "placement", unix))]
+pub mod licence_checkout_rpc;
 /// This node's cog ingest bridge and store owner (mesh-placement-10).
 #[cfg(all(feature = "placement", unix))]
 pub mod cog_ingest_serve;

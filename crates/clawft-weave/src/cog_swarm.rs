@@ -6,12 +6,13 @@
 //! front of the daemon's `A2ARouter` at link time, and [`install`] fills its
 //! slot once the exchange exists. Until then feature topics are dropped.
 //!
-//! The daemon runs no steward relay yet: the real `weft-licence` link arrives
-//! with phase 2, so a request to this node's `mesh.cog.checkout` is answered
-//! `no_steward`. Members can still fetch from peers and serve what a grant
-//! (from a reply, flood or sync) makes shareable. The relay's [`GrantFlood`]
-//! is [`grant_flood`]: the node's `LicenceExchange` once placement has started
-//! it (phase 1b), `NoFlood` before.
+//! A node with a `licence-link.json` gets the steward relay (phase 3,
+//! `licence_steward::wire`, installed into this cog mesh at placement start);
+//! it relays while the binding names it. Any other node answers a request to
+//! its `mesh.cog.checkout` with `no_steward`. Members still fetch from peers
+//! and serve what a grant (from a reply, flood or sync) makes shareable. The
+//! relay's [`GrantFlood`] is [`grant_flood`]: the node's `LicenceExchange`
+//! once placement has started it (phase 1b), `NoFlood` before.
 //!
 //! The service reserves the `mesh.cog.`, `mesh.artifact.` and `mesh.licence.`
 //! topics for the cluster owner's registration (the only one with no

@@ -74,7 +74,9 @@ pub struct CogMesh {
     exchange: Arc<ArtifactExchange>,
     store: Arc<CheckoutGrantStore>,
     sender: Arc<dyn PeerSender>,
-    relay: Option<Arc<CheckoutRelay>>,
+    /// The steward relay; set and cleared at runtime (a binding that names
+    /// this node can arrive after boot).
+    relay: std::sync::RwLock<Option<Arc<CheckoutRelay>>>,
     tunnel: Arc<ArtifactTunnel>,
     pending: DashMap<String, Pending>,
     /// Counters.
@@ -94,7 +96,7 @@ impl CogMesh {
             exchange,
             store,
             sender,
-            relay,
+            relay: std::sync::RwLock::new(relay),
             tunnel,
             pending: DashMap::new(),
             counters: CogMeshCounters::default(),
@@ -107,9 +109,27 @@ impl CogMesh {
         &self.tunnel
     }
 
+    /// Install (or with `None` remove) the steward relay.
+    pub fn set_relay(&self, relay: Option<Arc<CheckoutRelay>>) {
+        *self.relay.write().unwrap_or_else(|p| p.into_inner()) = relay;
+    }
+
+    /// The steward relay, when this node runs one.
+    pub fn relay(&self) -> Option<Arc<CheckoutRelay>> {
+        self.relay.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// An RPC caller on the steward asks for a checkout, as `principal`.
+    pub async fn checkout_as(&self, principal: &str, req: &CheckoutWire) -> Result<SignedGrant, CheckoutRefusal> {
+        match self.relay() {
+            Some(r) => r.handle(CheckoutCaller::Local(principal), req).await,
+            None => Err(CheckoutRefusal::Licence("no_steward".into())),
+        }
+    }
+
     /// The steward's own kernel asks for a checkout.
     pub async fn checkout_local(&self, req: &CheckoutWire) -> Result<SignedGrant, CheckoutRefusal> {
-        match &self.relay {
+        match self.relay() {
             Some(r) => r.handle(CheckoutCaller::Kernel, req).await,
             None => Err(CheckoutRefusal::Licence("no_steward".into())),
         }
@@ -166,7 +186,7 @@ impl CogMesh {
         // Parse first: a reply is only worth sending to a request that names itself.
         let MessagePayload::Json(v) = msg.payload.clone() else { return };
         let Ok(req) = serde_json::from_value::<CheckoutWire>(v) else { return };
-        let Some(relay) = self.relay.clone() else {
+        let Some(relay) = self.relay() else {
             self.counters.no_steward.fetch_add(1, Ordering::Relaxed);
             let _ = self.reply_refused(&from.peer_id, &req.request_id, "no_steward").await;
             return;
