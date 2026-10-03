@@ -6,6 +6,7 @@ runner, downloads through an injected opener, and the end-to-end harness
 test runs a fake cog (a Python script) against the real feed and stub.
 """
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -24,10 +25,18 @@ import conformance  # noqa: E402
 import harness  # noqa: E402
 import runtimes  # noqa: E402
 
+# A native arm64 driver; the emulation tests in conformance_honesty_tests.py
+# pass other machines explicitly.
+conformance.driver_machine = lambda *_a, **_k: "aarch64"
 
-def raw(cid, mode="once", rc=0, ingest=1, timed_out=False, cycle_ms=700.0, status="ran"):
+
+def raw(cid, mode="once", rc=0, ingest=1, timed_out=False, cycle_ms=700.0, status="ran",
+        host_machine="aarch64", cycles=None):
+    if cycles is None:
+        cycles = 1 if mode == "once" else 5
     return {"id": cid, "mode": mode, "rc": rc, "ingest_posts": ingest, "status": status,
-            "timed_out": timed_out, "cycle_ms": cycle_ms, "cycles": 1,
+            "host_machine": host_machine, "timed_out": timed_out, "cycle_ms": cycle_ms,
+            "cycles": cycles,
             "interval_s": 1 if mode == "interval" else None, "feed_id": "reference-v1",
             "harness_version": "1.0.0", "sha256": "ab" * 32}
 
@@ -170,7 +179,7 @@ class Classification(unittest.TestCase):
 class Capabilities(unittest.TestCase):
     def test_cycle_capability_is_measured_and_only_for_clean(self):
         caps = classify.cycle_capabilities([raw("a"), raw("b", ingest=0)],
-                                           "aarch64", "docker", "T")
+                                           "aarch64", "docker", "T", driver_machine="aarch64")
         self.assertEqual(len(caps), 1)
         c = caps[0]
         self.assertEqual((c["id"], c["provenance"]), ("perf.cog.cycle_ms", "measured"))
@@ -182,7 +191,8 @@ class Capabilities(unittest.TestCase):
                 {"id": "accel.gpu.metal", "provenance": "probed"},
                 {"id": "perf.cog.cycle_ms", "provenance": "measured",
                  "attrs": {"cog_id": "a", "arch": "aarch64", "runtime": "docker", "value": 1}}]
-        out = classify.upgrade_provenance(node, [raw("a")], "aarch64", "docker", "T")
+        out = classify.upgrade_provenance(node, [raw("a")], "aarch64", "docker", "T",
+                                          driver_machine="aarch64")
         by = {(c["id"], (c.get("attrs") or {}).get("cog_id")): c for c in out}
         self.assertEqual(by[("cpu.arch.aarch64", None)]["provenance"], "measured")
         self.assertEqual(by[("runtime.container.docker", None)]["provenance"], "measured")
@@ -309,14 +319,16 @@ class Runtimes(unittest.TestCase):
                 return io.BytesIO(body)
             return f
         with tempfile.TemporaryDirectory() as d:
-            p, why = runtimes.fetch_binary("x", "aarch64", d, opener=opener(self.ELF_A64))
+            sha = hashlib.sha256(self.ELF_A64).hexdigest()
+            fb = lambda cid, op, h=sha: runtimes.fetch_binary(  # noqa: E731
+                cid, "aarch64", d, expected_sha256=h, opener=op)
+            p, why = fb("x", opener(self.ELF_A64))
             self.assertIsNone(why)
             self.assertTrue(os.stat(p).st_mode & stat.S_IXUSR)
-            p2, _ = runtimes.fetch_binary("x", "aarch64", d, opener=opener(code=500))
+            p2, _ = fb("x", opener(code=500))
             self.assertEqual((p2, len(calls)), (p, 1))  # served from cache
-            self.assertEqual(runtimes.fetch_binary("y", "aarch64", d, opener=opener(code=404)),
-                             (None, "HTTP 404"))
-            self.assertEqual(runtimes.fetch_binary("z", "aarch64", d, opener=opener(b"nope"))[1],
+            self.assertEqual(fb("y", opener(code=404)), (None, "HTTP 404"))
+            self.assertEqual(fb("z", opener(b"nope"))[1],
                              "not an ELF file")
             self.assertFalse(os.path.exists(os.path.join(d, "cog-z-aarch64")))
 
@@ -426,6 +438,14 @@ class MeasuredFile(unittest.TestCase):
                                                 and c["id"].startswith("perf.") for c in got), argv)
         finally:
             conformance.execute = real
+
+
+# The four honesty findings (card b179280a) live in their own module to keep
+# both files under 500 lines; importing the classes makes `python3
+# test_conformance.py` run them too.
+from conformance_honesty_tests import (  # noqa: E402,F401
+    EmulationIsNotMeasured, EngineArch, ExecutedCopy, HashVerifiedBinaries, IntervalClean,
+    LocalBinaryTrust, MalformedInput)
 
 
 if __name__ == "__main__":

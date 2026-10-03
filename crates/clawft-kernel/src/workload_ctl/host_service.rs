@@ -124,6 +124,8 @@ pub struct WorkloadHostService {
     node_id: String,
     key: SigningKey,
     anchors: TrustAnchors,
+    /// Kinds this node accepts for a fetched package (builtin by default).
+    kinds: crate::workload_kind::KindRegistry,
     controllers: Box<dyn ControllerPolicy>,
     nonces: NonceGuard,
     pub(super) routes: BTreeMap<String, Arc<WorkloadHost>>,
@@ -179,6 +181,7 @@ impl WorkloadHostService {
             node_id: node_id_from_pubkey(&key.verifying_key().to_bytes()),
             key,
             anchors,
+            kinds: crate::workload_kind::KindRegistry::builtin(),
             controllers: Box::new(Vec::<[u8; 32]>::new()),
             nonces: NonceGuard::new(),
             routes: BTreeMap::new(),
@@ -194,6 +197,17 @@ impl WorkloadHostService {
             ingest: None,
             revocations: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Accept these workload kinds for a package fetched from a peer. The
+    /// default is [`KindRegistry::builtin`]; a node that places a registered
+    /// non-cog kind across nodes must pass the same registry as its control
+    /// plane, or the fetch refuses the kind.
+    ///
+    /// [`KindRegistry::builtin`]: crate::workload_kind::KindRegistry::builtin
+    pub fn with_kinds(mut self, kinds: crate::workload_kind::KindRegistry) -> Self {
+        self.kinds = kinds;
+        self
     }
 
     /// The revocation list this node enforces (first call wins). With it a
@@ -461,7 +475,7 @@ impl WorkloadHostService {
         let peers = fetch.ok_or_else(|| refuse(RefusalCode::Fetch, "no payload source"))?;
         let pkg = self
             .exchange
-            .fetch_package(peers, &b.manifest_hash, &self.anchors)
+            .fetch_package_in(peers, &b.manifest_hash, &self.anchors, &self.kinds)
             .await
             .map_err(|e| match e {
                 PackageExchangeError::Verify(v) => refuse(RefusalCode::Verify, v.to_string()),

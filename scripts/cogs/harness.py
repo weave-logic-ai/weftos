@@ -35,11 +35,13 @@ import math
 import os
 import platform
 import re
+import shutil
 import socket
 import statistics
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -287,9 +289,31 @@ def _is_json(text):
 
 
 def run_cog(spec, defaults):
-    """Run one cog per `spec` and return its raw result dict."""
+    """Run one cog per `spec` and return its raw result dict.
+
+    The binary is copied into a directory this process owns and made
+    read-only; that copy is what gets hashed and executed, so nothing can
+    swap the file between the hash check and exec.
+    """
+    source = spec["binary"]
+    if not os.path.isfile(source):
+        return _run_cog(spec, defaults, source)
+    shared_uid = any(a == "--run-as" for a in (defaults.get("launcher") or []))
+    # a launcher --run-as runs the cog as another uid, which must read it
+    d_mode, f_mode = (0o755, 0o555) if shared_uid else (0o700, 0o500)
+    private = tempfile.mkdtemp(prefix="cog-run-")
+    try:
+        os.chmod(private, d_mode)
+        copy = os.path.join(private, os.path.basename(source))
+        shutil.copyfile(source, copy)
+        os.chmod(copy, f_mode)
+        return _run_cog(spec, defaults, copy)
+    finally:
+        shutil.rmtree(private, ignore_errors=True)
+
+
+def _run_cog(spec, defaults, binary):
     cid = spec["id"]
-    binary = spec["binary"]
     mode = spec.get("mode", "once")
     interval_s = spec.get("interval", 1)
     timeout = float(spec.get("timeout", defaults["timeout"]))
@@ -306,8 +330,14 @@ def run_cog(spec, defaults):
     if not os.path.isfile(binary):
         result.update(status="missing-binary", rc=None, timed_out=False)
         return result
-    os.chmod(binary, 0o755)
     result["sha256"] = _sha256(binary)
+    expected = spec.get("sha256")
+    if expected is not None and expected != result["sha256"]:
+        # Checked here too, after staging: the cache or the copy to the node
+        # may not be the file that was verified when it was fetched.
+        result.update(status="exec-error", rc=None, timed_out=False,
+                      stderr_tail="sha256 mismatch: expected %s" % expected)
+        return result
     with Fixtures(feed, defaults["udp_port"], defaults["ingest_port"],
                   defaults["ingest_bind"]) as fx:
         time.sleep(0.1)  # let the feed and stub come up

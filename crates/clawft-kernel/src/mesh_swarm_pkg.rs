@@ -15,10 +15,11 @@ use crate::mesh_artifact_pkg::{ExchangedPackage, PackageExchangeError, pinned};
 use crate::mesh_artifact_types::ArtifactKey;
 use crate::mesh_swarm_fetch::{Expect, PeerDialer, SwarmFetchOptions};
 use crate::mesh_swarm_picker::PeerCandidate;
+use crate::workload_kind::KindRegistry;
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 use crate::workload_pkg::manifest::MAX_MANIFEST_BYTES;
-use crate::workload_pkg::verify::{VerifyError, verify_manifest_signatures};
-use crate::workload_pkg::{TrustAnchors, VerifyPolicy, verify_stored};
+use crate::workload_pkg::verify::{VerifyError, verify_manifest_signatures_in};
+use crate::workload_pkg::{TrustAnchors, VerifyPolicy, verify_stored_in};
 
 impl ArtifactExchange {
     /// Fetch a signed package by its manifest hash from `candidates`.
@@ -29,6 +30,27 @@ impl ArtifactExchange {
         manifest_hash: &str,
         anchors: &TrustAnchors,
         opts: &SwarmFetchOptions,
+    ) -> Result<ExchangedPackage, PackageExchangeError> {
+        self.swarm_fetch_package_in(
+            dialer,
+            candidates,
+            manifest_hash,
+            anchors,
+            opts,
+            &KindRegistry::builtin(),
+        )
+        .await
+    }
+
+    /// [`Self::swarm_fetch_package`] against a caller-supplied kind registry.
+    pub async fn swarm_fetch_package_in(
+        self: &Arc<Self>,
+        dialer: Arc<dyn PeerDialer>,
+        candidates: &[PeerCandidate],
+        manifest_hash: &str,
+        anchors: &TrustAnchors,
+        opts: &SwarmFetchOptions,
+        kinds: &KindRegistry,
     ) -> Result<ExchangedPackage, PackageExchangeError> {
         let mh = hex_decode_exact::<32>(manifest_hash).ok_or_else(|| {
             VerifyError::Manifest("manifest hash must be 64 lower-case hex".into())
@@ -51,7 +73,7 @@ impl ArtifactExchange {
             return Err(VerifyError::Manifest("manifest too large".into()).into());
         }
         let manifest = self.read_all(&m.id)?;
-        let verified = verify_manifest_signatures(&manifest, anchors)?;
+        let verified = verify_manifest_signatures_in(&manifest, anchors, kinds)?;
         self.refuse_if_revoked(&verified, anchors, &mh)?;
         let grant = self.authorize(verified.clone(), mh, Vec::new(), anchors);
 
@@ -86,11 +108,12 @@ impl ArtifactExchange {
             files.push((file.path.clone(), got.id));
         }
         if all_small {
-            verify_stored(
+            verify_stored_in(
                 self.store(),
                 &hex_encode(&mh),
                 anchors,
                 &VerifyPolicy::default(),
+                kinds,
             )?;
         }
         Ok(ExchangedPackage { files, ..grant })

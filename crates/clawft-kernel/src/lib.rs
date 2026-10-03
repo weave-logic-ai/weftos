@@ -258,7 +258,7 @@ pub mod gate;
 pub mod governance;
 pub mod governance_project;
 pub mod rule_distribution;
-#[cfg(feature = "exochain")]
+#[cfg(all(feature = "ecc", feature = "exochain"))]
 pub mod placement_vocabulary;
 pub mod health;
 pub mod heartbeat;

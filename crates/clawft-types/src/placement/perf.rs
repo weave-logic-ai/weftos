@@ -66,8 +66,8 @@ pub fn require_cog_cycle_within(
     budget_ms: f64,
 ) -> Result<Requirement, PlacementTypeError> {
     Ok(Requirement::exact(CapabilityId::new(PERF_COG_CYCLE_MS)?)
-        .with_where(AttrPredicate::eq("cog_id", cog_id))
-        .with_where(AttrPredicate::lte(VALUE_ATTR, budget_ms))
+        .try_with_where(AttrPredicate::eq("cog_id", cog_id))?
+        .try_with_where(AttrPredicate::lte(VALUE_ATTR, budget_ms))?
         .with_min_provenance(Provenance::Measured))
 }
 
@@ -77,7 +77,7 @@ pub fn require_infer_tok_s_at_least(
     min_tok_s: f64,
 ) -> Result<Requirement, PlacementTypeError> {
     Ok(Requirement::exact(CapabilityId::new(PERF_INFER_TOK_S)?)
-        .with_where(AttrPredicate::eq("model", model))
-        .with_where(AttrPredicate::gte(VALUE_ATTR, min_tok_s))
+        .try_with_where(AttrPredicate::eq("model", model))?
+        .try_with_where(AttrPredicate::gte(VALUE_ATTR, min_tok_s))?
         .with_min_provenance(Provenance::Measured))
 }

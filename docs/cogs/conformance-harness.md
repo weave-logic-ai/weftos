@@ -124,6 +124,34 @@ every aarch64 cog `--once`, 15 s cap, features feed). The raw prototype lines ar
 ADR-100 and the card text say "7 need seed peers or other CLI", but 93 + 5 + 7 is
 105, not 107. The raw results list nine, and the harness reports nine.
 
+## Honesty rules
+
+- **Emulation is not measurement.** A result counts as native only when the
+  machine that ran it matches the arch (`aarch64`/`arm64` for aarch64; `armv7l`,
+  `armv8l` for arm, plus an aarch64 kernel on a raw node). For a container
+  harness the driving host's machine is checked as well, because an emulated
+  container reports the emulated machine. When `DOCKER_HOST` is set, the
+  engine is asked (`docker info --format {{.Architecture}}`); if that fails the
+  run is not native. An unknown machine is not native. A
+  non-native run emits no `perf.cog.cycle_ms`, upgrades no node capability, and
+  is listed under `emulated` in the sweep summary and the probe output.
+- **Binaries are hash-checked.** Pass `--sha256-manifest` (a JSON map of
+  `cog-<id>-<arch>` to its sha256, at the top level or under `binaries`). With a
+  manifest, every binary must be listed and match, whether downloaded or from
+  `--binary-dir`; an unlisted one is refused. A download that does not match is
+  never written and a mismatching cache entry is discarded. The manifest's trust
+  root is whoever supplies it: the harness proves the files match the manifest,
+  not that the manifest is honest. `--binary-dir` with no manifest runs
+  unverified binaries and needs an explicit `--insecure-local` (it prints a
+  warning). On the node the harness copies each binary into a directory it
+  owns, makes it read-only, hashes that copy, and runs that copy, so the file
+  cannot be swapped between the check and exec.
+- **Interval cogs must cycle.** An `--interval` run is clean only when it was
+  still running at the deadline (or stopped by the launcher) after at least two
+  cycle events. One POST and then silence is `no-output`.
+- **Malformed input is a one-line error** (`error: ...`, exit code 2), not a
+  traceback: node facts, results files, expectations and the manifest.
+
 ## Admission probe and provenance
 
 `probe` runs one cog in its expected run mode. It emits a `perf.cog.cycle_ms`
