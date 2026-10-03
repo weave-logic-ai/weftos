@@ -44,7 +44,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clawft_kernel::cog_ingest::{
@@ -397,6 +397,20 @@ pub async fn start(
     key: &SigningKey,
     projects_dir: Option<Arc<dyn ProjectDirectory>>,
 ) -> Result<IngestRuntime, String> {
+    start_in(cfg, key, projects_dir, None).await
+}
+
+/// Subdirectory of the runtime dir holding the owner's per-project vector logs.
+pub const VECTOR_STORE_DIR: &str = "cog-ingest-vectors";
+
+/// [`start`], keeping the vectors this node owns in `store_dir` (one capped log
+/// per project) so they survive a restart. `None` keeps them in memory only.
+pub async fn start_in(
+    cfg: &IngestConfig,
+    key: &SigningKey,
+    projects_dir: Option<Arc<dyn ProjectDirectory>>,
+    store_dir: Option<PathBuf>,
+) -> Result<IngestRuntime, String> {
     cfg.validate()?;
     let node_id = clawft_kernel::node_id_from_pubkey(&key.verifying_key().to_bytes());
     let routes: Vec<Route> = if cfg.routes.is_empty() {
@@ -422,7 +436,10 @@ pub async fn start(
             }
         }
     }
-    let stores = VectorDirectory::new(std::iter::empty(), false);
+    let mut stores = VectorDirectory::new(std::iter::empty(), false);
+    if let Some(dir) = store_dir {
+        stores = stores.with_persistence(dir);
+    }
     let local_dir = Arc::new(stores.view(local_projects, local_fallback));
 
     let mut router = StaticRouter::new();

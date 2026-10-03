@@ -8,10 +8,12 @@
 //! the same instance already holds that id or a bit-identical value; with
 //! `dedup: false` the id is upserted.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::types::{DIMS, IngestVector};
+#[cfg(feature = "ecc")]
+use super::store_log::{LogRecord, VectorLog};
 
 /// Result of one batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -216,6 +218,8 @@ struct BackendInner {
     /// Backend id -> the (instance, id) it stands for.
     names: HashMap<u64, (String, u64)>,
     values: ValueIndex,
+    /// Durable log of accepted batches; `None` for a memory-only store.
+    log: Option<VectorLog>,
 }
 
 /// Adapter over the kernel's [`VectorBackend`](crate::vector_backend::VectorBackend)
@@ -246,6 +250,72 @@ impl VectorBackendStore {
             inner: Mutex::default(),
         }
     }
+
+    /// Wrap `backend` and keep every accepted batch in the log at `path`
+    /// (capped at `max_log_bytes`). Records already in the log are replayed
+    /// into `backend` first, so a restarted owner has what it had.
+    pub fn persistent(
+        backend: Arc<dyn crate::vector_backend::VectorBackend>,
+        path: &std::path::Path,
+        max_log_bytes: u64,
+    ) -> Result<Self, StoreError> {
+        let (log, records) = VectorLog::open(path, max_log_bytes)
+            .map_err(|e| StoreError::Backend(format!("vector log {}: {e}", path.display())))?;
+        let store = Self::new(backend);
+        {
+            let mut g = store
+                .inner
+                .lock()
+                .map_err(|_| StoreError::Backend("store lock poisoned".into()))?;
+            for r in records {
+                let from = Provenance { instance_id: r.instance, source_node: r.node };
+                let v = IngestVector { id: r.id, values: r.values };
+                store.apply(&mut g, &from, &v, false)?;
+            }
+            g.log = Some(log);
+        }
+        Ok(store)
+    }
+
+    /// Insert one vector into the backend and the indexes. `Ok(true)` when
+    /// written, `Ok(false)` when skipped as a duplicate.
+    fn apply(
+        &self,
+        g: &mut BackendInner,
+        from: &Provenance,
+        v: &IngestVector,
+        dedup: bool,
+    ) -> Result<bool, StoreError> {
+        let inst = &from.instance_id;
+        let bid = backend_id(inst, v.id);
+        let vk = value_key(inst, &v.values);
+        let present = match g.names.get(&bid) {
+            Some((i, id)) if i == inst && *id == v.id => true,
+            Some(_) => {
+                return Err(StoreError::Backend("vector id hash collision".into()));
+            }
+            None => false,
+        };
+        if dedup && (present || g.values.has(&vk)) {
+            return Ok(false);
+        }
+        let meta = serde_json::json!({
+            "instance": from.instance_id,
+            "node": from.source_node,
+            "id": v.id,
+        });
+        self.backend
+            .insert(bid, &format!("cog-ingest:{inst}:{}", v.id), &v.values, meta)
+            .map_err(|e| match e {
+                crate::vector_backend::VectorError::StoreFull { current, .. } => {
+                    StoreError::Full(current)
+                }
+                other => StoreError::Backend(other.to_string()),
+            })?;
+        g.names.insert(bid, (inst.clone(), v.id));
+        g.values.add(vk);
+        Ok(true)
+    }
 }
 
 #[cfg(feature = "ecc")]
@@ -260,38 +330,57 @@ impl IngestStore for VectorBackendStore {
             .inner
             .lock()
             .map_err(|_| StoreError::Backend("store lock poisoned".into()))?;
-        let inst = &from.instance_id;
-        let (mut accepted, mut deduped) = (0, 0);
-        for v in vectors {
-            let bid = backend_id(inst, v.id);
-            let vk = value_key(inst, &v.values);
-            let present = match g.names.get(&bid) {
-                Some((i, id)) if i == inst && *id == v.id => true,
-                Some(_) => {
-                    return Err(StoreError::Backend("vector id hash collision".into()));
-                }
-                None => false,
-            };
-            if dedup && (present || g.values.has(&vk)) {
-                deduped += 1;
-                continue;
+        let mut pending = Vec::new();
+        if let Some(log) = &g.log {
+            // Refuse a batch the log cannot hold before touching the index:
+            // memory never gets ahead of what a restart would restore.
+            let worst: Vec<LogRecord> = vectors
+                .iter()
+                .map(|v| LogRecord {
+                    instance: from.instance_id.clone(),
+                    node: from.source_node.clone(),
+                    id: v.id,
+                    values: v.values,
+                })
+                .collect();
+            if !worst.iter().all(LogRecord::is_encodable) {
+                return Err(StoreError::Backend("instance or node id too long to persist".into()));
             }
-            let meta = serde_json::json!({
-                "instance": from.instance_id,
-                "node": from.source_node,
-                "id": v.id,
-            });
-            self.backend
-                .insert(bid, &format!("cog-ingest:{inst}:{}", v.id), &v.values, meta)
-                .map_err(|e| match e {
-                    crate::vector_backend::VectorError::StoreFull { current, .. } => {
-                        StoreError::Full(current)
+            if !log.has_room_for(&worst) {
+                return Err(StoreError::Full(self.backend.len()));
+            }
+        }
+        let persist = g.log.is_some();
+        let (mut accepted, mut deduped) = (0, 0);
+        let mut failure = None;
+        for v in vectors {
+            match self.apply(&mut g, from, v, dedup) {
+                Ok(true) => {
+                    accepted += 1;
+                    if persist {
+                        pending.push(LogRecord {
+                            instance: from.instance_id.clone(),
+                            node: from.source_node.clone(),
+                            id: v.id,
+                            values: v.values,
+                        });
                     }
-                    other => StoreError::Backend(other.to_string()),
-                })?;
-            g.names.insert(bid, (inst.clone(), v.id));
-            g.values.add(vk);
-            accepted += 1;
+                }
+                Ok(false) => deduped += 1,
+                Err(e) => {
+                    failure = Some(e);
+                    break;
+                }
+            }
+        }
+        // Log what was applied even when the batch failed part way, so the
+        // log and the index agree.
+        if let Some(log) = g.log.as_mut() {
+            log.append(&pending)
+                .map_err(|e| StoreError::Backend(format!("vector log append: {e}")))?;
+        }
+        if let Some(e) = failure {
+            return Err(e);
         }
         Ok(IngestOutcome {
             accepted,
@@ -367,61 +456,5 @@ impl StoreDirectory for StaticDirectory {
             Some(p) => self.projects.lock().ok()?.get(p).cloned(),
             None => self.fallback.lock().ok()?.clone(),
         }
-    }
-}
-
-/// A node's stores for the projects it owns, each an in-memory HNSW index
-/// created on first use (persistence follows the project kernel's store
-/// work; a restart empties them). The index map is shared between
-/// [`views`](Self::view), so two views with different allow-lists (local
-/// cogs, remote forwarders) reach the same store for a project they both
-/// allow.
-#[cfg(feature = "ecc")]
-#[derive(Clone)]
-pub struct VectorDirectory {
-    projects: HashSet<String>,
-    fallback: bool,
-    stores: Arc<Mutex<HashMap<Option<String>, Arc<VectorBackendStore>>>>,
-}
-
-#[cfg(feature = "ecc")]
-impl VectorDirectory {
-    /// Directory owning `projects`, and the controller fallback if `fallback`.
-    pub fn new(projects: impl IntoIterator<Item = String>, fallback: bool) -> Self {
-        Self {
-            projects: projects.into_iter().collect(),
-            fallback,
-            stores: Arc::default(),
-        }
-    }
-
-    /// A view over the same stores allowing only `projects` (and the
-    /// fallback if `fallback`).
-    pub fn view(&self, projects: impl IntoIterator<Item = String>, fallback: bool) -> Self {
-        Self {
-            projects: projects.into_iter().collect(),
-            fallback,
-            stores: self.stores.clone(),
-        }
-    }
-}
-
-#[cfg(feature = "ecc")]
-impl StoreDirectory for VectorDirectory {
-    fn store_for(&self, project_id: Option<&str>) -> Option<Arc<dyn IngestStore>> {
-        match project_id {
-            Some(p) if !self.projects.contains(p) => return None,
-            None if !self.fallback => return None,
-            _ => {}
-        }
-        let mut g = self.stores.lock().ok()?;
-        let s = g.entry(project_id.map(String::from)).or_insert_with(|| {
-            Arc::new(VectorBackendStore::new(Arc::new(
-                crate::vector_hnsw::HnswBackend::new(
-                    crate::hnsw_service::HnswServiceConfig::default(),
-                ),
-            )))
-        });
-        Some(s.clone() as Arc<dyn IngestStore>)
     }
 }

@@ -108,8 +108,16 @@ that would put one project's data in another's store.
 **Where the vectors live (amended 2026-10-02).** On the owner daemon the
 store is a `VectorDirectory`: one in-memory HNSW index per project (plus one
 for the controller fallback), created on first use. The sentence above means
-that store, not a project kernel's durable store; at this point in the
-history a daemon restart empties it.
+that store, not a project kernel's durable store. The owner daemon keeps each
+index recoverable: every accepted batch is appended and synced to a capped log
+`<runtime dir>/cog-ingest-vectors/<project id>.vec` (`_controller.vec` for the
+fallback) before it is acknowledged, and a restarted daemon rebuilds the index
+and its dedup state from that log on the project's first use. Limits: the log
+is capped per project (64 MiB) and a batch past the cap is refused as store
+full; there is no compaction, so repeated upserts of one id use space until the
+cap; the index is rebuilt in memory, so a restart costs time proportional to the
+log. Wiring the owner store to a project kernel's own durable store remains
+follow-up work.
 
 Acceptance runs for the real-hardware card use a **replayed ESP32 feed**
 (recorded or synthetic packets). A live feed is optional and documented

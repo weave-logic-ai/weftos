@@ -23,13 +23,18 @@ pub mod hooks;
 pub mod owner;
 pub mod registry;
 pub mod store;
+pub mod store_log;
 pub mod types;
 pub mod udp;
+#[cfg(feature = "ecc")]
+pub mod vector_dir;
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_forward;
+#[cfg(all(test, feature = "ecc"))]
+mod tests_persist;
 
 pub use bridge::{BridgeConfig, BridgeHandle, BridgeScope, BridgeStats, IngestBridge};
 pub use forward::{
@@ -40,7 +45,9 @@ pub use hooks::{IngestHooks, IngestLease, ProjectDirectory};
 pub use owner::{ForwardPolicy, KeyPolicy, OwnerConnector, StoreOwnerService};
 pub use registry::{InstanceBinding, RateBudget, StaticRouter, StoreRouter, TokenRegistry};
 #[cfg(feature = "ecc")]
-pub use store::{VectorBackendStore, VectorDirectory};
+pub use store::VectorBackendStore;
+#[cfg(feature = "ecc")]
+pub use vector_dir::VectorDirectory;
 pub use store::{
     Hit, IngestOutcome, IngestStore, MemoryIngestStore, Provenance, StaticDirectory, StoreDirectory,
     StoreError,

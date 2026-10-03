@@ -217,3 +217,57 @@ async fn the_owner_service_serves_only_what_store_owner_lists() {
     assert_eq!(post(Some(P2), "i2").await, "502", "B's local-route project is not served to remotes");
     assert_eq!(post(None, "i3").await, "502", "fallback is off");
 }
+
+/// The owner daemon's project store survives a restart: after it comes back
+/// over the same store dir, the same batch is a duplicate, not new.
+#[tokio::test]
+async fn the_owner_daemons_vectors_survive_a_restart() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let tmp = tempfile::tempdir().unwrap();
+    let store_dir = tmp.path().join(VECTOR_STORE_DIR);
+    let k = key(9);
+    let c = cfg(&format!(
+        r#"{{"bridge":{{"bind":"127.0.0.1:0"}},"routes":[{{"project":"{PROJECT}","owner":"local"}}]}}"#
+    ))
+    .unwrap();
+    let post = |rt: &IngestRuntime, inst: &'static str| {
+        let reg = rt.hooks.registry().clone();
+        let addr = rt.bridge_addr.unwrap();
+        async move {
+            let contract = clawft_kernel::workload_runtime::HostContract::default_feed();
+            let token = contract.token.expose().to_string();
+            reg.register(
+                clawft_kernel::cog_ingest::InstanceBinding::new(inst, Some(PROJECT.into()), "ctl"),
+                &contract,
+            )
+            .unwrap();
+            let body = r#"{"vectors":[[1,[0,1,2,3,4,5,6,7]]],"dedup":true}"#;
+            let raw = format!(
+                "POST /api/v1/store/ingest HTTP/1.1\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            s.write_all(raw.as_bytes()).await.unwrap();
+            let mut out = String::new();
+            tokio::time::timeout(Duration::from_secs(10), s.read_to_string(&mut out)).await.unwrap().unwrap();
+            out
+        }
+    };
+
+    let first = start_in(&c, &k, None, Some(store_dir.clone())).await.unwrap();
+    let out = post(&first, "inst").await;
+    assert!(out.contains(r#""accepted":1"#), "{out}");
+    drop(first);
+
+    let second = start_in(&c, &k, None, Some(store_dir.clone())).await.unwrap();
+    let out = post(&second, "inst").await;
+    assert!(out.contains(r#""deduped":1"#) && out.contains(r#""accepted":0"#), "restart kept the vector: {out}");
+    assert!(store_dir.join(format!("{PROJECT}.vec")).is_file());
+    drop(second);
+
+    // Without a store dir (a node that does not persist) the vector is new again.
+    let memory_only = start(&c, &k, None).await.unwrap();
+    let out = post(&memory_only, "inst").await;
+    assert!(out.contains(r#""accepted":1"#), "{out}");
+}
