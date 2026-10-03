@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 mod private;
-use weftos_cog_repo::{sha256_hex, verify_artifact_unrevoked, weavelogic_key, Artifact, CogEntry, Registry, RevokedKeys, VerifyError, SCHEMA};
+use weftos_cog_repo::{check_signable, sha256_hex, verify_artifact_unrevoked, weavelogic_key, Artifact, CogEntry, Registry, RevokedKeys, VerifyError, SCHEMA};
 
 type R<T> = Result<T, String>;
 
@@ -155,6 +155,7 @@ fn sign_tree(from: &str, out: &Path, repo_name: &str, key: &SigningKey) -> R<()>
                 continue;
             }
             let bytes = std::fs::read(&bin).map_err(|e| format!("read {bin:?}: {e}"))?;
+            check_signable(&bytes).map_err(|e| format!("{}: {e}", bin.display()))?;
             let sig = key.sign(&bytes);
             let rel_bin = format!("cogs/{arch}/cog-{id}{suffix}");
             let rel_manifest = format!("cogs/{arch}/manifest-{id}.json");
@@ -373,4 +374,33 @@ fn run(cmd: &str, args: &[&str]) -> R<()> {
 
 fn scp(local: &Path, remote: &str) -> R<()> {
     run("scp", &[local.to_str().ok_or("bad local path")?, remote])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dist_with(payload: &[u8]) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let cog = d.path().join("dist/probe");
+        std::fs::create_dir_all(&cog).unwrap();
+        std::fs::write(cog.join("manifest.json"), br#"{"name":"probe","version":"0.1.0"}"#).unwrap();
+        std::fs::write(cog.join("cog-probe-arm"), payload).unwrap();
+        d
+    }
+
+    #[test]
+    fn sign_tree_refuses_a_release_prefixed_payload_and_signs_an_elf() {
+        let key = SigningKey::from_bytes(&[3; 32]);
+        let d = dist_with(b"weftos-release-v1\n{\"schema\":1,\"kind\":\"weftos-release\"}");
+        let from = d.path().join("dist");
+        let e = sign_tree(from.to_str().unwrap(), &d.path().join("repo"), "t", &key).unwrap_err();
+        assert!(e.contains("reserved"), "{e}");
+        assert!(!d.path().join("repo/registry.json").exists());
+
+        let d = dist_with(b"\x7fELF probe");
+        let from = d.path().join("dist");
+        sign_tree(from.to_str().unwrap(), &d.path().join("repo"), "t", &key).unwrap();
+        assert!(d.path().join("repo/registry.json").is_file());
+    }
 }

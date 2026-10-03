@@ -78,22 +78,73 @@ weaver update --check      # report only; install nothing
 weaver update --dry-run    # show which files would be replaced
 weaver update --restart    # restart the per-user daemon without asking
 weaver update --no-restart # never ask; print the restart command
-weaver update --force      # reinstall even when already on the latest release
+weaver update --force      # reinstall the same version, or update an install with no receipt
 ```
 
-`weaver update` reads `dist-manifest.json` from the latest GitHub Release,
-downloads the archive for this platform, and checks each archive's sha256
-against the published `.sha256` (and `sha256.sum`, when the release has one)
-before anything is installed. A missing, malformed or mismatching checksum
-aborts the update with nothing changed. Archives are unpacked by `weaver`
+`--allow-downgrade` and `--insecure-skip-signature` also exist; see below
+before using either.
+
+`weaver update` reads `dist-manifest.json` from the latest GitHub Release
+and checks that the release is signed before it believes anything in it (see
+below). It then downloads the archive for this platform and checks each
+archive's sha256 against the signed list and against the published `.sha256`
+(and `sha256.sum`, when the release has one) before anything is installed. A
+missing, malformed or mismatching checksum aborts the update with nothing
+changed. Archives are unpacked by `weaver`
 itself: only regular files and directories are written, links, `..` and
 absolute paths are refused, and the unpacked size is capped. Each extracted
 binary is also run once with `--version` to confirm it matches the release.
 
-**The sha256 check gives integrity, not authenticity.** The checksums come
-from the same GitHub release as the archives, so they catch corruption and a
-tampered download, not a compromised release or account. Signature and
-attestation verification are not done yet. Downloads use `curl -q` (your
+**Release signature.** Every release carries `weftos-release.json`, which
+lists the sha256 of every file in the release (`dist-manifest.json`
+included), and `weftos-release.json.sig`, an Ed25519 signature over it by
+the WeaveLogic release key. Release CI makes both. `weaver` has the public key
+compiled in. It is the same key that signs cogs (COG-008), and no file,
+variable or setting replaces it. Before downloading any archive, `weaver
+update` requires:
+
+- the signature to verify under that key;
+- the signed tag to be the manifest's tag;
+- `dist-manifest.json` to hash to its signed entry.
+
+Each archive must then hash to its own signed entry. The `.sha256` files only
+prove integrity: they come from the same release as the archives, so anyone
+who can replace an archive can also rehash it. The signature is what proves
+the release came from WeaveLogic. An unsigned release, a bad signature, a
+signature for another tag, or an archive or manifest that does not match the
+signed list is refused, with nothing downloaded or installed. `--check`
+refuses too, so an unverified version is never reported as available.
+
+The signed list also records when the release was signed (`published`). If
+the latest release was signed more than 90 days ago, `weaver update` warns:
+a mirror or attacker may be serving an old release and hiding newer ones.
+
+If an operator has revoked the release key (a `signer_key` entry in
+`revoked_subjects.json`, the same list cog installs honour), `weaver update`
+refuses everything, `--check` included. It reads the user-level lists
+whatever directory you run it from: `$WEFTOS_RUNTIME_DIR` when set,
+otherwise `~/.weftos/run` and the legacy `~/.clawft`. Inside a project, it
+also adds that project's `.weftos/runtime` list. An unreadable user-level
+list stops the update. An unreadable project list is ignored with a
+warning, so a broken file in a cloned repository cannot block updates. A revoked key means a new key, which can only
+arrive with a new `weaver`. Reinstall out of band from a source you trust,
+following WeaveLogic's key-rotation announcement.
+
+**No downgrades.** `weaver update` never installs a release older than the
+running build, and `--force` does not change that: it only reinstalls the
+same version or confirms an install with no receipt. The receipt also records
+the highest version ever installed through it (`weftos_highest_version`),
+and a release below that is refused as well. This stops a validly signed but
+older release, served as "latest", from rolling you back to fixed bugs.
+`--allow-downgrade` installs the older release anyway, with a warning. A
+downgrade never lowers the recorded highest version.
+
+`--insecure-skip-signature` installs without checking the signature. It
+prints a warning, and the sha256 and archive checks still run. It exists for
+an emergency, such as a release published before signing existed or a lost
+key, and means trusting whoever controls the GitHub release.
+
+Downloads use `curl -q` (your
 `.curlrc` is ignored), https only, at most 5 redirects, and ignore
 `CURL_CA_BUNDLE`, `SSL_CERT_FILE` and `SSL_CERT_DIR`. Standard proxy variables
 (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) still apply.

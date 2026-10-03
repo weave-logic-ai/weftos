@@ -18,6 +18,7 @@ use clawft_rpc::doctor::probe::parse_semver;
 use super::daemon_restart::{Host, Inputs, restart_with};
 use super::update_install::{self as install, Decision, Inject, Method, Plan};
 use super::update_release::{self as release, Release, Source};
+use super::update_signature::Trust;
 use crate::service_units::{LAUNCHD_LABEL, SYSTEMD_UNIT};
 
 /// What the user asked for.
@@ -27,8 +28,11 @@ pub struct Opts {
     pub check: bool,
     /// Show what would be replaced; download and install nothing.
     pub dry_run: bool,
-    /// Reinstall even when already on (or past) the latest release.
+    /// Reinstall the same version, or confirm an install with no receipt.
+    /// Never accepts an older release.
     pub force: bool,
+    /// Accept a release older than this build or the receipt's high-water mark.
+    pub allow_downgrade: bool,
     /// Restart the user daemon without asking.
     pub restart: bool,
     /// Never restart or ask; print the command.
@@ -38,6 +42,9 @@ pub struct Opts {
 /// Everything the update reads from the outside world.
 pub struct Ctx<'a> {
     pub src: Source,
+    /// Release key the signed hash list must verify under. Production passes
+    /// [`Trust::pinned`]; only tests pass anything else.
+    pub trust: Trust,
     pub triple: String,
     pub current_version: String,
     pub current_exe: PathBuf,
@@ -65,6 +72,9 @@ pub enum Outcome {
     DryRun,
     /// Not ours to update; nothing changed.
     Refused { command: String },
+    /// The release is older than this build or than the receipt's mark, and
+    /// `--allow-downgrade` was not given; nothing downloaded.
+    DowngradeRefused { version: String },
     Installed { version: String, daemon_restarted: bool },
 }
 
@@ -167,10 +177,20 @@ fn print_plan(plan: &Plan, rel: &Release, out: &mut dyn Write) -> anyhow::Result
 /// Run the update.
 pub fn execute(ctx: &Ctx<'_>, opts: &Opts, out: &mut dyn Write) -> anyhow::Result<Outcome> {
     let scratch = tempfile::tempdir()?;
-    let rel = release::fetch_latest(&ctx.src, &ctx.triple, scratch.path())?;
+    if matches!(ctx.trust, Trust::Skip) {
+        writeln!(out, "WARNING: --insecure-skip-signature: the release signature is NOT checked.")?;
+        writeln!(out, "WARNING: anyone who can change the GitHub release can choose what gets installed.")?;
+    }
+    let rel = release::fetch_latest(&ctx.src, &ctx.triple, scratch.path(), &ctx.trust)?;
     writeln!(out, "Current: v{}", ctx.current_version)?;
     writeln!(out, "Latest:  v{}", rel.version)?;
     writeln!(out, "Platform: {}", ctx.triple)?;
+    if let Some(signed) = &rel.signed {
+        writeln!(out, "Signature: verified (WeaveLogic release key)")?;
+        if let Some(w) = signed.staleness_warning(chrono::Utc::now()) {
+            writeln!(out, "{w}")?;
+        }
+    }
 
     let (cur, new) = (parse_semver(&ctx.current_version), parse_semver(&rel.version));
     let newer = match (&cur, &new) {
@@ -180,9 +200,18 @@ pub fn execute(ctx: &Ctx<'_>, opts: &Opts, out: &mut dyn Write) -> anyhow::Resul
     let names = rel.binaries();
     let decision = install::decide(&ctx.env, &ctx.current_exe, ctx.dirty, &names);
 
-    if !newer && !opts.force {
-        let ahead = matches!((&cur, &new), (Some(c), Some(n)) if c > n);
-        writeln!(out, "{}", if ahead { "This build is newer than the latest release; not downgrading. Use --force to reinstall." } else { "You are up to date. Use --force to reinstall." })?;
+    let ahead = matches!((&cur, &new), (Some(c), Some(n)) if c > n);
+    if ahead && !opts.allow_downgrade {
+        if opts.force {
+            writeln!(out, "Not downgrading: v{} is older than this build (v{}). --force only reinstalls the same version.", rel.version, ctx.current_version)?;
+            writeln!(out, "To install the older release anyway: weaver update --allow-downgrade")?;
+            return Ok(Outcome::DowngradeRefused { version: rel.version });
+        }
+        writeln!(out, "This build is newer than the latest release; not downgrading. Use --allow-downgrade to install the older release.")?;
+        return Ok(Outcome::UpToDate);
+    }
+    if !newer && !ahead && !opts.force {
+        writeln!(out, "You are up to date. Use --force to reinstall.")?;
         return Ok(Outcome::UpToDate);
     }
     let plan = match decision {
@@ -194,7 +223,18 @@ pub fn execute(ctx: &Ctx<'_>, opts: &Opts, out: &mut dyn Write) -> anyhow::Resul
             return Ok(Outcome::Refused { command });
         }
     };
-    let ahead = matches!((&cur, &new), (Some(c), Some(n)) if c > n);
+    let mark = match &plan.method {
+        Method::Receipt(p) => install::receipt_highest(p).map(|m| (p.clone(), m)),
+        Method::Unmanaged => None,
+    };
+    let below_mark = mark.as_ref().is_some_and(|(_, m)| matches!((parse_semver(m), &new), (Some(m), Some(n)) if *n < m));
+    if below_mark && !opts.allow_downgrade {
+        let (p, m) = mark.as_ref().expect("below_mark implies a mark");
+        writeln!(out, "Not installing v{}: the receipt {} records v{m} as installed before, and an older release can bring back fixed bugs.", rel.version, p.display())?;
+        writeln!(out, "To install it anyway: weaver update --allow-downgrade")?;
+        return Ok(Outcome::DowngradeRefused { version: rel.version });
+    }
+    let downgrade = ahead || below_mark;
     if opts.check {
         writeln!(out, "Update available: v{} -> v{}. Run: weaver update", ctx.current_version, rel.version)?;
         return Ok(Outcome::Available { version: rel.version });
@@ -205,8 +245,9 @@ pub fn execute(ctx: &Ctx<'_>, opts: &Opts, out: &mut dyn Write) -> anyhow::Resul
         writeln!(out, "Dry run: nothing downloaded or installed.")?;
         return Ok(Outcome::DryRun);
     }
-    if ahead {
-        writeln!(out, "warning: downgrading from v{} to v{}", ctx.current_version, rel.version)?;
+    if downgrade {
+        let from = mark.as_ref().filter(|_| below_mark).map_or(ctx.current_version.as_str(), |(_, m)| m.as_str());
+        writeln!(out, "WARNING: --allow-downgrade: downgrading from v{from} to v{}. An older release can bring back fixed vulnerabilities.", rel.version)?;
     }
     if plan.method == Method::Unmanaged && !opts.force {
         let q = format!(

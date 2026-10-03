@@ -18,7 +18,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use clawft_rpc::doctor::DoctorEnv;
 use clawft_rpc::doctor::channel::{Channel, ChannelKind, Sources, remedy_for};
-use clawft_rpc::doctor::probe::probe_version;
+use clawft_rpc::doctor::probe::{parse_semver, probe_version};
 use serde_json::Value;
 
 use super::update_release::Staged;
@@ -380,10 +380,38 @@ fn sync_dir(dir: &Path) {
     let _ = dir;
 }
 
-/// Record the new version in the cargo-dist receipt (atomic; other keys kept).
+/// Receipt key for the highest version ever installed through this receipt.
+/// `weaver update` refuses anything older unless `--allow-downgrade` is given.
+pub const HIGHEST_KEY: &str = "weftos_highest_version";
+
+fn highest_of(v: &Value) -> Option<String> {
+    let mut best: Option<&str> = None;
+    for s in [HIGHEST_KEY, "version"].iter().filter_map(|k| v[*k].as_str()) {
+        let Some(sv) = parse_semver(s) else { continue };
+        if best.and_then(parse_semver).is_none_or(|b| sv > b) {
+            best = Some(s);
+        }
+    }
+    best.map(|s| s.trim_start_matches('v').to_string())
+}
+
+/// The anti-rollback mark: the larger of the receipt's
+/// `weftos_highest_version` and its `version`. `None` when unreadable.
+pub fn receipt_highest(receipt: &Path) -> Option<String> {
+    highest_of(&serde_json::from_str(&std::fs::read_to_string(receipt).ok()?).ok()?)
+}
+
+/// Record the new version in the cargo-dist receipt (atomic; other keys kept),
+/// raising the anti-rollback mark when `version` is above it. A downgrade
+/// never lowers the mark.
 pub fn update_receipt_version(receipt: &Path, version: &str) -> anyhow::Result<()> {
     let mut v: Value = serde_json::from_str(&std::fs::read_to_string(receipt)?)?;
+    if let Some(prior) = highest_of(&v) {
+        v[HIGHEST_KEY] = Value::String(prior);
+    }
     v["version"] = Value::String(version.into());
+    let mark = highest_of(&v).unwrap_or_else(|| version.to_string());
+    v[HIGHEST_KEY] = Value::String(mark);
     let tmp = side(receipt, "new");
     create_new(&tmp)?.write_all(&serde_json::to_vec_pretty(&v)?)?;
     std::fs::rename(&tmp, receipt).inspect_err(|_| {

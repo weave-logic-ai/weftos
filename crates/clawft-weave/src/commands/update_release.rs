@@ -13,10 +13,13 @@
 //!    capped. Each binary is then run once (`--version`) so a wrong-arch or
 //!    wrong-version payload is caught before anything is installed.
 //!
-//! **sha256 gives integrity, not authenticity.** The checksums and the
-//! manifest come from the same GitHub release as the archives, so they catch
-//! corruption and a tampered archive, but not a compromised release or
-//! account. Signature or attestation verification is not done here yet.
+//! 4. Authenticity: `weftos-release.json` lists the sha256 of every release
+//!    asset and is Ed25519-signed by the compiled-in WeaveLogic release key
+//!    (see [`super::update_signature`]). The signature is checked before the
+//!    manifest is trusted, the manifest's own sha256 and tag must match the
+//!    signed list, and every archive must hash to its signed entry. The
+//!    `.sha256` files alone only prove integrity: they come from the same
+//!    release as the archives, so whoever can replace an archive can rehash it.
 //!
 //! Downloads use `curl -q` (no `.curlrc`), https only, at most 5 redirects.
 //! CA-bundle overrides (`CURL_CA_BUNDLE`, `SSL_CERT_FILE`, `SSL_CERT_DIR`) are
@@ -33,6 +36,8 @@ use std::time::Duration;
 use anyhow::{Context, anyhow, bail};
 use clawft_rpc::doctor::probe::{parse_semver, probe_version, sha256_file};
 use serde_json::Value;
+
+use super::update_signature::{self as signature, SignedRelease, Trust};
 
 /// Binaries `weaver update` is willing to install. A manifest naming anything
 /// else is ignored for that entry: a release never gets to pick new file names
@@ -92,6 +97,8 @@ pub struct Release {
     pub version: String,
     pub artifacts: Vec<ReleaseArtifact>,
     pub unified_checksum: Option<String>,
+    /// The verified signed hash list; `None` only under [`Trust::Skip`].
+    pub signed: Option<SignedRelease>,
 }
 
 impl Release {
@@ -195,7 +202,7 @@ pub fn parse_manifest(text: &str, triple: &str) -> anyhow::Result<Release> {
     if !seen.iter().any(|b| b == "weaver") {
         bail!("release {tag} has no weaver binary for {triple}");
     }
-    Ok(Release { tag: tag.into(), version, artifacts, unified_checksum })
+    Ok(Release { tag: tag.into(), version, artifacts, unified_checksum, signed: None })
 }
 
 /// Hash from a `.sha256` file (`<hex>  <file>` or `<hex> *<file>`); when the
@@ -257,10 +264,30 @@ fn fetch_text(src: &Source, url: &str, scratch: &Path) -> anyhow::Result<String>
     std::fs::read_to_string(&f).with_context(|| format!("{url} is not text"))
 }
 
-/// Fetch and parse the latest release's manifest for `triple`.
-pub fn fetch_latest(src: &Source, triple: &str, scratch: &Path) -> anyhow::Result<Release> {
+/// Fetch the latest release's manifest for `triple` and, unless `trust` is
+/// [`Trust::Skip`], verify it against the signed hash list for its tag. A
+/// missing or bad signature fails here, before anything else is believed.
+pub fn fetch_latest(src: &Source, triple: &str, scratch: &Path, trust: &Trust) -> anyhow::Result<Release> {
+    if let Trust::Pinned { key, revoked } = trust {
+        signature::check_not_revoked(key, revoked)?;
+    }
     let text = fetch_text(src, &src.manifest_url(), scratch)?;
-    parse_manifest(&text, triple)
+    let mut rel = parse_manifest(&text, triple)?;
+    let Trust::Pinned { key, .. } = trust else {
+        return Ok(rel);
+    };
+    let missing = |what: &str| format!("release {} has no {what}; refusing an unsigned release", rel.tag);
+    let doc = fetch_text(src, &src.asset_url(&rel.tag, signature::SIGNED_DOC), scratch)
+        .with_context(|| missing(signature::SIGNED_DOC))?;
+    let sig = fetch_text(src, &src.asset_url(&rel.tag, signature::SIGNATURE), scratch)
+        .with_context(|| missing(signature::SIGNATURE))?;
+    let signed = signature::verify(doc.as_bytes(), &sig, key)?;
+    if signed.tag != rel.tag {
+        bail!("signed release is for {}, but the manifest says {}", signed.tag, rel.tag);
+    }
+    signed.check(signature::MANIFEST, &signature::sha256_hex(text.as_bytes()))?;
+    rel.signed = Some(signed);
+    Ok(rel)
 }
 
 /// Run `bin --version` and require it to report `version`.
@@ -358,6 +385,9 @@ pub fn stage(
         if got != want {
             bail!("checksum mismatch for {}: published {want}, downloaded {got}", art.name);
         }
+        if let Some(s) = &release.signed {
+            s.check(&art.name, &got)?;
+        }
         if let Some(text) = &unified {
             match find_in_unified(text, &art.name) {
                 Some(u) if u == want => {}
@@ -365,7 +395,8 @@ pub fn stage(
                 None => bail!("sha256.sum does not list {}", art.name),
             }
         }
-        writeln!(out, "  sha256 verified {}", &got[..16])?;
+        let signed = if release.signed.is_some() { " (matches the signed release)" } else { "" };
+        writeln!(out, "  sha256 verified {}{signed}", &got[..16])?;
         let dir = staging.join(format!("x-{}", art.name));
         std::fs::create_dir_all(&dir)?;
         extract(&tarball, &dir, src.max_extract_bytes)

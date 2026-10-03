@@ -1,11 +1,12 @@
 //! `weaver update` / `weft update` — verified, receipt-aware self-update.
 //!
-//! Fetches the latest GitHub Release, verifies every archive against its
-//! published sha256 and `dist-manifest.json`, then replaces every binary of
+//! Fetches the latest GitHub Release, verifies its Ed25519 signature with the
+//! compiled-in WeaveLogic release key and every archive against the signed
+//! sha256 list and `dist-manifest.json`, then replaces every binary of
 //! the release set together, with rollback. It refuses to touch Homebrew,
 //! `cargo install` and source-build copies and prints their own update
 //! command instead. See [`super::update_flow`] for the sequence and
-//! `docs/guides/updating.md` for the user-facing behaviour.
+//! `docs/deployment/install.md#updating` for the user-facing behaviour.
 
 use std::io::{IsTerminal, Write};
 
@@ -15,6 +16,7 @@ use clawft_rpc::doctor::DoctorEnv;
 use super::daemon_restart::{self, RealHost};
 use super::update_flow::{Ctx, Opts, Outcome, execute};
 use super::update_release::Source;
+use super::update_signature::Trust;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -27,15 +29,21 @@ pub struct UpdateFlags {
     /// Show which binaries would be replaced; download and install nothing.
     #[arg(long)]
     pub dry_run: bool,
-    /// Reinstall even if already on the latest release.
+    /// Reinstall the same version, or proceed without an install receipt. Never installs an older release.
     #[arg(long)]
     pub force: bool,
+    /// Install a release older than this build or than the highest version installed before. Unsafe.
+    #[arg(long)]
+    pub allow_downgrade: bool,
     /// Restart the per-user daemon after installing, without asking.
     #[arg(long, conflicts_with = "no_restart")]
     pub restart: bool,
     /// Never restart or ask; print the restart command.
     #[arg(long)]
     pub no_restart: bool,
+    /// Install a release without checking its WeaveLogic signature (sha256 still checked). Unsafe.
+    #[arg(long)]
+    pub insecure_skip_signature: bool,
 }
 
 /// `weaver update` arguments.
@@ -89,8 +97,18 @@ fn running_as_sudo_root() -> bool {
 
 fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
+    let trust = if flags.insecure_skip_signature {
+        Trust::Skip
+    } else {
+        let (trust, warnings) = Trust::pinned()?;
+        for w in warnings {
+            println!("{w}");
+        }
+        trust
+    };
     let ctx = Ctx {
         src: Source::github(),
+        trust,
         triple: detect_target_triple().to_string(),
         current_version: CURRENT_VERSION.to_string(),
         dirty: option_env!("BUILD_VERSION").is_some_and(|v| v.contains("-dirty")),
@@ -107,12 +125,16 @@ fn run_with(flags: UpdateFlags) -> anyhow::Result<()> {
         check: flags.check,
         dry_run: flags.dry_run,
         force: flags.force,
+        allow_downgrade: flags.allow_downgrade,
         restart: flags.restart,
         no_restart: flags.no_restart,
     };
     let outcome = execute(&ctx, &opts, &mut std::io::stdout())?;
     match outcome {
         Outcome::Refused { .. } => anyhow::bail!("update refused: this install is managed elsewhere"),
+        Outcome::DowngradeRefused { version } => {
+            anyhow::bail!("update refused: v{version} is older than what is installed (see --allow-downgrade)")
+        }
         Outcome::Installed { .. } => print_service_update_lines(),
         _ => {}
     }

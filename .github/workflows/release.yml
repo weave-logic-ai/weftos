@@ -25,6 +25,10 @@
 # host/announce a publishing run unless local+global builds succeeded.
 # Re-apply this patch if you regenerate release.yml via `dist generate`.
 #
+# Card a8dbfb3b (hand-patch): the host job runs scripts/release/sign-release.sh
+# before `gh release create`, adding weftos-release.json(.sig). `weaver update`
+# refuses a release without them. Re-apply after `dist generate` too.
+#
 # WEFT-476 (hand-patch): parallel `build-wasi` job calls the reusable
 # release-wasi.yml workflow and stages wasm32-wasip2 artefacts under the
 # `artifacts-*` name pattern. The host job requires build-wasi success on
@@ -63,7 +67,8 @@ on:
   pull_request:
   push:
     tags:
-      - '**[0-9]+.[0-9]+.[0-9]+*'
+      # Every release tag is v-prefixed; sign-release.sh accepts the same set.
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
@@ -320,6 +325,9 @@ jobs:
     # WEFT-476: also require build-wasi so the GitHub Release always ships the
     # wasm32-wasip2 artefact without a post-hoc poll/upload race.
     if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.build-global-artifacts.result == 'success' && needs.build-local-artifacts.result == 'success' && needs.build-wasi.result == 'success' }}
+    # The release signing key lives in the protected `release` environment
+    # (v* tags only, required reviewer); see docs/deployment/release.md.
+    environment: release
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
@@ -386,6 +394,15 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      # Card a8dbfb3b: sign the hash list of every file about to be uploaded
+      # (dist-manifest.json included) with the WeaveLogic release key, the
+      # COG-008 key `weaver update` pins. No secret, no release: the script
+      # fails, and with it this job, before `gh release create` runs.
+      - name: Sign release (weftos-release.json + .sig)
+        env:
+          WEAVELOGIC_RELEASE_KEY: ${{ secrets.WEAVELOGIC_RELEASE_KEY }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: scripts/release/sign-release.sh artifacts "$RELEASE_TAG"
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ steps.host.outputs.is_prerelease == 'true' && '--prerelease' || '' }}"

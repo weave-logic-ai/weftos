@@ -10,11 +10,23 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clawft_rpc::doctor::probe::sha256_file;
+use ed25519_dalek::{Signer, SigningKey};
 
 use super::update_release::Source;
+use super::update_signature::{DOMAIN, SIGNATURE, SIGNED_DOC, Trust};
+use weftos_cog_repo::RevokedKeys;
 
 pub const TRIPLE: &str = "test-triple";
 pub const BINS: [(&str, &str); 3] = [("weft", "clawft-cli"), ("weaver", "clawft-weave"), ("weftos", "weftos")];
+
+/// Throwaway release key the mock signs with; never the real one.
+pub fn test_key() -> SigningKey {
+    SigningKey::from_bytes(&[0x5a; 32])
+}
+
+pub fn test_trust() -> Trust {
+    Trust::Pinned { key: test_key().verifying_key(), revoked: RevokedKeys::none() }
+}
 
 pub type Routes = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 
@@ -56,7 +68,8 @@ impl Mock {
     }
 
     pub fn asset_requests(&self) -> usize {
-        self.log.lock().unwrap().iter().filter(|p| p.contains("/download/v")).count()
+        let sig_file = |p: &str| p.ends_with(SIGNED_DOC) || p.ends_with(SIGNATURE);
+        self.log.lock().unwrap().iter().filter(|p| p.contains("/download/v") && !sig_file(p)).count()
     }
 }
 
@@ -133,8 +146,35 @@ fn evil_tar(path: &Path, kind: Evil) {
     b.into_inner().unwrap().finish().unwrap();
 }
 
+/// How (or whether) the mock signs the release.
+#[derive(Default, Clone, Copy, PartialEq)]
+pub enum Sign {
+    #[default]
+    Good,
+    /// Neither `weftos-release.json` nor its signature.
+    Unsigned,
+    /// The hash list without a signature.
+    NoSig,
+    /// Signed by some other key.
+    WrongKey,
+    /// The signature file is not hex.
+    Garbage,
+    /// Signed over the raw document, without the domain prefix.
+    NoDomain,
+    /// A correctly signed hash list, but for another tag (a replay).
+    OtherTag,
+    /// After signing, replace this archive and republish matching `.sha256`
+    /// and `sha256.sum`: what someone holding the release (not the key) can do.
+    TamperRehash(&'static str),
+    /// After signing, edit `dist-manifest.json`.
+    TamperManifest,
+}
+
 #[derive(Default, Clone)]
 pub struct Rel {
+    pub sign: Sign,
+    /// The signed `published` time (default: now).
+    pub published: Option<&'static str>,
     /// Make the `weftos` archive hostile (checksums are still published and valid).
     pub evil: Option<Evil>,
     /// Version the binaries inside the archives report (defaults to the release's).
@@ -147,6 +187,42 @@ pub struct Rel {
     pub no_sha: Option<&'static str>,
 }
 
+fn make_tar(work: &Path, stage: &str, stem: &str, bin: &str, content: &str) -> std::path::PathBuf {
+    let dir = work.join(format!("{stage}-{stem}/{stem}-{TRIPLE}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(bin), content).unwrap();
+    let tarball = work.join(format!("{stage}-{stem}-{TRIPLE}.tar.gz"));
+    let st = Command::new("tar")
+        .arg("czf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(work.join(format!("{stage}-{stem}")))
+        .arg(format!("{stem}-{TRIPLE}"))
+        .status()
+        .unwrap();
+    assert!(st.success());
+    tarball
+}
+
+fn sign_doc(key: &SigningKey, doc: &[u8], domain: bool) -> Vec<u8> {
+    let mut m = if domain { DOMAIN.to_vec() } else { Vec::new() };
+    m.extend_from_slice(doc);
+    format!("{}\n", hex::encode(key.sign(&m).to_bytes())).into_bytes()
+}
+
+/// The signed hash list over every published file of `tag`, as CI writes it.
+pub fn hash_doc(routes: &HashMap<String, Vec<u8>>, tag: &str, doc_tag: &str, published: &str) -> Vec<u8> {
+    let prefix = format!("/r/download/{tag}/");
+    let mut assets = std::collections::BTreeMap::new();
+    for (path, body) in routes {
+        if let Some(name) = path.strip_prefix(&prefix) {
+            assets.insert(name.to_string(), super::update_signature::sha256_hex(body));
+        }
+    }
+    serde_json::to_vec_pretty(&serde_json::json!({"schema": 1, "kind": "weftos-release", "tag": doc_tag, "published": published, "assets": assets}))
+        .unwrap()
+}
+
 pub fn publish(mock: &Mock, work: &Path, version: &str, rel: &Rel) {
     let tag = format!("v{version}");
     let mut routes = mock.routes.lock().unwrap();
@@ -154,19 +230,7 @@ pub fn publish(mock: &Mock, work: &Path, version: &str, rel: &Rel) {
     let mut unified = String::new();
     for (bin, stem) in BINS {
         let name = format!("{stem}-{TRIPLE}.tar.gz");
-        let dir = work.join(format!("stage-{stem}/{stem}-{TRIPLE}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(bin), script(bin, rel.payload_version.unwrap_or(version))).unwrap();
-        let tarball = work.join(&name);
-        let st = Command::new("tar")
-            .arg("czf")
-            .arg(&tarball)
-            .arg("-C")
-            .arg(work.join(format!("stage-{stem}")))
-            .arg(format!("{stem}-{TRIPLE}"))
-            .status()
-            .unwrap();
-        assert!(st.success());
+        let tarball = make_tar(work, "stage", stem, bin, &script(bin, rel.payload_version.unwrap_or(version)));
         if stem == "weftos" && let Some(k) = rel.evil {
             evil_tar(&tarball, k);
         }
@@ -188,7 +252,49 @@ pub fn publish(mock: &Mock, work: &Path, version: &str, rel: &Rel) {
     }
     arts.insert("sha256.sum".into(), serde_json::json!({"name": "sha256.sum", "kind": "unified-checksum"}));
     routes.insert(format!("/r/download/{tag}/sha256.sum"), unified.into_bytes());
-    let manifest = serde_json::json!({"announcement_tag": tag, "artifacts": arts});
-    routes.insert("/r/latest/download/dist-manifest.json".into(), manifest.to_string().into_bytes());
+    let manifest = serde_json::json!({"announcement_tag": tag, "artifacts": arts}).to_string().into_bytes();
+    // CI uploads dist-manifest.json as a release asset; `latest/` redirects to it.
+    routes.insert(format!("/r/download/{tag}/dist-manifest.json"), manifest.clone());
+    routes.insert("/r/latest/download/dist-manifest.json".into(), manifest);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    sign_release(&mut routes, work, version, rel.sign, rel.published.unwrap_or(&now));
+}
+
+fn sign_release(routes: &mut HashMap<String, Vec<u8>>, work: &Path, version: &str, mode: Sign, published: &str) {
+    let tag = format!("v{version}");
+    let at = |n: &str| format!("/r/download/{tag}/{n}");
+    let doc_tag = if mode == Sign::OtherTag { "v0.8.5" } else { tag.as_str() };
+    let doc = hash_doc(routes, &tag, doc_tag, published);
+    let sig = match mode {
+        Sign::WrongKey => sign_doc(&SigningKey::from_bytes(&[9; 32]), &doc, true),
+        Sign::Garbage => b"not a signature\n".to_vec(),
+        Sign::NoDomain => sign_doc(&test_key(), &doc, false),
+        _ => sign_doc(&test_key(), &doc, true),
+    };
+    if mode != Sign::Unsigned {
+        routes.insert(at(SIGNED_DOC), doc);
+    }
+    if !matches!(mode, Sign::Unsigned | Sign::NoSig) {
+        routes.insert(at(SIGNATURE), sig);
+    }
+    match mode {
+        Sign::TamperRehash(stem) => {
+            let (bin, _) = BINS.iter().find(|(_, s)| *s == stem).copied().unwrap();
+            let evil = format!("{}# backdoor\n", script(bin, version));
+            let tarball = make_tar(work, "evil", stem, bin, &evil);
+            let name = format!("{stem}-{TRIPLE}.tar.gz");
+            let sha = sha256_file(&tarball).unwrap();
+            let old = super::update_signature::sha256_hex(&routes[&at(&name)]);
+            routes.insert(at(&name), std::fs::read(&tarball).unwrap());
+            routes.insert(at(&format!("{name}.sha256")), format!("{sha}  {name}\n").into_bytes());
+            let sum = String::from_utf8(routes[&at("sha256.sum")].clone()).unwrap().replace(&old, &sha);
+            routes.insert(at("sha256.sum"), sum.into_bytes());
+        }
+        Sign::TamperManifest => {
+            let m = routes.get_mut("/r/latest/download/dist-manifest.json").unwrap();
+            m.splice(1..1, br#""note":"edited","#.iter().copied());
+        }
+        _ => {}
+    }
 }
 
