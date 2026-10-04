@@ -1204,6 +1204,7 @@ pub async fn run(
     // in service mode the box key belongs to the mesh service, so placement and
     // the licence steward sign with a daemon-local control key instead
     // (ADR-106 phase 3, `placement_boot`).
+    crate::fleet_labels::init(&runtime_dir);
     #[cfg(all(feature = "placement", unix))]
     crate::placement_boot::start(&kernel, &daemon_identity, &runtime_dir).await;
     // mesh-placement-03: probe, sign and cache this node's facts. In service
@@ -6302,18 +6303,7 @@ async fn dispatch(
             let nodes: Vec<ClusterNodeInfo> = peers
                 .iter()
                 .map(|(id, state, platform)| {
-                    let peer = membership.get_peer(id);
-                    ClusterNodeInfo {
-                        node_id: id.clone(),
-                        name: peer
-                            .as_ref()
-                            .map(|p| p.name.clone())
-                            .unwrap_or_else(|| id.clone()),
-                        platform: platform.to_string(),
-                        state: state.to_string(),
-                        address: peer.and_then(|p| p.address),
-                        last_seen: String::new(),
-                    }
+                    ClusterNodeInfo::from_peer(id, state, platform, membership.get_peer(id))
                 })
                 .collect();
             Response::success(serde_json::to_value(nodes).unwrap())
@@ -6467,12 +6457,7 @@ async fn dispatch(
                                     }
                                     if parts.is_empty() {
                                         // Fallback: show first 60 chars of payload
-                                        let s = p.to_string();
-                                        if s.len() > 60 {
-                                            format!("{}...", &s[..60])
-                                        } else {
-                                            s
-                                        }
+                                        crate::fleet_labels::truncate_chars(&p.to_string(), 60)
                                     } else {
                                         parts.join(" ")
                                     }

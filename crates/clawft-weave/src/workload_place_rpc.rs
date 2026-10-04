@@ -117,6 +117,28 @@ pub fn in_process_host() -> Option<Arc<WorkloadHostService>> {
     HOST.get().cloned()
 }
 
+/// Read-only controller view for `fleet.snapshot`: known targets and placed
+/// instances with the controller's own lifecycle record. Memory only, no
+/// peer is contacted (`workload.status` is a Write verb because it does
+/// contact them). `None` until the control plane is built.
+pub fn controller_view() -> Option<Value> {
+    let plane = PLANE.get()?;
+    let instances: Vec<Value> = plane
+        .placements()
+        .into_iter()
+        .map(|rec| {
+            let lifecycle = plane.life_summary(&rec.instance_id);
+            json!({ "placement": rec, "lifecycle": lifecycle })
+        })
+        .collect();
+    Some(json!({
+        "controller": plane.node_id(),
+        "targets": plane.targets(),
+        "instances": instances,
+        "unsettled": plane.unsettled().len(),
+    }))
+}
+
 /// The daemon's runtime directory (where the operator's policy files are),
 /// once [`init`] ran.
 pub fn runtime_dir() -> Option<PathBuf> {

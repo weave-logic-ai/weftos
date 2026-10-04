@@ -229,7 +229,33 @@ pub struct ClusterNodeInfo {
     pub platform: String,
     pub state: String,
     pub address: Option<String>,
-    pub last_seen: String,
+    /// RFC 3339 time the membership last heard a verified join, recovery or announce
+    /// from the peer (not liveness: nothing pings peers); empty when the membership
+    /// has no record of the peer.
+    #[serde(alias = "last_seen")]
+    pub last_announce: String,
+}
+
+impl ClusterNodeInfo {
+    /// Row for `cluster.nodes` from a membership entry. `peer` is the full
+    /// record (`None` if it vanished between the list and the lookup).
+    pub fn from_peer(
+        id: &str,
+        state: &impl std::fmt::Display,
+        platform: &impl std::fmt::Display,
+        peer: Option<clawft_kernel::PeerNode>,
+    ) -> Self {
+        Self {
+            node_id: id.to_owned(),
+            name: peer.as_ref().map_or_else(|| id.to_owned(), |p| p.name.clone()),
+            platform: platform.to_string(),
+            state: state.to_string(),
+            last_announce: peer.as_ref().map_or_else(String::new, |p| {
+                p.last_heartbeat.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            }),
+            address: peer.and_then(|p| p.address),
+        }
+    }
 }
 
 /// A single shard entry for `cluster.shards`.

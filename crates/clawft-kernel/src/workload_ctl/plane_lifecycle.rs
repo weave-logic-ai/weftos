@@ -175,6 +175,20 @@ impl PlacementControlPlane {
             .and_then(|l| l.get(instance_id).map(|c| c.life.state))
     }
 
+    /// `{state, restarts, reschedules, has_error}` the controller holds for
+    /// `instance_id`; in memory only, no peer is contacted. The error text is
+    /// withheld (it can carry paths and peer detail).
+    pub fn life_summary(&self, instance_id: &str) -> Option<Value> {
+        self.life_of(instance_id).map(|c| {
+            json!({
+                "state": c.life.state,
+                "restarts": c.life.restarts.len(),
+                "reschedules": c.reschedules,
+                "has_error": c.last_error.is_some(),
+            })
+        })
+    }
+
     pub(super) fn life_of(&self, instance_id: &str) -> Option<ControllerLife> {
         self.lives.lock().ok().and_then(|l| l.get(instance_id).cloned())
     }

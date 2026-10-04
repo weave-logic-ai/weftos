@@ -401,6 +401,18 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::token_rpc::handle,
     },
+    // Fleet manager P1: the snapshot is read-only and contacts no peer; a
+    // location label is an operator decision recorded on the chain.
+    ExtRoute {
+        prefix: "fleet.snapshot",
+        capability: Capability::Read,
+        handler: crate::fleet_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "fleet.location.set",
+        capability: Capability::Admin,
+        handler: crate::fleet_rpc::handle,
+    },
     // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
     // handler resolves the project itself (token scope or Admin) and refuses
     // anonymous callers; `Write` is the floor.
@@ -591,6 +603,18 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "auth.token.validate",
         capability: Capability::Read,
         handler: crate::token_rpc::handle,
+    },
+    // Fleet manager P1: the snapshot is read-only and contacts no peer; a
+    // location label is an operator decision recorded on the chain.
+    ExtRoute {
+        prefix: "fleet.snapshot",
+        capability: Capability::Read,
+        handler: crate::fleet_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "fleet.location.set",
+        capability: Capability::Admin,
+        handler: crate::fleet_rpc::handle,
     },
     // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
     // handler resolves the project itself (token scope or Admin) and refuses

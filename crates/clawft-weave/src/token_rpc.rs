@@ -26,7 +26,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::Duration;
 use clawft_kernel::boot::Kernel;
-use clawft_kernel::token_authority::{Issuer, MAX_TTL, SECRET_PREFIX, TokenAuthority, TokenInfo};
+use clawft_kernel::token_authority::{
+    Issuer, MAX_TTL, SECRET_PREFIX, TokenAuthority, TokenInfo, TokenScope,
+};
 use clawft_platform::NativePlatform;
 use clawft_rpc::Response;
 use clawft_types::runtime_paths::RuntimePaths;
@@ -254,8 +256,16 @@ fn issue(authority: &TokenAuthority, params: &Value) -> Response {
             None => return Response::error("auth.token.issue: 'project' must be a ULID"),
         },
     };
+    let scope = match params.get("scope").and_then(Value::as_str) {
+        None | Some("owner") => TokenScope::Owner,
+        Some("read") => TokenScope::Read,
+        Some(_) => return Response::error("auth.token.issue: 'scope' must be 'owner' or 'read'"),
+    };
+    if scope == TokenScope::Read && project.is_some() {
+        return Response::error("auth.token.issue: a read-only token cannot be scoped to a project");
+    }
     let issuer = Issuer { uid: local_uid() };
-    match authority.issue(label, ttl, project, &issuer) {
+    match authority.issue_scoped_at(chrono::Utc::now(), label, ttl, project, scope, &issuer) {
         Ok((secret, info)) => {
             let mut v = info_json(&info);
             v["secret"] = json!(secret);

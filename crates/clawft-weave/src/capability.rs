@@ -88,6 +88,8 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-106: withdrawing a Seed binding is the same trust change.
         "workload.node.unbind" => Capability::Admin,
         "workload.node.reset-floor" => Capability::Admin,
+        // Fleet manager: a location label is an operator decision on the chain.
+        "fleet.location.set" => Capability::Admin,
         // ADR-106 phase 3: an operator hash approval is a trust change, and a
         // checkout spends the Seed's licence and transfer budget.
         "workload.cog.checkout.approve" => Capability::Admin,
@@ -209,7 +211,13 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-106 phase 3: grants, approvals and the run gate per artifact.
         | "workload.cog.checkout.status"
         | "workload.cog.checkout.list"
-        | "infer.status" => Capability::Read,
+        | "infer.status"
+        // Fleet manager: one read-only document composed from sources the
+        // daemon already holds; contacts no peer and no device.
+        | "fleet.snapshot" => Capability::Read,
+
+        // An unclassified `fleet.*` verb is a mutation, never anonymous Read.
+        m if m.starts_with("fleet.") => Capability::Admin,
 
         // An unclassified `infer.*` verb is a mutation, never anonymous Read.
         m if m.starts_with("infer.") => Capability::Admin,

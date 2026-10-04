@@ -6,12 +6,19 @@
 //! token), so nothing may treat the roster as trusted input (no placement, scheduling or policy
 //! decisions read it; only `/network` does). Inputs are therefore bounded: at most [`MAX_NODES`]
 //! nodes (oldest evicted), string fields capped, numbers range-checked.
+//!
+//! Heartbeat v2 adds optional `uptime_s`, `load`, `free_heap`, `reset_reason`, `chip`, `mac`,
+//! `channel` and `sample_hz`. A v1 heartbeat (without them) is accepted unchanged. Every roster row
+//! carries `"provenance": "self_reported"`: the node said it, nothing here was verified, and the
+//! console must label it so.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Label on every roster row: the node reported it about itself and nothing verified it.
+pub const PROVENANCE: &str = "self_reported";
 const ONLINE_TTL: u64 = 60; // seen within 60 s = online
 const DROP_TTL: u64 = 3600; // forget after 1 h unseen
 /// Roster size cap; the least recently seen node is evicted for a new one.
@@ -20,6 +27,15 @@ const ID_CAP: usize = 64;
 const FIELD_CAP: usize = 128;
 /// Request body cap for `/fleet/heartbeat`.
 pub const HEARTBEAT_BODY_CAP: usize = 4 * 1024;
+
+/// `aa:bb:cc:dd:ee:ff` (colons or dashes in, lowercase colons out); anything else is dropped.
+fn normalize_mac(s: &str) -> Option<String> {
+    let parts: Vec<&str> = s.trim().split([':', '-']).collect();
+    if parts.len() != 6 || !parts.iter().all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit())) {
+        return None;
+    }
+    Some(parts.join(":").to_ascii_lowercase())
+}
 
 fn clean(s: &str, cap: usize) -> String {
     s.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(cap).collect()
@@ -41,6 +57,25 @@ pub struct Heartbeat {
     pub fw: Option<String>,
     #[serde(default)]
     pub ip: Option<String>,
+    // ---- v2 (all optional, self-reported) ----
+    #[serde(default)]
+    pub uptime_s: Option<u64>,
+    /// Load as a fraction of one core (0.0 idle, 1.0 one core busy); may exceed 1 on multi-core.
+    #[serde(default)]
+    pub load: Option<f64>,
+    #[serde(default)]
+    pub free_heap: Option<u64>,
+    #[serde(default)]
+    pub reset_reason: Option<String>,
+    #[serde(default)]
+    pub chip: Option<String>,
+    #[serde(default)]
+    pub mac: Option<String>,
+    /// WiFi channel.
+    #[serde(default)]
+    pub channel: Option<u32>,
+    #[serde(default)]
+    pub sample_hz: Option<f64>,
 }
 
 #[derive(Clone, Default)]
@@ -51,8 +86,23 @@ struct Node {
     rssi: Option<i32>,
     battery: Option<f64>,
     fw: String,
+    uptime_s: Option<u64>,
+    load: Option<f64>,
+    free_heap: Option<u64>,
+    reset_reason: String,
+    chip: String,
+    mac: String,
+    channel: Option<u32>,
+    sample_hz: Option<f64>,
     last_seen: u64,
 }
+
+/// Upper bounds for self-reported numbers; anything past them is ignored, not stored.
+const MAX_UPTIME_S: u64 = 10 * 365 * 86_400;
+const MAX_LOAD: f64 = 1000.0;
+const MAX_HEAP: u64 = 1 << 40;
+const MAX_CHANNEL: u32 = 196;
+const MAX_SAMPLE_HZ: f64 = 1_000_000.0;
 
 #[derive(Default)]
 pub struct Fleet {
@@ -89,6 +139,16 @@ impl Fleet {
         if let Some(b) = h.battery.filter(|b| b.is_finite() && (0.0..=100.0).contains(b)) {
             n.battery = Some(b);
         }
+        // v2: a heartbeat is a full report, so a field it omits or sends out of
+        // range is cleared rather than left stale from an earlier one.
+        n.uptime_s = h.uptime_s.filter(|u| *u <= MAX_UPTIME_S);
+        n.load = h.load.filter(|l| l.is_finite() && (0.0..=MAX_LOAD).contains(l));
+        n.free_heap = h.free_heap.filter(|m| *m <= MAX_HEAP);
+        n.channel = h.channel.filter(|c| (1..=MAX_CHANNEL).contains(c));
+        n.sample_hz = h.sample_hz.filter(|r| r.is_finite() && (0.0..=MAX_SAMPLE_HZ).contains(r));
+        n.reset_reason = h.reset_reason.as_deref().map(|r| clean(r, FIELD_CAP)).unwrap_or_default();
+        n.chip = h.chip.as_deref().map(|c| clean(c, FIELD_CAP)).unwrap_or_default();
+        n.mac = h.mac.as_deref().and_then(normalize_mac).unwrap_or_default();
         if let Some(ip) = h.ip.as_deref().map(|s| clean(s, FIELD_CAP)).filter(|s| !s.is_empty()).or(peer_ip) {
             n.ip = ip;
         }
@@ -116,8 +176,17 @@ impl Fleet {
                         "rssi": v.rssi,
                         "battery": v.battery,
                         "fw": v.fw,
+                        "uptime_s": v.uptime_s,
+                        "load": v.load,
+                        "free_heap": v.free_heap,
+                        "reset_reason": v.reset_reason,
+                        "chip": v.chip,
+                        "mac": v.mac,
+                        "channel": v.channel,
+                        "sample_hz": v.sample_hz,
                         "age_s": age,
                         "online": online,
+                        "provenance": PROVENANCE,
                     }),
                 )
             })
@@ -148,7 +217,7 @@ mod tests {
     fn heartbeat_upserts_and_reports_online() {
         let mut f = Fleet::default();
         f.heartbeat(
-            &Heartbeat { id: "esp-01".into(), kind: Some("esp32".into()), sensor: Some("ecg".into()), rssi: Some(-55), battery: Some(3.9), fw: Some("0.1".into()), ip: None },
+            &Heartbeat { kind: Some("esp32".into()), sensor: Some("ecg".into()), rssi: Some(-55), battery: Some(3.9), fw: Some("0.1".into()), ..hb("esp-01") },
             Some("192.168.1.50".into()),
         );
         let r = f.roster();
@@ -162,7 +231,23 @@ mod tests {
     }
 
     fn hb(id: &str) -> Heartbeat {
-        Heartbeat { id: id.into(), kind: None, sensor: None, rssi: None, battery: None, fw: None, ip: None }
+        Heartbeat {
+            id: id.into(),
+            kind: None,
+            sensor: None,
+            rssi: None,
+            battery: None,
+            fw: None,
+            ip: None,
+            uptime_s: None,
+            load: None,
+            free_heap: None,
+            reset_reason: None,
+            chip: None,
+            mac: None,
+            channel: None,
+            sample_hz: None,
+        }
     }
 
     #[test]
@@ -187,7 +272,7 @@ mod tests {
         let mut f = Fleet::default();
         let long = "x".repeat(1000);
         f.heartbeat(
-            &Heartbeat { id: format!("{long}\n"), kind: Some(long.clone()), sensor: Some(format!("a\x1b[0mb{long}")), rssi: Some(9999), battery: Some(1e9), fw: Some(long.clone()), ip: Some(long.clone()) },
+            &Heartbeat { kind: Some(long.clone()), sensor: Some(format!("a\x1b[0mb{long}")), rssi: Some(9999), battery: Some(1e9), fw: Some(long.clone()), ip: Some(long.clone()), ..hb(&format!("{long}\n")) },
             None,
         );
         let r = f.roster();
@@ -204,5 +289,62 @@ mod tests {
         assert!(r[0]["battery"].is_null());
         f.heartbeat(&hb("   "), None); // empty id ignored
         assert_eq!(f.len(), 1);
+    }
+
+    #[test]
+    fn a_v1_heartbeat_still_parses_and_v2_fields_are_stored_and_labelled_self_reported() {
+        let v1: Heartbeat = serde_json::from_str(r#"{"id":"esp-01","kind":"esp32","rssi":-60}"#).unwrap();
+        assert!(v1.uptime_s.is_none() && v1.load.is_none() && v1.mac.is_none());
+        let mut f = Fleet::default();
+        f.heartbeat(&v1, None);
+        let r = f.roster();
+        assert_eq!(r[0]["provenance"], "self_reported");
+        assert!(r[0]["uptime_s"].is_null() && r[0]["channel"].is_null());
+
+        let v2: Heartbeat = serde_json::from_str(
+            r#"{"id":"esp-01","fw":"0.4.3","uptime_s":3600,"load":0.35,"free_heap":123456,
+                "reset_reason":"poweron","chip":"esp32-c6","mac":"20:6e:f1:0b:05:44","channel":6,"sample_hz":10.5,
+                "future_field":"ignored"}"#,
+        )
+        .unwrap();
+        f.heartbeat(&v2, None);
+        let n = &f.roster()[0];
+        assert_eq!((n["uptime_s"].as_u64(), n["free_heap"].as_u64(), n["channel"].as_u64()), (Some(3600), Some(123456), Some(6)));
+        assert_eq!((n["load"].as_f64(), n["sample_hz"].as_f64()), (Some(0.35), Some(10.5)));
+        assert_eq!((n["chip"].as_str(), n["mac"].as_str(), n["reset_reason"].as_str()), (Some("esp32-c6"), Some("20:6e:f1:0b:05:44"), Some("poweron")));
+        assert_eq!(n["fw"], "0.4.3");
+        assert_eq!(n["provenance"], "self_reported");
+    }
+
+    #[test]
+    fn v2_numbers_out_of_range_are_ignored_and_strings_capped() {
+        let mut f = Fleet::default();
+        let long = "m".repeat(500);
+        f.heartbeat(
+            &Heartbeat {
+                uptime_s: Some(u64::MAX),
+                load: Some(f64::INFINITY),
+                free_heap: Some(u64::MAX),
+                channel: Some(0),
+                sample_hz: Some(-1.0),
+                mac: Some(format!("{long}\x1b")),
+                reset_reason: Some(long.clone()),
+                chip: Some(long),
+                ..hb("esp-02")
+            },
+            None,
+        );
+        let n = &f.roster()[0];
+        for k in ["uptime_s", "load", "free_heap", "channel", "sample_hz"] {
+            assert!(n[k].is_null(), "{k} should be dropped");
+        }
+        assert_eq!(n["mac"], "", "a malformed mac is dropped");
+        assert!(n["reset_reason"].as_str().unwrap().chars().count() <= FIELD_CAP);
+        // each heartbeat replaces the v2 report: an omitted or bad field is cleared
+        f.heartbeat(&Heartbeat { channel: Some(11), mac: Some("20-6E-F1-0B-05-44".into()), ..hb("esp-02") }, None);
+        assert_eq!((f.roster()[0]["channel"].as_u64(), f.roster()[0]["mac"].as_str()), (Some(11), Some("20:6e:f1:0b:05:44")));
+        f.heartbeat(&hb("esp-02"), None);
+        assert!(f.roster()[0]["channel"].is_null());
+        assert_eq!(f.roster()[0]["mac"], "");
     }
 }

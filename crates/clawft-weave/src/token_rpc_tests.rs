@@ -192,3 +192,35 @@ fn merge_with_no_legacy_journal_creates_nothing() {
     merge_legacy_journals(&new, &[dir.path().join("absent")]);
     assert!(!new.exists());
 }
+
+#[test]
+fn a_read_scope_token_validates_as_read_and_is_never_write_or_admin() {
+    use crate::capability::CallerCapabilities;
+    let a = authority();
+    let v = ok(run(&a, "auth.token.issue", &json!({"label": "console", "scope": "read"}), Some("admin")));
+    assert_eq!(v["scope"], "read");
+    let secret = v["secret"].as_str().unwrap().to_owned();
+    let val = ok(run(&a, "auth.token.validate", &json!({"token": secret}), None));
+    assert_eq!(val["token"]["scope"], "read");
+    // What the daemon grants such a token.
+    let info = a.validate(&secret).unwrap();
+    let caps = CallerCapabilities::from_scopes(info.scope.capability_scopes().iter().copied());
+    assert!(caps.allows_method("fleet.snapshot") && caps.allows_method("kernel.status"));
+    assert!(!caps.allows_method("agent.spawn"), "no Write");
+    assert!(!caps.allows_method("fleet.location.set") && !caps.allows_method("kernel.shutdown"), "no Admin");
+    // And it cannot mint, revoke or list tokens.
+    let r = run(&a, "auth.token.issue", &json!({}), Some(&secret));
+    assert!(!r.ok);
+    assert_eq!(r.error_kind.as_deref(), Some(TOKEN_CANNOT_MINT_KIND));
+}
+
+#[test]
+fn a_read_token_cannot_carry_a_project_and_an_unknown_scope_is_refused() {
+    let a = authority();
+    let r = run(&a, "auth.token.issue", &json!({"scope": "read", "project": "01ARZ3NDEKTSV4RRFFQ69G5FAV"}), Some("admin"));
+    assert!(!r.ok);
+    assert!(!run(&a, "auth.token.issue", &json!({"scope": "root"}), Some("admin")).ok);
+    // The default is still owner.
+    let v = ok(run(&a, "auth.token.issue", &json!({}), Some("admin")));
+    assert_eq!(v["scope"], "owner");
+}
