@@ -20,20 +20,24 @@ pub fn color(name: &str) -> Color32 {
 }
 
 const PANEL: Color32 = Color32::from_rgb(34, 36, 40);
-const EDGE: Color32 = Color32::from_rgb(90, 95, 105);
-const TEXT: Color32 = Color32::from_rgb(225, 228, 232);
-const DIM: Color32 = Color32::from_rgb(150, 155, 162);
-const BAD: Color32 = Color32::from_rgb(220, 70, 70);
+const EDGE: Color32 = Color32::from_rgb(110, 116, 128);
+const TEXT: Color32 = Color32::from_rgb(230, 233, 237);
+// Secondary text on the dark diagram canvas (bg ~rgb(24,25,28)). Brightened from the old
+// rgb(150,155,162) so even the "dim" labels clear a comfortable contrast ratio.
+const DIM: Color32 = Color32::from_rgb(190, 195, 203);
+const BAD: Color32 = Color32::from_rgb(232, 96, 96);
 
 // One type scale for every painted diagram, so titles, labels, pin numbers and detail text
 // are sized consistently across header / wiring / flow / grid rather than ad-hoc per call.
-const F_TITLE: f32 = 14.0; // board / panel title
-const F_NAME: f32 = 13.0; // part name, legend name, grid title
-const F_LABEL: f32 = 12.0; // primary labels and pin numbers (mono)
-const F_AXIS: f32 = 11.0; // orientation / axis / note labels
-const F_TINY: f32 = 10.0; // dense labels (wire labels, header row labels, pad labels)
-const F_DETAIL: f32 = 9.5; // secondary detail text inside boxes
-const F_CELL: f32 = 9.0; // grid cell index (mono)
+// Scaled up from the original (10/9.5/9 dense sizes were unreadable); geometry below is
+// enlarged to match so labels keep their room and never overlap.
+const F_TITLE: f32 = 16.0; // board / panel title
+const F_NAME: f32 = 14.0; // part name, legend name, grid title
+const F_LABEL: f32 = 13.0; // primary labels and pin numbers (mono)
+const F_AXIS: f32 = 12.5; // orientation / axis / note labels
+const F_TINY: f32 = 12.0; // dense labels (wire labels, pad labels)
+const F_DETAIL: f32 = 11.5; // secondary detail text inside boxes
+const F_CELL: f32 = 11.0; // grid cell index (mono)
 
 /// Standard inset from a canvas edge to its text, so every diagram's margins match.
 const MARGIN: f32 = 14.0;
@@ -65,26 +69,45 @@ fn canvas(ui: &mut Ui, h: f32) -> (egui::Painter, Rect) {
 pub fn header(ui: &mut Ui, doc: &GuideDoc) {
     let Some(h) = &doc.header else { return };
     let rows = h.used.len() + h.avoid.len();
-    let (p, r) = canvas(ui, 118.0 + rows as f32 * 21.0);
-    let pitch = ((r.width() - 60.0) / 20.0).min(40.0);
-    let x0 = r.left() + 30.0 + pitch / 2.0;
+    // Layout in fixed vertical bands so nothing collides regardless of pitch: title, orientation,
+    // a wrapped caption that explains the two rows (replacing the old per-row labels that could
+    // land on top of the pin numbers), then the pin block, then the legend list.
+    let w = ui.available_width().min(980.0);
+    let pitch = ((w - 64.0) / 20.0).clamp(22.0, 44.0);
+    let caption_top = 66.0; // wrapped two-row explanation
+    let caption_budget = 46.0; // room for up to ~2 wrapped lines
+    let even_dy = caption_top + caption_budget + pitch; // even/outer row, from r.top()
+    let legend_dy = even_dy + pitch + pitch * 1.2; // first legend row, from r.top()
+    let height = legend_dy + rows as f32 * 32.0 + 20.0;
+    let (p, r) = canvas(ui, height);
+    let x0 = r.left() + 34.0 + pitch / 2.0;
     // Header along the top edge, ports along the bottom: the OUTER row (nearer the board edge) holds
     // the even pins 2-40 and is drawn on top; the INNER row (nearer the chip) holds the odd pins
     // 1-39 and is drawn below. Pin 1 (3.3 V) is the inner row's left pin. Matches the orientation text.
-    let (y_even, y_odd) = (r.top() + 70.0, r.top() + 70.0 + pitch);
+    let (y_even, y_odd) = (r.top() + even_dy, r.top() + even_dy + pitch);
     p.text(
-        pos2(r.left() + MARGIN, r.top() + 12.0),
+        pos2(r.left() + MARGIN, r.top() + 16.0),
         Align2::LEFT_TOP,
         &h.board,
         FontId::proportional(F_TITLE),
         TEXT,
     );
     p.text(
-        pos2(r.left() + MARGIN, r.top() + 32.0),
+        pos2(r.left() + MARGIN, r.top() + 40.0),
         Align2::LEFT_TOP,
         &h.orientation,
         FontId::proportional(F_AXIS),
         DIM,
+    );
+    // Row explanation as a wrapped caption above the block — unambiguous however the board is held,
+    // and safely clear of the pin numbers below.
+    wrapped(
+        &p,
+        pos2(r.left() + MARGIN, r.top() + caption_top),
+        "Outer row = even pins 2 to 40 (board edge). Inner row = odd pins 1 to 39 (chip side). Pin 1 = 3V3 at top-left.",
+        FontId::proportional(F_AXIS),
+        DIM,
+        r.width() - 2.0 * MARGIN,
     );
     p.rect_stroke(
         Rect::from_min_max(
@@ -94,21 +117,6 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
         4.0,
         Stroke::new(1.0, EDGE),
         egui::StrokeKind::Middle,
-    );
-    // Row labels so the orientation is unambiguous regardless of how the board is held.
-    p.text(
-        pos2(x0 - pitch * 0.7, y_even - pitch * 0.95),
-        Align2::LEFT_BOTTOM,
-        "outer row · even 2-40 (board edge)",
-        FontId::proportional(F_TINY),
-        DIM,
-    );
-    p.text(
-        pos2(x0 - pitch * 0.7, y_odd + pitch * 0.95),
-        Align2::LEFT_TOP,
-        "inner row · odd 1-39 (nearer the chip) — pin 1 = 3V3 at left",
-        FontId::proportional(F_TINY),
-        DIM,
     );
     for pin in 1..=40u8 {
         let col = f32::from((pin - 1) / 2);
@@ -147,18 +155,18 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
             );
         }
     }
-    let mut y = y_even + pitch * 1.1;
+    let mut y = r.top() + legend_dy;
     for u in &h.used {
-        p.circle_filled(pos2(r.left() + 20.0, y + 6.0), 5.0, color(&u.color));
+        p.circle_filled(pos2(r.left() + 22.0, y + 8.0), 6.0, color(&u.color));
         let text = format!("pin {}  {}  ->  {}", u.pin, u.name, u.to);
         y += wrapped(
             &p,
-            pos2(r.left() + 32.0, y),
+            pos2(r.left() + 36.0, y),
             &text,
             FontId::proportional(F_LABEL),
             TEXT,
-            r.width() - 46.0,
-        ) + 3.0;
+            r.width() - 50.0,
+        ) + 5.0;
     }
     for a in &h.avoid {
         let text = format!("x  pin {}: never use. {}", a.pin, a.why);
@@ -169,7 +177,7 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
             FontId::proportional(F_AXIS),
             BAD,
             r.width() - 28.0,
-        ) + 3.0;
+        ) + 5.0;
     }
 }
 
@@ -178,7 +186,7 @@ fn pin_pos(parts: &[Part], rects: &[Rect], endpoint: &str) -> Option<(egui::Pos2
     let i = parts.iter().position(|p| p.id == pid)?;
     let k = parts[i].pins.iter().position(|x| x == pin)?;
     let r = rects[i];
-    Some((pos2(r.center().x, r.top() + 48.0 + k as f32 * 22.0), i))
+    Some((pos2(r.center().x, r.top() + 58.0 + k as f32 * 24.0), i))
 }
 
 /// Parts as boxes left to right, wires between their pins.
@@ -188,7 +196,7 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
         return;
     }
     let max_pins = parts.iter().map(|p| p.pins.len()).max().unwrap_or(1) as f32;
-    let (p, r) = canvas(ui, 70.0 + max_pins * 22.0 + 40.0);
+    let (p, r) = canvas(ui, 104.0 + max_pins * 24.0);
     let n = parts.len() as f32;
     let measure = |s: &str, size: f32| {
         ui.painter()
@@ -210,7 +218,7 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
             let x = r.left() + 20.0 + i as f32 * (box_w + gap);
             Rect::from_min_size(
                 pos2(x, r.top() + 14.0),
-                vec2(box_w, 44.0 + part.pins.len() as f32 * 22.0),
+                vec2(box_w, 58.0 + part.pins.len() as f32 * 24.0),
             )
         })
         .collect();
@@ -291,7 +299,7 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
             .size()
             .x
             > rect.width() - 8.0;
-        let name_font = FontId::proportional(if wide { 10.5 } else { F_NAME });
+        let name_font = FontId::proportional(if wide { 11.5 } else { F_NAME });
         p.text(
             pos2(rect.center().x, rect.top() + 8.0),
             Align2::CENTER_TOP,
@@ -306,12 +314,12 @@ pub fn wiring(ui: &mut Ui, doc: &GuideDoc) {
             rect.width() - 6.0,
         );
         p.galley(
-            pos2(rect.center().x - detail.size().x / 2.0, rect.top() + 24.0),
+            pos2(rect.center().x - detail.size().x / 2.0, rect.top() + 28.0),
             detail,
             DIM,
         );
         for (k, pin) in part.pins.iter().enumerate() {
-            let y = rect.top() + 48.0 + k as f32 * 22.0;
+            let y = rect.top() + 58.0 + k as f32 * 24.0;
             p.text(
                 pos2(rect.center().x, y),
                 Align2::CENTER_CENTER,
@@ -338,7 +346,7 @@ pub fn placements(ui: &mut Ui, doc: &GuideDoc, selected: &mut usize) {
     if !pl.when.is_empty() {
         ui.label(egui::RichText::new(&pl.when).italics());
     }
-    let (p, r) = canvas(ui, 380.0);
+    let (p, r) = canvas(ui, 420.0);
     let fig = Rect::from_center_size(
         pos2(r.left() + r.width() * 0.33, r.center().y + 8.0),
         vec2(240.0, 340.0),
@@ -383,8 +391,8 @@ pub fn placements(ui: &mut Ui, doc: &GuideDoc, selected: &mut usize) {
     let lx = r.left() + r.width() * 0.58;
     for pad in &pl.pads {
         let c = at(pad.x, pad.y);
-        p.circle_filled(c, 11.0, pad_col(&pad.label));
-        p.circle_stroke(c, 11.0, Stroke::new(1.5, Color32::BLACK));
+        p.circle_filled(c, 13.0, pad_col(&pad.label));
+        p.circle_stroke(c, 13.0, Stroke::new(1.5, Color32::BLACK));
         p.text(
             c,
             Align2::CENTER_CENTER,
@@ -392,17 +400,17 @@ pub fn placements(ui: &mut Ui, doc: &GuideDoc, selected: &mut usize) {
             FontId::proportional(F_TINY),
             Color32::BLACK,
         );
-        p.circle_filled(pos2(lx, ly + 8.0), 8.0, pad_col(&pad.label));
+        p.circle_filled(pos2(lx, ly + 9.0), 9.0, pad_col(&pad.label));
         let text = format!("{}: {}", pad.label, pad.note);
         let h = wrapped(
             &p,
-            pos2(lx + 16.0, ly),
+            pos2(lx + 20.0, ly),
             &text,
             FontId::proportional(F_NAME),
             TEXT,
-            r.right() - lx - 24.0,
+            r.right() - lx - 28.0,
         );
-        ly += h.max(18.0) + 12.0;
+        ly += h.max(22.0) + 14.0;
     }
 }
 
@@ -412,13 +420,13 @@ pub fn flow(ui: &mut Ui, doc: &GuideDoc) {
     if steps.is_empty() {
         return;
     }
-    let (p, r) = canvas(ui, 92.0);
+    let (p, r) = canvas(ui, 108.0);
     let n = steps.len() as f32;
     let gap = 18.0;
     let w = (r.width() - 24.0 - gap * (n - 1.0)) / n;
     for (i, s) in steps.iter().enumerate() {
         let x = r.left() + 12.0 + i as f32 * (w + gap);
-        let b = Rect::from_min_size(pos2(x, r.top() + 16.0), vec2(w, 60.0));
+        let b = Rect::from_min_size(pos2(x, r.top() + 16.0), vec2(w, 74.0));
         p.rect_filled(b, 6.0, PANEL);
         p.rect_stroke(b, 6.0, Stroke::new(1.0, EDGE), egui::StrokeKind::Middle);
         p.text(
@@ -435,7 +443,7 @@ pub fn flow(ui: &mut Ui, doc: &GuideDoc) {
             b.width() - 8.0,
         );
         p.galley(
-            pos2(b.center().x - detail.size().x / 2.0, b.top() + 28.0),
+            pos2(b.center().x - detail.size().x / 2.0, b.top() + 32.0),
             detail,
             DIM,
         );
@@ -453,16 +461,16 @@ pub fn flow(ui: &mut Ui, doc: &GuideDoc) {
 pub fn grid(ui: &mut Ui, doc: &GuideDoc) {
     let Some(g) = &doc.grid else { return };
     let (rows, cols) = (g.rows.max(1) as f32, g.cols.max(1) as f32);
-    let cell = ((ui.available_width().min(980.0) - 160.0) / cols).clamp(18.0, 44.0);
-    let (p, r) = canvas(ui, 70.0 + cell * rows + 60.0);
+    let cell = ((ui.available_width().min(980.0) - 160.0) / cols).clamp(20.0, 46.0);
+    let (p, r) = canvas(ui, 76.0 + cell * rows + 64.0);
     p.text(
-        pos2(r.left() + MARGIN, r.top() + 10.0),
+        pos2(r.left() + MARGIN, r.top() + 12.0),
         Align2::LEFT_TOP,
         &g.title,
         FontId::proportional(F_NAME),
         TEXT,
     );
-    let origin = pos2(r.center().x - cell * cols / 2.0, r.top() + 50.0);
+    let origin = pos2(r.center().x - cell * cols / 2.0, r.top() + 56.0);
     for y in 0..g.rows {
         for x in 0..g.cols {
             let cr = Rect::from_min_size(
@@ -471,7 +479,7 @@ pub fn grid(ui: &mut Ui, doc: &GuideDoc) {
             );
             let shade = 40 + ((x + y) % 2) as u8 * 10;
             p.rect_filled(cr, 2.0, Color32::from_gray(shade));
-            if cell >= 24.0 {
+            if cell >= 22.0 {
                 p.text(
                     cr.center(),
                     Align2::CENTER_CENTER,

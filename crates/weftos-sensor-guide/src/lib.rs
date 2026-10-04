@@ -18,6 +18,25 @@ const BANNER_BG: Color32 = Color32::from_rgb(38, 96, 58);
 /// Amber caution used for the medical-device disclaimer.
 const CAUTION: Color32 = Color32::from_rgb(230, 170, 40);
 
+/// Legible type scale for guide chrome, replacing egui's `.small()` (~10.5 px) which is hard to
+/// read on the dark theme. `BODY` is for labels and buttons, `CAPTION` for secondary text — both
+/// stay well above egui's default so nothing is cramped or tiny.
+const BODY: f32 = 15.0;
+const CAPTION: f32 = 13.0;
+
+/// A secondary text colour that keeps adequate contrast on either theme. egui's `weak` colour
+/// blends ~55 % into the background (faint, low-contrast on dark); this blends only ~25 %, so
+/// captions read as secondary yet stay clearly legible. Used instead of `.weak()` everywhere.
+fn muted(ui: &egui::Ui) -> Color32 {
+    let v = ui.visuals();
+    blend(v.text_color(), v.window_fill(), 0.25)
+}
+
+fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
 /// egui's default fonts lack arrows, comparison signs and ticks; show ASCII equivalents
 /// (authors may use either; ADR-104).
 pub fn displayable(md: &str) -> String {
@@ -47,6 +66,8 @@ pub struct GuideView {
     pub sensor: usize,
     sensor_filter: String,
     loaded_images: std::collections::BTreeSet<String>,
+    /// Whether the full-screen pinout/help overlay is open (the "Show pinout / Help" button).
+    pinout_open: bool,
     cache: CommonMarkCache,
 }
 
@@ -100,7 +121,8 @@ impl GuideView {
                         }
                     }
                 });
-            ui.label(RichText::new(format!("{} sensors", sensors.len())).weak().small());
+            let m = muted(ui);
+            ui.label(RichText::new(format!("{} sensors", sensors.len())).size(CAPTION).color(m));
         });
         ui.add_space(4.0);
         // "Configuring: X" banner as a rounded panel with real padding, instead of a bare
@@ -112,7 +134,7 @@ impl GuideView {
             .inner_margin(egui::Margin::symmetric(10, 5))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Configuring").size(11.0).color(Color32::from_rgb(170, 210, 185)));
+                    ui.label(RichText::new("Configuring").size(13.0).color(Color32::from_rgb(190, 224, 203)));
                     ui.label(RichText::new(&s.name).strong().color(Color32::WHITE));
                     if !s.location.is_empty() {
                         ui.label(RichText::new(format!("· {}", s.location)).color(Color32::from_rgb(210, 230, 218)));
@@ -120,10 +142,11 @@ impl GuideView {
                 });
             });
         if !s.detail.is_empty() {
-            ui.add_space(2.0);
-            ui.label(RichText::new(&s.detail).small().weak());
+            ui.add_space(4.0);
+            let m = muted(ui);
+            ui.label(RichText::new(&s.detail).size(CAPTION).color(m));
         }
-        ui.add_space(4.0);
+        ui.add_space(6.0);
     }
 
     /// Register this bundle's embedded images with the egui context (once each) so `![](name)`
@@ -160,15 +183,16 @@ impl GuideView {
             .resizable(false)
             .exact_size(220.0)
             .show_inside(ui, |ui| {
-                ui.label(RichText::new(&bundle.doc.title).size(16.0).strong());
+                ui.label(RichText::new(&bundle.doc.title).size(17.0).strong());
                 if !bundle.doc.cog.is_empty() {
+                    let m = muted(ui);
                     ui.label(
                         RichText::new(format!("cog {} {}", bundle.doc.cog, bundle.doc.cog_version))
-                            .small()
-                            .weak(),
+                            .size(CAPTION)
+                            .color(m),
                     );
                 }
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("🔍 search the guide").desired_width(f32::INFINITY));
                 ui.add_space(8.0);
                 let q = self.search.to_lowercase();
@@ -189,13 +213,14 @@ impl GuideView {
                     }
                 }
                 if shown == 0 {
-                    ui.label(RichText::new("no pages match").small().weak());
+                    let m = muted(ui);
+                    ui.label(RichText::new("no pages match").size(CAPTION).color(m));
                 }
                 if !bundle.doc.medical {
-                    ui.add_space(10.0);
+                    ui.add_space(12.0);
                     ui.separator();
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Not a medical device.").small().color(CAUTION));
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Not a medical device.").size(CAPTION).color(CAUTION));
                 }
             });
         let Some(page) = bundle.page(&current) else {
@@ -205,30 +230,33 @@ impl GuideView {
             .id_salt(("sensor_guide_page", &page.id))
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(4.0);
+                ui.add_space(6.0);
+                let mut pinout_button_drawn = false;
                 for seg in bundle::segments(&page.markdown) {
                     match seg {
                         Segment::Text(t) => {
                             CommonMarkViewer::new().show(ui, &mut self.cache, &displayable(&t));
                         }
-                        Segment::Image { alt, name } => {
-                            ui.add_space(4.0);
-                            if bundle.images.contains_key(&name) {
-                                let uri = std::borrow::Cow::Owned(format!("bytes://{name}"));
-                                let w = ui.available_width().min(760.0);
-                                ui.add(egui::Image::new(egui::ImageSource::Uri(uri)).max_width(w).corner_radius(4.0));
-                            } else {
-                                ui.label(RichText::new(format!("[image '{name}' not bundled]")).weak());
+                        // The pinout photo and the header pin diagram are "how do I find the
+                        // port?" helpers — tiny and in the way inline. One button collapses both
+                        // behind the full-screen overlay (see `pinout_modal`), shown once where
+                        // the first such element would have appeared.
+                        Segment::Image { .. } => {
+                            if !pinout_button_drawn {
+                                pinout_button_drawn = true;
+                                self.pinout_button(ui);
                             }
-                            if !alt.is_empty() {
-                                ui.label(RichText::new(&alt).small().weak());
-                            }
-                            ui.add_space(6.0);
                         }
+                        Segment::Diagram(kind) if kind == "header" => {
+                            if !pinout_button_drawn {
+                                pinout_button_drawn = true;
+                                self.pinout_button(ui);
+                            }
+                        }
+                        // Content diagrams stay inline — they are the page, not port-finding.
                         Segment::Diagram(kind) => {
-                            ui.add_space(4.0);
+                            ui.add_space(6.0);
                             match kind.as_str() {
-                                "header" => diagrams::header(ui, &bundle.doc),
                                 "wiring" => diagrams::wiring(ui, &bundle.doc),
                                 "placements" => {
                                     diagrams::placements(ui, &bundle.doc, &mut self.placement)
@@ -236,17 +264,142 @@ impl GuideView {
                                 "flow" => diagrams::flow(ui, &bundle.doc),
                                 "grid" => diagrams::grid(ui, &bundle.doc),
                                 other => {
+                                    let m = muted(ui);
                                     ui.label(
                                         RichText::new(format!("(unknown diagram '{other}')"))
-                                            .weak(),
+                                            .size(CAPTION)
+                                            .color(m),
                                     );
                                 }
                             }
-                            ui.add_space(6.0);
+                            ui.add_space(8.0);
                         }
                     }
                 }
                 ui.add_space(24.0);
             });
+        if self.pinout_open {
+            self.pinout_modal(ui, bundle, &current);
+        }
+    }
+
+    /// Inline affordance that opens the full-screen pinout overlay ([`Self::pinout_modal`]).
+    fn pinout_button(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        let m = muted(ui);
+        if ui
+            .add(
+                egui::Button::new(RichText::new("Show pinout / Help").size(BODY))
+                    .min_size(egui::vec2(0.0, 34.0)),
+            )
+            .on_hover_text("Open the port location photo and pin diagram full-screen")
+            .clicked()
+        {
+            self.pinout_open = true;
+        }
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new("Shows where the port is and which pins to use, full-screen.")
+                .size(CAPTION)
+                .color(m),
+        );
+        ui.add_space(8.0);
+    }
+
+    /// Full-screen overlay with the header pin diagram and every bundled photo for `page_id`,
+    /// sized to ~90 % of the screen so the pinout is actually readable. A backdrop click, Escape,
+    /// or the Close button dismiss it. Works natively and in the browser (egui `Modal`).
+    fn pinout_modal(&mut self, ui: &mut egui::Ui, bundle: &GuideBundle, page_id: &str) {
+        let Some(page) = bundle.page(page_id) else {
+            self.pinout_open = false;
+            return;
+        };
+        let ctx = ui.ctx().clone();
+        let screen = ctx.content_rect();
+        let width = (screen.width() * 0.92).clamp(320.0, 1200.0);
+        let max_h = (screen.height() * 0.8).max(240.0);
+        let modal = egui::Modal::new(egui::Id::new("guide_pinout_modal")).show(&ctx, |ui| {
+            ui.set_width(width);
+            let mut close = false;
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Pinout & port location").size(20.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Close").size(BODY))
+                                .min_size(egui::vec2(0.0, 34.0)),
+                        )
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            let m = muted(ui);
+            ui.label(
+                RichText::new(
+                    "Match the highlighted pins. Click outside this panel or press Esc to close.",
+                )
+                .size(CAPTION)
+                .color(m),
+            );
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .max_height(max_h)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let mut any = false;
+                    for seg in bundle::segments(&page.markdown) {
+                        match seg {
+                            Segment::Diagram(kind) if kind == "header" => {
+                                any = true;
+                                ui.add_space(6.0);
+                                diagrams::header(ui, &bundle.doc);
+                                ui.add_space(12.0);
+                            }
+                            Segment::Image { alt, name } => {
+                                any = true;
+                                ui.add_space(6.0);
+                                if bundle.images.contains_key(&name) {
+                                    let uri = std::borrow::Cow::Owned(format!("bytes://{name}"));
+                                    let w = ui.available_width().min(1100.0);
+                                    ui.add(
+                                        egui::Image::new(egui::ImageSource::Uri(uri))
+                                            .max_width(w)
+                                            .corner_radius(6.0),
+                                    );
+                                } else {
+                                    let m = muted(ui);
+                                    ui.label(
+                                        RichText::new(format!("[image '{name}' not bundled]"))
+                                            .size(CAPTION)
+                                            .color(m),
+                                    );
+                                }
+                                if !alt.is_empty() {
+                                    ui.add_space(2.0);
+                                    let m = muted(ui);
+                                    ui.label(RichText::new(&alt).size(CAPTION).color(m));
+                                }
+                                ui.add_space(12.0);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !any {
+                        let m = muted(ui);
+                        ui.label(
+                            RichText::new("No pinout diagram or photo on this page.")
+                                .size(BODY)
+                                .color(m),
+                        );
+                    }
+                });
+            close
+        });
+        if modal.should_close() || modal.inner {
+            self.pinout_open = false;
+        }
     }
 }
