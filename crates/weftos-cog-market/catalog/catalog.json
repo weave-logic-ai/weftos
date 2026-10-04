@@ -248,10 +248,6 @@
           "url": "docs/hardware/sensors.md"
         },
         {
-          "label": "Seed I2C bus notes",
-          "url": "cognitum-cogs: .claude/skills/sensor-cog/references/seed-buses.md"
-        },
-        {
           "label": "ADR-107: hardware catalog links to cogs",
           "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
         }
@@ -2194,10 +2190,6 @@
           "url": "docs/hardware/radar-protocols.md"
         },
         {
-          "label": "hlk-as201 cog guide",
-          "url": "cognitum-cogs: src/cogs/hlk-as201/guide/"
-        },
-        {
           "label": "ADR-104: sensor guides ship with sensor cogs",
           "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
         },
@@ -2429,10 +2421,6 @@
           "url": "docs/hardware/radar-protocols.md"
         },
         {
-          "label": "ld2450-radar cog: API, config keys, wiring guide",
-          "url": "cognitum-cogs: src/cogs/ld2450-radar/guide/"
-        },
-        {
           "label": "ADR-104: sensor guides ship with sensor cogs",
           "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
         },
@@ -2515,10 +2503,6 @@
         "ld6002-radar"
       ],
       "docs": [
-        {
-          "label": "ld6002-radar cog",
-          "url": "cognitum-cogs: src/cogs/ld6002-radar/"
-        },
         {
           "label": "ADR-104: sensor guides ship with sensor cogs",
           "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
@@ -3099,10 +3083,6 @@
       ],
       "docs": [
         {
-          "label": "sound-detect cog guide",
-          "url": "cognitum-cogs: src/cogs/sound-detect/guide/"
-        },
-        {
           "label": "ADR-104: sensor guides ship with sensor cogs",
           "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
         },
@@ -3643,10 +3623,6 @@
         "mentra-live"
       ],
       "docs": [
-        {
-          "label": "mentra-live companion cog",
-          "url": "cognitum-cogs: src/cogs/mentra-live/"
-        },
         {
           "label": "ADR-107: hardware catalog links to cogs",
           "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
@@ -5067,10 +5043,6 @@
           "url": "docs/hardware/radar-protocols.md"
         },
         {
-          "label": "rd-03e cog guide",
-          "url": "cognitum-cogs: src/cogs/rd-03e/guide/"
-        },
-        {
           "label": "ADR-104: sensor guides ship with sensor cogs",
           "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
         },
@@ -5933,10 +5905,6 @@
           "url": "docs/hardware/sensors.md"
         },
         {
-          "label": "sen0213-ecg cog guide (first ADR-104 guide)",
-          "url": "cognitum-cogs: src/cogs/sen0213-ecg/guide/"
-        },
-        {
           "label": "ADR-104: sensor guides ship with sensor cogs",
           "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
         },
@@ -6011,10 +5979,6 @@
         {
           "label": "Sensor inventory",
           "url": "docs/hardware/sensors.md"
-        },
-        {
-          "label": "sen0628-tof cog guide",
-          "url": "cognitum-cogs: src/cogs/sen0628-tof/guide/"
         },
         {
           "label": "ADR-104: sensor guides ship with sensor cogs",

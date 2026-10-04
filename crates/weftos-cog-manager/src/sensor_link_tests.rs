@@ -217,4 +217,12 @@ fn the_host_reported_export_port_beats_the_built_in_map() {
     assert_eq!(export_port("ld2450-radar", Some(&h)), 8052);
     assert_eq!(export_port("ld2450-radar", None), 8052);
     assert_eq!(export_port("unknown-cog", None), 0);
+    // several listeners: the declared port wins over a lower one the cog also holds
+    let mut c = host_cog("ld2450-radar", true, true, None);
+    c.export_ports = vec![80, 8052, 9000];
+    assert_eq!(export_port("ld2450-radar", Some(&host(vec![c]))), 8052);
+    // an unknown cog takes the first listener the host reports
+    let mut c = host_cog("mystery", true, true, None);
+    c.export_ports = vec![7000, 7001];
+    assert_eq!(export_port("mystery", Some(&host(vec![c]))), 7000);
 }

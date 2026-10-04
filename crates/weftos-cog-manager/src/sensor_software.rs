@@ -25,7 +25,7 @@ pub(crate) fn software(ui: &mut Ui, m: &Module, cogs: &[CogView], pc: &PanelCtx)
             ui,
             "To get one: ask for it on the dashboard board (cite this module), or build it with the sensor-cog skill: identify the part, verify the protocol from the vendor documents, write a resyncing parser with fixtures, add --simulate, a guide and an ADR.",
         ));
-        ui.label(RichText::new(link::SENSOR_COG_SKILL).monospace().size(12.0));
+        ui.label(style::dim(ui, link::SENSOR_COG_SKILL));
         return;
     }
     for v in cogs {
@@ -98,27 +98,34 @@ fn install_flow(ui: &mut Ui, v: &CogView, m: &Module, pc: &PanelCtx) {
         return;
     };
     let reachable: Vec<&mesh::MeshNodeView> = mv.nodes.iter().filter(|n| n.reachable).collect();
-    let me = reachable.iter().find(|n| n.is_self).map(|n| n.name.clone()).unwrap_or_default();
-    let picked = pc.target.borrow().get(&v.id).cloned().unwrap_or_else(|| me.clone());
-    let picked = if reachable.iter().any(|n| n.name == picked) { picked } else { me.clone() };
+    // nodes are picked by key (address; "self" for the connected host), never by name
+    let picked = pc.target.borrow().get(&v.id).cloned().filter(|k| reachable.iter().any(|n| n.key() == *k)).unwrap_or_else(|| "self".into());
+    let label_of = |n: &mesh::MeshNodeView| if n.is_self { format!("{} (connected)", n.name) } else if n.name.is_empty() { n.ip.clone() } else { format!("{} ({})", n.name, n.ip) };
     egui::ComboBox::from_id_salt(("target", &v.id))
-        .selected_text(if picked == me { format!("{picked} (connected)") } else { picked.clone() })
+        .selected_text(reachable.iter().find(|n| n.key() == picked).map(|n| label_of(n)).unwrap_or_default())
         .show_ui(ui, |ui| {
             for n in &reachable {
-                let label = if n.is_self { format!("{} (connected)", n.name) } else { n.name.clone() };
-                if ui.selectable_label(n.name == picked, label).clicked() {
-                    pc.target.borrow_mut().insert(v.id.clone(), n.name.clone());
+                if ui.selectable_label(n.key() == picked, label_of(n)).clicked() {
+                    pc.target.borrow_mut().insert(v.id.clone(), n.key());
                 }
             }
         });
     if matches!(&mv.scope, Scope::ThisHostOnly(_)) {
         ui.label(style::dim(ui, "only this host is known; other nodes appear once the host can see them (mesh view above)"));
     }
-    if picked != me {
-        let ip = reachable.iter().find(|n| n.name == picked).map(|n| n.ip.clone()).unwrap_or_default();
-        ui.label(style::dim(ui, "Checks and install run through the node's own cog-host, so the console must point at it."));
-        if ui.button(format!("Switch the console to {picked}")).clicked() {
-            pc.events.borrow_mut().push(Event::SwitchHost { url: inst::peer_url(&pc.client.s.host, &ip) });
+    if picked != "self" {
+        let node = reachable.iter().find(|n| n.key() == picked);
+        let name = node.map(|n| label_of(n)).unwrap_or_default();
+        ui.label(style::dim(ui, "Checks and install run through the node's own cog-host, so the console must point at it. It will ask for that node's own token; the current host's token is not sent there."));
+        match node.and_then(|n| inst::peer_url(&pc.client.s.host, &n.ip)) {
+            Some(url) => {
+                if ui.button(format!("Switch the console to {url}")).on_hover_text(format!("{name}. Clears the token field.")).clicked() {
+                    pc.events.borrow_mut().push(Event::SwitchHost { url });
+                }
+            }
+            None => {
+                ui.label(RichText::new("this node's address is not a tailnet address, so the console will not switch to it").color(AMBER));
+            }
         }
         return;
     }

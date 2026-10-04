@@ -442,6 +442,10 @@ pub enum Identify {
 
 #[derive(Default)]
 pub struct Shared {
+    /// Bumped on every reconnect. A fetch remembers the epoch it started in and drops its answer if
+    /// the console has since switched host, so a slow reply from the old node never lands in the
+    /// new node's state.
+    pub epoch: u64,
     /// Identify-hardware modal: last scan (None = not scanned yet / in flight), when it landed,
     /// and per-device agent answers. On demand only; never polled.
     pub hw_usb: Option<Result<HwUsbReport, String>>,
@@ -503,7 +507,11 @@ impl Client {
     /// Reconnect to a (possibly new) host/registries: clear state and refetch.
     pub fn reconnect(&mut self, s: Settings) {
         self.s = s;
-        *self.shared.lock().unwrap() = Shared::default();
+        {
+            let mut sh = self.shared.lock().unwrap();
+            let epoch = sh.epoch + 1;
+            *sh = Shared { epoch, ..Shared::default() };
+        }
         self.status_fired = None;
         self.status_busy.store(false, Ordering::Release);
         self.net_fired = None;
@@ -533,10 +541,11 @@ impl Client {
         self.net_fired = Some(now);
         let url = format!("{}/network", base(&self.s.host));
         let shared = Arc::clone(&self.shared);
+        let epoch = epoch_of(&shared);
         let busy = Arc::clone(&self.net_busy);
         let ctx = ctx.clone();
         ehttp::fetch(ehttp::Request::get(url), move |res| {
-            shared.lock().unwrap().net = Some(parse_json::<Net>(&res));
+            apply(&shared, epoch, |sh| sh.net = Some(parse_json::<Net>(&res)));
             busy.store(false, Ordering::Release);
             ctx.request_repaint();
         });
@@ -553,11 +562,13 @@ impl Client {
         self.status_fired = Some(now);
         let url = format!("{}/status", base(&self.s.host));
         let shared = Arc::clone(&self.shared);
+        let epoch = epoch_of(&shared);
         let busy = Arc::clone(&self.status_busy);
         let ctx = ctx.clone();
-        ehttp::fetch(ehttp::Request::get(url), move |res| {
+        // with the host token the rows also carry output-log stats and listening ports
+        ehttp::fetch(get_req(url, &self.s.token), move |res| {
             let parsed = parse_json::<HostStatus>(&res);
-            shared.lock().unwrap().host = Some(parsed);
+            apply(&shared, epoch, |sh| sh.host = Some(parsed));
             busy.store(false, Ordering::Release);
             ctx.request_repaint();
         });
@@ -876,14 +887,16 @@ impl Client {
         let host_url = format!("{}/cogs/{id}/guide", base(&self.s.host));
         let export_url = (port != 0).then(|| format!("{}/guide", self.export_base(port)));
         let shared = Arc::clone(&self.shared);
+        let epoch = epoch_of(&shared);
         let id = id.to_string();
         let ctx = ctx.clone();
         let finish = move |parsed: Result<serde_json::Value, String>| {
-            let mut sh = shared.lock().unwrap();
-            // Only apply if this is still the guide we're waiting on.
-            if let Some(g) = sh.guide.as_mut().filter(|g| g.id == id && g.port == port) {
-                g.result = Some(parsed);
-            }
+            // Only apply if this is still the guide we're waiting on, on the same connection.
+            apply(&shared, epoch, |sh| {
+                if let Some(g) = sh.guide.as_mut().filter(|g| g.id == id && g.port == port) {
+                    g.result = Some(parsed);
+                }
+            });
             ctx.request_repaint();
         };
         let to_json = |res: &ehttp::Result<ehttp::Response>| -> Result<serde_json::Value, String> {
@@ -912,31 +925,42 @@ impl Client {
             let prev = sh.cog_out.get(id).and_then(|f| f.result.clone());
             sh.cog_out.insert(id.to_string(), CogOutFetch { fired: Instant::now(), in_flight: true, result: prev });
         }
-        // Primary: the host's own redacted last-output route (works whatever the cog's export is
-        // bound to). Fallback for hosts that predate it: the cog's export `/status`.
+        // Primary: the host's own last-output route (token-guarded; health fields only; works
+        // whatever the cog's export is bound to). Only a host that predates the route ("not found")
+        // falls back to the cog's export `/status`; "no output yet" is a real answer, not a miss.
         let host_url = format!("{}/cogs/{id}/last", base(&self.s.host));
         let export_url = (port != 0).then(|| format!("{}/status", self.export_base(port)));
+        let token = self.s.token.clone();
         let shared = Arc::clone(&self.shared);
+        let epoch = epoch_of(&shared);
         let id = id.to_string();
         let ctx = ctx.clone();
         let finish = move |parsed: Result<serde_json::Value, String>| {
-            if let Some(f) = shared.lock().unwrap().cog_out.get_mut(&id) {
-                f.in_flight = false;
-                f.result = Some(parsed);
-            }
+            apply(&shared, epoch, |sh| {
+                if let Some(f) = sh.cog_out.get_mut(&id) {
+                    f.in_flight = false;
+                    f.result = Some(parsed);
+                }
+            });
             ctx.request_repaint();
         };
-        let to_json = |res: &ehttp::Result<ehttp::Response>| -> Result<serde_json::Value, String> {
-            match res {
-                Ok(r) if r.ok => serde_json::from_slice(&r.bytes).map_err(|e| e.to_string()),
-                Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
-                Err(e) => Err(e.clone()),
+        ehttp::fetch(get_req(host_url, &token), move |res| match &res {
+            Ok(r) if r.ok => finish(serde_json::from_slice(&r.bytes).map_err(|e| e.to_string())),
+            Ok(r) if r.status == 401 || r.status == 403 => finish(Err("needs the host token (set it in the top bar)".into())),
+            Ok(r) if r.status == 404 && !route_missing(&r.bytes) => finish(Err("no output yet".into())),
+            Ok(r) if export_url.is_none() => finish(Err(format!("HTTP {} {}", r.status, r.status_text))),
+            Err(e) if export_url.is_none() => finish(Err(e.clone())),
+            _ => {
+                if let Some(url) = export_url {
+                    ehttp::fetch(ehttp::Request::get(url), move |r2| {
+                        finish(match &r2 {
+                            Ok(r) if r.ok => serde_json::from_slice(&r.bytes).map_err(|e| e.to_string()),
+                            Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
+                            Err(e) => Err(e.clone()),
+                        })
+                    });
+                }
             }
-        };
-        ehttp::fetch(ehttp::Request::get(host_url), move |res| match (to_json(&res), export_url) {
-            (Ok(v), _) => finish(Ok(v)),
-            (Err(_), Some(url)) => ehttp::fetch(ehttp::Request::get(url), move |r2| finish(to_json(&r2))),
-            (Err(e), None) => finish(Err(e)),
         });
     }
 
@@ -954,16 +978,20 @@ impl Client {
         }
         let url = format!("{}/mesh/cogs", base(&self.s.host));
         let shared = Arc::clone(&self.shared);
+        let epoch = epoch_of(&shared);
         let ctx = ctx.clone();
-        ehttp::fetch(ehttp::Request::get(url), move |res| {
+        ehttp::fetch(get_req(url, &self.s.token), move |res| {
             let parsed = match &res {
                 Ok(r) if r.status == 404 => Err("unsupported".to_string()),
+                Ok(r) if r.status == 401 || r.status == 403 => Err("needs the host token (set it in the top bar)".to_string()),
                 _ => parse_json::<MeshCogs>(&res),
             };
-            if let Some(f) = shared.lock().unwrap().mesh.as_mut() {
-                f.in_flight = false;
-                f.result = Some(parsed);
-            }
+            apply(&shared, epoch, |sh| {
+                if let Some(f) = sh.mesh.as_mut() {
+                    f.in_flight = false;
+                    f.result = Some(parsed);
+                }
+            });
             ctx.request_repaint();
         });
     }
@@ -981,13 +1009,14 @@ impl Client {
         let url = format!("{}/hw/buses", base(&self.s.host));
         let have_token = !self.s.token.trim().is_empty();
         let (shared, ctx) = (Arc::clone(&self.shared), ctx.clone());
+        let epoch = epoch_of(&shared);
         ehttp::fetch(get_req(url, &self.s.token), move |res| {
             let parsed = match &res {
                 Ok(r) if r.status == 401 || r.status == 403 => Err(if have_token { "the host refused the token".to_string() } else { "needs the host token (set it in the top bar)".to_string() }),
                 Ok(r) if r.status == 404 => Err("this host predates the pre-install check".to_string()),
                 _ => parse_json::<NodeFacts>(&res),
             };
-            shared.lock().unwrap().node_facts = Some(parsed);
+            apply(&shared, epoch, |sh| sh.node_facts = Some(parsed));
             ctx.request_repaint();
         });
     }
@@ -996,6 +1025,27 @@ impl Client {
     pub fn clear_guide(&self) {
         self.shared.lock().unwrap().guide = None;
     }
+}
+
+/// The epoch of the current host connection (see [`Shared::epoch`]).
+/// True when a 404 body is the host's generic "not found": the route does not exist on this host.
+/// (`/cogs/<id>/last` answers 404 with `no output yet` / `no such cog` when the route exists.)
+fn route_missing(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body).ok().and_then(|v| v["error"].as_str().map(|e| e == "not found")).unwrap_or(false)
+}
+
+fn epoch_of(shared: &Arc<Mutex<Shared>>) -> u64 {
+    shared.lock().unwrap().epoch
+}
+
+/// Run `f` on the shared state only if the console is still on the connection the fetch started in.
+fn apply(shared: &Arc<Mutex<Shared>>, epoch: u64, f: impl FnOnce(&mut Shared)) -> bool {
+    let mut sh = shared.lock().unwrap();
+    if sh.epoch != epoch {
+        return false;
+    }
+    f(&mut sh);
+    true
 }
 
 fn set(shared: &Arc<Mutex<Shared>>, ctx: &eframe::egui::Context, msg: String) {
@@ -1107,5 +1157,41 @@ fn hexval(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod epoch_tests {
+    use super::*;
+
+    #[test]
+    fn a_reply_from_the_old_host_is_dropped_after_a_switch() {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let started = epoch_of(&shared);
+        assert!(apply(&shared, started, |sh| sh.last_action = Some("fresh".into())));
+        // the console switches host: the epoch moves on and state is reset
+        {
+            let mut sh = shared.lock().unwrap();
+            let epoch = sh.epoch + 1;
+            *sh = Shared { epoch, ..Shared::default() };
+        }
+        assert!(!apply(&shared, started, |sh| sh.last_action = Some("stale".into())), "stale reply must not apply");
+        assert!(shared.lock().unwrap().last_action.is_none());
+        assert!(apply(&shared, epoch_of(&shared), |sh| sh.last_action = Some("new".into())));
+    }
+
+    #[test]
+    fn reconnect_bumps_the_epoch() {
+        let mut c = Client::new(Settings::default());
+        let e0 = c.snapshot().epoch;
+        c.reconnect(Settings::default());
+        assert_eq!(c.snapshot().epoch, e0 + 1);
+    }
+
+    #[test]
+    fn only_the_generic_not_found_means_the_route_is_missing() {
+        assert!(route_missing(br#"{"ok":false,"error":"not found"}"#));
+        assert!(!route_missing(br#"{"ok":false,"error":"no output yet"}"#));
+        assert!(!route_missing(b"garbage"));
     }
 }

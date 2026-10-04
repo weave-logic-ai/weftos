@@ -139,7 +139,8 @@ fn spawn_retry(cmd: &mut Command) -> std::io::Result<Child> {
 }
 
 /// One cog's live status, as the API serializes it.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CogStatus {
     pub id: String,
     pub version: String,
@@ -165,49 +166,10 @@ pub struct CogStatus {
     /// Seconds since the cog last wrote output (log mtime): the "last output" age.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_age_s: Option<u64>,
-    /// TCP ports the running cog is listening on (its export / API port), read from `/proc`.
-    /// Replaces the console's hand-kept id -> port map. Empty off Linux or when nothing listens.
+    /// TCP ports the running cog is listening on (its export / API port). Filled by the HTTP layer
+    /// from `/proc` (see `proc.rs`), not by the supervisor. Empty off Linux or when nothing listens.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub export_ports: Vec<u16>,
-}
-
-/// Listening TCP ports of `pid`: socket inodes from `<proc>/<pid>/fd`, matched against the
-/// LISTEN rows (state `0A`) of `<proc>/net/tcp` and `tcp6`. Sorted, de-duplicated.
-pub fn listen_ports(proc_root: &Path, pid: u32) -> Vec<u16> {
-    let Ok(rd) = std::fs::read_dir(proc_root.join(pid.to_string()).join("fd")) else { return Vec::new() };
-    let inodes: std::collections::HashSet<String> = rd
-        .filter_map(|e| std::fs::read_link(e.ok()?.path()).ok())
-        .filter_map(|l| l.to_str()?.strip_prefix("socket:[")?.strip_suffix(']').map(str::to_string))
-        .collect();
-    let mut ports = Vec::new();
-    for f in ["net/tcp", "net/tcp6"] {
-        if let Ok(t) = std::fs::read_to_string(proc_root.join(f)) {
-            ports.extend(parse_listen_rows(&t, &inodes));
-        }
-    }
-    ports.sort_unstable();
-    ports.dedup();
-    ports
-}
-
-fn parse_listen_rows(table: &str, inodes: &std::collections::HashSet<String>) -> Vec<u16> {
-    table
-        .lines()
-        .skip(1)
-        .filter_map(|l| {
-            let c: Vec<&str> = l.split_whitespace().collect();
-            // sl local_address rem_address st tx:rx tr:when retrnsmt uid timeout inode
-            let (local, st, inode) = (c.get(1)?, c.get(3)?, c.get(9)?);
-            (*st == "0A" && inodes.contains(*inode)).then(|| u16::from_str_radix(local.rsplit(':').next()?, 16).ok()).flatten()
-        })
-        .collect()
-}
-
-/// (size, seconds since last write) of a cog's log, `None` when there is no log yet.
-pub fn log_stats(path: &Path) -> (Option<u64>, Option<u64>) {
-    let Ok(m) = std::fs::metadata(path) else { return (None, None) };
-    let age = m.modified().ok().and_then(|t| t.elapsed().ok()).map(|d| d.as_secs());
-    (Some(m.len()), age)
 }
 
 pub struct Supervisor {
@@ -450,7 +412,7 @@ impl Supervisor {
             .map(|r| {
                 let run = self.running.get(&r.id);
                 let pid = run.map(|x| x.child.id());
-                let (log_bytes, log_age_s) = log_stats(&r.dir(&self.root).join("host.log"));
+                let (log_bytes, log_age_s) = crate::proc::log_stats(&r.dir(&self.root).join("host.log"));
                 CogStatus {
                     id: r.id.clone(),
                     version: r.version.clone(),
@@ -467,7 +429,7 @@ impl Supervisor {
                     licence_grant: run.and_then(|x| x.grant_id.clone()),
                     log_bytes,
                     log_age_s,
-                    export_ports: pid.map(|p| listen_ports(Path::new("/proc"), p)).unwrap_or_default(),
+                    export_ports: Vec::new(),
                 }
             })
             .collect();
@@ -502,42 +464,6 @@ fn rss_kb(pid: u32) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn listen_rows_match_only_this_process_listeners() {
-        let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
-   0: 0100007F:1F5C 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 111 1 0 100 0 0 10 0\n\
-   1: 00000000:2648 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 222 1 0 100 0 0 10 0\n\
-   2: 0100007F:D000 0100007F:1F5C 01 00000000:00000000 00:00000000 00000000  1000        0 111 1 0 100 0 0 10 0\n";
-        let mine: std::collections::HashSet<String> = ["111".to_string()].into();
-        assert_eq!(super::parse_listen_rows(table, &mine), vec![8028], "0x1F5C listening, inode 111; the ESTABLISHED row is skipped");
-    }
-
-    #[test]
-    fn listen_ports_reads_a_proc_tree() {
-        let d = tempfile::tempdir().unwrap();
-        let fd = d.path().join("42/fd");
-        std::fs::create_dir_all(&fd).unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink("socket:[333]", fd.join("3")).unwrap();
-        std::fs::create_dir_all(d.path().join("net")).unwrap();
-        std::fs::write(d.path().join("net/tcp"), "hdr\n   0: 0100007F:1F54 00000000:0000 0A 0:0 0:0 0 1000 0 333 1\n").unwrap();
-        std::fs::write(d.path().join("net/tcp6"), "hdr\n").unwrap();
-        #[cfg(unix)]
-        assert_eq!(super::listen_ports(d.path(), 42), vec![8020]);
-        assert!(super::listen_ports(d.path(), 99).is_empty());
-    }
-
-    #[test]
-    fn log_stats_reports_real_size_and_age_or_nothing() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("host.log");
-        assert_eq!(super::log_stats(&p), (None, None));
-        std::fs::write(&p, b"0123456789").unwrap();
-        let (bytes, age) = super::log_stats(&p);
-        assert_eq!(bytes, Some(10));
-        assert!(age.is_some_and(|a| a < 5));
-    }
-
     use super::*;
     use crate::{save_record, Source};
     use std::io::Write;

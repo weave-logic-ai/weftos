@@ -156,11 +156,28 @@ fn reasons(o: &CogOutput) -> String {
 }
 
 /// `http://<ip>:<port>` of a peer's cog-host, reusing the port of the host the console is on.
-pub fn peer_url(connected_host: &str, ip: &str) -> String {
+/// `None` unless `ip` is a literal tailnet address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`): the
+/// console never offers to send a host token to an address it did not get from the tailnet.
+pub fn peer_url(connected_host: &str, ip: &str) -> Option<String> {
+    let addr = weftos_cog_market::net::tailnet_ip(ip)?;
     let rest = connected_host.trim().trim_end_matches('/');
     let rest = rest.strip_prefix("http://").or_else(|| rest.strip_prefix("https://")).unwrap_or(rest);
     let port = rest.rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok()).unwrap_or(9480);
-    format!("http://{ip}:{port}")
+    Some(match addr {
+        std::net::IpAddr::V4(a) => format!("http://{a}:{port}"),
+        std::net::IpAddr::V6(a) => format!("http://[{a}]:{port}"),
+    })
+}
+
+/// Per-host tokens when the console moves from one host to another: remember the token of the host
+/// being left, and return the token for the new one (what was entered for it before, else empty).
+/// The old host's token is never returned for a different host.
+pub fn switch_token(tokens: &mut std::collections::BTreeMap<String, String>, from_host: &str, from_token: &str, to_host: &str) -> String {
+    tokens.insert(from_host.trim().to_string(), from_token.to_string());
+    if from_host.trim() == to_host.trim() {
+        return from_token.to_string();
+    }
+    tokens.get(to_host.trim()).cloned().unwrap_or_default()
 }
 
 /// True when the console points at this machine, which is rarely what a user on a remote node meant.

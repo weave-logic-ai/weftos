@@ -73,6 +73,8 @@ pub struct Manager {
     pending_hw: RefCell<Option<String>>,
     /// Install flow: the node picked for each cog (cog id -> node name).
     targets: RefCell<std::collections::BTreeMap<String, String>>,
+    /// Host token per host address, so switching nodes never sends one node's token to another.
+    tokens: std::collections::BTreeMap<String, String>,
     focus_module: Option<String>,
     focus_step: Option<u8>,
 }
@@ -114,6 +116,7 @@ impl Manager {
             events: RefCell::new(Vec::new()),
             pending_hw: RefCell::new(None),
             targets: RefCell::new(Default::default()),
+            tokens: Default::default(),
             focus_module: deep,
             focus_step: client::setting("WEFTOS_STEP", "step", "").trim().parse().ok(),
         };
@@ -271,8 +274,17 @@ impl Manager {
                 ui.add(egui::TextEdit::singleline(&mut self.token_draft).password(true).desired_width(110.0).hint_text("<root>/host.token"));
                 if ui.button("Connect").clicked() {
                     let mut s = self.client.s.clone();
+                    // a token typed for one host is never carried to a different one unchanged
+                    let moved = self.host_draft.trim() != self.client.s.host.trim();
+                    if moved {
+                        let for_new = sensor_install::switch_token(&mut self.tokens, &self.client.s.host, &self.client.s.token, &self.host_draft);
+                        if self.token_draft == self.client.s.token {
+                            self.token_draft = for_new;
+                        }
+                    }
                     s.host = self.host_draft.clone();
                     s.token = self.token_draft.clone();
+                    self.tokens.insert(s.host.clone(), s.token.clone());
                     self.client.reconnect(s);
                     self.guides.borrow_mut().clear();
                 }
@@ -725,6 +737,20 @@ impl Manager {
         }
     }
 
+    /// Point the console at another node. Tokens are per host: the current host's token is kept
+    /// under its own address and is NOT sent to the new node; the new node's token is whatever was
+    /// entered for it before, else empty (the user is asked for it in the top bar).
+    fn switch_host(&mut self, url: String) {
+        let mut s = self.client.s.clone();
+        s.token = sensor_install::switch_token(&mut self.tokens, &s.host, &s.token, &url);
+        s.host = url.clone();
+        self.host_draft = url;
+        self.token_draft = s.token.clone();
+        self.client.reconnect(s);
+        self.guides.borrow_mut().clear();
+        self.targets.borrow_mut().clear();
+    }
+
     /// Apply what the panel and cross-links asked for this frame, with the same client calls the
     /// Cogs tab uses (install / start / stop) plus tab navigation.
     fn apply_requests(&mut self, ctx: &egui::Context) {
@@ -741,13 +767,7 @@ impl Manager {
                 Event::Install { id, source, version } => self.client.install(&id, source, version, ctx),
                 Event::Lifecycle { id, action } => self.client.lifecycle(&id, action, ctx),
                 Event::OpenGuide { cog, page } => self.open_guide(&cog, page, Some(ctx)),
-                Event::SwitchHost { url } => {
-                    let mut s = self.client.s.clone();
-                    s.host = url.clone();
-                    self.host_draft = url;
-                    self.client.reconnect(s);
-                    self.guides.borrow_mut().clear();
-                }
+                Event::SwitchHost { url } => self.switch_host(url),
             }
         }
     }

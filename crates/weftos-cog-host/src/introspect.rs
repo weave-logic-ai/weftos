@@ -50,7 +50,8 @@ pub fn bus_facts(fs: &Path, node: &str, root: &Path) -> Value {
     let cmdline = std::fs::read_to_string(fs.join("proc/cmdline")).ok();
     let console = cmdline.as_deref().and_then(serial_console);
     let uart: Vec<&str> = ["/dev/serial0", "/dev/ttyAMA0", "/dev/ttyS0"].into_iter().filter(|d| exists(fs, d)).collect();
-    let cogs: Vec<Value> = crate::load_records(root).iter().filter(|r| r.enabled).map(|r| json!({"id": r.id, "args": r.args})).collect();
+    // ids only: a cog's command line can carry key or token paths, which a bus check never needs
+    let cogs: Vec<Value> = crate::load_records(root).iter().filter(|r| r.enabled).map(|r| json!({"id": r.id})).collect();
     json!({
         "ok": true,
         "node": node,
@@ -101,11 +102,11 @@ pub fn last_output(root: &Path, id: &str) -> Result<Value, (&'static str, String
 pub fn installed_guide(root: &Path, id: &str) -> Result<String, (&'static str, String)> {
     let dir = cog_dir(root, id).ok_or(("404 Not Found", "no such cog".to_string()))?;
     let p = dir.join("guide.json");
-    if p.is_file() {
-        if std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > GUIDE_CAP {
-            return Err(("413 Payload Too Large", "guide too large".into()));
-        }
-        return std::fs::read_to_string(&p).map_err(|_| ("404 Not Found", "no guide installed with this cog".to_string()));
+    if std::fs::symlink_metadata(&p).is_ok() {
+        // a ready-made guide.json: regular file only, size-capped
+        return read_regular(&p, GUIDE_CAP)
+            .and_then(|b| String::from_utf8(b).ok())
+            .ok_or(("404 Not Found", "no usable guide installed with this cog".to_string()));
     }
     bundle_dir(&dir.join("guide")).ok_or(("404 Not Found", "no guide installed with this cog".to_string()))
 }
@@ -113,6 +114,12 @@ pub fn installed_guide(root: &Path, id: &str) -> Result<String, (&'static str, S
 /// Store a hook-up guide with an installed cog (`<root>/<id>/guide.json`) so the host can serve it
 /// at `GET /cogs/<id>/guide`. `src` is a guide folder (ADR-104) or a bundled `/guide` JSON file.
 pub fn install_guide(root: &Path, id: &str, src: &Path) -> Result<(), String> {
+    if !crate::valid_cog_id(id) {
+        return Err(format!("bad cog id '{id}'"));
+    }
+    if !root.join(id).is_dir() {
+        return Err(format!("cog '{id}' is not installed in {}", root.display()));
+    }
     let json = if src.is_dir() {
         bundle_dir(src).ok_or("not a guide folder (needs guide.toml) or too large")?
     } else {
@@ -129,24 +136,38 @@ pub fn install_guide(root: &Path, id: &str, src: &Path) -> Result<(), String> {
     std::fs::write(root.join(id).join("guide.json"), json).map_err(|e| e.to_string())
 }
 
+/// Read one regular file of at most `cap` bytes, never through a symlink.
+fn read_regular(path: &Path, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    if !m.file_type().is_file() || m.len() > cap {
+        return None;
+    }
+    let mut v = Vec::new();
+    std::fs::File::open(path).ok()?.take(cap).read_to_end(&mut v).ok()?;
+    Some(v)
+}
+
+/// Bundle a guide folder into the `/guide` JSON. Only regular files directly inside it count:
+/// symlinks, sub-folders and anything over the size cap are skipped, so a package cannot make the
+/// host read an unrelated file.
 fn bundle_dir(g: &Path) -> Option<String> {
     use base64::Engine as _;
-    let toml = std::fs::read_to_string(g.join("guide.toml")).ok()?;
+    let toml = String::from_utf8(read_regular(&g.join("guide.toml"), GUIDE_CAP)?).ok()?;
     let (mut pages, mut images, mut total) = (serde_json::Map::new(), serde_json::Map::new(), toml.len() as u64);
     for e in std::fs::read_dir(g).ok()?.flatten() {
         let path = e.path();
-        let name = e.file_name().into_string().ok()?;
-        let len = e.metadata().ok()?.len();
-        total += len;
-        if total > GUIDE_CAP {
-            return None;
-        }
+        let Ok(name) = e.file_name().into_string() else { continue };
+        let Some(bytes) = read_regular(&path, GUIDE_CAP.saturating_sub(total)) else { continue };
+        total += bytes.len() as u64;
         match path.extension().and_then(|x| x.to_str()) {
             Some("md") => {
-                pages.insert(path.file_stem()?.to_str()?.to_string(), Value::String(std::fs::read_to_string(&path).ok()?));
+                if let (Some(stem), Ok(text)) = (path.file_stem().and_then(|s| s.to_str()), String::from_utf8(bytes)) {
+                    pages.insert(stem.to_string(), Value::String(text));
+                }
             }
             Some("png" | "jpg" | "jpeg" | "gif" | "webp") => {
-                images.insert(name, Value::String(base64::engine::general_purpose::STANDARD.encode(std::fs::read(&path).ok()?)));
+                images.insert(name, Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)));
             }
             _ => {}
         }
@@ -201,6 +222,8 @@ mod tests {
         assert_eq!(f["i2c"]["devices"], json!(["/dev/i2c-1"]));
         assert_eq!(f["usb_serial"], json!(["/dev/ttyUSB0"]));
         assert_eq!(f["enabled_cogs"].as_array().unwrap().len(), 1, "disabled cogs are not listed");
+        assert_eq!(f["enabled_cogs"][0], json!({"id": "a"}), "no command line leaves the node");
+        assert!(!f.to_string().contains("--device"));
         // an unreadable cmdline is "unknown", never "console off"
         let bare = tempfile::tempdir().unwrap();
         let f = bus_facts(bare.path(), "n", root.path());
@@ -249,6 +272,37 @@ mod tests {
         std::fs::write(&f, r#"{"nope":1}"#).unwrap();
         assert!(install_guide(root.path(), "z", &f).is_err());
         assert!(install_guide(root.path(), "z", Path::new("/nonexistent")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundling_never_follows_a_symlink_or_reads_past_the_cap() {
+        let root = tempfile::tempdir().unwrap();
+        add_cog(root.path(), "s", &[], false);
+        let g = root.path().join("s/guide");
+        std::fs::create_dir_all(&g).unwrap();
+        std::fs::write(g.join("guide.toml"), "pages = []\n").unwrap();
+        let secret = root.path().join("secret.md");
+        std::fs::write(&secret, "TOP SECRET").unwrap();
+        std::os::unix::fs::symlink(&secret, g.join("leak.md")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("host.token"), g.join("tok.png")).unwrap();
+        std::fs::create_dir_all(g.join("sub.md")).unwrap();
+        let out = installed_guide(root.path(), "s").unwrap();
+        assert!(!out.contains("TOP SECRET") && !out.contains("leak"), "{out}");
+        assert!(!out.contains("tok.png"));
+        // a guide.toml that is itself a symlink is refused outright
+        std::fs::remove_file(g.join("guide.toml")).unwrap();
+        std::os::unix::fs::symlink(&secret, g.join("guide.toml")).unwrap();
+        assert!(installed_guide(root.path(), "s").is_err());
+    }
+
+    #[test]
+    fn install_guide_refuses_a_bad_or_uninstalled_id() {
+        let root = tempfile::tempdir().unwrap();
+        let f = root.path().join("g.json");
+        std::fs::write(&f, r#"{"toml":"","pages":{}}"#).unwrap();
+        assert!(install_guide(root.path(), "../etc", &f).is_err());
+        assert!(install_guide(root.path(), "not-installed", &f).is_err());
     }
 
     #[test]

@@ -15,6 +15,14 @@ pub enum Scope {
     ThisHostOnly(String),
 }
 
+impl MeshNodeView {
+    /// Stable identity for picking a node: the address, never the name (names are advisory and can
+    /// collide or be spoofed); the connected host is always `"self"`.
+    pub fn key(&self) -> String {
+        if self.is_self { "self".into() } else { self.ip.clone() }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MeshNodeView {
     pub name: String,

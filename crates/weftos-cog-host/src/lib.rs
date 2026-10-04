@@ -14,6 +14,7 @@ pub mod introspect;
 pub mod licence;
 pub mod mesh;
 pub mod network;
+pub mod proc;
 pub mod supervise;
 pub mod usb;
 pub mod usb_identify;

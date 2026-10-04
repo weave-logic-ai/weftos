@@ -14,9 +14,13 @@ use weftos_sensor_guide::GuideDoc;
 /// The export port to use for a cog: the one the host reports from `/proc` for the running cog,
 /// else the built-in map below. 0 = unknown.
 pub fn export_port(id: &str, host: Option<&HostStatus>) -> u16 {
-    host.and_then(|h| h.cogs.iter().find(|c| c.id == id))
-        .and_then(|c| c.export_ports.first().copied())
-        .unwrap_or_else(|| default_export_port(id))
+    let known = default_export_port(id);
+    let ports = host.and_then(|h| h.cogs.iter().find(|c| c.id == id)).map(|c| c.export_ports.as_slice()).unwrap_or(&[]);
+    // a cog may listen on more than one port: prefer its declared one when the host sees it listening
+    if known != 0 && ports.contains(&known) {
+        return known;
+    }
+    ports.first().copied().unwrap_or(known)
 }
 
 /// Fallback id -> export port map (each cog.toml `[api].bind_port`) for hosts that predate
@@ -459,7 +463,7 @@ pub struct DocEntry {
     pub target: DocTarget,
 }
 
-pub const SENSOR_COG_SKILL: &str = "cognitum-cogs: .claude/skills/sensor-cog/SKILL.md";
+pub const SENSOR_COG_SKILL: &str = "the sensor-cog skill (ADR-104 describes the guide every sensor cog ships)";
 
 fn target_of(url: &str) -> DocTarget {
     if url.starts_with("http://") || url.starts_with("https://") {

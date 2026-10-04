@@ -74,7 +74,7 @@ own process group with a 90 s timeout (the whole group is killed), 16 KB output 
 
 ## Mesh view: `GET /mesh/cogs` (ADR-107)
 
-Read-only, open like `/status`. The host returns its own cogs plus the cogs of every online tailnet peer that answers `GET :9480/status` as a cog host (override the peer port with `WEFT_COG_HOST_PEER_PORT`):
+Read-only, **host token required** and no wildcard CORS (the rows describe the node's state). The host returns its own cogs plus the cogs of every online tailnet peer that answers `GET :9480/status` as a cog host (override the peer port with `WEFT_COG_HOST_PEER_PORT`):
 
 ```json
 {"ok":true,"scope":"mesh|this_host_only","reason":"...","self":"cog0",
@@ -87,5 +87,7 @@ Read-only, open like `/status`. The host returns its own cogs plus the cogs of e
 ## Install-flow facts (ADR-107)
 
 - `GET /hw/buses` (host token): `{arch, uart:{devices, console_on_uart, console}, i2c:{devices}, usb_serial, enabled_cogs:[{id,args}]}`. Only what the host can read: device nodes that exist, `/proc/cmdline` (`console_on_uart` is `null` when unreadable), the cog records on disk.
-- `GET /cogs/<id>/last` (open, like `/status`): the cog's newest output line reduced to health fields. Target positions are never returned.
-- `GET /cogs/<id>/guide` (open): the `guide.json` shipped in the installed package, or 404.
+- `GET /cogs/<id>/last` (**host token required**, no wildcard CORS): the cog's newest output line reduced to health fields. Health, reasons and quality can reveal a person's state (an ECG's lead-off, an irregular rhythm), so it is guarded like `/hw/*`. Target positions are never returned.
+- `GET /cogs/<id>/guide` (open: guides are public content): the `guide.json` shipped in the installed package, or a `guide/` folder bundled on the fly (regular files only, never through a symlink), or 404.
+- `GET /status` rows carry `log_bytes`, `log_age_s` and `export_ports` only for a caller with the host token: a presence radar's log growth and its listening port are activity side channels. `enabled_cogs` in `/hw/buses` lists ids only, never command lines.
+- Peers: `/mesh/cogs` only dials literal tailnet addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), each peer under one overall deadline, concurrent requests share one fan-out, and each peer's rows are re-read through a typed, capped struct.
