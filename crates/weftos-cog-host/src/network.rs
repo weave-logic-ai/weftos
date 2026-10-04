@@ -27,31 +27,69 @@ pub fn node_name() -> String {
 
 /// `tailscale status --json` → the fleet on the tailnet (self + peers).
 /// `tailscale status --json`, cached for a few seconds: the CLI is slow and every `/network` and
-/// `/mesh/cogs` request would otherwise spawn it. The cache lock is held while refreshing, so
-/// concurrent callers wait for one refresh instead of each spawning their own.
+/// `/mesh/cogs` request would otherwise spawn it. One refresh runs at a time (`REFRESH`), the
+/// cache lock is never held while the CLI runs, and the CLI is killed after [`TAILSCALE_TIMEOUT`],
+/// so a hung `tailscaled` cannot stall these routes.
 pub fn tailscale() -> Value {
     use std::sync::Mutex;
     use std::time::Instant;
     static CACHE: Mutex<Option<(Instant, Value)>> = Mutex::new(None);
-    let mut c = CACHE.lock().unwrap();
-    if let Some((at, v)) = c.as_ref()
-        && at.elapsed() < Duration::from_secs(5)
-    {
-        return v.clone();
+    static REFRESH: Mutex<()> = Mutex::new(());
+    let fresh = |c: &Option<(Instant, Value)>| {
+        c.as_ref().filter(|(at, _)| at.elapsed() < Duration::from_secs(5)).map(|(_, v)| v.clone())
+    };
+    if let Some(v) = fresh(&CACHE.lock().unwrap()) {
+        return v;
+    }
+    let _flight = REFRESH.lock().unwrap();
+    // Another caller may have refreshed while we waited.
+    if let Some(v) = fresh(&CACHE.lock().unwrap()) {
+        return v;
     }
     let v = tailscale_uncached();
-    *c = Some((Instant::now(), v.clone()));
+    *CACHE.lock().unwrap() = Some((Instant::now(), v.clone()));
     v
 }
 
+/// How long `tailscale status --json` may run before it is killed.
+pub const TAILSCALE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Run `cmd`, returning its stdout if it exits successfully within `timeout`; it is killed
+/// otherwise.
+pub fn output_within(mut cmd: Command, timeout: Duration) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::Instant;
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.by_ref().take(16 * 1024 * 1024).read_to_end(&mut buf);
+        buf
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let out = reader.join().ok()?;
+    status.filter(|s| s.success()).map(|_| out)
+}
+
 fn tailscale_uncached() -> Value {
-    let Ok(out) = Command::new("tailscale").args(["status", "--json"]).output() else {
+    let mut cmd = Command::new("tailscale");
+    cmd.args(["status", "--json"]);
+    let Some(stdout) = output_within(cmd, TAILSCALE_TIMEOUT) else {
         return json!({ "available": false });
     };
-    if !out.status.success() {
-        return json!({ "available": false });
-    }
-    let Ok(d) = serde_json::from_slice::<Value>(&out.stdout) else {
+    let Ok(d) = serde_json::from_slice::<Value>(&stdout) else {
         return json!({ "available": false });
     };
     let mut peers = Vec::new();
@@ -107,6 +145,25 @@ fn http_get(host: &str, path: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hung_command_is_killed_at_the_timeout() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let t = std::time::Instant::now();
+        assert_eq!(output_within(cmd, Duration::from_millis(200)), None);
+        assert!(t.elapsed() < Duration::from_secs(5), "took {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn a_quick_command_returns_its_stdout() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "printf ok"]);
+        assert_eq!(output_within(cmd, Duration::from_secs(5)).as_deref(), Some(&b"ok"[..]));
+        let mut fail = Command::new("sh");
+        fail.args(["-c", "printf no; exit 3"]);
+        assert_eq!(output_within(fail, Duration::from_secs(5)), None);
+    }
 
     #[test]
     fn peer_row_carries_last_seen_path_and_tags_and_tolerates_their_absence() {

@@ -23,6 +23,13 @@ pub(super) fn apply(shared: &Arc<Mutex<Shared>>, epoch: u64, f: impl FnOnce(&mut
     true
 }
 
+/// [`set`], but only while the console is still on the connection `epoch` started in.
+pub(super) fn set_in(shared: &Arc<Mutex<Shared>>, epoch: u64, ctx: &eframe::egui::Context, msg: String) {
+    if apply(shared, epoch, |sh| sh.last_action = Some(msg)) {
+        ctx.request_repaint();
+    }
+}
+
 pub(super) fn set(shared: &Arc<Mutex<Shared>>, ctx: &eframe::egui::Context, msg: String) {
     shared.lock().unwrap().last_action = Some(msg);
     ctx.request_repaint();

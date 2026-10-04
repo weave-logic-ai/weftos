@@ -204,6 +204,7 @@ pub enum Identify {
 impl Client {
     /// Scan the host's USB bus (`GET /hw/usb`). On demand: the modal calls this on open and Rescan.
     pub fn hw_scan(&self, ctx: &eframe::egui::Context) {
+        let epoch = epoch_of(&self.shared);
         self.shared.lock().unwrap().hw_usb = None;
         // POST: a scan the user asked for records sightings in the dex (GET /hw/usb is read-only).
         let url = format!("{}/hw/usb/scan", base(&self.s.host));
@@ -213,6 +214,9 @@ impl Client {
         let ctx = ctx.clone();
         ehttp::fetch(req, move |res| {
             let mut sh = shared.lock().unwrap();
+                if sh.epoch != epoch {
+                    return;
+                }
             sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
             sh.hw_usb_at = Some(Instant::now());
             ctx.request_repaint();
@@ -221,6 +225,7 @@ impl Client {
 
     /// Accept the current scan (`keys = None`) or just `keys` as the known baseline, then rescan.
     pub fn hw_baseline(&self, keys: Option<Vec<String>>, ctx: &eframe::egui::Context) {
+        let epoch = epoch_of(&self.shared);
         let url = format!("{}/hw/usb/baseline", base(&self.s.host));
         let body = match keys {
             Some(k) => serde_json::json!({ "keys": k }).to_string().into_bytes(),
@@ -235,11 +240,16 @@ impl Client {
                 Ok(r) => format!("baseline: {}", http_err(r)),
                 Err(e) => format!("baseline: {e}"),
             };
-            shared.lock().unwrap().last_action = Some(msg);
+            if !apply(&shared, epoch, |sh| sh.last_action = Some(msg)) {
+                return;
+            }
             let url = format!("{}/hw/usb", base(&host));
             let (shared, ctx3) = (Arc::clone(&shared), ctx2.clone());
             ehttp::fetch(get_req(url, &token), move |res| {
                 let mut sh = shared.lock().unwrap();
+                if sh.epoch != epoch {
+                    return;
+                }
                 sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
                 sh.hw_usb_at = Some(Instant::now());
                 ctx3.request_repaint();
@@ -250,6 +260,7 @@ impl Client {
     /// Ask the host's agent what a device is (`POST /hw/usb/identify {key}`); the answer lands in
     /// `hw_identify[key]`. The host blocks up to ~90 s, so the UI shows a spinner meanwhile.
     pub fn hw_identify(&self, key: &str, ctx: &eframe::egui::Context) {
+        let epoch = epoch_of(&self.shared);
         self.shared.lock().unwrap().hw_identify.insert(key.to_string(), Identify::Pending);
         let url = format!("{}/hw/usb/identify", base(&self.s.host));
         let mut req = ehttp::Request::post(url, serde_json::json!({ "key": key }).to_string().into_bytes());
@@ -271,13 +282,16 @@ impl Client {
                 },
                 Err(e) => Err(e.clone()),
             };
-            shared.lock().unwrap().hw_identify.insert(key, Identify::Done(out));
+            apply(&shared, epoch, |sh| {
+                sh.hw_identify.insert(key, Identify::Done(out));
+            });
             ctx.request_repaint();
         });
     }
 
     /// Acknowledge the "NEW CATCH!" banners (`POST /hw/dex/ack`), then refresh the scan and dex.
     pub fn hw_ack(&self, ctx: &eframe::egui::Context) {
+        let epoch = epoch_of(&self.shared);
         let url = format!("{}/hw/dex/ack", base(&self.s.host));
         let mut req = ehttp::Request::post(url, Vec::new());
         post_headers(&mut req, &self.s.token);
@@ -288,12 +302,17 @@ impl Client {
                 Ok(r) => format!("ack: {}", http_err(r)),
                 Err(e) => format!("ack: {e}"),
             };
-            shared.lock().unwrap().last_action = Some(msg);
+            if !apply(&shared, epoch, |sh| sh.last_action = Some(msg)) {
+                return;
+            }
             for path in ["hw/usb", "hw/dex"] {
                 let (shared, ctx) = (Arc::clone(&shared), ctx.clone());
                 let url = format!("{}/{path}", base(&host));
                 ehttp::fetch(get_req(url, &token), move |res| {
                     let mut sh = shared.lock().unwrap();
+                if sh.epoch != epoch {
+                    return;
+                }
                     if path == "hw/usb" {
                         sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
                     } else {
@@ -307,10 +326,11 @@ impl Client {
 
     /// Fetch the Hardware Dex (`GET /hw/dex`).
     pub fn hw_dex_fetch(&self, ctx: &eframe::egui::Context) {
+        let epoch = epoch_of(&self.shared);
         let url = format!("{}/hw/dex", base(&self.s.host));
         let (shared, ctx) = (Arc::clone(&self.shared), ctx.clone());
         ehttp::fetch(get_req(url, &self.s.token), move |res| {
-            shared.lock().unwrap().hw_dex = Some(parse_json::<HwDexReport>(&res));
+            apply(&shared, epoch, |sh| sh.hw_dex = Some(parse_json::<HwDexReport>(&res)));
             ctx.request_repaint();
         });
     }
@@ -318,6 +338,7 @@ impl Client {
     /// "Register species": link an attached device to a catalog ref (`module:<id>`/`chip:<id>`) or
     /// register it as `wild` (with `name`). Rescans and refreshes the dex afterwards.
     pub fn hw_dex_catch(&self, key: &str, catalog_id: &str, name: &str, answer: &str, ctx: &eframe::egui::Context) {
+        let epoch = epoch_of(&self.shared);
         let url = format!("{}/hw/dex/catch", base(&self.s.host));
         let body = serde_json::json!({ "key": key, "catalog_id": catalog_id, "name": name, "answer": answer });
         let mut req = ehttp::Request::post(url, body.to_string().into_bytes());
@@ -335,6 +356,9 @@ impl Client {
             };
             {
                 let mut sh = shared.lock().unwrap();
+                if sh.epoch != epoch {
+                    return;
+                }
                 sh.last_action = Some(msg);
             }
             for path in ["hw/usb", "hw/dex"] {
@@ -342,6 +366,9 @@ impl Client {
                 let url = format!("{}/{path}", base(&this.0.host));
                 ehttp::fetch(get_req(url, &this.0.token), move |res| {
                     let mut sh = shared.lock().unwrap();
+                if sh.epoch != epoch {
+                    return;
+                }
                     if path == "hw/usb" {
                         sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
                         sh.hw_usb_at = Some(Instant::now());

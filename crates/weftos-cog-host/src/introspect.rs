@@ -137,14 +137,30 @@ pub fn install_guide(root: &Path, id: &str, src: &Path) -> Result<(), String> {
 }
 
 /// Read one regular file of at most `cap` bytes, never through a symlink.
+#[cfg(unix)]
+fn open_nofollow(path: &Path) -> Option<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).ok()
+}
+
+#[cfg(not(unix))]
+fn open_nofollow(path: &Path) -> Option<std::fs::File> {
+    std::fs::File::open(path).ok()
+}
+
 fn read_regular(path: &Path, cap: u64) -> Option<Vec<u8>> {
     use std::io::Read;
     let m = std::fs::symlink_metadata(path).ok()?;
     if !m.file_type().is_file() || m.len() > cap {
         return None;
     }
+    // Open without following a symlink swapped in after the check, then re-check the opened file.
+    let f = open_nofollow(path)?;
+    if !f.metadata().ok()?.file_type().is_file() {
+        return None;
+    }
     let mut v = Vec::new();
-    std::fs::File::open(path).ok()?.take(cap).read_to_end(&mut v).ok()?;
+    f.take(cap).read_to_end(&mut v).ok()?;
     Some(v)
 }
 
@@ -153,6 +169,10 @@ fn read_regular(path: &Path, cap: u64) -> Option<Vec<u8>> {
 /// host read an unrelated file.
 fn bundle_dir(g: &Path) -> Option<String> {
     use base64::Engine as _;
+    // A symlinked guide/ directory could point anywhere; only a real directory counts.
+    if !std::fs::symlink_metadata(g).ok()?.file_type().is_dir() {
+        return None;
+    }
     let toml = String::from_utf8(read_regular(&g.join("guide.toml"), GUIDE_CAP)?).ok()?;
     let (mut pages, mut images, mut total) = (serde_json::Map::new(), serde_json::Map::new(), toml.len() as u64);
     for e in std::fs::read_dir(g).ok()?.flatten() {
@@ -293,6 +313,19 @@ mod tests {
         // a guide.toml that is itself a symlink is refused outright
         std::fs::remove_file(g.join("guide.toml")).unwrap();
         std::os::unix::fs::symlink(&secret, g.join("guide.toml")).unwrap();
+        assert!(installed_guide(root.path(), "s").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_guide_directory_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        add_cog(root.path(), "s", &[], false);
+        let elsewhere = root.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("guide.toml"), "pages = []\n").unwrap();
+        std::fs::write(elsewhere.join("leak.md"), "OUTSIDE").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.path().join("s/guide")).unwrap();
         assert!(installed_guide(root.path(), "s").is_err());
     }
 

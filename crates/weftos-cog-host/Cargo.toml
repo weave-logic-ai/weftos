@@ -27,8 +27,8 @@ weftos-cog-market = { path = "../weftos-cog-market" }
 clawft-kernel = { workspace = true, features = ["native", "ecc", "exochain", "mesh"] }
 blake3 = { workspace = true }
 
-# memfd_create / fcntl seals: run exactly the hashed bytes of a licensed cog (supervise.rs).
-[target.'cfg(target_os = "linux")'.dependencies]
+# memfd_create / fcntl seals (Linux, supervise.rs) and O_NOFOLLOW guide reads (introspect.rs).
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]

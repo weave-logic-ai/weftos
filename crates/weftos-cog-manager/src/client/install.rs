@@ -34,6 +34,7 @@ impl Client {
         };
 
         self.set_action(format!("fetching {id}…"), ctx);
+        let epoch = epoch_of(&self.shared);
         let shared = Arc::clone(&self.shared);
         let host = base(&self.s.host);
         let token = self.s.token.clone();
@@ -43,8 +44,8 @@ impl Client {
         ehttp::fetch(ehttp::Request::get(url), move |res| {
             let bytes = match &res {
                 Ok(r) if r.ok => r.bytes.clone(),
-                Ok(r) => return set(&shared, &ctx, format!("fetch {id}: HTTP {}", r.status)),
-                Err(e) => return set(&shared, &ctx, format!("fetch {id}: {e} (CORS? use the native console for this source)")),
+                Ok(r) => return set_in(&shared, epoch, &ctx, format!("fetch {id}: HTTP {}", r.status)),
+                Err(e) => return set_in(&shared, epoch, &ctx, format!("fetch {id}: {e} (CORS? use the native console for this source)")),
             };
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
             let body = serde_json::json!({
@@ -67,7 +68,7 @@ impl Client {
                     Err(e) => format!("install {id2}: {e}"),
                 };
                 busy2.store(false, Ordering::Release); // prompt a status refresh so it shows up
-                set(&shared2, &ctx2, msg);
+                set_in(&shared2, epoch, &ctx2, msg);
             });
         });
     }
