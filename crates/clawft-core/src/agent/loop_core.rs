@@ -495,6 +495,9 @@ pub struct AgentLoop<P: Platform> {
     /// HashMap-backed). Phase C3 swaps in the substrate-backed sink
     /// from `clawft-service-agent`.
     sink: Arc<dyn ConversationSink>,
+    /// Memory consolidation after each turn (WEFT-347 / WEFT-733), from
+    /// `agents.memory_consolidation`; `None` when off.
+    consolidator: Option<crate::agent::learning::MemoryConsolidator<P>>,
     /// Optional daemon-supplied agent_id for [`EffectGate::check`]
     /// calls (agent-core-v1 Phase D2). When set, every tool dispatch
     /// passes this id to the gate instead of the synthesized
@@ -655,6 +658,7 @@ impl<P: Platform> AgentLoop<P> {
         context: ContextBuilder<P>,
         permission_resolver: PermissionResolver,
     ) -> Self {
+        let consolidator = context.consolidator_from_config();
         Self {
             config,
             platform,
@@ -671,6 +675,7 @@ impl<P: Platform> AgentLoop<P> {
             context_router: Arc::new(NullRouter),
             gate: Arc::new(NoopGate),
             sink: Arc::new(InMemorySink::new()),
+            consolidator,
             daemon_agent_id: None,
             system_prompt_builder: None,
             soul_journal: None,
@@ -1885,6 +1890,17 @@ impl<P: Platform> AgentLoop<P> {
                 warn!(error = %e, "failed to serialize agent loop result meta; result fields will default");
             }
         }
+        // 13a. Memory consolidation (WEFT-347 / WEFT-733): distil this conversation's turns
+        //      into long-term memory when the cadence is due. Best-effort: a failure is logged
+        //      and never fails the turn.
+        if let Some(ref consolidator) = self.consolidator
+            && let Err(e) = consolidator
+                .run_if_due(self.sink.as_ref(), &conv_id, crate::agent::learning::consolidator::now_ms())
+                .await
+        {
+            warn!(conv_id = %conv_id, error = %e, "memory consolidation failed");
+        }
+
         // 13b. Memory citations (WEFT-732): reward the memory reranker for the retrieved
         //      snippets the reply cited (+1) or ignored (-1), and drop the [mN] markers from
         //      the user-facing text (the sink keeps the reply as the model wrote it).
@@ -3553,6 +3569,105 @@ mod tests {
         )
         .with_observation_sessions_dir(sessions);
         (agent, dir)
+    }
+
+    /// `make_agent_loop` with an `AgentsConfig` tweak and a pre-seeded MEMORY.md.
+    async fn make_agent_loop_cfg(
+        transport: Arc<dyn LlmTransport>,
+        prefix: &str,
+        tweak: impl Fn(&mut AgentsConfig),
+        memory_md: &str,
+    ) -> (AgentLoop<NativePlatform>, PathBuf, Arc<MemoryStore<NativePlatform>>) {
+        let dir = temp_dir(prefix);
+        let platform = Arc::new(NativePlatform::new());
+        let memory = Arc::new(MemoryStore::with_paths(
+            dir.join("memory").join("MEMORY.md"),
+            dir.join("memory").join("HISTORY.md"),
+            platform.clone(),
+        ));
+        if !memory_md.is_empty() {
+            memory.write_long_term(memory_md).await.unwrap();
+        }
+        let skills = Arc::new(SkillsLoader::with_dir(dir.join("skills"), platform.clone()));
+        let mut cfg = test_config();
+        tweak(&mut cfg);
+        let context = ContextBuilder::new(cfg.clone(), memory.clone(), skills, platform.clone());
+        let sessions = dir.join("sessions");
+        let _ = std::fs::create_dir_all(&sessions);
+        let agent = AgentLoop::new(
+            cfg,
+            platform,
+            Arc::new(MessageBus::new()),
+            make_pipeline(transport),
+            Arc::new(ToolRegistry::new()),
+            context,
+            PermissionResolver::default_resolver(),
+        )
+        .with_observation_sessions_dir(sessions);
+        (agent, dir, memory)
+    }
+
+    fn inbound(content: &str) -> InboundMessage {
+        InboundMessage {
+            channel: "test".into(),
+            sender_id: "user1".into(),
+            chat_id: "chat1".into(),
+            content: content.into(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn consolidation_after_a_turn_writes_the_topic_bank() {
+        let transport = Arc::new(MockTransport::new("Noted."));
+        let (agent, dir, memory) = make_agent_loop_cfg(
+            transport,
+            "consolidate_turn",
+            |c| {
+                c.memory_consolidation.enabled = true;
+                c.memory_consolidation.every_k_turns = 1;
+            },
+            "",
+        )
+        .await;
+        agent
+            .handle_turn(inbound("I am allergic to penicillin and I live in Denver."), &CancellationToken::new())
+            .await
+            .unwrap();
+        let md = memory.read_long_term().await.unwrap();
+        assert!(md.contains("<!-- topics -->"), "{md}");
+        assert!(md.contains("I am allergic to penicillin") && md.contains("I live in Denver"), "{md}");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn consolidation_off_by_default_leaves_memory_untouched() {
+        let transport = Arc::new(MockTransport::new("Noted."));
+        let (agent, dir, memory) = make_agent_loop_cfg(transport, "consolidate_off", |_| {}, "").await;
+        agent.handle_turn(inbound("I live in Denver."), &CancellationToken::new()).await.unwrap();
+        assert!(memory.read_long_term().await.unwrap_or_default().is_empty());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[cfg(feature = "vector-memory")]
+    #[tokio::test]
+    async fn memory_recall_citations_are_stripped_from_the_user_facing_reply() {
+        let transport = Arc::new(MockTransport::new("You drink tea [m1]."));
+        let (agent, dir, _) = make_agent_loop_cfg(
+            transport,
+            "recall_turn",
+            |c| c.memory_recall.enabled = true,
+            "The user prefers tea over coffee.\n\nThe user lives in Denver.",
+        )
+        .await;
+        let out = agent
+            .handle_turn(inbound("tea or coffee preference?"), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(out.content, "You drink tea.");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[test]

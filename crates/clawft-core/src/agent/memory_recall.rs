@@ -25,12 +25,22 @@ pub struct MemorySnippet {
 }
 
 /// Split a memory file into snippets: blank-line separated paragraphs, empty ones dropped.
-/// A heading line on its own is kept with the paragraph that follows it.
+/// A heading line on its own is kept with the paragraph that follows it. Comment-only lines
+/// (`<!-- topic:key=… -->`, consolidator fingerprints) are removed.
 pub fn split_snippets(md: &str) -> Vec<MemorySnippet> {
     let mut out = Vec::new();
     let mut pending_heading: Option<String> = None;
     for para in md.split("\n\n") {
-        let t = para.trim();
+        // Bookkeeping comments (topic keys, consolidator fingerprints) never reach the prompt.
+        let kept: Vec<&str> = para
+            .lines()
+            .filter(|l| {
+                let l = l.trim();
+                !(l.starts_with("<!--") && l.ends_with("-->"))
+            })
+            .collect();
+        let joined = kept.join("\n");
+        let t = joined.trim();
         if t.is_empty() {
             continue;
         }

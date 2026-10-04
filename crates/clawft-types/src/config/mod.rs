@@ -352,6 +352,42 @@ pub struct AgentsConfig {
     /// TOML/JSON: `agents.memory_recall` / `agents.memoryRecall`.
     #[serde(default, alias = "memoryRecall")]
     pub memory_recall: MemoryRecallConfig,
+
+    /// Distil finished conversation turns into long-term memory (WEFT-347) and, with
+    /// `topic_merge`, organize them as topic nodes with merge-or-insert (WEFT-733, RMM
+    /// prospective). Off by default; when on, the agent loop runs it after each turn on the
+    /// conversation sink whenever its cadence is due.
+    ///
+    /// TOML/JSON: `agents.memory_consolidation` / `agents.memoryConsolidation`.
+    #[serde(default, alias = "memoryConsolidation")]
+    pub memory_consolidation: MemoryConsolidationConfig,
+}
+
+/// Memory consolidation settings (WEFT-347 / WEFT-733). See [`AgentsConfig::memory_consolidation`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryConsolidationConfig {
+    /// Run the consolidator from the agent loop. Default `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Consolidate after this many new turns in a conversation.
+    #[serde(default = "default_consolidate_every_k", alias = "everyKTurns")]
+    pub every_k_turns: usize,
+    /// Merge facts into topic nodes instead of appending blocks (WEFT-733). Default `true`.
+    #[serde(default = "default_true_bool", alias = "topicMerge")]
+    pub topic_merge: bool,
+}
+
+fn default_consolidate_every_k() -> usize {
+    10
+}
+fn default_true_bool() -> bool {
+    true
+}
+
+impl Default for MemoryConsolidationConfig {
+    fn default() -> Self {
+        Self { enabled: false, every_k_turns: default_consolidate_every_k(), topic_merge: true }
+    }
 }
 
 /// Retrieved-memory settings (WEFT-732). See [`AgentsConfig::memory_recall`].

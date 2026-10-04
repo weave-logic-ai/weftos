@@ -1,3 +1,5 @@
+> **Status 2026-10-04:** implemented (opt-in `agents.memory_consolidation`, `topic_merge`); see `docs/research/rmm-reflective-memory-management.md` §5 "Phase 2 as built".
+
 ## Source
 
 - paper: Tan et al., ACL 2025, arXiv:2503.08026 — Reflective Memory Management (prospective loop)

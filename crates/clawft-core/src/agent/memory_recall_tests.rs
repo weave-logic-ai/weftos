@@ -148,3 +148,11 @@ fn hash_retriever_ranks_the_matching_snippet_first() {
 fn disabled_config_builds_no_recall() {
     assert!(from_config(&clawft_types::config::MemoryRecallConfig::default()).is_none());
 }
+
+#[test]
+fn topic_bank_nodes_become_clean_snippets() {
+    let md = "<!-- topics -->\n\n<!-- topic:key=lives in -->\n- I live in Denver _(from c1)_\n\n<!-- /topics -->";
+    let s = split_snippets(md);
+    assert_eq!(s.len(), 1, "{s:?}");
+    assert_eq!(s[0].text, "- I live in Denver _(from c1)_");
+}

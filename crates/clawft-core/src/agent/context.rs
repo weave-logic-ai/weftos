@@ -135,6 +135,22 @@ impl<P: Platform> ContextBuilder<P> {
         self
     }
 
+    /// The memory consolidator from `agents.memory_consolidation` over this builder's memory
+    /// files (WEFT-347 / WEFT-733), or `None` when it is off.
+    pub fn consolidator_from_config(&self) -> Option<crate::agent::learning::MemoryConsolidator<P>> {
+        let c = &self.config.memory_consolidation;
+        if !c.enabled {
+            return None;
+        }
+        let store = MemoryStore::with_paths(
+            self.memory.memory_path().clone(),
+            self.memory.history_path().clone(),
+            self.platform.clone(),
+        );
+        let cfg = crate::agent::learning::ConsolidationConfig::every_k_turns(c.every_k_turns).with_topic_merge(c.topic_merge);
+        Some(crate::agent::learning::MemoryConsolidator::new(store, cfg))
+    }
+
     /// The attached memory recall, for the agent loop's post-turn attribution.
     pub fn memory_recall(&self) -> Option<&Arc<super::memory_recall::MemoryRecall>> {
         self.memory_recall.as_ref()

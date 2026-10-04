@@ -1,6 +1,6 @@
 # Reflective Memory Management (RMM) — Google Cloud AI Research → WeftOS
 
-**Status:** Research captured 2026-09-11. **Updated 2026-10-04: Phase 1 (retrospective, WEFT-732) implemented**, opt-in via `agents.memory_recall.enabled` — see §5 "Phase 1 as built". Phase 2 (prospective, **WEFT-733**) and Phase 3 (Gumbel, promote gate) not started. Board ticket **WEFT-732** → **WEFT-733**, cycle 0.8.x, `ws06-memory`.
+**Status:** Research captured 2026-09-11. **Updated 2026-10-04: Phase 1 (retrospective, WEFT-732) and Phase 2 (prospective, WEFT-733) implemented**, both opt-in (`agents.memory_recall`, `agents.memory_consolidation`) — see §5 "Phase 1 as built" and "Phase 2 as built". Phase 3 (Gumbel, promote gate) not started. Board ticket **WEFT-732** → **WEFT-733**, cycle 0.8.x, `ws06-memory`.
 **Date:** 2026-09-11
 **Paper:** Tan, Yan, Hsu, Han, Wang, Le, Song, Chen, Palangi, Lee, Iyer, Chen, Liu, Lee, Pfister —
 *In Prospect and Retrospect: Reflective Memory Management for Long-term Personalized Dialogue Agents*,
@@ -279,6 +279,25 @@ turn
 3. Knowledge-update tests: a later fact must replace, not sit beside,
    the earlier paragraph.
 
+### Phase 2 as built (2026-10-04, WEFT-733)
+
+- `crates/clawft-core/src/agent/learning/topics.rs`: the topic bank, a managed
+  `<!-- topics -->` section of `MEMORY.md` with one node per topic (`<!-- topic:key=… -->` then
+  `- fact _(from conv)_`). Facts are split into clauses, keyed deterministically by
+  `topic_key` (negation and filler dropped; single-valued attributes such as where you live,
+  your name or what you prefer key on the attribute alone), then merged (same key: the newer
+  fact replaces the text) or inserted (new key). Same transcript twice changes nothing.
+- WEFT-347's consolidator grows a `topic_merge` mode instead of a second consolidator; the
+  store's existing sanitizing applies to every write.
+- `AgentLoop` runs the consolidator after each turn on the conversation sink when its cadence
+  is due (`agents.memory_consolidation { enabled = false, every_k_turns = 10, topic_merge = true }`).
+  Before this, nothing ran the consolidator in production.
+- Retrieval sees one snippet per node; comment lines are stripped from snippets.
+- Deterministic keying is the "equivalent" the ticket allows; an LLM summarizer can replace
+  `topic_key` behind the same shape. Known limit: two phrasings of one single-valued fact that
+  share no attribute cue (for example "home is Austin" vs "I live in Denver") still insert two
+  nodes.
+
 ### Phase 3 — exploration + promote gate
 
 1. Gumbel noise on rerank logits so new topic nodes get sampled.
@@ -324,8 +343,9 @@ Canonical note: this file.
 
 | Location | What to look for |
 |----------|------------------|
-| Board `ws06-memory` | **WEFT-732** retrospective (Phase 1 built 2026-10-04), **WEFT-733** prospective (blocked-by 732, now unblocked). Specs in `docs/plans/weft-rmm-*.md` |
+| Board `ws06-memory` | **WEFT-732** retrospective (Phase 1 built 2026-10-04), **WEFT-733** prospective (Phase 2 built 2026-10-04). Specs in `docs/plans/weft-rmm-*.md` |
 | `crates/clawft-core/src/agent/memory_recall.rs` | WEFT-732 Phase 1: retrieve / rerank / cite / attribute |
+| `crates/clawft-core/src/agent/learning/topics.rs` | WEFT-733 Phase 2: topic keys, merge-or-insert bank |
 | ADR-058 | Update 2026-09-11 — RMM is the reserved “semantic re-chunking” step; do not dump L3 into L1 |
 | ADR-096 | Reranker weights = flywheel champion, `confirm=true` |
 | `docs/brain/05-rvf-brain-and-research.md` | Research stream **RMM / citation-attributed memory** |

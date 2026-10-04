@@ -472,5 +472,9 @@ missing retrieval-attribution loop this ADR does not specify.
 default and the fail-open path). When on, `ContextBuilder::build_messages_with_query`
 injects at most `top_m` of `top_k` retrieved `MEMORY.md` snippets tagged `[m1]`…, and
 `AgentLoop` feeds `+1` cited / `-1` ignored to the reranker (SONA under
-`hybrid-rerank`, identity otherwise); the retriever is never updated. Topic units
-(prospective, WEFT-733) are still open. Code: `crates/clawft-core/src/agent/memory_recall.rs`.
+`hybrid-rerank`, identity otherwise); the retriever is never updated. Code:
+`crates/clawft-core/src/agent/memory_recall.rs`. The L3 prospective path is built too
+(WEFT-733): the WEFT-347 consolidator, now run from `AgentLoop` when
+`agents.memory_consolidation.enabled`, merges facts into topic nodes in `MEMORY.md`
+(merge-or-insert by a deterministic topic key) instead of appending blocks
+(`crates/clawft-core/src/agent/learning/topics.rs`).

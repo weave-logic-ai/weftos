@@ -13,6 +13,7 @@
 //!   the former and writes the latter. The two stores never share paths.
 
 pub mod consolidator;
+pub mod topics;
 
 pub use consolidator::{
     ConsolidationConfig, ConsolidationOutcome, ConsolidationReport, DistilledMemory,
