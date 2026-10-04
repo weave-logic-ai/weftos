@@ -407,6 +407,7 @@ impl AgentsConfig {
 
 /// Expand `~/` on a configured workspace_root path (native only).
 fn expand_agent_workspace_root(raw: &std::path::Path) -> PathBuf {
+    #[cfg(feature = "native")]
     let s = raw.to_string_lossy();
     #[cfg(feature = "native")]
     if let Some(rest) = s.strip_prefix("~/")

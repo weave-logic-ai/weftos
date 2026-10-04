@@ -12,6 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "exochain")]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
