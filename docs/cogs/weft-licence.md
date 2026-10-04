@@ -343,6 +343,34 @@ Recorded on 2026-10-02 (release profile, already stripped):
 
 `weftos-cog-sources` builds for `armv7-unknown-linux-gnueabihf` as part of this.
 
+## Running cogs on the Seed
+
+`weft-licence` holds the licence; `weft-cog-host` enforces it at start (ADR-106, "Phase 3 `weft-cog-host` start check"). The host reads its own licence directory, `<root>/.licence` by default (`$WEFT_COG_HOST_LICENCE_DIR` or `serve --licence-dir` override), so on a Seed that is `~/.weftos/cogs/.licence`. Without the directory the host behaves as before. With it, every `source: cognitum` cog needs a grant and an operator hash approval to start, including cogs installed earlier.
+
+Set it up, as the user the host runs as:
+
+```sh
+L=~/.weftos/cogs/.licence
+mkdir -p "$L" && chmod 700 "$L"
+printf '{"mesh_id": "%s"}\n' "<64-hex mesh id the Seed is bound to>" > "$L/config.json"
+cat > "$L/trust.json" <<'JSON'
+{"schema": "weftos.workload-trust.v1",
+ "operator_keys": [{"key_id": "acme-operator", "public_key": "<64-hex Ed25519 public key>"}]}
+JSON
+weft-cog-host licence status          # state "ready", binding not yet in effect
+```
+
+`trust.json` pins the operator keys that verify the binding, approvals and revocation notices; put in it the public key you bound with. Then import signed records, which the host verifies itself (grants must be signed by the grant key the binding names):
+
+```sh
+weft-cog-host licence import records.json     # or: POST /licence/records on :9480 with the host bearer token
+weft-cog-host licence status
+```
+
+`records.json` is `{"binding": <SignedBinding>, "grants": [..], "approvals": [..], "revocations": [..]}`; every field is optional. Each record is judged on its own and the answer lists, in order, `applied`, `duplicate`, `ignored`, `applied_unsaved` or `refused` with the reason. The binding is the operator-signed v2 binding, the grants come from `weft-licence`, the approvals are the operator's hash approvals, and an `artifact_hash` revocation notice stops a running cog. No `weaver` verb writes this file today; the signed records are the ones the licence holder already has.
+
+A refused start shows in `GET /cogs` as `licence_refusal` with the stable code, and in the host log with the remedy. The state is re-read when its files change, so no restart is needed after an import.
+
 ## Pending Cognitum (phase 4)
 
 | Stub | Where | Question |
