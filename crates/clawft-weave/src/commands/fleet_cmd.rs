@@ -139,7 +139,12 @@ pub fn render(snap: &Value, now: u64) -> String {
     ]);
     for n in snap["nodes"].as_array().into_iter().flatten() {
         let id = n["node_id"].as_str().unwrap_or("?");
-        let name = n["name"]["value"].as_str().map_or_else(|| short(id), str::to_owned);
+        // A node whose announced name is only its id is named by the hostname the daemon reports.
+        let name = n["name"]["value"]
+            .as_str()
+            .filter(|s| *s != id)
+            .or_else(|| n["host"]["value"]["hostname"].as_str())
+            .map_or_else(|| short(id), str::to_owned);
         let local = if n["local"] == true { " (this node)" } else { "" };
         let facts = val(n, "facts");
         let trust = facts["trust_tier"].as_str().map_or_else(
@@ -211,7 +216,8 @@ mod tests {
     fn snap() -> Value {
         json!({
             "nodes": [
-                { "node_id": "aaaaaaaaaaaaaaaaaaaa", "local": true, "name": { "value": "mac" },
+                { "node_id": "aaaaaaaaaaaaaaaaaaaa", "local": true, "name": { "value": "aaaaaaaaaaaaaaaaaaaa" },
+                  "host": { "value": { "hostname": "mac" } },
                   "announced": { "value": { "address": "10.0.0.2:9" } },
                   "cluster": { "value": { "state": "active", "last_announce_unix": 990 } },
                   "facts": { "value": { "trust_tier": "pinned", "tier_source": "operator" } },
