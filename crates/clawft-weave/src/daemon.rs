@@ -3684,6 +3684,20 @@ pub async fn run(
     // Project kernel: final anchor and unregister, before the chain is saved.
     #[cfg(all(unix, feature = "exochain"))]
     crate::nested_rpc::quiesce().await?;
+    // A nested user instance (ADR-103 Phase 4, D10) owns its projects: they stop with it,
+    // whether shutdown came by RPC or by the owner closing the liveness pipe (deny_all). A
+    // top-level user daemon keeps its children running for re-adoption on the next boot;
+    // `weaver kernel stop` cascades explicitly there. Bounded inside the owner's 15 s
+    // graceful window.
+    #[cfg(unix)]
+    if crate::nested_boot::active().is_some()
+        && let Some(sup) = crate::project_supervisor::global()
+    {
+        match tokio::time::timeout(std::time::Duration::from_secs(10), sup.stop_all()).await {
+            Ok(stopped) => info!(count = stopped.len(), "nested instance: stopped its project kernels"),
+            Err(_) => warn!("nested instance: project kernels did not stop within 10 s"),
+        }
+    }
     crate::project_hooks::pre_shutdown().await;
 
     // Gracefully shut down running agents before kernel shutdown

@@ -163,6 +163,12 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "project.restart",
     "project.status",
     "project.token.refresh",
+    // Nested projects (ADR-103 Phase 4): a master project kernel calls these with its
+    // project claim (inside a project); outside a project they are user-level Admin. The
+    // handler revalidates master identity, root and parentage.
+    "project.nested.register",
+    "project.nested.start",
+    "project.nested.stop",
     // mesh-local/1 (package H): spawn-nonce and PoP authenticated; a child
     // sends its project claim on every call, so it is inside a project.
     "mesh.challenge",

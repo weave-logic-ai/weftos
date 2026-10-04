@@ -290,7 +290,10 @@ async fn nested_user_supervises_project_and_restarts_with_private_identity() {
             .is_err(),
         "inner projects must stop with inner user"
     );
-    assert!(c.home.join(".weftos/chain/chain.json").exists());
+    // The chain persists as `chain.rvf` beside the configured `chain.json` checkpoint path
+    // when signed (kernel boot prefers RVF); either file is a saved chain.
+    let chain = c.home.join(".weftos/chain/chain.json");
+    assert!(chain.exists() || chain.with_extension("rvf").exists(), "inner chain was not saved");
     sup.start(ID).await.unwrap();
     assert_eq!(
         std::fs::read(c.home.join(".weftos/user.key")).unwrap(),
