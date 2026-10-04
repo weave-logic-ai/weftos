@@ -51,6 +51,21 @@
         "pi-zero-2w"
       ],
       "hash": "wh_0e536ec6b40b44b9"
+    },
+    {
+      "id": "ld2450-radar",
+      "name": "Tracking Radar (LD2450)",
+      "category": "presence",
+      "difficulty": "moderate",
+      "summary": "24 GHz FMCW radar tracking up to three moving people over UART (256000 8N1): x/y in metres in the radar's own frame, speed and gate size per target, 10 frames/s. Positions only, no identity.",
+      "export_port": 8052,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "hlk-ld2450",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_bf60545d7171c67b"
     }
   ],
   "modules": [
@@ -2360,27 +2375,34 @@
         "3D / Z axis",
         "identity / re-ID"
       ],
-      "notes": [],
+      "notes": [
+        "Bluetooth is on from the factory and Hi-Link's app can reconfigure the radar; command 0x00A4 turns it off.",
+        "On a Pi Zero 2 W the header UART is the mini UART by default; at 256000 baud prefer the PL011 (dtoverlay=disable-bt or miniuart-bt + core_freq=250)."
+      ],
       "spec": {
-        "freq": "24 GHz",
-        "interface": "UART",
-        "power": "5V",
-        "output": "up to 3 targets (x,y)",
-        "source": "docs/MODULES.md \u00a72",
+        "freq": "24-24.25 GHz, FMCW, 250 MHz sweep",
         "band": "24 GHz",
-        "targets": "3 (2D)"
+        "antenna": "1 TX, 2 RX microstrip (manual); not checked against the board",
+        "interface": "UART 256000 8N1, 3.3 V IO",
+        "power": "5V, supply > 200 mA, 120 mA average",
+        "output": "up to 3 targets: x, y (mm), speed (cm/s), gate size (mm); sign-magnitude int16",
+        "targets": "3 (2D)",
+        "range": "6 m",
+        "fov": "azimuth +-60 deg, pitch +-35 deg",
+        "rate": "10 Hz",
+        "mounting": "wall, 1.5-2 m",
+        "size": "15 x 44 mm",
+        "source": "Hi-Link HLK-LD2450 Serial Communication Protocol V1.03 (2023-10-17) and Instruction manual V1.00 (2023-05-10); vendor figures, not measured. Frame format and example decode are what the ld2450-radar cog implements (cogs ADR-161); nothing measured on hardware yet"
       },
       "pins": [
-        "UART RX/TX",
         "5V",
-        "GND",
-        "UART TX",
-        "UART RX",
-        "VCC"
+        "G (GND)",
+        "UR (radar UART RX)",
+        "UT (radar UART TX)"
       ],
       "chips": [],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://d.hlktech.net/download/HLK-LD2450/1/HLK-LD2450%20operation%20manual.doc..pdf",
       "mouser_query": "HLK-LD2450",
       "buy": [
         {

@@ -163,3 +163,17 @@ fn docs_include_buy_and_sources_and_bus_detection_covers_i2c_and_analog() {
     assert_eq!(d[0].target, DocTarget::Web("https://x/y.pdf".into()));
     assert!(d.iter().any(|e| e.target == DocTarget::Path("docs/hardware/sensors.md".into())));
 }
+
+/// Every catalog project that declares an export port must have the same port here, so the
+/// Sensors tab finds its `/guide` without a prompt.
+#[test]
+fn export_ports_match_the_bundled_catalog() {
+    let catalog = weftos_cog_market::hw::HwCatalog::bundled();
+    for p in &catalog.projects {
+        if let Some(port) = p.export_port {
+            assert_eq!(default_export_port(&p.id), port, "{}", p.id);
+        }
+    }
+    assert_eq!(default_export_port("ld2450-radar"), 8052);
+    assert_eq!(default_export_port("not-a-cog"), 0);
+}
