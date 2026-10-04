@@ -1,4 +1,4 @@
-# Real Pi 5 test lane (`scripts/build.sh test-pi`)
+# ARM test lane (`scripts/build.sh test-pi`)
 
 Card mesh-placement-fu-pi-test-lane. Decision (2026-09-29): anything that has to
 prove it runs on ARM is tested on the real Raspberry Pi 5, not on the Mac or in a
@@ -9,6 +9,7 @@ described in [conformance-harness.md](conformance-harness.md).
 
 ```bash
 export WEFTOS_PI_HOST=pi5                              # [user@]host or ~/.ssh/config alias
+export WEFTOS_PI_COG_MANIFEST=/path/to/cog-hashes.json # verified cog sha256s (see below)
 scripts/build.sh test-pi                               # full lane (see below)
 scripts/build.sh test-pi clawft-kernel                 # one crate's tests on the Pi
 scripts/build.sh test-pi clawft-kernel --filter chain  # libtest name filter
@@ -19,6 +20,39 @@ scripts/build.sh test-pi --placement --mac-container debian@sha256:<digest>  # p
 scripts/build.sh test-pi --dry-run                     # print the plan, touch nothing
 scripts/build.sh test-pi --help
 ```
+
+## The target host
+
+The target can be any aarch64 Linux box or VM that has `sshd`, `rsync`,
+`python3` and glibc 2.36 or newer (the cross-build uses a bookworm builder, and
+the lane refuses a target older than that). A real Pi 5 is the reference. An
+OrbStack Debian trixie arm64 VM works for the same tests:
+
+```bash
+orb create -a arm64 debian:trixie weftos-arm64
+ssh weftos-arm64@orb 'sudo apt-get install -y python3 rsync'
+export WEFTOS_PI_HOST=weftos-arm64@orb
+scripts/build.sh test-pi clawft-kernel
+```
+
+The preflight stops with a clear message if `rsync` or `python3` is missing.
+Tests that choose a free port at run time can occasionally collide when the
+suite runs in parallel (`the_callers_path_wins_over_the_supervisors_default`
+did so on the VM); rerun before suspecting the lane.
+
+## Verified cog binaries (`--sha256-manifest`)
+
+The live-native, cogs and placement stages run the released
+`cog-anomaly-detect-aarch64`, and the lane refuses an unverified download.
+Give it the expected hashes with `--sha256-manifest PATH` or
+`WEFTOS_PI_COG_MANIFEST`: a JSON object mapping `cog-<id>-aarch64` to its
+sha256 (top level or under `binaries`; the same file `conformance.py
+--sha256-manifest` takes, and the lane passes it through to that stage). Take
+the hashes from the registry or a package manifest you trust. Without a
+manifest, or when it has no entry for `cog-anomaly-detect-aarch64`, those three
+stages print `SKIP` with the reason and the lane carries on: the crate test
+stage still runs and the skips are listed under `skipped` in `--report`. The
+repo holds no pinned hash for the released binaries, so none is built in.
 
 `WEFTOS_PI_HOST` is never committed. When it is unset the lane prints a `SKIP`
 line and exits 0, so it is safe in scripts that also run off the tailnet.

@@ -102,7 +102,7 @@ use serde::{Deserialize, Serialize};
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 
 pub use approval::{Approval, SignedApproval, sign_approval, verify_approval, verify_approval_signature};
-pub use approval_store::ApprovalStore;
+pub use approval_store::{APPROVALS_FILE, ApprovalStore};
 pub use binding::{
     AdmissionPosture, BindState, BindingExtraCheck, BindingRecord, NoExtraChecks, SignedBinding,
     sign_binding, verify_binding_member,
@@ -158,7 +158,7 @@ pub use request::{
     RequestAuth, RequestRefused, sign_request, signing_string, valid_nonce, verify_request,
 };
 pub use steward::StewardCheck;
-pub use store::{CheckoutGrantStore, VerifiedCheckoutGrant};
+pub use store::{CheckoutGrantStore, GRANTS_FILE, VerifiedCheckoutGrant};
 
 /// What an accepted record did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

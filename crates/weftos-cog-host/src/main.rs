@@ -5,6 +5,7 @@
 //!                     [--version v] [--arg --interval --arg 1] [--enable] [--signed]
 //!   weft-cog-host list [--root <dir>]
 //!   weft-cog-host start|stop <id> [--root <dir>]           # flip enabled on disk (a running daemon picks it up)
+//!   weft-cog-host licence status|import <records.json> [--root <dir>] [--licence-dir <dir>]
 //!
 //! Root defaults to $WEFTOS_COG_ROOT or ~/.weftos/cogs. The agent's /var/lib/cognitum/apps is
 //! untouched; cogs run here still POST to the agent store on :80, so they join its memory.
@@ -15,6 +16,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use weftos_cog_host::licence::{default_licence_dir, HostLicence, Records};
 use weftos_cog_host::supervise::Supervisor;
 use weftos_cog_host::{default_root, load_records, save_record, CogRecord, Source};
 
@@ -33,6 +35,9 @@ fn has(a: &[String], f: &str) -> bool {
 fn root_of(a: &[String]) -> PathBuf {
     opt(a, "--root").map(PathBuf::from).unwrap_or_else(default_root)
 }
+fn licence_dir_of(a: &[String], root: &std::path::Path) -> PathBuf {
+    opt(a, "--licence-dir").map(PathBuf::from).unwrap_or_else(|| default_licence_dir(root))
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -41,8 +46,11 @@ fn usage() -> ! {
          add --id <id> --binary <path> [--source weavelogic|cognitum|local] [--version v]\n\
          \t[--arg <a> ...] [--enable] [--signed]   install a cog into the root\n\
          list [--root <dir>]                       show installed cogs\n\
-         start|stop <id> [--root <dir>]            set enabled on disk (a running daemon applies it)\n\n\
-         root defaults to $WEFTOS_COG_ROOT or ~/.weftos/cogs"
+         start|stop <id> [--root <dir>]            set enabled on disk (a running daemon applies it)\n\
+         licence status [--licence-dir <dir>]      show the ADR-106 licence state the start check uses\n\
+         licence import <records.json>             verify and apply signed binding/grants/approvals/revocations\n\n\
+         root defaults to $WEFTOS_COG_ROOT or ~/.weftos/cogs; the licence dir to\n\
+         $WEFT_COG_HOST_LICENCE_DIR or <root>/.licence (serve also takes --licence-dir)"
     );
     std::process::exit(2);
 }
@@ -54,6 +62,7 @@ fn main() {
         Some("add") => cmd_add(&a[2..]),
         Some("list") => cmd_list(&a[2..]),
         Some(act @ ("start" | "stop")) => cmd_enable(&a[2..], act == "start"),
+        Some("licence") => cmd_licence(&a[2..]),
         _ => usage(),
     };
     if let Err(e) = res {
@@ -66,10 +75,14 @@ fn cmd_serve(a: &[String]) -> Result<(), String> {
     let root = root_of(a);
     std::fs::create_dir_all(&root).map_err(|e| format!("create root: {e}"))?;
     let port: u16 = opt(a, "--port").and_then(|p| p.parse().ok()).unwrap_or(9480);
-    let sup = Arc::new(Mutex::new(Supervisor::new(root.clone())));
+    let licence = Arc::new(HostLicence::open(licence_dir_of(a, &root)));
+    let mut supervisor = Supervisor::new(root.clone());
+    supervisor.set_licence_gate(licence.clone());
+    let sup = Arc::new(Mutex::new(supervisor));
 
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("bind :{port}: {e}"))?;
     eprintln!("[cog-host] root={} api=http://0.0.0.0:{port} — {} cog(s) known", root.display(), sup.lock().unwrap().ids().len());
+    eprintln!("[cog-host] licence dir {} ({})", licence.dir().display(), licence.status()["state"].as_str().unwrap_or("?"));
 
     // Per-host bearer token for the /hw/* mutating routes ($WEFT_COG_HOST_TOKEN, else <root>/host.token).
     let policy = Arc::new(weftos_cog_host::auth::Policy::load(&root).map_err(|e| format!("host token: {e}"))?);
@@ -78,12 +91,13 @@ fn cmd_serve(a: &[String]) -> Result<(), String> {
     let _ = weftos_cog_host::dex::with_dex(&root, |_| ());
 
     // HTTP thread
-    let http_sup = Arc::clone(&sup);
-    std::thread::spawn(move || http::serve(listener, http_sup, policy));
+    let (http_sup, http_lic) = (Arc::clone(&sup), Arc::clone(&licence));
+    std::thread::spawn(move || http::serve(listener, http_sup, policy, http_lic));
 
     // Stop children cleanly on Ctrl-C by relying on process exit; supervision loop in the main thread.
     loop {
         {
+            licence.refresh(); // pick up `licence import` from the CLI
             let mut s = sup.lock().unwrap();
             s.reload(); // pick up installs/enable-flips from disk or the CLI
             s.tick();
@@ -151,4 +165,27 @@ fn cmd_enable(a: &[String], enable: bool) -> Result<(), String> {
     save_record(&root, rec).map_err(|e| e.to_string())?;
     eprintln!("{id} enabled={enable} (a running daemon applies it within ~1s)");
     Ok(())
+}
+
+fn cmd_licence(a: &[String]) -> Result<(), String> {
+    let root = root_of(a);
+    let lic = HostLicence::open(licence_dir_of(a, &root));
+    match a.first().map(String::as_str) {
+        Some("status") => {
+            println!("{}", serde_json::to_string_pretty(&lic.status()).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        Some("import") => {
+            let file = a.get(1).filter(|s| !s.starts_with("--")).ok_or("licence import needs <records.json>")?;
+            let bytes = std::fs::read(file).map_err(|e| format!("read {file}: {e}"))?;
+            if bytes.len() > weftos_cog_host::licence::MAX_IMPORT_BYTES {
+                return Err(format!("{file} is larger than {} bytes", weftos_cog_host::licence::MAX_IMPORT_BYTES));
+            }
+            let recs: Records = serde_json::from_slice(&bytes).map_err(|e| format!("{file}: {e}"))?;
+            let lines = lic.import(&recs)?;
+            println!("{}", serde_json::to_string_pretty(&lines).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        _ => Err("licence needs status or import <records.json>".into()),
+    }
 }

@@ -10768,6 +10768,10 @@ name = "weftos-cog-host"
 version = "0.8.1"
 dependencies = [
  "base64 0.22.1",
+ "blake3",
+ "clawft-kernel",
+ "ed25519-dalek",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
