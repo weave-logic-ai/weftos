@@ -628,6 +628,53 @@ async fn admin_routing_stats_endpoint() {
     assert_eq!(body["by_reason"]["rate_limited"], 1);
 }
 
+#[tokio::test]
+async fn monitoring_reports_recorded_tokens_latency_and_failures() {
+    use clawft_core::pipeline::decision_history::CallOutcome;
+    use clawft_core::pipeline::traits::RoutingDecision;
+    use http_body_util::BodyExt;
+
+    let (state, auth) = make_state();
+    let d = |sender: &str| RoutingDecision {
+        provider: "openai".into(),
+        model: "m".into(),
+        reason: "test".into(),
+        sender_id: Some(sender.into()),
+        ..Default::default()
+    };
+    let ok = state.routing_history.record_with_channel(&d("alice"), None);
+    state.routing_history.record_outcome(ok, CallOutcome { ok: true, input_tokens: Some(100), output_tokens: Some(20), latency_ms: 250 });
+    let bad = state.routing_history.record_with_channel(&d("bob"), None);
+    state.routing_history.record_outcome(bad, CallOutcome { ok: false, input_tokens: None, output_tokens: None, latency_ms: 9 });
+    state.routing_history.record_with_channel(&d("carol"), None); // in flight
+    let token = auth.generate_token(3600).unwrap();
+    let get = |uri: &'static str| {
+        Request::builder()
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let app = build_router(state, &[], None);
+    let read = |resp: axum::response::Response| async move {
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+    };
+
+    let usage = read(app.clone().oneshot(get("/api/monitoring/token-usage")).await.unwrap()).await;
+    assert_eq!((usage["total_input"].as_u64(), usage["total_output"].as_u64()), (Some(100), Some(20)));
+    assert_eq!(usage["total_requests"], 3);
+    let alice = usage["by_session"].as_array().unwrap().iter().find(|s| s["session_key"] == "alice").unwrap();
+    assert_eq!(alice["input_tokens"], 100);
+
+    let runs = read(app.oneshot(get("/api/monitoring/pipeline-runs")).await.unwrap()).await;
+    let runs = runs.as_array().unwrap();
+    assert_eq!(runs.len(), 2, "the in-flight call is not a run yet");
+    let by = |who: &str| runs.iter().find(|r| r["session_key"] == who).unwrap().clone();
+    assert_eq!((by("alice")["latency_ms"].as_u64(), by("alice")["status"].as_str()), (Some(250), Some("success")));
+    assert_eq!(by("bob")["status"], "error");
+}
+
 // ── WEFT-48/49: admin rate-limiter metrics + LRU flush ──────────────────
 
 #[tokio::test]

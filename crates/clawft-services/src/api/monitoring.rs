@@ -104,21 +104,19 @@ pub enum PipelineRunStatus {
 
 // ── Handlers ───────────────────────────────────────────────────
 //
-// WEFT-305: Prefer live `ApiState.routing_history` (WEFT-40 in-process
-// ring) over hardcoded fixtures. Token counts are not yet recorded on
-// `RoutingDecisionEntry` (D5/D6 token meter still open) — `token_usage`
-// therefore returns request counts with zero tokens rather than fake
-// 245k-style totals. Upgrade path: record prompt/completion tokens on
-// the ring (or a dedicated metrics store) when the agent loop emits
-// usage, then map them here.
+// WEFT-305: every figure comes from the live `ApiState.routing_history`
+// ring (WEFT-40), which the gateway shares with the agent pipeline. The
+// pipeline records each routing decision, then attaches the provider's
+// reported tokens, the transport latency and success once the call returns
+// (`RoutingDecisionHistory::record_outcome`). The ring is in-process and
+// bounded; a persisted metrics store is the upgrade path.
 
 async fn token_usage(State(state): State<ApiState>) -> Json<TokenUsageSummary> {
     use std::collections::HashMap;
 
     let entries = state.routing_history.recent(state.routing_history.capacity());
 
-    // Aggregate request counts by (provider, model). Tokens stay 0 until
-    // a real usage recorder lands (D5/D6).
+    // Aggregate by (provider, model) and by principal (sender_id, D6).
     let mut by_key: HashMap<(String, String), TokenUsage> = HashMap::new();
     let mut by_session_map: HashMap<String, SessionTokenUsage> = HashMap::new();
 
@@ -132,7 +130,11 @@ async fn token_usage(State(state): State<ApiState>) -> Json<TokenUsageSummary> {
             total_tokens: 0,
             request_count: 0,
         });
+        let (inp, out) = (e.input_tokens.unwrap_or(0), e.output_tokens.unwrap_or(0));
         slot.request_count = slot.request_count.saturating_add(1);
+        slot.input_tokens = slot.input_tokens.saturating_add(inp);
+        slot.output_tokens = slot.output_tokens.saturating_add(out);
+        slot.total_tokens = slot.input_tokens.saturating_add(slot.output_tokens);
 
         // principal ≈ sender_id (D6 attribution surface when present).
         let session_key = e
@@ -148,15 +150,19 @@ async fn token_usage(State(state): State<ApiState>) -> Json<TokenUsageSummary> {
                 request_count: 0,
             });
         sess.request_count = sess.request_count.saturating_add(1);
+        sess.input_tokens = sess.input_tokens.saturating_add(inp);
+        sess.output_tokens = sess.output_tokens.saturating_add(out);
     }
 
     let by_provider: Vec<TokenUsage> = by_key.into_values().collect();
     let by_session: Vec<SessionTokenUsage> = by_session_map.into_values().collect();
     let total_requests = by_provider.iter().map(|p| p.request_count).sum();
+    let total_input = by_provider.iter().map(|p| p.input_tokens).sum();
+    let total_output = by_provider.iter().map(|p| p.output_tokens).sum();
 
     Json(TokenUsageSummary {
-        total_input: 0,
-        total_output: 0,
+        total_input,
+        total_output,
         total_requests,
         by_provider,
         by_session,
@@ -213,22 +219,22 @@ async fn cost_breakdown(State(state): State<ApiState>) -> Json<CostBreakdown> {
 }
 
 async fn pipeline_runs(State(state): State<ApiState>) -> Json<Vec<PipelineRun>> {
-    // Map routing decisions → pipeline run rows. Latency and complexity
-    // are not yet on `RoutingDecisionEntry` (D5) — report 0 rather than
-    // inventing values. Status is Success; fallback/escalation is still
-    // visible via `/admin/routing/decisions`.
+    // Map finished calls → pipeline run rows (in-flight ones are not runs
+    // yet). Complexity is not on `RoutingDecisionEntry`; report 0 rather
+    // than inventing it. Fallback/escalation is visible via
+    // `/admin/routing/decisions`.
     let entries = state.routing_history.recent(200);
     let runs: Vec<PipelineRun> = entries
         .into_iter()
+        .filter(|e| e.ok.is_some())
         .enumerate()
         .map(|(i, e)| PipelineRun {
             id: format!("route-{}", entries_id_suffix(&e.ts, i)),
             session_key: e.principal.unwrap_or_else(|| "anonymous".into()),
             model: e.model,
-            // D5: per-session latency/complexity not on RoutingDecisionEntry yet.
             complexity: 0.0,
-            latency_ms: 0,
-            status: PipelineRunStatus::Success,
+            latency_ms: e.latency_ms.unwrap_or(0),
+            status: if e.ok == Some(false) { PipelineRunStatus::Error } else { PipelineRunStatus::Success },
             timestamp: e.ts,
         })
         .collect();

@@ -271,6 +271,7 @@ pub fn verify_witness_signature(
 }
 
 /// Decode a hex string to bytes.
+#[cfg(any(feature = "exochain", test))]
 fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
     if !hex.len().is_multiple_of(2) {
         return Err("odd-length hex string".into());

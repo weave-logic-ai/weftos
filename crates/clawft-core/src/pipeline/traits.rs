@@ -639,13 +639,32 @@ impl PipelineRegistry {
     }
 
     /// Record a routing decision into the history ring (best-effort).
-    fn record_decision(&self, request: &ChatRequest, routing: &RoutingDecision) {
+    fn record_decision(&self, request: &ChatRequest, routing: &RoutingDecision) -> u64 {
         let channel = request
             .auth_context
             .as_ref()
             .map(|a| a.channel.as_str());
         self.decision_history
-            .record_with_channel(routing, channel);
+            .record_with_channel(routing, channel)
+    }
+
+    /// Attach the transport result to history entry `id` (WEFT-305).
+    fn record_call(
+        &self,
+        id: u64,
+        result: &clawft_types::Result<LlmResponse>,
+        latency_ms: u64,
+    ) {
+        let usage = result.as_ref().ok().map(|r| &r.usage);
+        self.decision_history.record_outcome(
+            id,
+            crate::pipeline::decision_history::CallOutcome {
+                ok: result.is_ok(),
+                input_tokens: usage.map(|u| u64::from(u.input_tokens)),
+                output_tokens: usage.map(|u| u64::from(u.output_tokens)),
+                latency_ms,
+            },
+        );
     }
 
     /// Register a specialized pipeline for a specific task type.
@@ -669,7 +688,7 @@ impl PipelineRegistry {
         // Stage 2: route
         let routing = pipeline.router.route(request, &profile).await;
         // WEFT-40: persist into last-N ring for admin history.
-        self.record_decision(request, &routing);
+        let history_id = self.record_decision(request, &routing);
 
         // Stage 3: assemble context
         let context = pipeline.assembler.assemble(request, &profile).await;
@@ -691,8 +710,10 @@ impl PipelineRegistry {
             tool_choice: request.tool_choice.clone(),
         };
         let start_ms = crate::runtime::now_millis();
-        let response = pipeline.transport.complete(&transport_request).await?;
+        let result = pipeline.transport.complete(&transport_request).await;
         let latency_ms = crate::runtime::now_millis().saturating_sub(start_ms);
+        self.record_call(history_id, &result, latency_ms);
+        let response = result?;
 
         // Stage 5: score
         let quality = pipeline.scorer.score(request, &response);
@@ -737,7 +758,7 @@ impl PipelineRegistry {
         let pipeline = self.get(&profile.task_type);
         let routing = pipeline.router.route(request, &profile).await;
         // WEFT-40: persist into last-N ring for admin history.
-        self.record_decision(request, &routing);
+        let history_id = self.record_decision(request, &routing);
         let context = pipeline.assembler.assemble(request, &profile).await;
 
         // Stage 3.5: same feedback loop as the non-streaming path.
@@ -755,11 +776,13 @@ impl PipelineRegistry {
 
         // Stage 4: streaming transport (with latency measurement)
         let start_ms = crate::runtime::now_millis();
-        let response = pipeline
+        let result = pipeline
             .transport
             .complete_stream(&transport_request, callback)
-            .await?;
+            .await;
         let latency_ms = crate::runtime::now_millis().saturating_sub(start_ms);
+        self.record_call(history_id, &result, latency_ms);
+        let response = result?;
 
         // Stages 5-6: score and learn
         let quality = pipeline.scorer.score(request, &response);
@@ -1322,6 +1345,10 @@ mod tests {
         // Free-text reason must not leak; TestRouter uses reason "test"
         // which redacts to the default tiered_routing category.
         assert_eq!(entries[0].reason_category, "tiered_routing");
+        // WEFT-305: the call's outcome is attached to its entry.
+        assert_eq!(entries[0].ok, Some(true));
+        assert_eq!((entries[0].input_tokens, entries[0].output_tokens), (Some(10), Some(5)));
+        assert!(entries[0].latency_ms.is_some());
     }
 
     #[tokio::test]
