@@ -564,11 +564,20 @@ impl ClusterMembership {
     /// the same path via [`Self::persist`].
     pub fn with_persist_path(self, path: impl AsRef<Path>) -> Self {
         let path = path.as_ref().to_path_buf();
+        let mut prune_file = false;
         if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(data) => match serde_json::from_str::<ClusterPeersFile>(&data) {
                     Ok(file) => {
+                        let mut legacy = Vec::new();
                         for peer in file.peers {
+                            // Pre-0.8 daemons keyed peers by UUID; node ids are now
+                            // 32-hex from the node key, so a UUID entry can never match a
+                            // live peer again (phase-0 review R8).
+                            if is_legacy_uuid_id(&peer.id) {
+                                legacy.push(peer.id);
+                                continue;
+                            }
                             // Bypass rate-limiting and duplicate checks during rehydration.
                             self.peers.insert(peer.id.clone(), peer);
                         }
@@ -577,6 +586,15 @@ impl ClusterMembership {
                             path = %path.display(),
                             "rehydrated cluster peers from disk"
                         );
+                        if !legacy.is_empty() {
+                            warn!(
+                                dropped = legacy.len(),
+                                ids = ?legacy,
+                                path = %path.display(),
+                                "dropped legacy UUID peer ids from the cluster peers file"
+                            );
+                            prune_file = true;
+                        }
                     }
                     Err(e) => {
                         warn!(
@@ -599,6 +617,10 @@ impl ClusterMembership {
             .persist_path
             .lock()
             .expect("persist_path lock poisoned") = Some(path);
+        if prune_file {
+            // Write the cleaned list back so the legacy ids are gone from disk too.
+            self.persist();
+        }
         self
     }
 
@@ -1728,6 +1750,14 @@ mod cluster_service {
 #[cfg(feature = "cluster")]
 pub use cluster_service::ClusterService;
 
+
+/// A pre-0.8 UUID peer id (`8-4-4-4-12` hex). Current node ids are 32 lowercase hex.
+fn is_legacy_uuid_id(id: &str) -> bool {
+    let parts: Vec<&str> = id.split('-').collect();
+    parts.len() == 5
+        && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2258,6 +2288,29 @@ mod tests {
         assert!(restored.get_peer("node-1").is_some());
         assert!(restored.get_peer("node-2").is_some());
 
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn legacy_uuid_peer_ids_are_dropped_on_load_and_from_disk() {
+        let path = persist_tmp_path("legacy-uuid");
+        let uuid = "e6182c9e-2dc9-45c3-a93f-e93d978e3dca";
+        let hex = "c12684d4ee48f647f0468b233a24b2c2";
+        {
+            let cluster = ClusterMembership::new(ClusterConfig::default())
+                .with_min_peer_interval(std::time::Duration::ZERO)
+                .with_persist_path(&path);
+            for id in [uuid, hex, "node-1"] {
+                cluster.add_peer(make_peer(id, id)).unwrap();
+            }
+        }
+        let restored = ClusterMembership::new(ClusterConfig::default()).with_persist_path(&path);
+        assert!(restored.get_peer(uuid).is_none(), "the UUID entry is dropped");
+        assert!(restored.get_peer(hex).is_some() && restored.get_peer("node-1").is_some(), "other ids are kept");
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains(uuid), "and it is gone from the file");
+        assert!(is_legacy_uuid_id(uuid) && !is_legacy_uuid_id(hex) && !is_legacy_uuid_id("node-1"));
+        assert!(!is_legacy_uuid_id("e6182c9e-2dc9-45c3-a93f-e93d978e3dcz"), "non-hex is not a UUID");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
