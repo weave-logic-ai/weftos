@@ -1,6 +1,6 @@
 # Manufacturer catalog sources
 
-Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 73 manufacturers across 5 areas. Generated 2026-10-03 by the catalog-source sweep (Sipeed, Pololu added 2026-10-04).
+Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 74 manufacturers across 5 areas. Generated 2026-10-03 by the catalog-source sweep (Sipeed, Pololu, Toradex added 2026-10-04).
 
 > `best_ingest_path` is how WE pull it today (Mouser API by manufacturer+category) and the authoritative fuller source (parametric CSV export / Octopart-Nexar / first-party scrape). Many first-party selectors are bot-walled; the distributor/CSV paths are the practical ones.
 
@@ -75,7 +75,7 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **Teledyne FLIR (OEM thermal camera cores)** | https://oem.flir.com/categories/infrared-camera-cores/modelselector (model selector for LWIR cores: Boson, Boson+, Lepton, Tau 2, Hadron, Tura) | parametric-selector | 60 | Scrape oem.flir.com model selector pages; DigiKey/GroupGets for Lepton breakout/orderable variants. | found |
 | **Vishay Intertechnology** | https://www.vishay.com/en/optoelectronics/ (interactive parametric product tables: IR emitters, PIN photodiodes, phototransistors, reflective/transmissive optical sensors, ambient light/proximity sensors, optocouplers) + selector guide PDFs (sg2123, sg2166) | parametric-selector | 2000 | Mouser keyword pull (Vishay photodiode / phototransistor / IR emitter / proximity sensor) + Vishay parametric table scrape. | found |
 
-## boards  (22)
+## boards  (23)
 
 | Manufacturer | Catalog source | Type | ~SKUs | Best ingest path | Status |
 |---|---|---|---|---|---|
@@ -98,6 +98,7 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **Seeed Studio** | https://www.seeedstudio.com/catalogsearch/result/?q= (store categories); SBC tag https://www.seeedstudio.com/tag/SBC.html | product-listing | 400 | Mouser pull for Grove/XIAO/Wio SKUs; scrape store category pages + 2025 catalog PDF for SBC/reComputer families not on Mouser. | found |
 | **Sipeed** | https://wiki.sipeed.com/hardware/en/ (hardware wiki, mirrored at github.com/sipeed/sipeed_wiki); store at sipeed.com / AliExpress | product-listing | 120 | Scrape the Sipeed wiki hardware tree (Lichee SBCs, Maix AI, Tang FPGA, M0s/M1s RISC-V MCU, Longan) + github.com/sipeed/sipeed_wiki markdown for specs. Not a first-party Mouser line; a few parts reach Mouser/LCSC via distributors, store/wiki are primary. RISC-V-first vendor; Tang FPGA + BL616/BL808 radios relevant to SDR/radio work. | found |
 | **Pololu** | https://www.pololu.com (category tree, e.g. https://www.pololu.com/category/7/sensors, /136/voltage-regulators, /9/motors-and-gearboxes) | product-listing | 1500 | Scrape pololu.com category pages (stable /category/<id>/ scheme) + per-product pages for specs; Pololu sells direct (not a Mouser line). Signature families: switching voltage regulators (buck/boost/buck-boost), motor drivers & smart controllers (Tic/Motoron/Jrk/Maestro), sensor carriers (ST ToF VLxxx, ST MEMS IMUs, Allegro current sensors), gearmotors/steppers/servos, robot platforms (3pi+/Zumo/Romi/Balboa). Carriers expose chips already in our catalog (VL53L7CX, LSM6DSO/LIS3MDL/LPS22, ADS1115-paired current sensors) — drop-in alternatives. See [pololu.md](pololu.md). | found |
+| **Toradex** | https://www.toradex.com/computer-on-modules (Verdin / Apalis / Colibri / OSM SoMs + carrier boards); developer.toradex.com + docs.toradex.com datasheets | product-listing | 40 | Registry only: enumerate SoMs + carriers from toradex.com/computer-on-modules + per-module docs.toradex.com datasheet PDFs. toradex.com is bot-walled (HTTP 403) — use developer.toradex.com + docs.toradex.com PDFs + Mouser Toradex line (eu.mouser.com/new/toradex) for orderable SKUs. Industrial Arm SoMs, not a sensor/broadline pull. See docs/hardware/toradex.md. | found |
 | **SparkFun** | https://www.sparkfun.com/categories (category tree); products under /products | product-listing | 2500 | Mouser pull for Qwiic/breakout SKUs; supplement via store category scrape + github.com/sparkfun for OSHW board metadata. | found |
 | **Waveshare** | https://www.waveshare.com/product/ (full product tree by category) | product-listing | 2000 | Scrape https://www.waveshare.com/product/ category tree + per-product wiki pages. Not on Mouser. | found |
 | **Xunlong (Orange Pi)** | http://www.orangepi.org/html/hardWare/computerAndMicrocontrollers/index.html (board index); global store orangepi.org / AliExpress | product-listing | 90 | Scrape orangepi.org hardware board index + per-board download pages. Not on Mouser. | found |
