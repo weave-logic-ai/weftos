@@ -957,6 +957,16 @@ cmd_check_mesh_only() {
     timer_end
 }
 
+# The cog conformance launcher's feature set (scripts/pi/pi_plan.py
+# launcher_cargo_args): workload-runtime without mesh/ecc/exochain, so code
+# that names the licence module must stay behind its cfg.
+cmd_check_launcher() {
+    header "Running cargo check -p clawft-kernel --no-default-features --features workload-runtime --example cog_adapter_run"
+    timer_start
+    run_cmd cargo check -p clawft-kernel --no-default-features --features workload-runtime --example cog_adapter_run
+    timer_end
+}
+
 # Doc drift: the weaver/weft commands and [kernel.mesh] keys in the verified
 # deployment docs must exist in target/debug/{weaver,weft}
 # (scripts/check-doc-commands.sh). Not part of `gate`.
@@ -1109,6 +1119,8 @@ cmd_check() {
         run_cmd cargo check --workspace
     fi
     timer_end
+
+    cmd_check_launcher
 
     # WEFT-114: hard local twin of the PR-gates wasm-kernel-no-mesh job.
     # Skipped only when the target is not installed (contributors without the
@@ -2317,6 +2329,8 @@ ${BOLD}Commands:${NC}
                   gate against the panel size budget. (WEFT-484 / M6-B)
                   Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
   check-mesh-only Run cargo check -p clawft-kernel --no-default-features --features native,mesh
+  check-launcher  Check clawft-kernel under the cog_adapter_run launcher's features
+                  (workload-runtime only; also part of whole-workspace check)
   check-doc-commands
                   Doc drift check: weaver/weft commands and [kernel.mesh] keys in
                   docs/guides/agents.md and the deployment SOPs (SOP 1, SOP 3)
@@ -2652,6 +2666,7 @@ main() {
         wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
         check-mesh-only) cmd_check_mesh_only ;;
+        check-launcher) cmd_check_launcher ;;
         check-doc-commands) cmd_check_doc_commands ;;
         test-mesh-service) cmd_test_mesh_service ;;
         check-tests)  cmd_check_tests ;;

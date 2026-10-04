@@ -1,12 +1,20 @@
 //! The supervisor: keeps every `enabled` cog running, restarts it on exit with capped backoff, and
 //! reports status. No cap on how many run at once — that is governed by the hardware, not policy.
+//!
+//! With a licence gate set ([`Supervisor::set_licence_gate`], ADR-106 phase 3) every spawn first
+//! hashes the binary file and asks [`crate::licence::check_start`]; a refusal is a failed spawn
+//! (backoff, retried) carrying the gate's code. Every tick, a running cog whose binary hash is
+//! revoked is stopped.
 
+use crate::licence::{check_start, hashes};
 use crate::{load_records, save_record, CogRecord};
+use clawft_kernel::licence::CognitumRunGate;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -14,6 +22,10 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 struct Running {
     child: Child,
     started: Instant,
+    /// BLAKE3 of the started binary (only hashed when a licence gate is set).
+    blake3: Option<String>,
+    /// The grant that covered a licensed start.
+    grant_id: Option<String>,
 }
 
 /// One cog's live status, as the API serializes it.
@@ -30,6 +42,12 @@ pub struct CogStatus {
     pub uptime_s: Option<u64>,
     pub last_exit: Option<String>,
     pub signed: bool,
+    /// The licence run gate's code when it refused the last start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub licence_refusal: Option<String>,
+    /// The checkout grant that covered the running instance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub licence_grant: Option<String>,
 }
 
 pub struct Supervisor {
@@ -41,6 +59,8 @@ pub struct Supervisor {
     restarts: HashMap<String, u32>,
     last_exit: HashMap<String, String>,
     backoff_until: HashMap<String, Instant>,
+    gate: Option<Arc<dyn CognitumRunGate>>,
+    refusals: HashMap<String, &'static str>,
 }
 
 impl Supervisor {
@@ -54,7 +74,14 @@ impl Supervisor {
             restarts: HashMap::new(),
             last_exit: HashMap::new(),
             backoff_until: HashMap::new(),
+            gate: None,
+            refusals: HashMap::new(),
         }
+    }
+
+    /// Ask `gate` before every spawn (ADR-106 start-time licence check).
+    pub fn set_licence_gate(&mut self, gate: Arc<dyn CognitumRunGate>) {
+        self.gate = Some(gate);
     }
 
     /// Re-read records from disk (after an install/add outside the process).
@@ -114,6 +141,26 @@ impl Supervisor {
             .open(rec.dir(&self.root).join("host.log"))
             .map_err(|e| format!("open log: {e}"))?;
         let errlog = log.try_clone().map_err(|e| format!("clone log: {e}"))?;
+        let (mut blake3, mut grant_id) = (None, None);
+        if let Some(gate) = &self.gate {
+            // Hash the file that is about to run; the gate alone decides.
+            let bytes = std::fs::read(&bin).map_err(|e| format!("read {}: {e}", bin.display()))?;
+            match check_start(gate.as_ref(), rec, &bytes) {
+                Ok(lic) => {
+                    self.refusals.remove(id);
+                    if let Some(l) = &lic {
+                        eprintln!("[cog-host] licence permit {id} {}: grant {} approval {}", rec.version, l.permit.grant_id, l.permit.approval_id);
+                    }
+                    grant_id = lic.map(|l| l.permit.grant_id);
+                    blake3 = Some(hashes(&bytes).1);
+                }
+                Err(r) => {
+                    eprintln!("[cog-host] {id}: {r}");
+                    self.refusals.insert(id.to_string(), r.code);
+                    return Err(r.reason);
+                }
+            }
+        }
         let child = Command::new(&bin)
             .args(&rec.args)
             .current_dir(rec.dir(&self.root))
@@ -122,12 +169,37 @@ impl Supervisor {
             .stderr(Stdio::from(errlog))
             .spawn()
             .map_err(|e| format!("spawn {id}: {e}"))?;
-        self.running.insert(id.to_string(), Running { child, started: Instant::now() });
+        self.running.insert(id.to_string(), Running { child, started: Instant::now(), blake3, grant_id });
         Ok(())
+    }
+
+    /// Stop every running cog whose binary hash is now revoked (the start-time check would refuse
+    /// it). A lapsed grant does not stop a running cog; only its next start is refused.
+    fn sweep_revoked(&mut self) {
+        let Some(gate) = &self.gate else { return };
+        let revoked: Vec<String> = self
+            .running
+            .iter()
+            .filter(|(_, r)| r.blake3.as_deref().is_some_and(|b| gate.revoked(b)))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in revoked {
+            if let Some(mut r) = self.running.remove(&id) {
+                let _ = r.child.kill();
+                let _ = r.child.wait();
+                eprintln!("[cog-host] {id}: stopped, its binary hash is revoked");
+                self.last_exit.insert(id.clone(), format!("stopped: licence run gate [hash_revoked] at {}", unix_now()));
+                self.refusals.insert(id.clone(), "hash_revoked");
+                let n = self.restarts.entry(id.clone()).or_insert(0);
+                *n += 1;
+                self.backoff_until.insert(id, Instant::now() + backoff(*n));
+            }
+        }
     }
 
     /// One supervision step: reap exits, restart enabled cogs past their backoff. Call ~1/s.
     pub fn tick(&mut self) {
+        self.sweep_revoked();
         // reap
         let ids: Vec<String> = self.running.keys().cloned().collect();
         for id in ids {
@@ -185,6 +257,8 @@ impl Supervisor {
                     uptime_s: run.map(|x| x.started.elapsed().as_secs()),
                     last_exit: self.last_exit.get(&r.id).cloned(),
                     signed: r.signed,
+                    licence_refusal: self.refusals.get(&r.id).map(|c| c.to_string()),
+                    licence_grant: run.and_then(|x| x.grant_id.clone()),
                 }
             })
             .collect();

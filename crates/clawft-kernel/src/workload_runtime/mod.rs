@@ -66,7 +66,7 @@ mod tests_native;
 mod tests_seed;
 #[cfg(test)]
 mod tests_seed_bind;
-#[cfg(test)]
+#[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 mod tests_seed_bind_v2;
 #[cfg(test)]
 mod tests_seed_host;
@@ -98,9 +98,10 @@ pub use logical::{
 pub use native::{NativeConfig, NativeRuntime};
 pub use seed::{SeedApiRuntime, SeedConfig, SeedPin};
 pub use seed_bind::{
-    BindError, BindRecord, Binding, SeedBinder, SignedBind, StewardBind, UnbindOutcome, attest_seed_facts,
-    grant_fingerprint, seed_node_id, sign_bind,
+    BindError, BindRecord, Binding, SeedBinder, SignedBind, attest_seed_facts, seed_node_id, sign_bind,
 };
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub use seed_bind::{StewardBind, UnbindOutcome, grant_fingerprint};
 pub use seed_creds::FileCredentials;
 pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};
 pub use seed_ops::{SeedBackup, UpgradeOutcome};

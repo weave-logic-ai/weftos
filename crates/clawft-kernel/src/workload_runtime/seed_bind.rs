@@ -147,7 +147,8 @@ pub enum BindError {
     #[error("{0}")]
     UnpinnedTransport(String),
     /// A licence-record check failed (v2 binding: signature, mesh id,
-    /// steward profile, admission posture).
+    /// steward profile, admission posture). Only with the licence module.
+    #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
     #[error("{0}")]
     Licence(crate::licence::LicenceError),
     /// The device is already bound to another mesh here; unbind first.
@@ -177,6 +178,7 @@ impl BindError {
             Self::Replayed => "replayed",
             Self::NodeTaken(_) => "node_taken",
             Self::UnpinnedTransport(_) => "unpinned_transport",
+            #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
             Self::Licence(e) => v2::licence_code(e),
             Self::SeedBoundElsewhere { .. } => "seed_bound_elsewhere",
             Self::State(_) => "state_unwritable",
@@ -471,7 +473,11 @@ impl SeedBinder {
     }
 }
 
+// The v2 (licence) form needs the licence module, which is gated like the
+// mesh swarm code; without it only the v1 bind exists.
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 mod v2;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub use v2::{StewardBind, UnbindOutcome, grant_fingerprint};
 
 impl SeedApiRuntime {

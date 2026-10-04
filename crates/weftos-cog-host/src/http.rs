@@ -3,6 +3,8 @@
 //!   POST /cogs/<id>/start|stop -> enable/disable + spawn/kill
 //!   POST /install              -> verify (Ed25519/sha256) + write + reload  (body: InstallReq JSON)
 //!   POST /reload               -> re-read records from disk
+//!   GET  /licence              -> the ADR-106 licence state the start check uses
+//!   POST /licence/records      -> verify + apply signed binding/grants/approvals/revocations
 //!   GET  /healthz              -> ok
 //!   /hw/*                      -> USB inventory, identify, Hardware Dex (see `hw_http`)
 //!
@@ -12,7 +14,7 @@
 //! bearer token, as does every `GET /hw/*`; CORS is answered only for allowlisted origins on
 //! `/hw/*` and on every POST. See `auth`. `GET /status|/network|/healthz` stay open (read views)
 //! and keep `*`. Limits: 32 concurrent connections (503 beyond), 20 s per request, 64 KB bodies on
-//! `/hw/*`, 4 KB on `/fleet/heartbeat`.
+//! `/hw/*`, 4 KB on `/fleet/heartbeat`, 2 MB on `/licence/records`.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -23,6 +25,7 @@ use std::time::{Duration, Instant};
 use weftos_cog_host::auth::{Headers, Policy};
 use weftos_cog_host::fleet::{Heartbeat, HEARTBEAT_BODY_CAP};
 use weftos_cog_host::hw_http::{self, HW_BODY_CAP};
+use weftos_cog_host::licence::{HostLicence, Records, MAX_IMPORT_BYTES};
 use weftos_cog_host::supervise::Supervisor;
 use weftos_cog_host::{install, InstallReq};
 
@@ -40,7 +43,7 @@ impl Drop for Slot {
     }
 }
 
-pub fn serve(listener: TcpListener, sup: Arc<Mutex<Supervisor>>, policy: Arc<Policy>) {
+pub fn serve(listener: TcpListener, sup: Arc<Mutex<Supervisor>>, policy: Arc<Policy>, licence: Arc<HostLicence>) {
     for stream in listener.incoming() {
         match stream {
             Ok(mut s) => {
@@ -50,12 +53,12 @@ pub fn serve(listener: TcpListener, sup: Arc<Mutex<Supervisor>>, policy: Arc<Pol
                     let _ = respond(&mut s, "503 Service Unavailable", r#"{"ok":false,"error":"too many connections"}"#.into(), "");
                     continue;
                 }
-                let (sup, policy) = (Arc::clone(&sup), Arc::clone(&policy));
+                let (sup, policy, licence) = (Arc::clone(&sup), Arc::clone(&policy), Arc::clone(&licence));
                 // One thread per connection: /hw/usb/identify blocks on an agent for up to 90 s and
                 // must not stall lifecycle/status requests.
                 std::thread::spawn(move || {
                     let _slot = Slot;
-                    if let Err(e) = handle(s, sup, &policy) {
+                    if let Err(e) = handle(s, sup, &policy, &licence) {
                         eprintln!("[cog-host] request error: {e}");
                     }
                 });
@@ -92,7 +95,7 @@ fn cors_headers(method: &str, path: &str, h: &Headers, policy: &Policy) -> Strin
     }
 }
 
-fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy) -> std::io::Result<()> {
+fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licence: &HostLicence) -> std::io::Result<()> {
     let peer_ip = s.peer_addr().ok().map(|a| a.ip().to_string());
     let deadline = Instant::now() + REQUEST_DEADLINE;
     let mut buf: Vec<u8> = Vec::new();
@@ -110,6 +113,8 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy) -> std
                 HW_BODY_CAP
             } else if path == "/fleet/heartbeat" {
                 HEARTBEAT_BODY_CAP
+            } else if path.starts_with("/licence") {
+                MAX_IMPORT_BYTES
             } else {
                 MAX_BODY
             };
@@ -166,7 +171,11 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy) -> std
     let hw = hw_http::Req { method, path, headers: &headers, body };
     let (code, payload) = match hw_http::handle(&hw, &root, policy) {
         Some(r) => r,
-        None => route(method, path, body, peer_ip, &sup),
+        None => match (method, path) {
+            ("GET", "/licence") => ("200 OK", licence.status().to_string()),
+            ("POST", "/licence/records") => licence_route(body, licence),
+            _ => route(method, path, body, peer_ip, &sup),
+        },
     };
     respond(&mut s, code, payload, &cors)
 }
@@ -224,6 +233,17 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
     }
 }
 
+fn licence_route(body: &[u8], licence: &HostLicence) -> (&'static str, String) {
+    let recs: Records = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => return ("400 Bad Request", serde_json::json!({"ok":false,"error":format!("bad licence records: {e}")}).to_string()),
+    };
+    match licence.import(&recs) {
+        Ok(lines) => ("200 OK", serde_json::json!({"ok":true,"records":lines}).to_string()),
+        Err(e) => ("400 Bad Request", serde_json::json!({"ok":false,"error":e}).to_string()),
+    }
+}
+
 fn install_route(body: &[u8], sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
     let req: InstallReq = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -273,7 +293,8 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let sup = Arc::new(Mutex::new(Supervisor::new(root.path().to_path_buf())));
         let policy = Arc::new(Policy::new("tok".into(), vec!["http://127.0.0.1:*".into(), "http://localhost:*".into()]));
-        std::thread::spawn(move || serve(listener, sup, policy));
+        let licence = Arc::new(HostLicence::open(root.path().join(".licence")));
+        std::thread::spawn(move || serve(listener, sup, policy, licence));
         (addr, root)
     }
 
@@ -422,6 +443,24 @@ mod tests {
             let (st, h, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
             assert!(st.contains("200") && h.contains("access-control-allow-origin: *"), "{path}: {st}");
         }
+    }
+
+    #[test]
+    fn licence_records_need_the_token_and_status_is_a_read_view() {
+        let _g = serial();
+        let (a, root) = start();
+        let (st, _, body) = send(a, &post("/licence/records", JSON, "{}"));
+        assert!(st.contains("401") && body.contains("host token required"), "{st}");
+        // With the token: no licence dir yet, so nothing is imported.
+        let (st, _, body) = send(a, &post("/licence/records", &format!("{JSON}{TOK}"), "{}"));
+        assert!(st.contains("400") && body.contains("no licence directory"), "{st} {body}");
+        let (st, _, body) = send(a, &post("/licence/records", &format!("{JSON}{TOK}"), r#"{"nope":1}"#));
+        assert!(st.contains("400") && body.contains("bad licence records"), "{st} {body}");
+        let (st, _, body) = send(a, "GET /licence HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(st.contains("200") && body.contains("unconfigured"), "{st} {body}");
+        let raw = format!("POST /licence/records HTTP/1.1\r\nHost: 127.0.0.1\r\n{JSON}{TOK}Content-Length: {}\r\n\r\n", MAX_IMPORT_BYTES + 1);
+        assert!(send(a, &raw).0.contains("413"));
+        assert!(!root.path().join(".licence").exists());
     }
 
     #[test]

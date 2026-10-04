@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "weft-cog-host (COG-009): a WeftOS process supervisor that runs cogs on an appliance with no agent cap, each still ingesting to the Cognitum store. Lifecycle HTTP API for the manager UI. std-only, arm64-portable."
+description = "weft-cog-host (COG-009): a WeftOS process supervisor that runs cogs on an appliance with no agent cap, each still ingesting to the Cognitum store. Lifecycle HTTP API for the manager UI (std HTTP, no TLS stack); armv7 and arm64."
 
 [[bin]]
 name = "weft-cog-host"
@@ -21,6 +21,12 @@ weftos-cog-repo = { path = "../weftos-cog-repo", default-features = false }
 base64 = "0.22"
 # USB id table for /hw/usb (pure data, wasm-safe; no new third-party deps).
 weftos-cog-market = { path = "../weftos-cog-market" }
+# ADR-106 phase 3: the start-time licence check reuses the kernel's run gate and
+# licence stores (`licence`, gated on these four features). No workload-runtime,
+# so no reqwest/TLS.
+clawft-kernel = { workspace = true, features = ["native", "ecc", "exochain", "mesh"] }
+blake3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+ed25519-dalek = { workspace = true }
