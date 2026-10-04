@@ -46,14 +46,19 @@ pub const COG_SYNC_TOPIC: &str = "mesh.cog.sync";
 /// `infer_proxy::hub`.
 pub const INFER_TOPIC: &str = "mesh.infer";
 
+/// Control topic carrying liveness ping/pong between verified peers
+/// (see [`crate::mesh_liveness`]). Handled like [`FACTS_TOPIC`].
+pub const PING_TOPIC: &str = "mesh.ping";
+
 /// Control topics the runtime consumes instead of routing locally.
-const CONTROL_TOPICS: [&str; 6] = [
+const CONTROL_TOPICS: [&str; 7] = [
     FACTS_TOPIC,
     REVOKE_TOPIC,
     COG_BINDING_TOPIC,
     COG_GRANT_TOPIC,
     COG_SYNC_TOPIC,
     INFER_TOPIC,
+    PING_TOPIC,
 ];
 
 /// Receiver of a runtime control topic (one of `CONTROL_TOPICS`).
@@ -112,6 +117,11 @@ pub struct PeerDetail {
     pub connected_at: chrono::DateTime<chrono::Utc>,
     /// Heartbeat tracker's view, when discovery is attached and tracks it.
     pub heartbeat: Option<crate::mesh_heartbeat::HeartbeatState>,
+    /// Last counted liveness pong from this peer (real liveness), when the
+    /// liveness service runs and the peer has answered.
+    pub last_seen: Option<std::time::SystemTime>,
+    /// Smoothed ping round-trip time in milliseconds, same condition.
+    pub rtt_ms: Option<f64>,
 }
 
 /// Count of live routes registered by one serving connection. Lets the
@@ -203,9 +213,24 @@ pub struct MeshRuntime {
     /// before. Set by the owner of the admission mode and updated when the
     /// mode changes.
     enforcing: std::sync::atomic::AtomicBool,
+    /// Liveness ping/pong service, once started ([`MeshRuntime::start_liveness`]).
+    liveness: std::sync::OnceLock<Arc<crate::mesh_liveness::Liveness>>,
 }
 
 impl MeshRuntime {
+    /// Start the liveness ping/pong between verified peers (idempotent).
+    pub fn start_liveness(self: &Arc<Self>, cfg: crate::mesh_liveness::LivenessConfig) {
+        let lv = crate::mesh_liveness::Liveness::new(self, cfg);
+        if self.liveness.set(lv.clone()).is_ok() {
+            lv.start();
+        }
+    }
+
+    /// The liveness service, when started.
+    pub fn liveness(&self) -> Option<&Arc<crate::mesh_liveness::Liveness>> {
+        self.liveness.get()
+    }
+
     /// Say whether admission is `enforce` (see the field). Takes effect for
     /// the peer events emitted after the call.
     pub fn set_enforcing(&self, enforcing: bool) {
@@ -240,6 +265,7 @@ impl MeshRuntime {
             conn_ids: Mutex::new(Vec::new()),
             conn_seq: std::sync::atomic::AtomicU64::new(0),
             enforcing: std::sync::atomic::AtomicBool::new(false),
+            liveness: std::sync::OnceLock::new(),
         }
     }
 
@@ -267,6 +293,7 @@ impl MeshRuntime {
             conn_ids: Mutex::new(Vec::new()),
             conn_seq: std::sync::atomic::AtomicU64::new(0),
             enforcing: std::sync::atomic::AtomicBool::new(false),
+            liveness: std::sync::OnceLock::new(),
         }
     }
 
@@ -982,10 +1009,20 @@ impl MeshRuntime {
                         .discovery
                         .as_ref()
                         .and_then(|d| d.heartbeat.lock().ok()?.peer_state(e.key())),
+                    last_seen: None,
+                    rtt_ms: None,
                 }
             })
             .collect();
         out.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        if let Some(lv) = self.liveness.get() {
+            for d in &mut out {
+                if let Some(l) = lv.peer(&d.node_id) {
+                    d.last_seen = Some(l.last_seen);
+                    d.rtt_ms = Some(l.rtt_ms);
+                }
+            }
+        }
         out
     }
 

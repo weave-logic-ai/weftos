@@ -62,6 +62,8 @@ fn raw() -> Raw {
             licensed: false,
             connected_at: chrono::DateTime::from_timestamp(1_700_000_050, 0).unwrap(),
             heartbeat: Some("alive"),
+            last_seen: None,
+            rtt_ms: None,
         }]),
         revoked: vec![clawft_kernel::revocation::RevokedHost {
             host_id: "bad-node".into(),
@@ -211,11 +213,20 @@ fn a_label_for_an_unknown_id_is_flagged() {
 }
 
 #[test]
-fn rtt_is_null_with_a_note_never_a_zero() {
+fn rtt_and_last_seen_are_null_until_measured_never_a_zero() {
     let snap = assemble(raw(), Extra::default(), 1);
     let mesh = &node(&snap, "zeta")["mesh"]["value"];
     assert!(mesh["rtt_ms"].is_null());
-    assert!(mesh["rtt_note"].as_str().unwrap().contains("not measured"));
+    assert!(mesh["last_seen"].is_null());
+
+    let mut r = raw();
+    let m = &mut r.mesh.as_mut().unwrap()[0];
+    m.rtt_ms = Some(12.345);
+    m.last_seen = chrono::DateTime::from_timestamp(1_700_000_200, 0);
+    let snap = assemble(r, Extra::default(), 1);
+    let mesh = &node(&snap, "zeta")["mesh"]["value"];
+    assert_eq!(mesh["rtt_ms"], 12.3);
+    assert_eq!(mesh["last_seen_unix"], 1_700_000_200);
 }
 
 #[test]

@@ -352,6 +352,8 @@ pub fn init(
         return;
     }
     let exchange = mesh.map(|rt| {
+        // Liveness/RTT ping between verified peers (fleet `last_seen`, `rtt_ms`).
+        rt.start_liveness(clawft_kernel::mesh_liveness::LivenessConfig::default());
         let ex = FactsExchange::new(
             key.clone(),
             membership.clone(),

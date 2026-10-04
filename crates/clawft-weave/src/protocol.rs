@@ -230,7 +230,8 @@ pub struct ClusterNodeInfo {
     pub state: String,
     pub address: Option<String>,
     /// RFC 3339 time the membership last heard a verified join, recovery or announce
-    /// from the peer (not liveness: nothing pings peers); empty when the membership
+    /// from the peer (per-pong liveness is `fleet.snapshot` `mesh.last_seen`); empty
+    /// when the membership
     /// has no record of the peer.
     #[serde(alias = "last_seen")]
     pub last_announce: String,

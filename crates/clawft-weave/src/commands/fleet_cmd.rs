@@ -146,10 +146,14 @@ pub fn render(snap: &Value, now: u64) -> String {
             .map_or_else(|| "-".to_owned(), |t| age(now, t));
         let mesh = match val(n, "mesh") {
             m if m.is_object() => format!(
-                "{}{} {}",
+                "{}{} {}{}",
                 m["class"].as_str().unwrap_or("?"),
                 if m["verified"] == true { "" } else { " unverified" },
-                m["heartbeat"].as_str().unwrap_or("")
+                m["heartbeat"].as_str().unwrap_or(""),
+                match (m["rtt_ms"].as_f64(), m["last_seen_unix"].as_u64()) {
+                    (Some(r), Some(t)) => format!(" {r:.0}ms, pong {}", age(now, t)),
+                    _ => String::new(),
+                }
             )
             .trim()
             .to_owned(),
@@ -203,6 +207,9 @@ mod tests {
                   "facts": { "value": { "trust_tier": "pinned", "tier_source": "operator" } },
                   "instances": { "value": [{}, {}] },
                   "location": { "value": { "site": "Lab", "room": "R1" } } },
+                { "node_id": "cccccccccccccccccccc",
+                  "mesh": { "value": { "class": "node", "verified": true, "heartbeat": "alive",
+                                       "rtt_ms": 4.2, "last_seen_unix": 995 } } },
                 { "node_id": "bbbbbbbbbbbbbbbbbbbb",
                   "cluster": { "value": { "state": "suspect", "last_announce_unix": 100 } },
                   "mesh": { "value": { "class": "leaf", "verified": false, "heartbeat": "suspect" } },
@@ -223,6 +230,7 @@ mod tests {
         assert!(out.contains("Lab / R1") && out.contains("10.0.0.2:9"), "{out}");
         assert!(out.contains("bbbbbbbb... REVOKED"), "{out}");
         assert!(out.contains("leaf unverified suspect"), "{out}");
+        assert!(out.contains("node alive 4ms, pong 5s ago"), "{out}");
         assert!(out.contains("mesh id: mesh-1") && out.contains("revoked hosts: 1"), "{out}");
         assert!(out.contains("not available: placement:"), "{out}");
     }

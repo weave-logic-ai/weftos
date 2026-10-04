@@ -9,10 +9,10 @@
 //! | section | source | provenance |
 //! |---|---|---|
 //! | `name` | the peer's own announced name | `peer_claimed` |
-//! | `cluster` | state, first seen and `last_announce` (when a verified join, recovery or announce last arrived; NOT liveness, nothing pings peers) | `daemon_observed` |
+//! | `cluster` | state, first seen and `last_announce` (when a verified join, recovery or announce last arrived; per-pong liveness is `mesh.last_seen`) | `daemon_observed` |
 //! | `announced` | platform and address the peer announced (an unverified peer chooses them) | `peer_claimed` |
 //! | `facts` | signed node facts cache (`cluster.facts`) | `signed_fact` |
-//! | `mesh` | live connection detail (class, verified, heartbeat) | `daemon_observed` |
+//! | `mesh` | live connection detail (class, verified, heartbeat, last pong, smoothed RTT) | `daemon_observed` |
 //! | `revoked` | host revocation list (`mesh.revoked`) | `daemon_observed` |
 //! | `instances` | placement controller's own records and lifecycle (no error text) | `daemon_observed` |
 //! | `location` | operator labels (`fleet.location.set`) | `operator_claimed` |
@@ -24,8 +24,10 @@
 //! `self_reported` is the fifth label: heartbeat fields an edge node says
 //! about itself (the cog-host roster). The daemon holds none today.
 //!
-//! Round-trip time is reported as `null` with a note: no code in the runtime
-//! measures it, and a zero would read as a perfect link.
+//! `mesh.last_seen` and `mesh.rtt_ms` come from the liveness ping/pong between
+//! verified peers (`mesh.ping`); they are `null` until a pong has been counted
+//! (an unverified peer is never pinged), never a zero that would read as a
+//! perfect link.
 //!
 //! `fleet.location.set` (Admin) records `{node, site, room}` on the chain and
 //! saves it ([`crate::fleet_labels`]).
@@ -115,6 +117,10 @@ pub(crate) struct MeshPeer {
     pub connected_at: chrono::DateTime<chrono::Utc>,
     /// `alive`, `suspect` or `dead`; `None` when not tracked.
     pub heartbeat: Option<&'static str>,
+    /// Last counted liveness pong; `None` until one arrives.
+    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
+    /// Smoothed round-trip time, milliseconds; `None` until measured.
+    pub rtt_ms: Option<f64>,
 }
 
 #[cfg(feature = "mesh")]
@@ -136,6 +142,8 @@ fn mesh_peers(k: &Kernel<NativePlatform>) -> Option<Vec<MeshPeer>> {
                     Some(Dead) => Some("dead"),
                     _ => None,
                 },
+                last_seen: d.last_seen.map(chrono::DateTime::<chrono::Utc>::from),
+                rtt_ms: d.rtt_ms,
             })
             .collect(),
     )
@@ -229,8 +237,9 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
                             "licensed": d.licensed,
                             "connected_at": rfc3339(d.connected_at),
                             "heartbeat": d.heartbeat,
-                            "rtt_ms": null,
-                            "rtt_note": "not measured by this build",
+                            "last_seen": d.last_seen.map(rfc3339),
+                            "last_seen_unix": d.last_seen.map(|t| t.timestamp()),
+                            "rtt_ms": d.rtt_ms.map(|r| (r * 10.0).round() / 10.0),
                         }),
                         DAEMON_OBSERVED,
                     ),
