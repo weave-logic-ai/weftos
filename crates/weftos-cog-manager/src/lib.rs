@@ -13,8 +13,10 @@ pub mod client;
 mod hw_dex;
 mod hw_identify;
 mod sensor_detail;
+mod sensor_install;
 mod sensor_link;
 mod sensor_mesh;
+mod sensor_software;
 mod style;
 
 use client::{Client, HostCog, HostStatus, Net, Settings};
@@ -54,6 +56,8 @@ pub struct Manager {
     guide_view: GuideView,
     guide_bundle: Option<Result<GuideBundle, String>>,
     guide_port_draft: String,
+    /// Where the open guide came from, shown above it.
+    guide_source: &'static str,
     /// Catalog tab: the embedded Projects/Modules/Chips inventory + its view state.
     catalog: HwCatalog,
     cat_tab: u8, // 0 projects, 1 modules, 2 chips
@@ -67,7 +71,10 @@ pub struct Manager {
     guides: RefCell<GuideCache>,
     events: RefCell<Vec<Event>>,
     pending_hw: RefCell<Option<String>>,
+    /// Install flow: the node picked for each cog (cog id -> node name).
+    targets: RefCell<std::collections::BTreeMap<String, String>>,
     focus_module: Option<String>,
+    focus_step: Option<u8>,
 }
 
 impl Manager {
@@ -79,7 +86,7 @@ impl Manager {
         // card in the Catalog.
         let deep = client::setting("WEFTOS_MODULE", "module", "");
         let deep = (!deep.trim().is_empty()).then(|| deep.trim().to_string());
-        Self {
+        let mut me = Self {
             client: Client::new(s),
             section: match client::setting("WEFTOS_TAB", "tab", "").as_str() {
                 "sensors" => Section::Sensors,
@@ -96,6 +103,7 @@ impl Manager {
             guide_view: GuideView::at(None),
             guide_bundle: None,
             guide_port_draft: String::new(),
+            guide_source: "",
             catalog: HwCatalog::bundled(),
             cat_tab: 1,
             cat_search: deep.clone().unwrap_or_default(),
@@ -105,8 +113,16 @@ impl Manager {
             guides: RefCell::new(GuideCache::new()),
             events: RefCell::new(Vec::new()),
             pending_hw: RefCell::new(None),
+            targets: RefCell::new(Default::default()),
             focus_module: deep,
+            focus_step: client::setting("WEFTOS_STEP", "step", "").trim().parse().ok(),
+        };
+        // Deep link: `WEFTOS_GUIDE=<cog id>` / `?guide=` opens that cog's bundled guide.
+        let g = client::setting("WEFTOS_GUIDE", "guide", "");
+        if !g.trim().is_empty() {
+            me.open_guide(g.trim(), None, None);
         }
+        me
     }
 }
 
@@ -261,6 +277,9 @@ impl Manager {
                     self.guides.borrow_mut().clear();
                 }
                 ui.separator();
+                if sensor_install::is_loopback_host(&self.client.s.host) {
+                    style::pill(ui, "this machine", AMBER).on_hover_text("The console is pointed at 127.0.0.1, not a remote node. Set the host above (or WEFTOS_HOST) to reach an appliance.");
+                }
                 let sh = self.client.snapshot();
                 match &sh.host {
                     Some(Ok(h)) => {
@@ -538,7 +557,7 @@ impl Manager {
                     let sh = self.client.snapshot();
                     sensor_mesh::mesh_view(sh.mesh.as_ref().and_then(|f| f.result.as_ref()), host.as_ref())
                 };
-                let pc = PanelCtx { client: &self.client, egui: ctx, market: market.as_ref(), host: host.as_ref(), mesh: Some(&mesh), guides: &self.guides, events: &self.events };
+                let pc = PanelCtx { client: &self.client, egui: ctx, catalog: &self.catalog, market: market.as_ref(), host: host.as_ref(), mesh: Some(&mesh), guides: &self.guides, events: &self.events, target: &self.targets, focus_step: self.focus_step.filter(|_| ctx.input(|i| i.time) < 6.5) };
                 let focus = self.focus_module.clone();
                 render_catalog_list(ui, "modules", &items, search, |ui, m| sensor_detail::module_card(ui, m, &pc, focus.as_deref() == Some(m.id.as_str())));
                 self.focus_module = None;
@@ -650,62 +669,58 @@ impl Manager {
     }
 
     fn sensors_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        // Guide open? Render it; otherwise list the running sensor cogs with a "Guide" button each.
+        // Guide open? Render it; otherwise list every sensor whose hook-up guide ships with the
+        // catalog. Reading a guide needs no host, no install and no running cog.
         if self.guide_cog.is_some() {
             self.guide_detail(ui, ctx);
             return;
         }
 
-        style::section_header(ui, "Sensors", "running sensor cogs and their hook-up guides");
-        let running: Vec<HostCog> = match &self.client.snapshot().host {
-            Some(Ok(h)) => h.cogs.iter().filter(|c| c.running).cloned().collect(),
-            _ => Vec::new(),
-        };
-        if running.is_empty() {
-            ui.add_space(style::GAP_M);
-            ui.vertical_centered(|ui| {
-                ui.label(style::dim(ui, "No cogs running. Start one in the Cogs tab, then open its guide here."));
-            });
-        } else {
-            for c in &running {
-                let mut open_guide = false;
-                style::card_frame(ui).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        style::truncated(ui, &c.id, true);
-                        style::pill(ui, &format!("v{}", c.version), GREY);
-                        self.hw_links(ui, &c.id);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            open_guide = ui.button("📖  Open guide").clicked();
-                        });
+        style::section_header(ui, "Sensors", "hook-up guides: wiring, pins, bus, power. They ship with the catalog, so read one before you install");
+        let host: Option<HostStatus> = self.client.snapshot().host.clone().and_then(|r| r.ok());
+        for (id, _) in weftos_cog_market::guides::GUIDES {
+            let cog = host.as_ref().and_then(|h| h.cogs.iter().find(|c| c.id == *id));
+            let mut open_guide = false;
+            style::card_frame(ui).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    style::truncated(ui, id, true);
+                    match cog {
+                        Some(c) if c.running => style::pill(ui, "running", GREEN),
+                        Some(_) => style::pill(ui, "installed", AMBER),
+                        None => style::pill(ui, "not installed", GREY),
+                    };
+                    self.hw_links(ui, id);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        open_guide = ui.button("📖  Open guide").clicked();
                     });
                 });
-                ui.add_space(style::GAP_XS);
-                if open_guide {
-                    self.open_guide(&c.id, None, ctx);
-                }
+            });
+            ui.add_space(style::GAP_XS);
+            if open_guide {
+                self.open_guide(id, None, Some(ctx));
             }
         }
         ui.add_space(style::GAP_M);
-        ui.label(
-            style::dim(
-                ui,
-                "The guide is served by each cog on its own export port — no Seed agent needed. \
-                 Live dashboards (ECG waveform, ToF heatmap, generic trace) come next.",
-            )
-            .italics(),
-        );
+        ui.label(style::dim(ui, "Live dashboards (ECG waveform, ToF heatmap, generic trace) come next.").italics());
     }
 
-    /// Switch to the Sensors tab with this cog's guide open (optionally at a page).
-    fn open_guide(&mut self, id: &str, page: Option<&'static str>, ctx: &egui::Context) {
+    /// Switch to the Sensors tab with this cog's guide open (optionally at a page). The guide
+    /// bundled with the catalog is used when there is one; otherwise a running cog's own `/guide`.
+    fn open_guide(&mut self, id: &str, page: Option<&'static str>, ctx: Option<&egui::Context>) {
         let port = default_export_port(id);
         self.section = Section::Sensors;
         self.guide_cog = Some(id.to_string());
-        self.guide_bundle = None;
         self.guide_view = GuideView::at(page.map(str::to_string));
         self.guide_port_draft = if port == 0 { String::new() } else { port.to_string() };
-        if port != 0 {
+        self.guide_bundle = None;
+        if let Some(json) = weftos_cog_market::guides::bundled(id) {
+            self.guide_bundle = Some(serde_json::from_str::<serde_json::Value>(json).map_err(|e| e.to_string()).and_then(|v| GuideBundle::from_json(&v)));
+            self.guide_source = "bundled with the catalog (readable offline, before install)";
+        } else if let (true, Some(ctx)) = (port != 0, ctx) {
+            self.guide_source = "served by the running cog";
             self.client.fetch_guide(id, port, ctx);
+        } else {
+            self.guide_source = "";
         }
     }
 
@@ -724,7 +739,14 @@ impl Manager {
             match e {
                 Event::Install { id, source, version } => self.client.install(&id, source, version, ctx),
                 Event::Lifecycle { id, action } => self.client.lifecycle(&id, action, ctx),
-                Event::OpenGuide { cog, page } => self.open_guide(&cog, page, ctx),
+                Event::OpenGuide { cog, page } => self.open_guide(&cog, page, Some(ctx)),
+                Event::SwitchHost { url } => {
+                    let mut s = self.client.s.clone();
+                    s.host = url.clone();
+                    self.host_draft = url;
+                    self.client.reconnect(s);
+                    self.guides.borrow_mut().clear();
+                }
             }
         }
     }
@@ -743,20 +765,26 @@ impl Manager {
             style::h2(ui, format!("{id} — guide"));
         });
         ui.add_space(style::GAP_XS);
-        ui.horizontal(|ui| {
-            ui.label(style::dim(ui, "export port"));
-            ui.add(egui::TextEdit::singleline(&mut self.guide_port_draft).desired_width(70.0));
-            let load = ui.button("Load").clicked().then(|| self.guide_port_draft.trim().parse::<u16>().ok()).flatten();
-            if let Some(p) = load {
-                self.guide_bundle = None;
-                self.guide_view = GuideView::at(None);
-                self.client.fetch_guide(&id, p, ctx);
-            }
-        });
+        if !self.guide_source.is_empty() {
+            ui.label(style::dim(ui, format!("Guide source: {}", self.guide_source)));
+        }
+        let from_cog = self.guide_source.starts_with("served by");
+        if from_cog {
+            ui.horizontal(|ui| {
+                ui.label(style::dim(ui, "export port"));
+                ui.add(egui::TextEdit::singleline(&mut self.guide_port_draft).desired_width(70.0));
+                let load = ui.button("Load").clicked().then(|| self.guide_port_draft.trim().parse::<u16>().ok()).flatten();
+                if let Some(p) = load {
+                    self.guide_bundle = None;
+                    self.guide_view = GuideView::at(None);
+                    self.client.fetch_guide(&id, p, ctx);
+                }
+            });
+        }
         ui.separator();
 
-        // Parse the fetched JSON into a GuideBundle once, then cache it.
-        if self.guide_bundle.is_none() {
+        // A running cog's own guide arrives as JSON: parse it into a GuideBundle once, then cache.
+        if from_cog && self.guide_bundle.is_none() {
             let fetched = {
                 let sh = self.client.snapshot();
                 match &sh.guide {
@@ -770,13 +798,23 @@ impl Manager {
         }
 
         match &self.guide_bundle {
+            None if !from_cog => {
+                ui.add_space(style::GAP_S);
+                ui.label(RichText::new(format!("No hook-up guide ships for {id} yet.")).color(AMBER));
+                ui.label(style::dim(ui, "The wiring facts the catalog has for its hardware are on the module's card (Catalog tab). To add a guide, follow the sensor-cog skill."));
+                let hw: Vec<String> = self.catalog.modules_for_cog(&id).iter().map(|m| m.id.clone()).collect();
+                for m in hw {
+                    if ui.button(format!("🔧 Open {m} in the Catalog")).clicked() {
+                        *self.pending_hw.borrow_mut() = Some(m);
+                    }
+                }
+            }
             None => {
                 ui.add_space(style::GAP_S);
                 if self.guide_port_draft.trim().is_empty() {
-                    ui.label(RichText::new("Unknown export port for this cog — enter it above and press Load.").color(AMBER));
-                    ui.label(style::dim(ui, "(It's the cog's [api].bind_port, e.g. 8050 for rd-03e.)"));
+                    ui.label(RichText::new("No hook-up guide ships for this cog, and its export port is not known.").color(AMBER));
                 } else {
-                    ui.label(style::dim(ui, "Loading guide…"));
+                    ui.label(style::dim(ui, "Loading the guide from the running cog…"));
                 }
             }
             Some(Ok(bundle)) => {
@@ -785,8 +823,12 @@ impl Manager {
             }
             Some(Err(e)) => {
                 ui.add_space(style::GAP_S);
-                ui.label(RichText::new(format!("Couldn't load the guide: {e}")).color(RED));
-                ui.label(style::dim(ui, "Is the cog running and its export port reachable? Adjust the port above and press Load."));
+                ui.label(RichText::new(format!("Couldn't read {id}'s guide from the node.")).color(AMBER));
+                ui.label(style::dim(ui, "It is served by the running cog on its own port, which may be bound to the node only. Check that the cog is running, or adjust the port above."));
+                if sensor_install::is_loopback_host(&self.client.s.host) {
+                    ui.label(RichText::new("The console is pointed at this machine (127.0.0.1), not a remote node: set the node's address in the top bar.").color(AMBER));
+                }
+                ui.label(style::dim(ui, format!("detail: {e}")));
             }
         }
     }

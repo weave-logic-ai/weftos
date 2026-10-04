@@ -93,6 +93,8 @@ pub struct CogView {
     /// True when a host answered `/status`; installed/state are meaningless otherwise.
     pub connected: bool,
     pub installed: Option<Installed>,
+    /// A hook-up guide ships with the catalog for this cog (readable before install, offline).
+    pub guide: bool,
     /// Where it runs across the mesh (empty `on` when the mesh view has nothing).
     pub mesh: CogMesh,
 }
@@ -137,7 +139,7 @@ pub fn cog_view(id: &str, market: Option<&Catalog>, host: Option<&HostStatus>, m
         rss_kb: c.rss_kb,
         last_exit: c.last_exit.clone(),
     });
-    CogView { id: id.into(), available, marketplace_loaded: market.is_some(), connected: host.is_some(), installed, mesh: mesh.map(|m| cog_mesh(m, id)).unwrap_or_default() }
+    CogView { id: id.into(), available, marketplace_loaded: market.is_some(), connected: host.is_some(), guide: weftos_cog_market::guides::bundled(id).is_some() || (default_export_port(id) != 0 && installed.as_ref().is_some_and(|i| i.state == CogState::Running)), installed, mesh: mesh.map(|m| cog_mesh(m, id)).unwrap_or_default() }
 }
 
 /// What a module card advertises in the catalog list, weakest to strongest.
@@ -204,26 +206,29 @@ fn off(action: Action, why: &'static str) -> ActionState {
 /// The buttons for one cog and whether each can be pressed right now. Empty when there is nothing
 /// to do (not installed and no source offers it).
 pub fn actions(c: &CogView) -> Vec<ActionState> {
+    let mut v = Vec::new();
     match (&c.installed, c.preferred_source()) {
-        (None, Some(a)) => vec![if c.connected {
+        (None, Some(a)) => v.push(if c.connected {
             on(Action::Install(a.source))
         } else {
             off(Action::Install(a.source), "connect to a host to install")
-        }],
-        (None, None) => vec![],
-        (Some(i), _) => {
-            let up = i.state == CogState::Running;
-            let mut v = Vec::new();
-            v.push(match i.state {
-                CogState::Running => on(Action::Stop),
-                CogState::Refused => off(Action::Start, "the host's licence gate refused this cog"),
-                _ => on(Action::Start),
-            });
-            v.push(if up { on(Action::Configure) } else { off(Action::Configure, "start the cog first; its config keys are in its guide") });
-            v.push(if up { on(Action::OpenGuide) } else { off(Action::OpenGuide, "the guide is served by the running cog") });
-            v
-        }
+        }),
+        (None, None) => {}
+        (Some(i), _) => v.push(match i.state {
+            CogState::Running => on(Action::Stop),
+            CogState::Refused => off(Action::Start, "the host's licence gate refused this cog"),
+            _ => on(Action::Start),
+        }),
     }
+    // The hook-up guide ships with the catalog, so reading it needs no install and no running cog.
+    if c.guide {
+        v.push(on(Action::Configure));
+        v.push(on(Action::OpenGuide));
+    } else if c.installed.is_some() {
+        v.push(off(Action::Configure, "no hook-up guide ships for this cog; its config keys are in its cog.toml"));
+        v.push(off(Action::OpenGuide, "no hook-up guide ships for this cog"));
+    }
+    v
 }
 
 /// A one-line plain-language summary of a cog's software state.
@@ -248,6 +253,8 @@ pub struct CogOutput {
     pub parse_errors: Option<u64>,
     pub timestamp_ms: Option<u64>,
     pub simulated: bool,
+    /// The cog saw real frames from the sensor this window (`source.verified`), when it says.
+    pub verified: Option<bool>,
     pub firmware: Option<String>,
     pub reasons: Vec<String>,
 }
@@ -267,6 +274,7 @@ impl CogOutput {
             parse_errors: v.get("parse_errors").and_then(|x| x.as_u64()),
             timestamp_ms: v.get("timestamp_ms").and_then(|x| x.as_u64()),
             simulated: v.pointer("/source/simulated").and_then(|x| x.as_bool()).unwrap_or(false),
+            verified: v.pointer("/source/verified").and_then(|x| x.as_bool()),
             firmware,
             reasons: v.get("reasons").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default(),
         }
@@ -346,19 +354,17 @@ fn spec_text(m: &Module) -> String {
     t.to_lowercase()
 }
 
+/// The bus the module is read over. A module listing several interfaces ("I2C ... / UART ... /
+/// USB-C") is taken by the first one named: that is the vendor's primary, and the one our cogs use.
 pub fn detect_bus(m: &Module) -> Bus {
-    let t = spec_text(m);
-    if t.contains("uart") {
-        Bus::Uart
-    } else if t.contains("i2c") {
-        Bus::I2c
-    } else if t.contains("usb") {
-        Bus::Usb
-    } else if t.contains("analog") {
-        Bus::Analog
-    } else {
-        Bus::Unknown
-    }
+    let pick = |t: &str| {
+        [("uart", Bus::Uart), ("i2c", Bus::I2c), ("usb", Bus::Usb), ("analog", Bus::Analog)]
+            .into_iter()
+            .filter_map(|(k, b)| t.find(k).map(|i| (i, b)))
+            .min_by_key(|(i, _)| *i)
+            .map(|(_, b)| b)
+    };
+    m.spec.get("interface").and_then(|i| pick(&i.to_lowercase())).or_else(|| pick(&spec_text(m))).unwrap_or(Bus::Unknown)
 }
 
 /// Bus enablement and wiring steps. Device changes (serial console, I2C) are approval-gated, so

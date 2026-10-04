@@ -235,6 +235,14 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
             });
             ("200 OK", obj.to_string())
         }
+        ("GET", ["cogs", id, "last"]) => match weftos_cog_host::introspect::last_output(&root_of(sup), id) {
+            Ok(v) => ("200 OK", v.to_string()),
+            Err((code, e)) => (code, serde_json::json!({"ok": false, "error": e}).to_string()),
+        },
+        ("GET", ["cogs", id, "guide"]) => match weftos_cog_host::introspect::installed_guide(&root_of(sup), id) {
+            Ok(body) => ("200 OK", body),
+            Err((code, e)) => (code, serde_json::json!({"ok": false, "error": e}).to_string()),
+        },
         ("POST", ["reload"]) => {
             sup.lock().unwrap().reload();
             ("200 OK", r#"{"ok":true}"#.to_string())
@@ -250,6 +258,10 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
         }
         _ => ("404 Not Found", r#"{"ok":false,"error":"not found"}"#.to_string()),
     }
+}
+
+fn root_of(sup: &Arc<Mutex<Supervisor>>) -> PathBuf {
+    sup.lock().unwrap().root.clone()
 }
 
 fn licence_route(body: &[u8], licence: &HostLicence) -> (&'static str, String) {
@@ -451,7 +463,7 @@ mod tests {
             assert!(st.contains("401"), "{path}: {st}");
             assert!(body.contains("host token required"));
         }
-        for path in ["/hw/usb", "/hw/dex"] {
+        for path in ["/hw/usb", "/hw/dex", "/hw/buses"] {
             let (st, _, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
             assert!(st.contains("401"), "GET {path}: {st}");
             let (st, _, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{TOK}\r\n"));

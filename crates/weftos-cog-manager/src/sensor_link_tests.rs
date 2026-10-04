@@ -46,7 +46,6 @@ fn no_host_shows_availability_only() {
     assert_eq!(v.preferred_source().unwrap().source, Source::WeaveLogic);
     assert_eq!(module_badge(&[v.clone()]), Badge::Available);
     let a = actions(&v);
-    assert_eq!(a.len(), 1);
     assert!(!a[0].enabled && !a[0].why.is_empty(), "install is disabled with a reason");
     assert!(software_line(&v).contains("availability only"));
 }
@@ -58,12 +57,14 @@ fn state_machine_running_stopped_refused() {
     assert_eq!(run.state(), Some(CogState::Running));
     assert_eq!(module_badge(&[run.clone()]), Badge::Running);
     let acts: Vec<_> = actions(&run).into_iter().map(|a| (a.action, a.enabled)).collect();
-    assert_eq!(acts, vec![(Action::Stop, true), (Action::Configure, true), (Action::OpenGuide, true)]);
+    // "c" has no bundled guide and no known export port, so even running it has nothing to open
+    assert_eq!(acts, vec![(Action::Stop, true), (Action::Configure, false), (Action::OpenGuide, false)]);
 
     let stopped = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", false, false, None)])), None);
     assert_eq!(stopped.state(), Some(CogState::Stopped));
     assert_eq!(module_badge(&[stopped.clone()]), Badge::Installed);
     let acts: Vec<_> = actions(&stopped).into_iter().map(|a| (a.action, a.enabled)).collect();
+    // "c" ships no guide, so the guide buttons are disabled with a reason
     assert_eq!(acts, vec![(Action::Start, true), (Action::Configure, false), (Action::OpenGuide, false)]);
 
     let refused = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", false, false, Some("no_grant"))])), None);
@@ -176,4 +177,31 @@ fn export_ports_match_the_bundled_catalog() {
     }
     assert_eq!(default_export_port("ld2450-radar"), 8052);
     assert_eq!(default_export_port("not-a-cog"), 0);
+}
+
+#[test]
+fn the_guide_is_readable_before_install_and_with_no_host() {
+    // ld2450-radar ships a guide: Open guide is enabled even though nothing is installed
+    let m = market(vec![item("ld2450-radar", Source::WeaveLogic, false)]);
+    let v = cog_view("ld2450-radar", Some(&m), None, None);
+    assert!(v.guide && v.installed.is_none() && !v.connected);
+    let a: Vec<_> = actions(&v).into_iter().map(|a| (a.action, a.enabled)).collect();
+    assert_eq!(a[0], (Action::Install(Source::WeaveLogic), false), "install needs a host");
+    assert!(a.contains(&(Action::OpenGuide, true)));
+    // stopped but guided: guide buttons enabled
+    let v = cog_view("ld2450-radar", Some(&m), Some(&host(vec![host_cog("ld2450-radar", false, false, None)])), None);
+    assert!(actions(&v).iter().any(|a| a.action == Action::OpenGuide && a.enabled));
+}
+
+/// Every guide bundled with the catalog parses and passes the ADR-104 validator, so a user never
+/// opens a broken hook-up guide.
+#[test]
+fn every_bundled_guide_parses_and_validates() {
+    for (id, json) in weftos_cog_market::guides::GUIDES {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        let b = weftos_sensor_guide::GuideBundle::from_json(&v).unwrap_or_else(|e| panic!("{id}: {e}"));
+        let errs = b.validate();
+        assert!(errs.is_empty(), "{id}: {errs:?}");
+        assert!(!b.pages.is_empty(), "{id}");
+    }
 }

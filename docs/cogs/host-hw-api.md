@@ -83,3 +83,9 @@ Read-only, open like `/status`. The host returns its own cogs plus the cogs of e
 ```
 
 `/status` cog rows also carry `log_bytes` and `log_age_s` (size and age of the cog's `host.log`). Cogs have no ingest queue, so these are the only backlog numbers a host reports.
+
+## Install-flow facts (ADR-107)
+
+- `GET /hw/buses` (host token): `{arch, uart:{devices, console_on_uart, console}, i2c:{devices}, usb_serial, enabled_cogs:[{id,args}]}`. Only what the host can read: device nodes that exist, `/proc/cmdline` (`console_on_uart` is `null` when unreadable), the cog records on disk.
+- `GET /cogs/<id>/last` (open, like `/status`): the cog's newest output line reduced to health fields. Target positions are never returned.
+- `GET /cogs/<id>/guide` (open): the `guide.json` shipped in the installed package, or 404.

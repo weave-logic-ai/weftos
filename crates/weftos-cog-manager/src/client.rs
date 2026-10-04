@@ -107,6 +107,47 @@ pub struct MeshCogs {
     pub nodes: Vec<MeshNodeRaw>,
 }
 
+/// `GET /hw/buses`: what a node can host (devices the host can see, kernel console, enabled cogs).
+#[derive(Deserialize, Clone, Default, Debug)]
+pub struct NodeFacts {
+    #[serde(default)]
+    pub node: String,
+    #[serde(default)]
+    pub arch: String,
+    #[serde(default)]
+    pub uart: UartFacts,
+    #[serde(default)]
+    pub i2c: DevList,
+    #[serde(default)]
+    pub usb_serial: Vec<String>,
+    #[serde(default)]
+    pub enabled_cogs: Vec<EnabledCog>,
+}
+
+#[derive(Deserialize, Clone, Default, Debug)]
+pub struct UartFacts {
+    #[serde(default)]
+    pub devices: Vec<String>,
+    /// `None` = the kernel command line was unreadable (unknown, not "off").
+    #[serde(default)]
+    pub console_on_uart: Option<bool>,
+    #[serde(default)]
+    pub console: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Default, Debug)]
+pub struct DevList {
+    #[serde(default)]
+    pub devices: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Default, Debug)]
+pub struct EnabledCog {
+    pub id: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
 /// The mesh fetch: refetched at most every 6 s while a detail panel or catalog list is showing.
 #[derive(Clone)]
 pub struct MeshFetch {
@@ -416,6 +457,9 @@ pub struct Shared {
     /// Latest `/status` output line of each cog whose detail panel is open, by cog id.
     pub cog_out: std::collections::BTreeMap<String, CogOutFetch>,
     pub mesh: Option<MeshFetch>,
+    /// Pre-install facts of the connected host (`/hw/buses`); `Err` carries a human reason.
+    pub node_facts: Option<Result<NodeFacts, String>>,
+    pub node_facts_at: Option<Instant>,
 }
 
 /// One cog's export `/status` fetch (the cog's own endpoint, not a host endpoint).
@@ -855,21 +899,31 @@ impl Client {
             let prev = sh.cog_out.get(id).and_then(|f| f.result.clone());
             sh.cog_out.insert(id.to_string(), CogOutFetch { fired: Instant::now(), in_flight: true, result: prev });
         }
-        let url = format!("{}/status", self.export_base(port));
+        // Primary: the host's own redacted last-output route (works whatever the cog's export is
+        // bound to). Fallback for hosts that predate it: the cog's export `/status`.
+        let host_url = format!("{}/cogs/{id}/last", base(&self.s.host));
+        let export_url = (port != 0).then(|| format!("{}/status", self.export_base(port)));
         let shared = Arc::clone(&self.shared);
         let id = id.to_string();
         let ctx = ctx.clone();
-        ehttp::fetch(ehttp::Request::get(url), move |res| {
-            let parsed: Result<serde_json::Value, String> = match &res {
-                Ok(r) if r.ok => serde_json::from_slice(&r.bytes).map_err(|e| e.to_string()),
-                Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
-                Err(e) => Err(e.clone()),
-            };
+        let finish = move |parsed: Result<serde_json::Value, String>| {
             if let Some(f) = shared.lock().unwrap().cog_out.get_mut(&id) {
                 f.in_flight = false;
                 f.result = Some(parsed);
             }
             ctx.request_repaint();
+        };
+        let to_json = |res: &ehttp::Result<ehttp::Response>| -> Result<serde_json::Value, String> {
+            match res {
+                Ok(r) if r.ok => serde_json::from_slice(&r.bytes).map_err(|e| e.to_string()),
+                Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
+                Err(e) => Err(e.clone()),
+            }
+        };
+        ehttp::fetch(ehttp::Request::get(host_url), move |res| match (to_json(&res), export_url) {
+            (Ok(v), _) => finish(Ok(v)),
+            (Err(_), Some(url)) => ehttp::fetch(ehttp::Request::get(url), move |r2| finish(to_json(&r2))),
+            (Err(e), None) => finish(Err(e)),
         });
     }
 
@@ -897,6 +951,30 @@ impl Client {
                 f.in_flight = false;
                 f.result = Some(parsed);
             }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Fetch the connected host's bus facts for the pre-install check (needs the host token). At
+    /// most every 8 s; callers invoke it each frame the check is showing.
+    pub fn ensure_node_facts(&self, ctx: &eframe::egui::Context) {
+        {
+            let mut sh = self.shared.lock().unwrap();
+            if sh.node_facts_at.is_some_and(|t| t.elapsed() < Duration::from_secs(8)) {
+                return;
+            }
+            sh.node_facts_at = Some(Instant::now());
+        }
+        let url = format!("{}/hw/buses", base(&self.s.host));
+        let have_token = !self.s.token.trim().is_empty();
+        let (shared, ctx) = (Arc::clone(&self.shared), ctx.clone());
+        ehttp::fetch(get_req(url, &self.s.token), move |res| {
+            let parsed = match &res {
+                Ok(r) if r.status == 401 || r.status == 403 => Err(if have_token { "the host refused the token".to_string() } else { "needs the host token (set it in the top bar)".to_string() }),
+                Ok(r) if r.status == 404 => Err("this host predates the pre-install check".to_string()),
+                _ => parse_json::<NodeFacts>(&res),
+            };
+            shared.lock().unwrap().node_facts = Some(parsed);
             ctx.request_repaint();
         });
     }

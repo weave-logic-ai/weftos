@@ -10,6 +10,7 @@ pub mod auth;
 pub mod dex;
 pub mod fleet;
 pub mod hw_http;
+pub mod introspect;
 pub mod licence;
 pub mod mesh;
 pub mod network;
