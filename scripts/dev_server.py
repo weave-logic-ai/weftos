@@ -16,11 +16,42 @@ Usage:
 import http.server
 import sys
 import os
+import urllib.parse
 import urllib.request
 import urllib.error
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 DIRECTORY = sys.argv[2] if len(sys.argv) > 2 else "."
+
+# Only these LLM API hosts may be proxied (HTTPS only), so the dev server is not an
+# open proxy (CodeQL py/full-ssrf). Extend with DEV_PROXY_ALLOW="host1,host2".
+ALLOWED_HOSTS = {
+    "openrouter.ai",
+    "api.anthropic.com",
+    "api.openai.com",
+    "generativelanguage.googleapis.com",
+    "api.groq.com",
+    "api.mistral.ai",
+}
+ALLOWED_HOSTS |= {
+    h.strip().lower() for h in os.environ.get("DEV_PROXY_ALLOW", "").split(",") if h.strip()
+}
+# Bind to loopback unless DEV_SERVER_BIND says otherwise.
+BIND = os.environ.get("DEV_SERVER_BIND", "127.0.0.1")
+
+
+def proxy_target_allowed(url):
+    """True when `url` is https:// to an allowed host, with no userinfo and the default port."""
+    try:
+        u = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if u.scheme != "https" or u.username or u.password:
+        return False
+    if u.port not in (None, 443):
+        return False
+    return (u.hostname or "").lower() in ALLOWED_HOSTS
+
 
 # Headers to forward from browser request to upstream API.
 FORWARD_HEADERS = [
@@ -98,8 +129,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     def _proxy(self, method):
         target_url = self.path[len("/proxy/"):]
-        if not target_url.startswith("http"):
-            self.send_error(400, "proxy target must be an absolute URL")
+        if not proxy_target_allowed(target_url):
+            self.send_error(403, "proxy target must be https:// to an allowed LLM API host (see DEV_PROXY_ALLOW)")
             return
 
         # Read request body.
@@ -171,8 +202,8 @@ if __name__ == "__main__":
     # ThreadingHTTPServer is required — single-threaded HTTPServer blocks on
     # HTTP/1.1 keep-alive connections, causing browsers to hang.
     server_cls = http.server.ThreadingHTTPServer
-    with server_cls(("0.0.0.0", PORT), ProxyHandler) as httpd:
-        print(f"Serving on http://0.0.0.0:{PORT}/")
+    with server_cls((BIND, PORT), ProxyHandler) as httpd:
+        print(f"Serving on http://{BIND}:{PORT}/")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

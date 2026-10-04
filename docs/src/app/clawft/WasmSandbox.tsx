@@ -1158,7 +1158,7 @@ export default function WasmSandbox() {
     // Reset WASM conversation history — reinitialize
     wasmModule = null;
     wasmRef.current = null;
-    const key = localStorage.getItem('clawft-api-key') ?? '';
+    const key = sessionStorage.getItem('clawft-api-key') ?? '';
     const mdl = localStorage.getItem('clawft-model') ?? model;
     if (key) {
       initWasm(key, mdl).catch(() => {});
@@ -1207,8 +1207,10 @@ export default function WasmSandbox() {
         log('BOOT_SERVICES', `Knowledge base loaded: ${kb.entries.length} segments, dim=${kb.manifest.dimension}`);
         log('KB_READY', `Embedder: ${kb.manifest.embedder_name}`);
 
+        // Keys used to persist in localStorage; drop any left from older versions.
+        localStorage.removeItem('clawft-api-key');
         // Check for stored key — if present, upgrade to LLM mode
-        const stored = localStorage.getItem('clawft-api-key');
+        const stored = sessionStorage.getItem('clawft-api-key');
         const storedModel = localStorage.getItem('clawft-model');
         if (storedModel) setModel(storedModel);
 
@@ -1248,7 +1250,7 @@ export default function WasmSandbox() {
     setStatus('loading');
     setError('');
     try {
-      localStorage.setItem('clawft-api-key', apiKey);
+      sessionStorage.setItem('clawft-api-key', apiKey);
       localStorage.setItem('clawft-model', model);
       savePrefsDebounced({ model });
       await initWasm(apiKey, model);
@@ -1269,7 +1271,7 @@ export default function WasmSandbox() {
   };
 
   const handleClearKey = () => {
-    localStorage.removeItem('clawft-api-key');
+    sessionStorage.removeItem('clawft-api-key');
     localStorage.removeItem('clawft-model');
     wasmModule = null;
     wasmRef.current = null;
@@ -1515,7 +1517,7 @@ export default function WasmSandbox() {
             </div>
             <p className="mb-4 text-sm text-fd-muted-foreground">
               Local mode works without an API key — it searches the KB and returns matching docs directly.
-              Connect an LLM for synthesized answers. Your key stays in localStorage.
+              Connect an LLM for synthesized answers. Your key stays in this browser tab (sessionStorage) and is cleared when you close it.
             </p>
             {error && (
               <div className="mb-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-400">

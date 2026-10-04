@@ -354,13 +354,14 @@ fn print_provider(label: &str, api_key: &str) {
 
 /// Mask an API key, showing only the first 4 and last 4 characters.
 fn mask_key(key: &str) -> String {
-    if key.len() <= 8 {
-        return "*".repeat(key.len());
+    // Show only the last 4 characters, and only when the key is long enough that they reveal
+    // little. Char-based, so a non-ASCII key cannot panic on a byte boundary.
+    let n = key.chars().count();
+    if n <= 12 {
+        return "*".repeat(n.min(8));
     }
-    let prefix = &key[..4];
-    let suffix = &key[key.len() - 4..];
-    let middle_len = key.len() - 8;
-    format!("{prefix}{}...{suffix}", "*".repeat(middle_len.min(8)))
+    let suffix: String = key.chars().skip(n - 4).collect();
+    format!("********...{suffix}")
 }
 
 #[cfg(test)]
@@ -377,21 +378,23 @@ mod tests {
     fn mask_key_short() {
         assert_eq!(mask_key("abc"), "***");
         assert_eq!(mask_key("abcdefgh"), "********");
+        assert_eq!(mask_key("abcdefghijkl"), "********");
     }
 
     #[test]
     fn mask_key_long() {
         let masked = mask_key("sk-ant-test-key-12345");
-        assert!(masked.starts_with("sk-a"));
+        assert!(!masked.contains("sk-a"), "no key prefix is shown");
         assert!(masked.ends_with("2345"));
-        assert!(masked.contains("*"));
         assert!(masked.contains("..."));
+        // non-ASCII keys must not panic
+        assert!(mask_key("ключ-ключ-ключ-ключ").ends_with("ключ"));
     }
 
     #[test]
     fn mask_key_medium() {
-        let masked = mask_key("123456789");
-        assert_eq!(masked, "1234*...6789");
+        assert_eq!(mask_key("123456789"), "********");
+        assert_eq!(mask_key("1234567890abcd"), "********...abcd");
     }
 
     #[test]
