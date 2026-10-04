@@ -1,6 +1,6 @@
 # D10 nested user instances: source handoff
 
-Lane: nested user implementation. Tree: `/Users/mathewbeane/.codex/worktrees/topology-finish/weftos`. Base: detached `e6662b818`; existing Phase 4 edits preserved. No commits, pushes, board actions, live-HOME writes, compiler jobs, or new target directories.
+Lane: nested user implementation. Tree: `~/.codex/worktrees/topology-finish/weftos`. Base: detached `e6662b818`; existing Phase 4 edits preserved. No commits, pushes, board actions, live-HOME writes, compiler jobs, or new target directories.
 
 ## Verification status
 

@@ -92,7 +92,7 @@ and `mesh_nested_dial_tests.rs` uses the current non-optional handshake-hash API
    shutdown, and socket cleanup. Earlier r3 reached owner shutdown and exposed
    the scope bug now fixed; there is no positive final run yet.
 3. **Integrate Wasmtime semantically.** Source is frozen in
-   `/Users/mathewbeane/.codex/worktrees/wasm-project/weftos`. Verify hashes in
+   `~/.codex/worktrees/wasm-project/weftos`. Verify hashes in
    `docs/research/daemon-topology/adr103-wasm-project-freeze.json`, copy new files,
    and three-way merge tracked files. Never overwrite main's shared schema,
    supervisor, logical runtime, or `Cargo.lock`. The merge map and exact build
@@ -121,7 +121,7 @@ and `mesh_nested_dial_tests.rs` uses the current non-optional handshake-hash API
 
 ## Resume here
 
-Run from `/Users/mathewbeane/weftos`. Long jobs must be detached and polled.
+Run from `~/weftos`. Long jobs must be detached and polled.
 
 ```bash
 # 1. After removing one duplicate `use nix::libc;` in each named file:
@@ -153,9 +153,9 @@ python3 scripts/dev/p4-child-endpoint-smoke.py --binary target/debug/weaver
 
 # 4. Inspect the Wasmtime handoff before importing anything.
 sed -n '1,260p' \
-  /Users/mathewbeane/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-slice.md
+  ~/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-slice.md
 python3 -m json.tool \
-  /Users/mathewbeane/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-freeze.json \
+  ~/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-freeze.json \
   > /dev/null
 
 # 5. Container gate starts in plan-only mode. Read its --help before --run.
@@ -207,8 +207,8 @@ cache; disk space was about 19 GiB at the final check.
 - `docs/research/daemon-topology/completion-runs/container-lifecycle-plan.md` — exact real-driver topology and evidence requirements.
 - `scripts/dev/p4-child-endpoint-smoke.py` — isolated real daemon/child endpoint smoke.
 - `scripts/dev/p4-container-driver.py` — disposable DinD real-driver acceptance runner.
-- `/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-slice.md` — Wasmtime source handoff and semantic merge map.
-- `/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-freeze.json` — file hashes and import actions.
+- `~/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-slice.md` — Wasmtime source handoff and semantic merge map.
+- `~/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-freeze.json` — file hashes and import actions.
 
 ## Gotchas
 

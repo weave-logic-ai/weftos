@@ -1,5 +1,5 @@
 {
-  "source": "/Users/mathewbeane/.codex/worktrees/project-container/weftos",
+  "source": "~/.codex/worktrees/project-container/weftos",
   "base": "e6662b818be7511c283cc68c8e6df46681f342a2",
   "patch_sha256": "8afb4f78a6dd79e0077f010d724c922c1eed96c9aa2712934680c52f586393b6",
   "files": [

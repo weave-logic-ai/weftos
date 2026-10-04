@@ -51,7 +51,7 @@ All commands below ran with `HOME=$PWD/target/p4-home` and `WEFTOS_RUNTIME_DIR=$
 
 The initial temporary-HOME check also failed before compilation because rustup attempted to download its pinned toolchain into that HOME and DNS was unavailable. Setting `RUSTUP_HOME` to the installed toolchain resolved that setup failure. Two subsequent test compiles found and prompted local Rust errors (`run_dir` naming and `PermissionsExt` import); those were corrected before the current reruns. No compiler job is currently running. Further build and test commands are paused while disk space is recovered from this worktree's incremental build cache.
 
-The r5 host command used `HOME="$PWD/target/p4-host-home" WEFTOS_RUNTIME_DIR="$PWD/target/p4-host-runtime" CARGO_HOME="/Users/mathewbeane/.cargo" RUSTUP_HOME="/Users/mathewbeane/.rustup" CARGO_INCREMENTAL=0 scripts/build.sh test clawft-weave --filter seatbelt`. The test created separate temporary project, sibling process, socket and HOME paths. It did not connect to the installed daemon or hardware.
+The r5 host command used `HOME="$PWD/target/p4-host-home" WEFTOS_RUNTIME_DIR="$PWD/target/p4-host-runtime" CARGO_HOME="~/.cargo" RUSTUP_HOME="~/.rustup" CARGO_INCREMENTAL=0 scripts/build.sh test clawft-weave --filter seatbelt`. The test created separate temporary project, sibling process, socket and HOME paths. It did not connect to the installed daemon or hardware.
 
 ## Completion status
 

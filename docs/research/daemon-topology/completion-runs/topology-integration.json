@@ -1,5 +1,5 @@
 {
-  "source": "/Users/mathewbeane/.codex/worktrees/topology-finish/weftos",
+  "source": "~/.codex/worktrees/topology-finish/weftos",
   "modified": [
     "crates/clawft-kernel/src/boot.rs",
     "crates/clawft-kernel/src/mesh_admit.rs",

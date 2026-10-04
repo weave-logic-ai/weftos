@@ -30,7 +30,7 @@ The operator creates the service-owned registry at `<mesh state dir>/leaf/regist
 
 ## Evidence
 
-All host build and test commands used `scripts/build.sh` with `HOME=$PWD/.leaf-test-home`, `TMPDIR=$PWD/.leaf-test-home/tmp`, `WEFTOS_TEST_RUNTIME_ROOT=$PWD/.leaf-test-home/test-runtime`, `CARGO_TARGET_DIR=$PWD/target`, `CARGO_NET_OFFLINE=true`, `CARGO_HOME=/Users/mathewbeane/.cargo`, `RUSTUP_HOME=/Users/mathewbeane/.rustup`, and `WEFTOS_RUNTIME_DIR` unset. The final focused gate also set `CARGO_INCREMENTAL=0`. Here `$PWD` was `/Users/mathewbeane/.codex/worktrees/leaf-finish/weftos`. Build and test jobs were detached to `.grok/compose/logs/` and polled. The tests created only private worktree test files and in-memory channels. No test used a real daemon or hardware. The disposable `.leaf-test-home` directory was removed after the final host gate.
+All host build and test commands used `scripts/build.sh` with `HOME=$PWD/.leaf-test-home`, `TMPDIR=$PWD/.leaf-test-home/tmp`, `WEFTOS_TEST_RUNTIME_ROOT=$PWD/.leaf-test-home/test-runtime`, `CARGO_TARGET_DIR=$PWD/target`, `CARGO_NET_OFFLINE=true`, `CARGO_HOME=~/.cargo`, `RUSTUP_HOME=~/.rustup`, and `WEFTOS_RUNTIME_DIR` unset. The final focused gate also set `CARGO_INCREMENTAL=0`. Here `$PWD` was `~/.codex/worktrees/leaf-finish/weftos`. Build and test jobs were detached to `.grok/compose/logs/` and polled. The tests created only private worktree test files and in-memory channels. No test used a real daemon or hardware. The disposable `.leaf-test-home` directory was removed after the final host gate.
 
 | Command | Result |
 |---|---|

@@ -40,8 +40,8 @@ No defect-plant/run proof is claimed: compiler/test execution remains exclusivel
 After merge, using main's existing cache and the lead's detached runner:
 
 ```sh
-CARGO_INCREMENTAL=0 D10_TEST_ROOT=/Users/mathewbeane/weftos/docs/n cargo test -p clawft-weave --test nested_instances -- --test-threads=1
-CARGO_INCREMENTAL=0 D10_TEST_ROOT=/Users/mathewbeane/weftos/docs/n cargo test -p clawft-kernel --features mesh,exochain nested_seed_ -- --test-threads=1
+CARGO_INCREMENTAL=0 D10_TEST_ROOT=~/weftos/docs/n cargo test -p clawft-weave --test nested_instances -- --test-threads=1
+CARGO_INCREMENTAL=0 D10_TEST_ROOT=~/weftos/docs/n cargo test -p clawft-kernel --features mesh,exochain nested_seed_ -- --test-threads=1
 ```
 
 The short docs root is required for the real nested/project and orphan-UDS tests on macOS. Preserve main's reviewed container/trust-path integration while merging the boot hunk. Re-run combined endpoint, Seatbelt and container checks after these D10 tests; previous binaries do not contain the reciprocal path.
