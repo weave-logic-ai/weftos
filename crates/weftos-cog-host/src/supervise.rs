@@ -5,6 +5,11 @@
 //! hashes the binary file and asks [`crate::licence::check_start`]; a refusal is a failed spawn
 //! (backoff, retried) carrying the gate's code. Every tick, a running cog whose binary hash is
 //! revoked is stopped.
+//!
+//! The bytes that were hashed are the bytes that run: with a gate set, a permitted start writes
+//! exactly the hashed bytes to a private `0700` copy under `<root>/.run/` and executes that copy,
+//! so swapping the cog's binary between the hash and the exec changes nothing. The copy is
+//! removed when the instance ends; the directory is cleared when the supervisor starts.
 
 use crate::licence::{check_start, hashes};
 use crate::{load_records, save_record, CogRecord};
@@ -12,20 +17,61 @@ use clawft_kernel::licence::CognitumRunGate;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+/// Private executables of licence-checked starts (a cog id never starts with a dot).
+const RUN_DIR: &str = ".run";
 
 struct Running {
     child: Child,
+    /// The private copy this instance executes (removed on drop).
+    exec_copy: Option<PathBuf>,
     started: Instant,
     /// BLAKE3 of the started binary (only hashed when a licence gate is set).
     blake3: Option<String>,
     /// The grant that covered a licensed start.
     grant_id: Option<String>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(p) = &self.exec_copy {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Write `bytes` to a fresh `0700` file under `<root>/.run/` (itself `0700`) and return its path.
+/// The caller executes this file, not the cog's own binary path.
+fn private_copy(root: &Path, id: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    use std::io::Write;
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let dir = root.join(RUN_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("chmod {}: {e}", dir.display()))?;
+    }
+    let path = dir.join(format!("{id}-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o700);
+    }
+    let res = opts.open(&path).and_then(|mut f| f.write_all(bytes).and_then(|_| f.sync_all()));
+    if let Err(e) = res {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("write {}: {e}", path.display()));
+    }
+    Ok(path)
 }
 
 /// One cog's live status, as the API serializes it.
@@ -65,6 +111,8 @@ pub struct Supervisor {
 
 impl Supervisor {
     pub fn new(root: PathBuf) -> Self {
+        // Copies left by an earlier host process; any instance still running keeps its inode.
+        let _ = std::fs::remove_dir_all(root.join(RUN_DIR));
         let records = load_records(&root).into_iter().map(|r| (r.id.clone(), r)).collect();
         Supervisor {
             root,
@@ -141,7 +189,7 @@ impl Supervisor {
             .open(rec.dir(&self.root).join("host.log"))
             .map_err(|e| format!("open log: {e}"))?;
         let errlog = log.try_clone().map_err(|e| format!("clone log: {e}"))?;
-        let (mut blake3, mut grant_id) = (None, None);
+        let (mut blake3, mut grant_id, mut exec_copy) = (None, None, None);
         if let Some(gate) = &self.gate {
             // Hash the file that is about to run; the gate alone decides.
             let bytes = std::fs::read(&bin).map_err(|e| format!("read {}: {e}", bin.display()))?;
@@ -153,6 +201,8 @@ impl Supervisor {
                     }
                     grant_id = lic.map(|l| l.permit.grant_id);
                     blake3 = Some(hashes(&bytes).1);
+                    // Run exactly the bytes that were checked, not whatever the path holds now.
+                    exec_copy = Some(private_copy(&self.root, id, &bytes)?);
                 }
                 Err(r) => {
                     eprintln!("[cog-host] {id}: {r}");
@@ -161,15 +211,30 @@ impl Supervisor {
                 }
             }
         }
-        let child = Command::new(&bin)
-            .args(&rec.args)
-            .current_dir(rec.dir(&self.root))
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(errlog))
-            .spawn()
-            .map_err(|e| format!("spawn {id}: {e}"))?;
-        self.running.insert(id.to_string(), Running { child, started: Instant::now(), blake3, grant_id });
+        let exe = exec_copy.as_deref().unwrap_or(&bin);
+        let mut cmd = Command::new(exe);
+        cmd.args(&rec.args).current_dir(rec.dir(&self.root)).stdin(Stdio::null()).stdout(Stdio::from(log)).stderr(Stdio::from(errlog));
+        // A just-written file can be ETXTBSY if another thread forked while it was open.
+        let mut spawned = cmd.spawn();
+        for _ in 0..5 {
+            match &spawned {
+                Err(e) if e.raw_os_error() == Some(26) => {
+                    std::thread::sleep(Duration::from_millis(20));
+                    spawned = cmd.spawn();
+                }
+                _ => break,
+            }
+        }
+        let child = match spawned {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(p) = &exec_copy {
+                    let _ = std::fs::remove_file(p);
+                }
+                return Err(format!("spawn {id}: {e}"));
+            }
+        };
+        self.running.insert(id.to_string(), Running { child, exec_copy, started: Instant::now(), blake3, grant_id });
         Ok(())
     }
 

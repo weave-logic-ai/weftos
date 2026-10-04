@@ -184,6 +184,59 @@ fn a_revoked_hash_stops_a_running_cog_and_a_lapse_does_not() {
     s.stop_all_running();
 }
 
+/// A gate that swaps the cog's binary on disk while it is being asked, after the host hashed it.
+#[cfg(unix)]
+struct SwapGate {
+    bin: PathBuf,
+}
+
+#[cfg(unix)]
+impl CognitumRunGate for SwapGate {
+    fn check(&self, _: &RunRequest<'_>) -> Result<RunVerdict, RunRefusal> {
+        std::fs::write(&self.bin, "#!/bin/sh\necho swapped > ran.txt\nsleep 30\n").unwrap();
+        Ok(permit())
+    }
+    fn claims(&self, _: &str, _: &str) -> bool {
+        false
+    }
+    fn revoked(&self, _: &str) -> bool {
+        false
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn the_bytes_that_were_hashed_are_the_bytes_that_run() {
+    let root = tempfile::tempdir().unwrap();
+    sleeper(root.path(), Source::Cognitum);
+    let bin = root.path().join("fall-detect/cog-fall-detect-arm");
+    std::fs::write(&bin, "#!/bin/sh\necho original > ran.txt\nsleep 30\n").unwrap();
+    let mut s = Supervisor::new(root.path().to_path_buf());
+    s.set_licence_gate(Arc::new(SwapGate { bin: bin.clone() }));
+    s.start("fall-detect").unwrap();
+    // The path now holds the swapped bytes, but the instance runs the checked copy.
+    assert!(std::fs::read_to_string(&bin).unwrap().contains("swapped"));
+    let ran = root.path().join("fall-detect/ran.txt");
+    for _ in 0..100 {
+        if ran.exists() && !std::fs::read_to_string(&ran).unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(std::fs::read_to_string(&ran).unwrap().trim(), "original");
+    // The private copy is 0700 and goes away with the instance.
+    let run_dir = root.path().join(".run");
+    let copies: Vec<_> = std::fs::read_dir(&run_dir).unwrap().flatten().collect();
+    assert_eq!(copies.len(), 1);
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(copies[0].metadata().unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::metadata(&run_dir).unwrap().permissions().mode() & 0o777, 0o700);
+    }
+    s.stop("fall-detect").unwrap();
+    assert_eq!(std::fs::read_dir(&run_dir).unwrap().count(), 0);
+}
+
 #[test]
 #[cfg(unix)]
 fn without_a_gate_nothing_changes() {
