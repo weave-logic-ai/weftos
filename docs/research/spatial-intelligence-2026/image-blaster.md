@@ -111,8 +111,8 @@ object, one SFX), never a batch, and the agent stops and reports if its prompt n
   self-intersecting or wrong-scale").
 - **Images leave the machine.** The world call sends the photo inline as base64 to World Labs; edits,
   meshes and SFX go to FAL and through FAL to Google (nano-banana), Tencent (Hunyuan3D), Meshy and
-  ElevenLabs. Never run it on client or confidential imagery (the oil-rig material, client meeting
-  photos, anything under NDA).
+  ElevenLabs. Never run it on client or confidential imagery (private project material, client
+  meeting photos, anything under NDA).
 - **Paid and closed.** World Labs API credits and FAL credits per run; Marble worlds live behind the
   World API until downloaded. The closed API must never be a WeftOS SpatialBackend (S1 §4).
 - **Licences to check before any commercial use:** World Labs output terms; the Hunyuan3D model
