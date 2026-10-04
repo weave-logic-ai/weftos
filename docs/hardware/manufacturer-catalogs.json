@@ -1,7 +1,7 @@
 {
   "generated": "2026-10-03",
-  "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool.",
-  "count": 71,
+  "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool. Toradex added 2026-10-04 (see docs/hardware/toradex.md).",
+  "count": 72,
   "manufacturers": [
     {
       "manufacturer": "Adafruit",
@@ -199,6 +199,17 @@
       "access_notes": "Open-source-hardware store. No current public products REST API (older data.sparkfun.com phant service retired; the modern 'API' is their GitHub org of hardware/libraries). Scrape category/product pages. SparkFun (incl. Qwiic) is a Mouser line.",
       "approx_products": 2500,
       "best_ingest_path": "Mouser pull for Qwiic/breakout SKUs; supplement via store category scrape + github.com/sparkfun for OSHW board metadata.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "Toradex",
+      "area": "boards",
+      "website": "https://www.toradex.com",
+      "catalog_source": "https://www.toradex.com/computer-on-modules (Verdin / Apalis / Colibri / OSM Arm SoMs + carrier boards); developer docs at https://developer.toradex.com and datasheet PDFs at https://docs.toradex.com",
+      "source_type": "product-listing",
+      "access_notes": "Swiss maker of industrial Arm System-on-Modules (SoMs): Verdin (260-pin DDR4 SODIMM edge), Apalis (MXM3 314-pin), Colibri (SODIMM-200), and OSM (solderable) families, plus matching carrier boards (Verdin Dev Board, Dahlia, Yavia, Mallow, Ivy, Ixora, Aster) and the Torizon OS + Torizon Cloud fleet/OTA platform. NPU-equipped SoMs: Verdin iMX8M Plus (2.3 TOPS), Verdin iMX95 (eIQ Neutron ~2.0 TOPS, verify), OSM iMX93 (small eIQ Neutron). 10-15 yr guaranteed availability, -40/+85C industrial. www.toradex.com is bot-walled (HTTP 403 to naive fetch); developer.toradex.com + docs.toradex.com datasheet PDFs are the accessible primary sources. Toradex is a Mouser line (eu.mouser.com/new/toradex) for orderable SoM/carrier SKUs. Industrial SoMs, not a sensor/broadline parts pull. Full writeup in docs/hardware/toradex.md.",
+      "approx_products": 40,
+      "best_ingest_path": "Registry only: enumerate SoMs + carriers from toradex.com/computer-on-modules family pages + per-module docs.toradex.com datasheet PDFs; Mouser Toradex line for orderable SKUs. Not a broadline distributor parametric pull.",
       "status": "found"
     },
     {

@@ -1,6 +1,6 @@
 # Manufacturer catalog sources
 
-Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 71 manufacturers across 5 areas. Generated 2026-10-03 by the catalog-source sweep.
+Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 72 manufacturers across 5 areas. Generated 2026-10-03 by the catalog-source sweep (Toradex added 2026-10-04).
 
 > `best_ingest_path` is how WE pull it today (Mouser API by manufacturer+category) and the authoritative fuller source (parametric CSV export / Octopart-Nexar / first-party scrape). Many first-party selectors are bot-walled; the distributor/CSV paths are the practical ones.
 
@@ -75,7 +75,7 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **Teledyne FLIR (OEM thermal camera cores)** | https://oem.flir.com/categories/infrared-camera-cores/modelselector (model selector for LWIR cores: Boson, Boson+, Lepton, Tau 2, Hadron, Tura) | parametric-selector | 60 | Scrape oem.flir.com model selector pages; DigiKey/GroupGets for Lepton breakout/orderable variants. | found |
 | **Vishay Intertechnology** | https://www.vishay.com/en/optoelectronics/ (interactive parametric product tables: IR emitters, PIN photodiodes, phototransistors, reflective/transmissive optical sensors, ambient light/proximity sensors, optocouplers) + selector guide PDFs (sg2123, sg2166) | parametric-selector | 2000 | Mouser keyword pull (Vishay photodiode / phototransistor / IR emitter / proximity sensor) + Vishay parametric table scrape. | found |
 
-## boards  (20)
+## boards  (21)
 
 | Manufacturer | Catalog source | Type | ~SKUs | Best ingest path | Status |
 |---|---|---|---|---|---|
@@ -97,5 +97,6 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **Samsung** | https://semiconductor.samsung.com/processor/ (Exynos processors); Artik line discontinued | product-listing | 30 | No distribution ingest path for boards/modules. Record product-listing page for reference only; Exynos SoCs reach makers only inside finished devices. Essentially out of practical scope for a board/module pool. | partial |
 | **Seeed Studio** | https://www.seeedstudio.com/catalogsearch/result/?q= (store categories); SBC tag https://www.seeedstudio.com/tag/SBC.html | product-listing | 400 | Mouser pull for Grove/XIAO/Wio SKUs; scrape store category pages + 2025 catalog PDF for SBC/reComputer families not on Mouser. | found |
 | **SparkFun** | https://www.sparkfun.com/categories (category tree); products under /products | product-listing | 2500 | Mouser pull for Qwiic/breakout SKUs; supplement via store category scrape + github.com/sparkfun for OSHW board metadata. | found |
+| **Toradex** | https://www.toradex.com/computer-on-modules (Verdin / Apalis / Colibri / OSM SoMs + carrier boards); developer.toradex.com + docs.toradex.com datasheets | product-listing | 40 | Registry only: enumerate SoMs + carriers from toradex.com/computer-on-modules + per-module docs.toradex.com datasheet PDFs. toradex.com is bot-walled (HTTP 403) — use developer.toradex.com + docs.toradex.com PDFs + Mouser Toradex line (eu.mouser.com/new/toradex) for orderable SKUs. Industrial Arm SoMs, not a sensor/broadline pull. See docs/hardware/toradex.md. | found |
 | **Waveshare** | https://www.waveshare.com/product/ (full product tree by category) | product-listing | 2000 | Scrape https://www.waveshare.com/product/ category tree + per-product wiki pages. Not on Mouser. | found |
 | **Xunlong (Orange Pi)** | http://www.orangepi.org/html/hardWare/computerAndMicrocontrollers/index.html (board index); global store orangepi.org / AliExpress | product-listing | 90 | Scrape orangepi.org hardware board index + per-board download pages. Not on Mouser. | found |
