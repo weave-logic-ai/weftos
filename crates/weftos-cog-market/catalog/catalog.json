@@ -51,6 +51,83 @@
         "pi-zero-2w"
       ],
       "hash": "wh_0e536ec6b40b44b9"
+    },
+    {
+      "id": "ld2450-radar",
+      "name": "LD2450 Tracking Radar",
+      "category": "presence",
+      "difficulty": "moderate",
+      "summary": "HLK-LD2450 24 GHz multi-target tracking radar over UART. Reports up to three targets' x/y position (radar frame), speed and gate per window \u2014 positions only, no identity. A missing radar yields nulls, never fabricated readings.",
+      "export_port": 8052,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "hlk-ld2450",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_bf60545d7171c67b"
+    },
+    {
+      "id": "ld6002-radar",
+      "name": "LD6002 Vitals Radar",
+      "category": "health",
+      "difficulty": "moderate",
+      "summary": "HLK-LD6002 60 GHz FMCW vitals radar over USB-serial UART. Reports heart-rate, breathing-rate, distance, target count and presence per window. Contactless vitals; not a medical device.",
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "hlk-ld6002",
+        "hlk-ld6002b",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_e3d30c03b8b84f3f"
+    },
+    {
+      "id": "sen0213-ecg",
+      "name": "SEN0213 ECG",
+      "category": "health",
+      "difficulty": "moderate",
+      "summary": "DFRobot SEN0213 (AD8232) single-lead ECG read through an ADS1115 I2C ADC. Exports raw + filtered waveform, detects R-peaks (Pan-Tompkins) and reports heart rate, RR, SDNN, RMSSD and a signal-quality score. Flags leads-off; not a medical device.",
+      "export_port": 8046,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "sen0213-ecg",
+        "ads1115-board",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_ecf0ff5cae40d457"
+    },
+    {
+      "id": "sen0628-tof",
+      "name": "SEN0628 Matrix ToF",
+      "category": "presence",
+      "difficulty": "moderate",
+      "summary": "DFRobot SEN0628 8x8 matrix time-of-flight sensor (VL53L7CX + RP2040) over I2C. Reports nearest object and zone, valid-zone share, motion, presence against a learned background, and exports raw depth frames (20-3500 mm, 60 deg FOV).",
+      "export_port": 8047,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "sen0628-tof",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_857a2fe75743652a"
+    },
+    {
+      "id": "mentra-live",
+      "name": "Mentra Live Glasses (companion bridge)",
+      "category": "wearable",
+      "difficulty": "moderate",
+      "summary": "Companion-side bridge that lets a pair of Mentra Live smart glasses join the mesh as a node. The glasses run Android (MentraOS ASG client) and can't run a cog themselves, so this cog runs on a companion and reports their presence, battery and link.",
+      "export_port": 8061,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "mentra-live-glasses",
+        "mentra-live-display",
+        "mentra-live-microphone"
+      ],
+      "hash": "wh_aad1d82072fc533c"
     }
   ],
   "modules": [
