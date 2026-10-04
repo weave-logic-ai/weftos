@@ -332,6 +332,24 @@ class LaneBehaviour(unittest.TestCase):
         self.assertTrue(test_calls[0][-1].endswith("/home/u/weftos-test-pi/bin/e2e-2 chain"))
         self.assertIn("rm -rf weftos-test-pi", " ".join(runner.calls[-2]))
 
+    def test_cog_stages_skip_without_a_verified_hash(self):
+        runner = FakeRunner()
+        with mock.patch.dict(os.environ, {"WEFTOS_PI_COG_MANIFEST": ""}):
+            rc, out = self.run_main(["clawft-kernel", "--live-native", "--cogs", "--placement"],
+                                    runner)
+        self.assertEqual(rc, 0, out)
+        for stage in ("live-native", "cogs", "placement"):
+            self.assertIn("SKIP  %s: no verified sha256" % stage, out)
+        self.assertNotIn("Traceback", out)
+        self.assertEqual(len([c for c in runner.calls if " env -i " in " ".join(c)]), 1)
+        self.assertFalse(any("conformance.py" in " ".join(c) for c in runner.calls))
+
+    def test_manifest_flag_and_env_reach_the_parser(self):
+        with mock.patch.dict(os.environ, {"WEFTOS_PI_COG_MANIFEST": "/m/env.json"}):
+            self.assertEqual(pi_lane.parse_args(["--cogs"]).sha256_manifest, "/m/env.json")
+            a = pi_lane.parse_args(["--cogs", "--sha256-manifest", "/m/flag.json"])
+            self.assertEqual(a.sha256_manifest, "/m/flag.json")
+
     def test_failing_test_fails_the_lane_and_still_cleans_up(self):
         runner = FakeRunner(fail_on="e2e-2")
         rc, out = self.run_main(["clawft-kernel"], runner)

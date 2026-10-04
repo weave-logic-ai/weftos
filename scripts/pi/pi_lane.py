@@ -36,6 +36,8 @@ TARGET = os.path.join(ROOT, "target", "pi-aarch64")
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
 LIVE_TEST = "workload_runtime::tests_live::live_native_anomaly_detect"
 LIVE_MARK = "interval run:"
+NO_MANIFEST_WHY = ("no verified sha256 for cog-anomaly-detect-aarch64; pass --sha256-manifest PATH "
+                   "or set WEFTOS_PI_COG_MANIFEST (the lane never runs an unverified download)")
 DEFAULT_COGS = "anomaly-detect,fall-detect,sleep-apnea,health-monitor"
 CHAIN = ".clawft/chain.rvf"   # Mac side; Pi side: pi_plan.OPERATOR_FILES
 
@@ -96,6 +98,7 @@ class Lane:
         self.a, self.host, self.run = args, host, runner
         self.results = []   # {stage, name, rc, passed, failed, ignored, ok}
         self.facts = {}
+        self.skipped = []   # {stage, why}: stages that could not run
 
     # ── helpers ────────────────────────────────────────────────────────
     def ssh(self, line, capture="all", timeout=None):
@@ -134,6 +137,11 @@ class Lane:
         if not home.startswith("/") or any(c.isspace() for c in home):
             raise SystemExit("test-pi: unexpected remote $HOME")
         self.scratch = "%s/%s" % (home, self.a.scratch)
+        rc, _ = self.ssh("command -v rsync >/dev/null && command -v python3 >/dev/null",
+                         capture="quiet")
+        if rc != 0:
+            raise SystemExit("test-pi: the target needs rsync and python3 "
+                             "(sudo apt-get install -y rsync python3)")
         rc, bout = self.run(["docker", "run", "--rm", "--platform", "linux/arm64",
                              self.a.image, "sh", "-c", "ldd --version 2>&1 | head -1"],
                             capture="quiet")
@@ -245,9 +253,12 @@ class Lane:
 
     def run_cogs(self):
         launcher = os.path.join(TARGET, "debug", "examples", "cog_adapter_run")
+        if not self.a.sha256_manifest:
+            return self.skip("cogs", NO_MANIFEST_WHY)
         base = [sys.executable, os.path.join(COGS_DIR, "conformance.py"), "sweep",
                 "--runtime", "ssh", "--ssh-host", self.host, "--sudo", "--arch", "aarch64",
-                "--mode", "expected", "--cogs", self.a.cogs_ids]
+                "--mode", "expected", "--cogs", self.a.cogs_ids,
+                "--sha256-manifest", self.a.sha256_manifest]
         sweeps = [
             ("harness", ["--remote-dir", self.a.scratch + "/cogs-harness",
                          "--label", "pi5-ssh-aarch64-expected"]),
@@ -264,14 +275,29 @@ class Lane:
                                      failed=0 if ok else 1, ignored=0, suites=1))
             print("  %s  cogs %s (rc %d)" % ("PASS" if ok else "FAIL", name, rc))
 
+    def skip(self, stage, why):
+        """A stage that cannot run is reported, never silently dropped or crashed."""
+        self.skipped.append(dict(stage=stage, why=why))
+        print("  SKIP  %s: %s" % (stage, why))
+
     def fetch_cog(self):
+        """The verified anomaly-detect binary, or None (the cog stages then skip)."""
         sys.path.insert(0, COGS_DIR)
         import runtimes  # scripts/cogs: cached, ELF-checked released binaries
         self.cog_bin_name = runtimes.binary_name("anomaly-detect", "aarch64")
         if self.run.dry_run:
             return os.path.join(COGS_DIR, ".cache", "aarch64", self.cog_bin_name)
+        expected = None
+        if self.a.sha256_manifest:
+            try:
+                expected = runtimes.load_hash_manifest(self.a.sha256_manifest).get(self.cog_bin_name)
+            except ValueError as e:
+                raise SystemExit("test-pi: %s" % e)
+        if expected is None:
+            return None
         path, why = runtimes.fetch_binary("anomaly-detect", "aarch64",
-                                          os.path.join(COGS_DIR, ".cache", "aarch64"))
+                                          os.path.join(COGS_DIR, ".cache", "aarch64"),
+                                          expected_sha256=expected)
         if path is None:
             raise SystemExit("test-pi: anomaly-detect aarch64 binary: %s" % why)
         return path
@@ -293,17 +319,22 @@ class Lane:
         build = list(a.crates) + (["clawft-kernel"] if a.live_native else [])
         arts = self.build(list(dict.fromkeys(build)), launcher=a.cogs, node=a.placement)
         cog = self.fetch_cog() if (a.live_native or a.placement) else None
-        extra = [cog] if a.live_native else []
-        if a.placement:   # only the weaver daemon goes; the cog travels over the mesh
+        if cog is None and (a.live_native or a.placement):
+            for stage, wanted in (("live-native", a.live_native), ("placement", a.placement)):
+                if wanted:
+                    self.skip(stage, NO_MANIFEST_WHY)
+        live_native = a.live_native and cog is not None
+        extra = [cog] if live_native else []
+        if a.placement and cog is not None:   # only the weaver daemon goes; the cog travels over the mesh
             extra.append(placement.pi_binary(TARGET))
         self.stage_remote(arts, extra)
         if a.crates:
             self.run_tests(arts, a.crates)
-        if a.live_native:
+        if live_native:
             self.run_live_native(arts)
         if a.cogs:
             self.run_cogs()
-        if a.placement:
+        if a.placement and cog is not None:
             placement.run_placement(self, cog)
 
     def abort(self, why):
@@ -343,6 +374,11 @@ def parse_args(argv):
                          "local, operator-pinned base image")
     ap.add_argument("--full", action="store_true",
                     help="clawft-kernel + --live-native + --cogs + --placement (default, no args)")
+    ap.add_argument("--sha256-manifest", metavar="PATH",
+                    default=os.environ.get("WEFTOS_PI_COG_MANIFEST") or None,
+                    help="JSON map of cog-<id>-aarch64 to the expected sha256 (env "
+                         "WEFTOS_PI_COG_MANIFEST). Without it the live-native, cogs and "
+                         "placement stages skip; downloads are never unverified")
     ap.add_argument("--cogs-ids", default=DEFAULT_COGS, help="cogs for --cogs (comma-separated)")
     ap.add_argument("--image", help="arm64 builder image (default rust:<toolchain>-bookworm)")
     ap.add_argument("--scratch", default="weftos-test-pi",
@@ -420,7 +456,8 @@ def main(argv=None):
         import json
         with open(a.report, "w") as f:
             json.dump({"facts": lane.facts, "guard": guard, "results": lane.results,
-                       "crates": a.crates, "filter": a.filter, "ok": rc == 0}, f, indent=2)
+                       "skipped": lane.skipped, "crates": a.crates,
+                       "filter": a.filter, "ok": rc == 0}, f, indent=2)
             f.write("\n")
     return rc
 
