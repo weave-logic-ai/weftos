@@ -62,7 +62,12 @@ fn row(n: &Value) -> FleetRow {
         _ => "-".into(),
     };
     FleetRow {
-        name: text(val(n, "name")).unwrap_or_else(|| short(&id)),
+        // A node whose announced name is just its id is named by its hostname when the daemon
+        // reports one (the local node).
+        name: text(val(n, "name"))
+            .filter(|s| s != &id)
+            .or_else(|| text(&val(n, "host")["hostname"]))
+            .unwrap_or_else(|| short(&id)),
         local: n["local"] == true,
         state: text(&cluster["state"]).unwrap_or_else(|| if mesh.is_object() { "connected".into() } else { "-".into() }),
         trust,

@@ -98,3 +98,36 @@ fn host_of_strips_scheme_port_and_path() {
     assert_eq!(host_of("seed.local"), "seed.local");
     assert_eq!(host_of(""), "");
 }
+
+#[test]
+fn the_daemon_merges_with_its_tailnet_entry_by_hostname_and_loopback_never_matches() {
+    let snap = json!({ "nodes": [
+        { "node_id": "c1268", "local": true, "name": { "value": "c1268", "provenance": "peer_claimed" },
+          "host": { "value": { "hostname": "BigMac-The-Max.local" }, "provenance": "daemon_observed" },
+          "announced": { "value": { "address": "127.0.0.1:0" }, "provenance": "peer_claimed" } },
+        { "node_id": "old-1", "name": { "value": "old-1", "provenance": "peer_claimed" },
+          "cluster": { "value": { "state": "left" }, "provenance": "daemon_observed" },
+          "announced": { "value": { "address": "127.0.0.1:0" }, "provenance": "peer_claimed" } }
+    ]});
+    let n: Net = serde_json::from_value(json!({ "tailscale": { "available": true, "peers": [
+        { "name": "BigMac The Max", "ip": "100.64.0.20", "os": "macOS", "online": true }
+    ]}})).unwrap();
+    let all = unify(Some(&snap), Some(&n), &[]);
+    assert_eq!(all.len(), 2, "{all:#?}");
+    let mac = all.iter().find(|e| e.node_id.as_deref() == Some("c1268")).unwrap();
+    assert_eq!(mac.name, "BigMac-The-Max.local");
+    assert_eq!(mac.addrs, vec!["100.64.0.20".to_string()], "loopback is dropped, the tailnet IP kept");
+    assert_eq!(mac.sources.len(), 2);
+    let old = all.iter().find(|e| e.node_id.as_deref() == Some("old-1")).unwrap();
+    assert_eq!(old.online, Some(false), "a node that left is offline, not unknown");
+    assert!(old.addrs.is_empty());
+}
+
+#[test]
+fn a_mesh_leaf_is_labelled_as_a_leaf() {
+    let snap = json!({ "nodes": [
+        { "node_id": "leaf-1", "mesh": { "value": { "class": "leaf", "verified": true, "heartbeat": "alive" }, "provenance": "daemon_observed" } }
+    ]});
+    let all = unify(Some(&snap), None, &[]);
+    assert_eq!((all[0].class, all[0].class.label(), all[0].online), (Class::Leaf, "mesh leaf", Some(true)));
+}

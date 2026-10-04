@@ -13,6 +13,7 @@
 //! | `announced` | platform and address the peer announced (an unverified peer chooses them) | `peer_claimed` |
 //! | `facts` | signed node facts cache (`cluster.facts`) | `signed_fact` |
 //! | `mesh` | live connection detail (class, verified, heartbeat, last pong, smoothed RTT, missed pongs) | `daemon_observed` |
+//! | `host` | this daemon's own hostname (local node only) | `daemon_observed` |
 //! | `load` | load average, cores, memory: this daemon's own, or what a verified peer attached to its last pong | `daemon_observed` (own) / `peer_claimed` (peer) |
 //! | `revoked` | host revocation list (`mesh.revoked`) | `daemon_observed` |
 //! | `instances` | placement controller's own records and lifecycle (no error text) | `daemon_observed` |
@@ -109,6 +110,9 @@ pub(crate) struct Raw {
     pub revoked: Vec<clawft_kernel::revocation::RevokedHost>,
     /// This daemon's own load sample (`LoadSample` JSON), when the OS gives one.
     pub local_load: Option<Value>,
+    /// This machine's hostname, so a console can match the daemon to the same host seen by
+    /// other sources (tailnet, Seed agent).
+    pub local_hostname: Option<String>,
 }
 
 /// One live mesh connection.
@@ -176,7 +180,25 @@ pub(crate) fn collect(k: &Kernel<NativePlatform>) -> Raw {
         mesh: mesh_peers(k),
         revoked: k.revocation_list().list_revoked(),
         local_load: local_load(),
+        local_hostname: local_hostname(),
     }
+}
+
+/// This machine's name, read once per daemon run. On macOS `hostname` is often the DHCP name
+/// (`Mac.example.net`), so the machine's own `LocalHostName` is used there (the name tailscale
+/// and Bonjour show); elsewhere `hostname`.
+fn local_hostname() -> Option<String> {
+    static HOST: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    HOST.get_or_init(|| {
+        let run = |cmd: &str, args: &[&str]| -> Option<String> {
+            let out = std::process::Command::new(cmd).args(args).output().ok()?;
+            let h = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+            (out.status.success() && !h.is_empty() && h.len() <= 253).then_some(h)
+        };
+        let mac = if cfg!(target_os = "macos") { run("scutil", &["--get", "LocalHostName"]) } else { None };
+        mac.or_else(|| run("hostname", &[]))
+    })
+    .clone()
 }
 
 #[cfg(feature = "mesh")]
@@ -217,6 +239,9 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
     let mut degraded: Vec<String> = Vec::new();
     let mut nodes: Nodes = BTreeMap::new();
     touch(&mut nodes, &raw.local_id).insert("local".into(), json!(true));
+    if let Some(h) = &raw.local_hostname {
+        touch(&mut nodes, &raw.local_id).insert("host".into(), field(json!({ "hostname": h }), DAEMON_OBSERVED));
+    }
     if let Some(l) = &raw.local_load {
         touch(&mut nodes, &raw.local_id).insert("load".into(), field(l.clone(), DAEMON_OBSERVED));
     }

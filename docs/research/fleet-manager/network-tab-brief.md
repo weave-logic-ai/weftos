@@ -1,6 +1,23 @@
 # Network tab as Fleet Manager: research and design brief
 
-Date: 2026-10-04. Read-only research; no code was changed. Paths are relative to `~/weftos` unless noted. "not found" means I searched and did not find it. Labels: **[V]** read in source, **[U]** unverified (live system not reachable or card not readable).
+Date: 2026-10-04. Read-only research; no code was changed when it was written.
+
+**Build status (updated 2026-10-04):** P0, P1, P2 shipped; P3 and P4 shipped except the items
+marked open below. The summary and §1 describe the tab *before* this work and are kept as the
+record of the starting point.
+
+| Phase | State | Commits |
+|---|---|---|
+| P0/P1 snapshot, CLI, gateway route, read-only tokens, heartbeat v2 | shipped | `676242981` |
+| P2 node detail (Overview, Workloads, Health, Raw) | shipped | `6c0837de0` |
+| P3 liveness ping/pong + RTT, load in pongs, sparklines, edge v2 fields | shipped | `0883fcdaa`, `3b4f5da46` |
+| P4 Trust / licence and Software / firmware tabs | shipped | `3b4f5da46` |
+| One fleet list from every source (snapshot, tailnet, Seed agents, edge) + Seed detail | shipped | `9c6557410` |
+| Daemon hostname in the snapshot (local node matches its tailnet entry) | shipped | this change |
+| P3 leaf announce table; Seed upgrade/check; WeftOS version in node facts | open | — |
+| P5 gated actions | not started (only if wanted) | — |
+
+Original research text follows. Paths are relative to `~/weftos` unless noted. "not found" means I searched and did not find it. Labels: **[V]** read in source, **[U]** unverified (live system not reachable or card not readable).
 
 ## 0. Summary
 

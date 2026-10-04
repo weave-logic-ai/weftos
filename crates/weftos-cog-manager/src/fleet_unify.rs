@@ -12,6 +12,8 @@ use serde_json::Value;
 pub enum Class {
     /// A WeftOS daemon on the mesh (it is in `fleet.snapshot`).
     Node,
+    /// A leaf connected to the mesh (mesh class `leaf`: an ESP32-class device with its own key).
+    Leaf,
     /// A Cognitum Seed (answers the Seed agent API).
     Seed,
     /// A machine on the tailnet that is not (yet) a mesh node.
@@ -24,6 +26,7 @@ impl Class {
     pub fn label(self) -> &'static str {
         match self {
             Class::Node => "weftos node",
+            Class::Leaf => "mesh leaf",
             Class::Seed => "seed",
             Class::Host => "tailnet host",
             Class::Edge => "edge",
@@ -82,8 +85,17 @@ impl SeedView {
     }
 }
 
+/// Name for matching: case-folded, `.local` dropped, `-` and `_` read as spaces (macOS hostnames
+/// are `BigMac-The-Max.local` where tailscale says `BigMac The Max`).
 fn norm(s: &str) -> String {
-    s.trim().to_lowercase()
+    let s = s.trim().to_lowercase();
+    let s = s.strip_suffix(".local").unwrap_or(&s);
+    s.replace(['-', '_'], " ").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Addresses that say nothing about which machine it is (every daemon can report them).
+fn matchable(a: &str) -> bool {
+    !a.is_empty() && !a.starts_with("127.") && a != "0.0.0.0" && a != "::1" && a != "localhost"
 }
 
 /// Host part of `http://host:port/...` or `host:port`.
@@ -99,12 +111,12 @@ pub fn host_of(url: &str) -> String {
 fn find(out: &[Entry], name: &str, addrs: &[String]) -> Option<usize> {
     let n = norm(name);
     out.iter().position(|e| {
-        (!n.is_empty() && n != "localhost" && norm(&e.name) == n) || addrs.iter().any(|a| !a.is_empty() && e.addrs.contains(a))
+        (!n.is_empty() && n != "localhost" && norm(&e.name) == n) || addrs.iter().any(|a| matchable(a) && e.addrs.contains(a))
     })
 }
 
 fn add_addr(e: &mut Entry, a: &str) {
-    if !a.is_empty() && !e.addrs.iter().any(|x| x == a) {
+    if matchable(a) && !e.addrs.iter().any(|x| x == a) {
         e.addrs.push(a.to_owned());
     }
 }
@@ -119,9 +131,15 @@ pub fn unify(snap: Option<&Value>, net: Option<&Net>, seeds: &[SeedView]) -> Vec
             out.push(Entry {
                 key: r.id.clone(),
                 name: r.name.clone(),
-                class: Class::Node,
-                online: if r.local { Some(true) } else { r.heartbeat.as_deref().map(|h| h == "alive") },
-                addrs: if host.is_empty() { vec![] } else { vec![host] },
+                class: if r.class.as_deref() == Some("leaf") { Class::Leaf } else { Class::Node },
+                online: if r.local {
+                    Some(true)
+                } else if matches!(r.state.as_str(), "left" | "dead" | "failed") {
+                    Some(false)
+                } else {
+                    r.heartbeat.as_deref().map(|h| h == "alive")
+                },
+                addrs: if matchable(&host) { vec![host] } else { vec![] },
                 os: None,
                 firmware: None,
                 sources: vec![Source { kind: "snapshot", provenance: "daemon_observed" }],

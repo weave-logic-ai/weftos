@@ -73,6 +73,7 @@ fn raw() -> Raw {
             reason: "leaked key".into(),
         }],
         local_load: None,
+        local_hostname: Some("studio-mac.local".into()),
     }
 }
 
@@ -395,4 +396,12 @@ fn load_is_labelled_by_who_measured_it() {
     let z = node(&snap, "zeta");
     assert_eq!((z["load"]["value"]["cores"].as_u64(), z["load"]["provenance"].as_str()), (Some(4), Some("peer_claimed")));
     assert!(node(&snap, "bad-node").get("load").is_none(), "no sample, no section");
+}
+
+#[test]
+fn the_local_node_carries_this_machines_hostname() {
+    let snap = assemble(raw(), Extra::default(), 1);
+    let me = node(&snap, "local-node");
+    assert_eq!((me["host"]["value"]["hostname"].as_str(), me["host"]["provenance"].as_str()), (Some("studio-mac.local"), Some("daemon_observed")));
+    assert!(node(&snap, "zeta").get("host").is_none(), "only the local node");
 }
