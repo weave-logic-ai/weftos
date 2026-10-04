@@ -14,6 +14,9 @@ env:
   WASM_BINARY: target/wasm32-wasip2/release-wasm/clawft_wasm.wasm
   WASM_OPT_BINARY: target/wasm32-wasip2/release-wasm/clawft_wasm.opt.wasm
 
+permissions:
+  contents: read
+
 jobs:
   wasm-build:
     name: Build, optimize & gate WASM binary

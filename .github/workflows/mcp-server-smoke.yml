@@ -25,6 +25,9 @@ concurrency:
   group: mcp-smoke-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   smoke:
     name: tools/list + tools/call round-trip

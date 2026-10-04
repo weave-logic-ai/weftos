@@ -41,6 +41,9 @@ concurrency:
   group: pr-gates-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # -------------------------------------------------------------------
   # Lint: clippy with warnings-as-errors
