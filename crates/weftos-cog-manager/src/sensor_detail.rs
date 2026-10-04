@@ -133,7 +133,7 @@ fn prelude(m: &Module, pc: &PanelCtx) -> (Vec<CogView>, Option<CogOutput>) {
     for v in &cogs {
         pump_guide(&v.id, pc);
         if v.state() == Some(link::CogState::Running) {
-            pc.client.ensure_cog_output(&v.id, link::default_export_port(&v.id), pc.egui);
+            pc.client.ensure_cog_output(&v.id, link::export_port(&v.id, pc.host), pc.egui);
         }
     }
     let out = cog_output(&cogs, pc);
@@ -291,7 +291,7 @@ fn stats(ui: &mut Ui, cogs: &[CogView], pc: &PanelCtx, out: Option<&CogOutput>) 
             Some(Err(e)) => {
                 ui.label(style::dim(ui, format!("cog output unavailable ({e}); showing host stats only")));
             }
-            None if link::default_export_port(&v.id) == 0 => {
+            None if link::export_port(&v.id, pc.host) == 0 => {
                 ui.label(style::dim(ui, "export port unknown for this cog; showing host stats only"));
             }
             _ => {}

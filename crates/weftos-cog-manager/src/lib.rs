@@ -24,7 +24,7 @@ use eframe::egui::{self, Color32, RichText};
 use weftos_cog_market::hw::{Chip, HwCatalog, Module, Project};
 use weftos_cog_market::{Catalog, CatalogItem, Source};
 use sensor_detail::{Event, GuideCache, PanelCtx};
-use sensor_link::{default_export_port, fmt_dur};
+use sensor_link::{export_port, fmt_dur};
 use std::cell::RefCell;
 use weftos_sensor_guide::{GuideBundle, GuideView};
 
@@ -707,7 +707,8 @@ impl Manager {
     /// Switch to the Sensors tab with this cog's guide open (optionally at a page). The guide
     /// bundled with the catalog is used when there is one; otherwise a running cog's own `/guide`.
     fn open_guide(&mut self, id: &str, page: Option<&'static str>, ctx: Option<&egui::Context>) {
-        let port = default_export_port(id);
+        let host: Option<HostStatus> = self.client.snapshot().host.clone().and_then(|r| r.ok());
+        let port = export_port(id, host.as_ref());
         self.section = Section::Sensors;
         self.guide_cog = Some(id.to_string());
         self.guide_view = GuideView::at(page.map(str::to_string));

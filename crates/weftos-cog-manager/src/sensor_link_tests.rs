@@ -205,3 +205,16 @@ fn every_bundled_guide_parses_and_validates() {
         assert!(!b.pages.is_empty(), "{id}");
     }
 }
+
+#[test]
+fn the_host_reported_export_port_beats_the_built_in_map() {
+    let mut c = host_cog("ld2450-radar", true, true, None);
+    c.export_ports = vec![9999];
+    let h = host(vec![c]);
+    assert_eq!(export_port("ld2450-radar", Some(&h)), 9999);
+    // a host that predates export_ports (or a stopped cog) falls back to the map
+    let h = host(vec![host_cog("ld2450-radar", true, true, None)]);
+    assert_eq!(export_port("ld2450-radar", Some(&h)), 8052);
+    assert_eq!(export_port("ld2450-radar", None), 8052);
+    assert_eq!(export_port("unknown-cog", None), 0);
+}

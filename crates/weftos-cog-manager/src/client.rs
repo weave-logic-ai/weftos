@@ -76,6 +76,9 @@ pub struct HostCog {
     pub log_bytes: Option<u64>,
     #[serde(default)]
     pub log_age_s: Option<u64>,
+    /// TCP ports the running cog listens on (its export port), reported by the host from `/proc`.
+    #[serde(default)]
+    pub export_ports: Vec<u16>,
 }
 
 /// One node in the host's `/mesh/cogs` answer.
@@ -868,22 +871,32 @@ impl Client {
             let mut sh = self.shared.lock().unwrap();
             sh.guide = Some(GuideFetch { id: id.to_string(), port, result: None });
         }
-        let url = format!("{}/guide", self.export_base(port));
+        // The node's cog-host serves an installed package's guide (no running cog needed); the
+        // cog's own export is the fallback for hosts or packages without one.
+        let host_url = format!("{}/cogs/{id}/guide", base(&self.s.host));
+        let export_url = (port != 0).then(|| format!("{}/guide", self.export_base(port)));
         let shared = Arc::clone(&self.shared);
         let id = id.to_string();
         let ctx = ctx.clone();
-        ehttp::fetch(ehttp::Request::get(url), move |res| {
-            let parsed: Result<serde_json::Value, String> = match &res {
-                Ok(r) if r.ok => serde_json::from_slice(&r.bytes).map_err(|e| e.to_string()),
-                Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
-                Err(e) => Err(format!("{e} (is the cog running? CORS/port reachable?)")),
-            };
+        let finish = move |parsed: Result<serde_json::Value, String>| {
             let mut sh = shared.lock().unwrap();
             // Only apply if this is still the guide we're waiting on.
             if let Some(g) = sh.guide.as_mut().filter(|g| g.id == id && g.port == port) {
                 g.result = Some(parsed);
             }
             ctx.request_repaint();
+        };
+        let to_json = |res: &ehttp::Result<ehttp::Response>| -> Result<serde_json::Value, String> {
+            match res {
+                Ok(r) if r.ok => serde_json::from_slice(&r.bytes).map_err(|e| e.to_string()),
+                Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
+                Err(e) => Err(e.clone()),
+            }
+        };
+        ehttp::fetch(ehttp::Request::get(host_url), move |res| match (to_json(&res), export_url) {
+            (Ok(v), _) => finish(Ok(v)),
+            (Err(_), Some(url)) => ehttp::fetch(ehttp::Request::get(url), move |r2| finish(to_json(&r2))),
+            (Err(e), None) => finish(Err(e)),
         });
     }
 

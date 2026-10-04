@@ -11,8 +11,16 @@ use weftos_cog_market::hw::Module;
 use weftos_cog_market::{Catalog, Source};
 use weftos_sensor_guide::GuideDoc;
 
-/// The export port each known sensor cog serves `/guide` (and `/status`) on, from each cog.toml
-/// `[api].bind_port`. Unknown cogs return 0 (the Sensors tab then prompts for a port).
+/// The export port to use for a cog: the one the host reports from `/proc` for the running cog,
+/// else the built-in map below. 0 = unknown.
+pub fn export_port(id: &str, host: Option<&HostStatus>) -> u16 {
+    host.and_then(|h| h.cogs.iter().find(|c| c.id == id))
+        .and_then(|c| c.export_ports.first().copied())
+        .unwrap_or_else(|| default_export_port(id))
+}
+
+/// Fallback id -> export port map (each cog.toml `[api].bind_port`) for hosts that predate
+/// `export_ports` in `/status`, and for cogs that are not running. Unknown cogs return 0.
 pub fn default_export_port(id: &str) -> u16 {
     match id {
         "sen0213-ecg" => 8046,

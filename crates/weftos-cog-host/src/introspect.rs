@@ -95,14 +95,44 @@ pub fn last_output(root: &Path, id: &str) -> Result<Value, (&'static str, String
     Ok(Value::Object(out))
 }
 
-/// The guide shipped inside the installed package (`<root>/<id>/guide.json`, the `/guide` JSON).
+/// The guide shipped inside the installed package, as the `/guide` JSON: either a ready-made
+/// `<root>/<id>/guide.json`, or an ADR-104 `<root>/<id>/guide/` folder (`guide.toml`, one `.md`
+/// per page, any images) bundled on the fly. Needs no running cog.
 pub fn installed_guide(root: &Path, id: &str) -> Result<String, (&'static str, String)> {
     let dir = cog_dir(root, id).ok_or(("404 Not Found", "no such cog".to_string()))?;
     let p = dir.join("guide.json");
-    if std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > GUIDE_CAP {
-        return Err(("413 Payload Too Large", "guide too large".into()));
+    if p.is_file() {
+        if std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > GUIDE_CAP {
+            return Err(("413 Payload Too Large", "guide too large".into()));
+        }
+        return std::fs::read_to_string(&p).map_err(|_| ("404 Not Found", "no guide installed with this cog".to_string()));
     }
-    std::fs::read_to_string(&p).map_err(|_| ("404 Not Found", "no guide installed with this cog".to_string()))
+    bundle_dir(&dir.join("guide")).ok_or(("404 Not Found", "no guide installed with this cog".to_string()))
+}
+
+fn bundle_dir(g: &Path) -> Option<String> {
+    use base64::Engine as _;
+    let toml = std::fs::read_to_string(g.join("guide.toml")).ok()?;
+    let (mut pages, mut images, mut total) = (serde_json::Map::new(), serde_json::Map::new(), toml.len() as u64);
+    for e in std::fs::read_dir(g).ok()?.flatten() {
+        let path = e.path();
+        let name = e.file_name().into_string().ok()?;
+        let len = e.metadata().ok()?.len();
+        total += len;
+        if total > GUIDE_CAP {
+            return None;
+        }
+        match path.extension().and_then(|x| x.to_str()) {
+            Some("md") => {
+                pages.insert(path.file_stem()?.to_str()?.to_string(), Value::String(std::fs::read_to_string(&path).ok()?));
+            }
+            Some("png" | "jpg" | "jpeg" | "gif" | "webp") => {
+                images.insert(name, Value::String(base64::engine::general_purpose::STANDARD.encode(std::fs::read(&path).ok()?)));
+            }
+            _ => {}
+        }
+    }
+    Some(json!({"toml": toml, "pages": pages, "images": images}).to_string())
 }
 
 #[cfg(test)]
@@ -182,5 +212,20 @@ mod tests {
         std::fs::write(root.path().join("x/guide.json"), r#"{"toml":"","pages":{}}"#).unwrap();
         assert!(installed_guide(root.path(), "x").unwrap().contains("pages"));
         assert_eq!(installed_guide(root.path(), "nope").unwrap_err().0, "404 Not Found");
+    }
+
+    #[test]
+    fn a_guide_folder_in_the_package_is_bundled_on_the_fly() {
+        let root = tempfile::tempdir().unwrap();
+        add_cog(root.path(), "y", &[], false);
+        let g = root.path().join("y/guide");
+        std::fs::create_dir_all(&g).unwrap();
+        std::fs::write(g.join("guide.toml"), "pages = [\"start\"]\n").unwrap();
+        std::fs::write(g.join("start.md"), "# Start\n\n> go\n").unwrap();
+        std::fs::write(g.join("pin.png"), [1u8, 2, 3]).unwrap();
+        let v: Value = serde_json::from_str(&installed_guide(root.path(), "y").unwrap()).unwrap();
+        assert_eq!(v["pages"]["start"], "# Start\n\n> go\n");
+        assert!(v["images"]["pin.png"].is_string());
+        assert!(v["toml"].as_str().unwrap().contains("start"));
     }
 }
