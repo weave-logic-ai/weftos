@@ -13,7 +13,7 @@ fn grid(ui: &mut Ui, salt: &str, rows: Vec<(String, String, Option<&str>)>) {
     egui::Grid::new(salt).num_columns(3).spacing([14.0, 4.0]).show(ui, |ui| {
         for (k, v, p) in rows {
             ui.label(style::dim(ui, k));
-            ui.add(egui::Label::new(style::body(&v)).truncate()).on_hover_text(&v);
+            ui.label(style::body(&v));
             prov_pill(ui, p);
             ui.end_row();
         }

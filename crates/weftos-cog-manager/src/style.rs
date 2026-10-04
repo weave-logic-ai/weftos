@@ -85,10 +85,17 @@ pub fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
         .response
 }
 
+/// A painted filled circle. The bundled fonts have no `●`, so a glyph renders as an empty box.
+pub fn dot(ui: &mut Ui, color: Color32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
+    resp
+}
+
 /// A filled status dot + label, aligned on the baseline. Used for connection / peer state.
 pub fn status_dot(ui: &mut Ui, color: Color32, text: impl Into<String>) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("●").color(color).size(SMALL_SIZE));
+        dot(ui, color);
         ui.label(body(text));
     });
 }

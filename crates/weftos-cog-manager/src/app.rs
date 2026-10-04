@@ -108,9 +108,12 @@ impl Manager {
             focus_step: client::setting("WEFTOS_STEP", "step", "").trim().parse().ok(),
             gw_draft,
             gw_token_draft,
-            fleet_node: None,
-            fleet_tab: Default::default(),
-            edge_open: None,
+            // Deep link: `WEFTOS_NODE=<node id>` / `?node=` opens that node's detail on the
+            // Network tab; `WEFTOS_NODE_TAB` / `?nodetab=` picks its tab.
+            fleet_node: Some(client::setting("WEFTOS_NODE", "node", "")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            fleet_tab: crate::views::fleet::NodeTab::parse(&client::setting("WEFTOS_NODE_TAB", "nodetab", "")),
+            // Deep link: `WEFTOS_EDGE=<edge node id>` / `?edge=` expands that edge node's fields.
+            edge_open: Some(client::setting("WEFTOS_EDGE", "edge", "")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         };
         // Deep link: `WEFTOS_GUIDE=<cog id>` / `?guide=` opens that cog's bundled guide.
         let g = client::setting("WEFTOS_GUIDE", "guide", "");

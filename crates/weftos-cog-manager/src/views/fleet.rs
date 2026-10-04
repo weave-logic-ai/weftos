@@ -40,6 +40,20 @@ pub(crate) fn prov_pill(ui: &mut Ui, p: Option<&str>) {
     }
 }
 
+impl NodeTab {
+    /// Tab from a deep-link name (`overview`, `workloads`, `health`, `trust`, `software`, `raw`).
+    pub(crate) fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "workloads" | "cogs" => Self::Workloads,
+            "health" => Self::Health,
+            "trust" | "licence" | "license" => Self::Trust,
+            "software" | "firmware" => Self::Software,
+            "raw" => Self::Raw,
+            _ => Self::Overview,
+        }
+    }
+}
+
 impl Manager {
     /// The gateway settings and the node list (the Network tab's first section).
     pub(crate) fn fleet_section(&mut self, ui: &mut Ui) {
@@ -101,7 +115,7 @@ impl Manager {
     fn fleet_row(&mut self, ui: &mut Ui, r: &FleetRow, now: u64) {
         ui.horizontal(|ui| {
             let live = r.heartbeat.as_deref() == Some("alive") || r.local;
-            ui.label(RichText::new("●").color(if r.revoked { RED } else if live { GREEN } else { GREY }));
+            style::dot(ui, if r.revoked { RED } else if live { GREEN } else { GREY });
             let mut label = RichText::new(&r.name);
             if r.local {
                 label = label.strong().color(WL);
@@ -145,7 +159,7 @@ impl Manager {
                 if ui.small_button("copy id").on_hover_text(id).clicked() {
                     ui.ctx().copy_text(id.to_string());
                 }
-                if ui.small_button("✕").on_hover_text("close").clicked() {
+                if ui.small_button("close").clicked() {
                     self.fleet_node = None;
                 }
             });
@@ -196,7 +210,7 @@ impl Manager {
         egui::Grid::new(("node_overview", id)).num_columns(3).spacing([14.0, 4.0]).show(ui, |ui| {
             for (k, v, p) in rows {
                 ui.label(style::dim(ui, k));
-                ui.add(egui::Label::new(style::body(&v)).truncate()).on_hover_text(&v);
+                ui.label(style::body(&v));
                 prov_pill(ui, p);
                 ui.end_row();
             }

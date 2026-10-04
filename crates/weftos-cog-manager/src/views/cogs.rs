@@ -120,13 +120,13 @@ impl Manager {
     pub(crate) fn state_cell(&self, ui: &mut egui::Ui, c: &HostCog) {
         ui.horizontal(|ui| {
             if c.running {
-                ui.label(RichText::new("●").color(GREEN));
+                style::dot(ui, GREEN);
                 ui.label(format!("running {}", c.uptime_s.map(fmt_dur).unwrap_or_default()));
             } else if c.enabled {
-                ui.label(RichText::new("●").color(AMBER));
+                style::dot(ui, AMBER);
                 ui.label("starting…").on_hover_text(c.last_exit.clone().unwrap_or_default());
             } else {
-                ui.label(RichText::new("●").color(GREY));
+                style::dot(ui, GREY);
                 ui.label("stopped");
             }
         });

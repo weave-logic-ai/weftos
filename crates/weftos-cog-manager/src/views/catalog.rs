@@ -149,7 +149,7 @@ impl Manager {
                         .hint_text("search name, vendor, spec, what it senses…")
                         .desired_width(300.0),
                 );
-                if !self.cat_search.is_empty() && ui.button("✕").on_hover_text("clear search").clicked() {
+                if !self.cat_search.is_empty() && ui.button("clear").on_hover_text("clear search").clicked() {
                     self.cat_search.clear();
                 }
             });

@@ -44,7 +44,7 @@ impl Manager {
                 peers.sort_by_key(|p| (!p.is_self, !p.online, p.name.to_lowercase()));
                 for p in peers {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("●").color(if p.online { GREEN } else { GREY }));
+                        style::dot(ui, if p.online { GREEN } else { GREY });
                         let name = if p.name.is_empty() { "(unnamed)" } else { &p.name };
                         if p.is_self {
                             ui.label(RichText::new(name).strong().color(WL)).on_hover_text("this node");
@@ -98,7 +98,7 @@ impl Manager {
             ui.end_row();
             for f in &n.fleet {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("●").color(if f.online { GREEN } else { GREY }));
+                    style::dot(ui, if f.online { GREEN } else { GREY });
                     let open = self.edge_open.as_deref() == Some(f.id.as_str());
                     if ui.selectable_label(open, RichText::new(&f.id).strong()).on_hover_text("show all reported fields").clicked() {
                         self.edge_open = if open { None } else { Some(f.id.clone()) };
@@ -127,10 +127,7 @@ impl Manager {
             style::card_frame(ui).show(ui, |ui| {
                 style::h2(ui, &f.id);
                 let opt = |v: Option<String>| v.unwrap_or_else(|| "not reported".into());
-                style::spec_grid(
-                    ui,
-                    ("edge", &f.id),
-                    [
+                let rows = [
                         ("chip", opt(f.chip.clone())),
                         ("mac", opt(f.mac.clone())),
                         ("firmware", if f.fw.is_empty() { "not reported".into() } else { f.fw.clone() }),
@@ -139,10 +136,14 @@ impl Manager {
                         ("sample rate", opt(f.sample_hz.map(|h| format!("{h:.1} Hz")))),
                         ("free heap", opt(f.free_heap.map(|h| format!("{} KiB", h / 1024)))),
                         ("provenance", if f.provenance.is_empty() { "self_reported".into() } else { f.provenance.clone() }),
-                    ]
-                    .iter()
-                    .map(|(k, v)| (*k, v.as_str())),
-                );
+                    ];
+                egui::Grid::new(("edge", &f.id)).num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
+                    for (k, v) in &rows {
+                        ui.label(style::dim(ui, *k));
+                        ui.label(style::body(v.as_str()));
+                        ui.end_row();
+                    }
+                });
             });
         }
     }
