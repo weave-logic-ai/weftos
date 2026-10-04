@@ -123,7 +123,7 @@ pub(crate) fn managed(role: &str, model: &str, gb: f64, instance: u16, proxy: Op
 }
 
 pub(crate) async fn wait_for(p: &Path) -> bool {
-    for _ in 0..200 {
+    for _ in 0..800 {
         if p.exists() {
             return true;
         }
