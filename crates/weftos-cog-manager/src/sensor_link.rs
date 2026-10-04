@@ -6,6 +6,7 @@
 //! installed and how it is doing. This module joins the three.
 
 use crate::client::{HostCog, HostStatus};
+use crate::sensor_mesh::{cog_mesh, CogMesh, MeshView};
 use weftos_cog_market::hw::Module;
 use weftos_cog_market::{Catalog, Source};
 use weftos_sensor_guide::GuideDoc;
@@ -92,9 +93,22 @@ pub struct CogView {
     /// True when a host answered `/status`; installed/state are meaningless otherwise.
     pub connected: bool,
     pub installed: Option<Installed>,
+    /// Where it runs across the mesh (empty `on` when the mesh view has nothing).
+    pub mesh: CogMesh,
 }
 
 impl CogView {
+    /// Strongest state anywhere: on the connected host or on any mesh node.
+    pub fn best_state(&self) -> Option<CogState> {
+        let rank = |s: &CogState| match s {
+            CogState::Running => 0,
+            CogState::Starting => 1,
+            CogState::Refused => 2,
+            CogState::Stopped => 3,
+        };
+        self.state().into_iter().chain(self.mesh.best_state()).min_by_key(rank)
+    }
+
     pub fn state(&self) -> Option<CogState> {
         self.installed.as_ref().map(|i| i.state)
     }
@@ -104,7 +118,7 @@ impl CogView {
     }
 }
 
-pub fn cog_view(id: &str, market: Option<&Catalog>, host: Option<&HostStatus>) -> CogView {
+pub fn cog_view(id: &str, market: Option<&Catalog>, host: Option<&HostStatus>, mesh: Option<&MeshView>) -> CogView {
     let mut available = Vec::new();
     if let Some(item) = market.and_then(|m| m.find(id)) {
         available.push(Availability { source: item.source, version: item.version.clone(), signed: item.signed });
@@ -123,7 +137,7 @@ pub fn cog_view(id: &str, market: Option<&Catalog>, host: Option<&HostStatus>) -
         rss_kb: c.rss_kb,
         last_exit: c.last_exit.clone(),
     });
-    CogView { id: id.into(), available, marketplace_loaded: market.is_some(), connected: host.is_some(), installed }
+    CogView { id: id.into(), available, marketplace_loaded: market.is_some(), connected: host.is_some(), installed, mesh: mesh.map(|m| cog_mesh(m, id)).unwrap_or_default() }
 }
 
 /// What a module card advertises in the catalog list, weakest to strongest.
@@ -152,7 +166,7 @@ impl Badge {
 
 pub fn module_badge(cogs: &[CogView]) -> Badge {
     cogs.iter()
-        .map(|c| match c.state() {
+        .map(|c| match c.best_state() {
             Some(CogState::Running) => Badge::Running,
             Some(_) => Badge::Installed,
             None if !c.available.is_empty() => Badge::Available,

@@ -158,6 +158,20 @@ pub struct CogStatus {
     /// The checkout grant that covered the running instance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub licence_grant: Option<String>,
+    /// Size of the cog's output log (`host.log`, its stdout + stderr). Cogs post straight to the
+    /// store, so there is no queue to report; this is the one backlog the host really holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_bytes: Option<u64>,
+    /// Seconds since the cog last wrote output (log mtime): the "last output" age.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_age_s: Option<u64>,
+}
+
+/// (size, seconds since last write) of a cog's log, `None` when there is no log yet.
+pub fn log_stats(path: &Path) -> (Option<u64>, Option<u64>) {
+    let Ok(m) = std::fs::metadata(path) else { return (None, None) };
+    let age = m.modified().ok().and_then(|t| t.elapsed().ok()).map(|d| d.as_secs());
+    (Some(m.len()), age)
 }
 
 pub struct Supervisor {
@@ -400,6 +414,7 @@ impl Supervisor {
             .map(|r| {
                 let run = self.running.get(&r.id);
                 let pid = run.map(|x| x.child.id());
+                let (log_bytes, log_age_s) = log_stats(&r.dir(&self.root).join("host.log"));
                 CogStatus {
                     id: r.id.clone(),
                     version: r.version.clone(),
@@ -414,6 +429,8 @@ impl Supervisor {
                     signed: r.signed,
                     licence_refusal: self.refusals.get(&r.id).map(|c| c.to_string()),
                     licence_grant: run.and_then(|x| x.grant_id.clone()),
+                    log_bytes,
+                    log_age_s,
                 }
             })
             .collect();
@@ -448,6 +465,17 @@ fn rss_kb(pid: u32) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn log_stats_reports_real_size_and_age_or_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("host.log");
+        assert_eq!(super::log_stats(&p), (None, None));
+        std::fs::write(&p, b"0123456789").unwrap();
+        let (bytes, age) = super::log_stats(&p);
+        assert_eq!(bytes, Some(10));
+        assert!(age.is_some_and(|a| a < 5));
+    }
+
     use super::*;
     use crate::{save_record, Source};
     use std::io::Write;

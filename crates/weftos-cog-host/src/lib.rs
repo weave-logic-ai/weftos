@@ -11,6 +11,7 @@ pub mod dex;
 pub mod fleet;
 pub mod hw_http;
 pub mod licence;
+pub mod mesh;
 pub mod network;
 pub mod supervise;
 pub mod usb;

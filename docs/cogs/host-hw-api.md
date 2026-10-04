@@ -71,3 +71,15 @@ WEFT_COG_HOST_AGENT_CMD='claude -p --tools ""' weft-cog-host serve
 
 `weft agent` has no flag to disable tools, so it is not used as a default. The command runs in its
 own process group with a 90 s timeout (the whole group is killed), 16 KB output cap, one at a time.
+
+## Mesh view: `GET /mesh/cogs` (ADR-107)
+
+Read-only, open like `/status`. The host returns its own cogs plus the cogs of every online tailnet peer that answers `GET :9480/status` as a cog host (override the peer port with `WEFT_COG_HOST_PEER_PORT`):
+
+```json
+{"ok":true,"scope":"mesh|this_host_only","reason":"...","self":"cog0",
+ "nodes":[{"node":"cog0","ip":"","self":true,"reachable":true,"cogs":[<status rows>]},
+          {"node":"pi5","ip":"100.x","self":false,"reachable":false,"error":"connection refused","cogs":[]}]}
+```
+
+`/status` cog rows also carry `log_bytes` and `log_age_s` (size and age of the cog's `host.log`). Cogs have no ingest queue, so these are the only backlog numbers a host reports.

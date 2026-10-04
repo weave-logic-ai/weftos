@@ -170,7 +170,9 @@ pub fn spec_grid<'a>(
         .show(ui, |ui| {
             for (k, v) in rows {
                 ui.label(dim(ui, k));
-                ui.label(body(v));
+                // long vendor/source strings truncate with the full text on hover, so one row
+                // never widens the whole panel past the window
+                ui.add(egui::Label::new(body(v)).truncate()).on_hover_text(v);
                 ui.end_row();
             }
         });

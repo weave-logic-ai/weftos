@@ -40,7 +40,7 @@ fn host(cogs: Vec<HostCog>) -> HostStatus {
 #[test]
 fn no_host_shows_availability_only() {
     let m = market(vec![item("ld2450-radar", Source::WeaveLogic, true)]);
-    let v = cog_view("ld2450-radar", Some(&m), None);
+    let v = cog_view("ld2450-radar", Some(&m), None, None);
     assert!(!v.connected && v.installed.is_none());
     assert_eq!(v.available.len(), 2, "dual-listed shows both sources");
     assert_eq!(v.preferred_source().unwrap().source, Source::WeaveLogic);
@@ -54,19 +54,19 @@ fn no_host_shows_availability_only() {
 #[test]
 fn state_machine_running_stopped_refused() {
     let m = market(vec![item("c", Source::Cognitum, false)]);
-    let run = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", true, true, None)])));
+    let run = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", true, true, None)])), None);
     assert_eq!(run.state(), Some(CogState::Running));
     assert_eq!(module_badge(&[run.clone()]), Badge::Running);
     let acts: Vec<_> = actions(&run).into_iter().map(|a| (a.action, a.enabled)).collect();
     assert_eq!(acts, vec![(Action::Stop, true), (Action::Configure, true), (Action::OpenGuide, true)]);
 
-    let stopped = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", false, false, None)])));
+    let stopped = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", false, false, None)])), None);
     assert_eq!(stopped.state(), Some(CogState::Stopped));
     assert_eq!(module_badge(&[stopped.clone()]), Badge::Installed);
     let acts: Vec<_> = actions(&stopped).into_iter().map(|a| (a.action, a.enabled)).collect();
     assert_eq!(acts, vec![(Action::Start, true), (Action::Configure, false), (Action::OpenGuide, false)]);
 
-    let refused = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", false, false, Some("no_grant"))])));
+    let refused = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", false, false, Some("no_grant"))])), None);
     assert_eq!(refused.state(), Some(CogState::Refused));
     assert!(!actions(&refused)[0].enabled);
     assert!(software_line(&refused).contains("no_grant"));
@@ -75,14 +75,14 @@ fn state_machine_running_stopped_refused() {
 #[test]
 fn not_installed_on_connected_host_can_install() {
     let m = market(vec![item("c", Source::Cognitum, false)]);
-    let v = cog_view("c", Some(&m), Some(&host(vec![])));
+    let v = cog_view("c", Some(&m), Some(&host(vec![])), None);
     assert_eq!(actions(&v), vec![on(Action::Install(Source::Cognitum))]);
 }
 
 #[test]
 fn unpublished_cog_is_linked_only_and_has_no_actions() {
     let m = market(vec![]);
-    let v = cog_view("ghost", Some(&m), Some(&host(vec![])));
+    let v = cog_view("ghost", Some(&m), Some(&host(vec![])), None);
     assert_eq!(module_badge(&[v.clone()]), Badge::Linked);
     assert!(actions(&v).is_empty());
     assert_eq!(module_badge(&[]), Badge::NoCog);
@@ -92,7 +92,7 @@ fn unpublished_cog_is_linked_only_and_has_no_actions() {
 fn badge_takes_the_strongest_cog() {
     let m = market(vec![item("a", Source::WeaveLogic, false), item("b", Source::WeaveLogic, false)]);
     let h = host(vec![host_cog("b", true, true, None)]);
-    let views = [cog_view("a", Some(&m), Some(&h)), cog_view("b", Some(&m), Some(&h))];
+    let views = [cog_view("a", Some(&m), Some(&h), None), cog_view("b", Some(&m), Some(&h), None)];
     assert_eq!(module_badge(&views), Badge::Running);
 }
 
@@ -105,7 +105,7 @@ fn bundled_catalog_resolves_ld2450_end_to_end() {
     assert!(docs.iter().any(|d| d.target == DocTarget::Guide("ld2450-radar".into())));
     assert_eq!(detect_bus(m), Bus::Uart);
     assert!(!bus_steps(Bus::Uart).is_empty());
-    let views = [cog_view("ld2450-radar", None, None)];
+    let views = [cog_view("ld2450-radar", None, None, None)];
     // firmware: the cog can read it once query_firmware is on, and reports it when it does
     assert_eq!(firmware_read(m, &views, None), FwRead::CanRead { cog: "ld2450-radar".into(), key: "query_firmware".into() });
     let out = CogOutput::parse(&serde_json::json!({"firmware": "V1.02.22062416"}));

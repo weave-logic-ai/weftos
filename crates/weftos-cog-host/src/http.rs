@@ -213,6 +213,11 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
             snap["fleet"] = sup.lock().unwrap().fleet.roster();
             ("200 OK", snap.to_string())
         }
+        // Mesh-wide cogs: this host plus every online tailnet peer that answers as a cog-host.
+        ("GET", ["mesh", "cogs"]) => {
+            let local = serde_json::to_value(sup.lock().unwrap().status()).unwrap_or_default();
+            ("200 OK", weftos_cog_host::mesh::snapshot(local).to_string())
+        }
         ("POST", ["fleet", "heartbeat"]) => match serde_json::from_slice::<Heartbeat>(body) {
             Ok(h) => {
                 sup.lock().unwrap().fleet.heartbeat(&h, peer_ip);
@@ -453,7 +458,7 @@ mod tests {
             assert!(st.contains("200"), "GET {path} with token: {st}");
         }
         // read views stay open
-        for path in ["/status", "/network", "/healthz"] {
+        for path in ["/status", "/network", "/healthz", "/mesh/cogs"] {
             let (st, h, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
             assert!(st.contains("200") && h.contains("access-control-allow-origin: *"), "{path}: {st}");
         }

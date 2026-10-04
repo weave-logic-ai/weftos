@@ -4,7 +4,8 @@
 //! turns clicks into [`Event`]s that the app applies with the same client calls the Cogs tab uses.
 
 use crate::client::{Client, HostStatus};
-use crate::sensor_link::{self as link, Action, Badge, CogOutput, CogView, DocTarget, FwRead};
+use crate::sensor_link::{self as link, Action, Badge, CogOutput, CogView, CogState, DocTarget, FwRead};
+use crate::sensor_mesh::{self as mesh, MeshView, Scope};
 use crate::style;
 use eframe::egui::{self, Color32, RichText, Ui};
 use std::cell::RefCell;
@@ -43,6 +44,7 @@ pub struct PanelCtx<'a> {
     pub egui: &'a egui::Context,
     pub market: Option<&'a Catalog>,
     pub host: Option<&'a HostStatus>,
+    pub mesh: Option<&'a MeshView>,
     pub guides: &'a RefCell<GuideCache>,
     pub events: &'a RefCell<Vec<Event>>,
 }
@@ -60,8 +62,8 @@ pub fn badge_pill(ui: &mut Ui, b: Badge) {
     }
 }
 
-pub fn views(m: &Module, market: Option<&Catalog>, host: Option<&HostStatus>) -> Vec<CogView> {
-    m.cogs.iter().map(|c| link::cog_view(c, market, host)).collect()
+pub fn views(m: &Module, market: Option<&Catalog>, host: Option<&HostStatus>, mesh: Option<&MeshView>) -> Vec<CogView> {
+    m.cogs.iter().map(|c| link::cog_view(c, market, host, mesh)).collect()
 }
 
 fn now_ms() -> u64 {
@@ -71,7 +73,7 @@ fn now_ms() -> u64 {
 /// A module card for the catalog list: the summary facts, then the detail panel when expanded.
 /// `focus` forces it open and scrolls to it (a cross-link from another tab landed here).
 pub fn module_card(ui: &mut Ui, m: &Module, pc: &PanelCtx, focus: bool) {
-    let badge = link::module_badge(&views(m, pc.market, pc.host));
+    let badge = link::module_badge(&views(m, pc.market, pc.host, pc.mesh));
     style::card_focus(
         ui,
         ("mod", &m.id),
@@ -87,6 +89,7 @@ pub fn module_card(ui: &mut Ui, m: &Module, pc: &PanelCtx, focus: bool) {
             }
         },
         |ui| {
+            let (cogs, out) = prelude(m, pc);
             if !m.summary.is_empty() {
                 ui.label(style::body(&m.summary));
             }
@@ -94,6 +97,10 @@ pub fn module_card(ui: &mut Ui, m: &Module, pc: &PanelCtx, focus: bool) {
                 crate::tag_row(ui, m.chips.iter().map(String::as_str), GREY);
             }
             crate::buy_and_datasheet(ui, m.buy.first().map(|b| (b.price.as_str(), b.url.as_str())), &m.datasheet);
+            // Software first: how to get, install and run the cog is what the card is for.
+            ui.add_space(style::GAP_XS);
+            software(ui, &cogs, pc);
+            section(ui, "Specs");
             if !m.good_for.is_empty() {
                 ui.label(style::dim(ui, format!("Good for: {}", m.good_for.join(" · "))));
             }
@@ -104,14 +111,18 @@ pub fn module_card(ui: &mut Ui, m: &Module, pc: &PanelCtx, focus: bool) {
                 ui.label(RichText::new(format!("⚠ {n}")).color(AMBER).size(12.0));
             }
             style::spec_grid(ui, ("ms", &m.id), m.spec.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-            show(ui, m, pc);
+            setup(ui, m, &cogs, pc);
+            firmware(ui, m, &cogs, out.as_ref());
+            docs(ui, m, &cogs, pc);
+            stats(ui, &cogs, pc, out.as_ref());
         },
     );
 }
 
-pub fn show(ui: &mut Ui, m: &Module, pc: &PanelCtx) {
-    let cogs = views(m, pc.market, pc.host);
-    // Cogs that are up: their guide + output feed Setup / Firmware / Stats.
+/// Per-frame upkeep for a visible card: the cog views, plus the guide / output / mesh fetches for
+/// the ones that are up.
+fn prelude(m: &Module, pc: &PanelCtx) -> (Vec<CogView>, Option<CogOutput>) {
+    let cogs = views(m, pc.market, pc.host, pc.mesh);
     for v in cogs.iter().filter(|v| v.state() == Some(link::CogState::Running)) {
         pump_guide(&v.id, pc);
         let port = link::default_export_port(&v.id);
@@ -120,13 +131,7 @@ pub fn show(ui: &mut Ui, m: &Module, pc: &PanelCtx) {
         }
     }
     let out = cog_output(&cogs, pc);
-
-    ui.add_space(style::GAP_XS);
-    software(ui, &cogs, pc);
-    setup(ui, m, &cogs, pc);
-    firmware(ui, m, &cogs, out.as_ref());
-    docs(ui, m, &cogs, pc);
-    stats(ui, &cogs, pc, out.as_ref());
+    (cogs, out)
 }
 
 /// Request the cog's guide once and parse it into the cache when it lands.
@@ -219,6 +224,7 @@ fn cog_block(ui: &mut Ui, v: &CogView, pc: &PanelCtx) {
         if let Some(code) = v.installed.as_ref().and_then(|i| i.refusal.as_ref()) {
             ui.label(RichText::new(format!("The host refused to run it: {code}. Fix the licence grant, then start it.")).color(RED).size(12.0));
         }
+        mesh_table(ui, v, pc);
         ui.horizontal_wrapped(|ui| {
             for a in link::actions(v) {
                 if action_button(ui, &a) {
@@ -242,6 +248,54 @@ fn unchecked_sources(pc: &PanelCtx) -> String {
         miss.push(format!("Cognitum registry: {e}"));
     }
     if miss.is_empty() { String::new() } else { format!(" ({})", miss.join("; ")) }
+}
+
+/// Where the cog is on the mesh: per node version, state, restarts, last output and output-log
+/// size. The log is the only backlog a host holds (cogs post straight to the store, so there is no
+/// queue to show), and it is labelled as such.
+fn mesh_table(ui: &mut Ui, v: &CogView, pc: &PanelCtx) {
+    let scope_line = match pc.mesh.map(|m| &m.scope) {
+        Some(Scope::Mesh) => format!("mesh-wide: {} node(s) asked", pc.mesh.map(|m| m.nodes.len()).unwrap_or(0)),
+        Some(Scope::ThisHostOnly(why)) => format!("this host only ({why})"),
+        None => "this host only".into(),
+    };
+    let tally = if v.mesh.on.is_empty() { String::new() } else { format!(" · running on {} of {} node(s) that have it", v.mesh.running_nodes(), v.mesh.on.len()) };
+    ui.label(style::dim(ui, format!("On the mesh · {scope_line}{tally}")));
+    if v.mesh.on.is_empty() {
+        ui.label(style::dim(ui, "not installed on any node that answered"));
+    } else {
+        egui::ScrollArea::horizontal().id_salt(("mesh_scroll", &v.id)).show(ui, |ui| {
+        egui::Grid::new(("mesh", &v.id)).num_columns(7).spacing([12.0, 3.0]).show(ui, |ui| {
+            for h in ["node", "version", "state", "restarts", "up", "last output", "output log"] {
+                ui.label(RichText::new(h).strong().small());
+            }
+            ui.end_row();
+            for n in &v.mesh.on {
+                let name = if n.is_self { format!("{} (connected)", n.node) } else { n.node.clone() };
+                ui.label(RichText::new(name).strong().size(12.0)).on_hover_text(if n.ip.is_empty() { "the connected host" } else { n.ip.as_str() });
+                ui.label(RichText::new(format!("v{}", n.version)).size(12.0));
+                let c = match n.state {
+                    CogState::Running => GREEN,
+                    CogState::Refused => RED,
+                    _ => AMBER,
+                };
+                ui.label(RichText::new(n.refusal.clone().map(|r| format!("refused: {r}")).unwrap_or_else(|| n.state.label().into())).color(c).size(12.0));
+                ui.label(RichText::new(n.restarts.to_string()).size(12.0));
+                ui.label(RichText::new(n.uptime_s.map(link::fmt_dur).unwrap_or_else(|| "—".into())).size(12.0));
+                ui.label(RichText::new(n.log_age_s.map(|a| format!("{} ago", link::fmt_dur(a))).unwrap_or_else(|| "—".into())).size(12.0));
+                ui.label(RichText::new(n.log_bytes.map(mesh::fmt_bytes).unwrap_or_else(|| "—".into())).size(12.0));
+                ui.end_row();
+            }
+        });
+        });
+        ui.label(style::dim(ui, "output log = the cog's stdout/stderr file on that node; cogs post straight to the store, so there is no queue to count."));
+    }
+    if !v.mesh.without.is_empty() {
+        ui.label(style::dim(ui, format!("not installed on: {}", v.mesh.without.join(", "))));
+    }
+    for (n, why) in &v.mesh.unreachable {
+        ui.label(style::dim(ui, format!("{n}: no answer ({why})")));
+    }
 }
 
 fn action_button(ui: &mut Ui, a: &link::ActionState) -> bool {

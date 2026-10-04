@@ -14,6 +14,7 @@ mod hw_dex;
 mod hw_identify;
 mod sensor_detail;
 mod sensor_link;
+mod sensor_mesh;
 mod style;
 
 use client::{Client, HostCog, HostStatus, Net, Settings};
@@ -80,7 +81,15 @@ impl Manager {
         let deep = (!deep.trim().is_empty()).then(|| deep.trim().to_string());
         Self {
             client: Client::new(s),
-            section: if deep.is_some() { Section::Catalog } else { Section::Cogs },
+            section: match client::setting("WEFTOS_TAB", "tab", "").as_str() {
+                "sensors" => Section::Sensors,
+                "catalog" => Section::Catalog,
+                "network" => Section::Network,
+                "system" => Section::System,
+                "cogs" => Section::Cogs,
+                _ if deep.is_some() => Section::Catalog,
+                _ => Section::Cogs,
+            },
             host_draft,
             token_draft,
             guide_cog: None,
@@ -524,7 +533,12 @@ impl Manager {
                     let sh = self.client.snapshot();
                     (sh.catalog.clone(), sh.host.clone().and_then(|r| r.ok()))
                 };
-                let pc = PanelCtx { client: &self.client, egui: ctx, market: market.as_ref(), host: host.as_ref(), guides: &self.guides, events: &self.events };
+                self.client.ensure_mesh(ctx);
+                let mesh = {
+                    let sh = self.client.snapshot();
+                    sensor_mesh::mesh_view(sh.mesh.as_ref().and_then(|f| f.result.as_ref()), host.as_ref())
+                };
+                let pc = PanelCtx { client: &self.client, egui: ctx, market: market.as_ref(), host: host.as_ref(), mesh: Some(&mesh), guides: &self.guides, events: &self.events };
                 let focus = self.focus_module.clone();
                 render_catalog_list(ui, "modules", &items, search, |ui, m| sensor_detail::module_card(ui, m, &pc, focus.as_deref() == Some(m.id.as_str())));
                 self.focus_module = None;

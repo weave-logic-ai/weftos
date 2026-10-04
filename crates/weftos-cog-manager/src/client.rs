@@ -45,7 +45,7 @@ impl Default for Settings {
 
 // ---- host /status shape (mirror of weftos_cog_host::supervise::CogStatus) ----
 
-#[derive(Deserialize, Clone, Default)]
+#[derive(Deserialize, Clone, Default, Debug)]
 pub struct HostCog {
     pub id: String,
     #[serde(default)]
@@ -71,6 +71,49 @@ pub struct HostCog {
     /// Licence-gate refusal code from the host (`no_grant`, ...), when it refused to run the cog.
     #[serde(default)]
     pub licence_refusal: Option<String>,
+    /// Output-log size and age (seconds since last write), when the host reports them.
+    #[serde(default)]
+    pub log_bytes: Option<u64>,
+    #[serde(default)]
+    pub log_age_s: Option<u64>,
+}
+
+/// One node in the host's `/mesh/cogs` answer.
+#[derive(Deserialize, Clone, Default)]
+pub struct MeshNodeRaw {
+    #[serde(default)]
+    pub node: String,
+    #[serde(default)]
+    pub ip: String,
+    #[serde(default, rename = "self")]
+    pub is_self: bool,
+    #[serde(default)]
+    pub reachable: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub cogs: Vec<HostCog>,
+}
+
+/// The host's `/mesh/cogs` answer: this host plus the tailnet peers that answered as cog hosts.
+#[derive(Deserialize, Clone, Default)]
+pub struct MeshCogs {
+    /// `mesh` | `this_host_only`
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub nodes: Vec<MeshNodeRaw>,
+}
+
+/// The mesh fetch: refetched at most every 6 s while a detail panel or catalog list is showing.
+#[derive(Clone)]
+pub struct MeshFetch {
+    pub fired: Instant,
+    pub in_flight: bool,
+    /// `Err("unsupported")` when the host predates `/mesh/cogs` (HTTP 404).
+    pub result: Option<Result<MeshCogs, String>>,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -372,6 +415,7 @@ pub struct Shared {
     pub guide: Option<GuideFetch>,
     /// Latest `/status` output line of each cog whose detail panel is open, by cog id.
     pub cog_out: std::collections::BTreeMap<String, CogOutFetch>,
+    pub mesh: Option<MeshFetch>,
 }
 
 /// One cog's export `/status` fetch (the cog's own endpoint, not a host endpoint).
@@ -822,6 +866,34 @@ impl Client {
                 Err(e) => Err(e.clone()),
             };
             if let Some(f) = shared.lock().unwrap().cog_out.get_mut(&id) {
+                f.in_flight = false;
+                f.result = Some(parsed);
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Keep the mesh-wide cog view fresh (`GET /mesh/cogs` on the connected host, which does the
+    /// peer fan-out itself). Throttled to one request per 6 s; callers invoke it each frame.
+    pub fn ensure_mesh(&self, ctx: &eframe::egui::Context) {
+        {
+            let mut sh = self.shared.lock().unwrap();
+            let due = sh.mesh.as_ref().is_none_or(|f| f.fired.elapsed() >= Duration::from_secs(6) && (!f.in_flight || f.fired.elapsed() > STALE));
+            if !due {
+                return;
+            }
+            let prev = sh.mesh.as_ref().and_then(|f| f.result.clone());
+            sh.mesh = Some(MeshFetch { fired: Instant::now(), in_flight: true, result: prev });
+        }
+        let url = format!("{}/mesh/cogs", base(&self.s.host));
+        let shared = Arc::clone(&self.shared);
+        let ctx = ctx.clone();
+        ehttp::fetch(ehttp::Request::get(url), move |res| {
+            let parsed = match &res {
+                Ok(r) if r.status == 404 => Err("unsupported".to_string()),
+                _ => parse_json::<MeshCogs>(&res),
+            };
+            if let Some(f) = shared.lock().unwrap().mesh.as_mut() {
                 f.in_flight = false;
                 f.result = Some(parsed);
             }

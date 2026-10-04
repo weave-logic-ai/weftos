@@ -26,7 +26,7 @@ pub fn node_name() -> String {
 }
 
 /// `tailscale status --json` → the fleet on the tailnet (self + peers).
-fn tailscale() -> Value {
+pub fn tailscale() -> Value {
     let Ok(out) = Command::new("tailscale").args(["status", "--json"]).output() else {
         return json!({ "available": false });
     };
