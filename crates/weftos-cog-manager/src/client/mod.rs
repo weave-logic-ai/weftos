@@ -32,6 +32,8 @@ pub struct Client {
     status_fired: Option<Instant>,
     net_busy: Arc<AtomicBool>,
     net_fired: Option<Instant>,
+    fleet_busy: Arc<AtomicBool>,
+    fleet_fired: Option<Instant>,
     catalog_started: bool,
 }
 
@@ -44,6 +46,8 @@ impl Client {
             status_fired: None,
             net_busy: Arc::new(AtomicBool::new(false)),
             net_fired: None,
+            fleet_busy: Arc::new(AtomicBool::new(false)),
+            fleet_fired: None,
             catalog_started: false,
         }
     }
@@ -64,6 +68,8 @@ impl Client {
         self.status_busy.store(false, Ordering::Release);
         self.net_fired = None;
         self.net_busy.store(false, Ordering::Release);
+        self.fleet_fired = None;
+        self.fleet_busy.store(false, Ordering::Release);
         self.catalog_started = false;
     }
 
@@ -71,6 +77,7 @@ impl Client {
     pub fn tick(&mut self, ctx: &eframe::egui::Context) {
         self.poll_status(ctx);
         self.poll_network(ctx);
+        self.poll_fleet(ctx);
         if !self.catalog_started {
             self.catalog_started = true;
             self.fetch_registries(ctx);
@@ -94,6 +101,34 @@ impl Client {
         let ctx = ctx.clone();
         ehttp::fetch(ehttp::Request::get(url), move |res| {
             apply(&shared, epoch, |sh| sh.net = Some(parse_json::<Net>(&res)));
+            busy.store(false, Ordering::Release);
+            ctx.request_repaint();
+        });
+    }
+
+    /// The daemon's `fleet.snapshot` through the ADR-102 gateway, every 5 s, when a gateway is set.
+    fn poll_fleet(&mut self, ctx: &eframe::egui::Context) {
+        let Some(url) = crate::fleet::snapshot_url(&self.s.gateway) else { return };
+        let now = Instant::now();
+        let stale = self.fleet_fired.is_some_and(|f| now.duration_since(f) > STALE);
+        let waited = self.fleet_fired.is_none_or(|f| now.duration_since(f) >= Duration::from_secs(5));
+        if !(waited && (!self.fleet_busy.load(Ordering::Acquire) || stale)) {
+            return;
+        }
+        self.fleet_busy.store(true, Ordering::Release);
+        self.fleet_fired = Some(now);
+        let shared = Arc::clone(&self.shared);
+        let epoch = epoch_of(&shared);
+        let busy = Arc::clone(&self.fleet_busy);
+        let ctx = ctx.clone();
+        ehttp::fetch(get_req(url, &self.s.gateway_token), move |res| {
+            let parsed = match &res {
+                Ok(r) if r.status == 401 || r.status == 403 => {
+                    Err("the gateway wants a token: weft token issue --read-only, then set it as the gateway token".into())
+                }
+                _ => parse_json::<serde_json::Value>(&res),
+            };
+            apply(&shared, epoch, |sh| sh.fleet = Some(parsed));
             busy.store(false, Ordering::Release);
             ctx.request_repaint();
         });

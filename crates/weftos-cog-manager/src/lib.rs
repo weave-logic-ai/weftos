@@ -10,6 +10,7 @@
 #![allow(deprecated)]
 pub mod client;
 mod app;
+mod fleet;
 mod hw_dex;
 mod hw_identify;
 mod sensor_detail;

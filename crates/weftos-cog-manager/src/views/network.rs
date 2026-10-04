@@ -7,9 +7,11 @@ use crate::{GREEN, GREY, RED, WL};
 use eframe::egui::{self, RichText};
 
 impl Manager {
-    pub(crate) fn network_view(&self, ui: &mut egui::Ui) {
+    pub(crate) fn network_view(&mut self, ui: &mut egui::Ui) {
+        style::section_header(ui, "Network", "the fleet this OS is part of — mesh nodes, tailnet peers, the Cognitum overlay and edge nodes");
+        self.fleet_section(ui);
+        ui.add_space(style::GAP_S);
         let net = self.client.snapshot().net.clone();
-        style::section_header(ui, "Network", "the fleet this OS is part of — tailnet peers + the Cognitum mesh overlay");
         match &net {
             Some(Ok(n)) => self.fleet_tables(ui, n),
             Some(Err(e)) => {

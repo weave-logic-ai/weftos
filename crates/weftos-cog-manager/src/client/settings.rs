@@ -12,6 +12,12 @@ pub struct Settings {
     /// cog-host bearer token for the `/hw/*` mutating routes (`WEFTOS_HOST_TOKEN`, or `?token=` in
     /// the browser). Found in `<host root>/host.token`.
     pub token: String,
+    /// ADR-102 gateway base for the fleet snapshot (`WEFTOS_GATEWAY`, or `?gw=`); empty = the
+    /// Network tab shows only what this cog-host sees.
+    pub gateway: String,
+    /// Gateway bearer token; a read-only one is enough (`weft token issue --read-only`).
+    /// `WEFTOS_GATEWAY_TOKEN`, or `?gwtoken=` in the browser.
+    pub gateway_token: String,
 }
 
 impl Default for Settings {
@@ -20,6 +26,8 @@ impl Default for Settings {
             // native: env; browser: ?host= / ?wl= / ?cog= query params; else the default.
             host: setting("WEFTOS_HOST", "host", "http://127.0.0.1:9480"),
             token: setting("WEFTOS_HOST_TOKEN", "token", ""),
+            gateway: setting("WEFTOS_GATEWAY", "gw", ""),
+            gateway_token: setting("WEFTOS_GATEWAY_TOKEN", "gwtoken", ""),
             our_registry: setting("WEFTOS_WL_REGISTRY", "wl", ""),
             cognitum_registry: setting(
                 "WEFTOS_COGNITUM_REGISTRY",

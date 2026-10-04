@@ -56,6 +56,11 @@ pub struct Manager {
     pub(crate) tokens: std::collections::BTreeMap<String, String>,
     pub(crate) focus_module: Option<String>,
     pub(crate) focus_step: Option<u8>,
+    /// Network tab (fleet P2): gateway drafts, the open node and its detail tab.
+    pub(crate) gw_draft: String,
+    pub(crate) gw_token_draft: String,
+    pub(crate) fleet_node: Option<String>,
+    pub(crate) fleet_tab: crate::views::fleet::NodeTab,
 }
 
 impl Manager {
@@ -63,6 +68,7 @@ impl Manager {
         let s = Settings::default();
         let host_draft = s.host.clone();
         let token_draft = s.token.clone();
+        let (gw_draft, gw_token_draft) = (s.gateway.clone(), s.gateway_token.clone());
         // Deep link: `?module=<id>` (wasm) or `WEFTOS_MODULE=<id>` (native) opens that module's
         // card in the Catalog.
         let deep = client::setting("WEFTOS_MODULE", "module", "");
@@ -98,6 +104,10 @@ impl Manager {
             tokens: Default::default(),
             focus_module: deep,
             focus_step: client::setting("WEFTOS_STEP", "step", "").trim().parse().ok(),
+            gw_draft,
+            gw_token_draft,
+            fleet_node: None,
+            fleet_tab: Default::default(),
         };
         // Deep link: `WEFTOS_GUIDE=<cog id>` / `?guide=` opens that cog's bundled guide.
         let g = client::setting("WEFTOS_GUIDE", "guide", "");

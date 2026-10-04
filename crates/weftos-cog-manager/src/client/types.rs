@@ -227,6 +227,8 @@ pub struct Shared {
     /// Pre-install facts of the connected host (`/hw/buses`); `Err` carries a human reason.
     pub node_facts: Option<Result<NodeFacts, String>>,
     pub node_facts_at: Option<Instant>,
+    /// The daemon's `fleet.snapshot` through the gateway (None = not fetched / not configured).
+    pub fleet: Option<Result<serde_json::Value, String>>,
 }
 
 /// One cog's export `/status` fetch (the cog's own endpoint, not a host endpoint).
