@@ -584,8 +584,13 @@ mod tests {
         dummy_cog(&root, "flappy", "exit 0"); // exits immediately
         let mut s = Supervisor::new(root.clone());
         s.start("flappy").unwrap(); // spawns once
-        std::thread::sleep(Duration::from_millis(200));
-        s.tick(); // reap the exit -> restart counter increments, backoff set
+        // Reap the exit -> restart counter increments, backoff set. Poll rather than one fixed
+        // sleep: under a loaded parallel suite the child can take longer than 200 ms to exit.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while s.status()[0].restarts == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+            s.tick();
+        }
         assert!(s.status()[0].restarts >= 1, "expected a restart to be recorded");
         assert!(s.status()[0].last_exit.is_some());
         s.stop("flappy").unwrap();
