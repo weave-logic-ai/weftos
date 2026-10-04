@@ -55,8 +55,11 @@ fn history_chains_and_must_end_at_the_current_key() {
     assert!(h.accepts(&pk(&b), t(20)) && !h.accepts(&pk(&b), t(21)));
     assert!(h.accepts(&pk(&c), t(10_000)));
     // Wrong current key, skipped record, bad prev.
-    assert!(matches!(UserKeyHistory::from_records(&pk(&b), &[r1.clone(), r2.clone()]), Err(RotationError::NotCurrent { .. })));
-    assert!(UserKeyHistory::from_records(&pk(&c), &[r2.clone()]).is_err());
+    assert!(matches!(
+        UserKeyHistory::from_records(&pk(&b), &[r1.clone(), r2.clone()]),
+        Err(RotationError::NotCurrent { .. })
+    ));
+    assert!(UserKeyHistory::from_records(&pk(&c), std::slice::from_ref(&r2)).is_err());
     let orphan = RotationRecord::sign(&b, &c, None, t(20));
     assert!(UserKeyHistory::from_records(&pk(&c), &[r1.clone(), orphan]).is_err());
     // A handover forged with the stolen old key alone names a key nobody holds.
@@ -69,7 +72,7 @@ fn history_chains_and_must_end_at_the_current_key() {
 fn a_certificate_across_a_rotation_verifies_only_up_to_the_rotation_point() {
     let (old, new) = (key(1), key(2));
     let rec = RotationRecord::sign(&old, &new, None, t(100));
-    let h = UserKeyHistory::from_records(&pk(&new), &[rec.clone()]).unwrap();
+    let h = UserKeyHistory::from_records(&pk(&new), std::slice::from_ref(&rec)).unwrap();
     let before = cert(&old, t(50), 1);
     let at_point = cert(&old, t(100), 2);
     let after = cert(&old, t(101), 3);
@@ -95,7 +98,7 @@ fn a_certificate_across_a_rotation_verifies_only_up_to_the_rotation_point() {
     assert_eq!(v.last_serial(PID), 4);
     assert_eq!(v.current_cert(PID).map(|c| c.serial), Some(4));
     // Without chain evidence the old-key certificate is dropped too, however it is dated.
-    let v = RevocationView::build_with(&h, &[], &[], &[before.clone()]);
+    let v = RevocationView::build_with(&h, &[], &[], std::slice::from_ref(&before));
     assert_eq!(v.rejected(), 1);
     assert_eq!(v.last_serial(PID), 0);
 }
@@ -104,7 +107,7 @@ fn a_certificate_across_a_rotation_verifies_only_up_to_the_rotation_point() {
 fn a_rejected_retired_key_certificate_names_its_cause() {
     let (old, new) = (key(1), key(2));
     let rec = RotationRecord::sign(&old, &new, None, t(100));
-    let h = UserKeyHistory::from_records(&pk(&new), &[rec.clone()]).unwrap();
+    let h = UserKeyHistory::from_records(&pk(&new), std::slice::from_ref(&rec)).unwrap();
     let before = cert(&old, t(50), 1);
     let after = cert(&old, t(101), 3);
     let chain = crate::chain::ChainManager::new(0, 1000);

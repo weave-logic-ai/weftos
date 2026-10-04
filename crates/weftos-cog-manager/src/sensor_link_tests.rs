@@ -44,7 +44,7 @@ fn no_host_shows_availability_only() {
     assert!(!v.connected && v.installed.is_none());
     assert_eq!(v.available.len(), 2, "dual-listed shows both sources");
     assert_eq!(v.preferred_source().unwrap().source, Source::WeaveLogic);
-    assert_eq!(module_badge(&[v.clone()]), Badge::Available);
+    assert_eq!(module_badge(std::slice::from_ref(&v)), Badge::Available);
     let a = actions(&v);
     assert!(!a[0].enabled && !a[0].why.is_empty(), "install is disabled with a reason");
     assert!(software_line(&v).contains("availability only"));
@@ -55,15 +55,24 @@ fn state_machine_running_stopped_refused() {
     let m = market(vec![item("c", Source::Cognitum, false)]);
     let run = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", true, true, None)])), None);
     assert_eq!(run.state(), Some(CogState::Running));
-    assert_eq!(module_badge(&[run.clone()]), Badge::Running);
-    let acts: Vec<_> = actions(&run).into_iter().map(|a| (a.action, a.enabled)).collect();
+    assert_eq!(module_badge(std::slice::from_ref(&run)), Badge::Running);
+    let acts: Vec<_> = actions(&run)
+        .into_iter()
+        .map(|a| (a.action, a.enabled))
+        .collect();
     // "c" has no bundled guide and no known export port, so even running it has nothing to open
     assert_eq!(acts, vec![(Action::Stop, true), (Action::Configure, false), (Action::OpenGuide, false)]);
 
     let stopped = cog_view("c", Some(&m), Some(&host(vec![host_cog("c", false, false, None)])), None);
     assert_eq!(stopped.state(), Some(CogState::Stopped));
-    assert_eq!(module_badge(&[stopped.clone()]), Badge::Installed);
-    let acts: Vec<_> = actions(&stopped).into_iter().map(|a| (a.action, a.enabled)).collect();
+    assert_eq!(
+        module_badge(std::slice::from_ref(&stopped)),
+        Badge::Installed
+    );
+    let acts: Vec<_> = actions(&stopped)
+        .into_iter()
+        .map(|a| (a.action, a.enabled))
+        .collect();
     // "c" ships no guide, so the guide buttons are disabled with a reason
     assert_eq!(acts, vec![(Action::Start, true), (Action::Configure, false), (Action::OpenGuide, false)]);
 
@@ -84,7 +93,7 @@ fn not_installed_on_connected_host_can_install() {
 fn unpublished_cog_is_linked_only_and_has_no_actions() {
     let m = market(vec![]);
     let v = cog_view("ghost", Some(&m), Some(&host(vec![])), None);
-    assert_eq!(module_badge(&[v.clone()]), Badge::Linked);
+    assert_eq!(module_badge(std::slice::from_ref(&v)), Badge::Linked);
     assert!(actions(&v).is_empty());
     assert_eq!(module_badge(&[]), Badge::NoCog);
 }
@@ -153,9 +162,11 @@ fn short_name_drops_the_parenthetical() {
 
 #[test]
 fn docs_include_buy_and_sources_and_bus_detection_covers_i2c_and_analog() {
-    let mut m = Module::default();
-    m.datasheet = "https://x/y.pdf".into();
-    m.seen_in = vec!["docs/hardware/sensors.md".into()];
+    let mut m = Module {
+        datasheet: "https://x/y.pdf".into(),
+        seen_in: vec!["docs/hardware/sensors.md".into()],
+        ..Module::default()
+    };
     m.spec.insert("interface".into(), "analog (0-3.3 V)".into());
     assert_eq!(detect_bus(&m), Bus::Analog);
     m.spec.insert("interface".into(), "I2C 0x48".into());

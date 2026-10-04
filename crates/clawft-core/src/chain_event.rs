@@ -145,6 +145,9 @@ macro_rules! chain_event {
     };
 }
 
+pub const EVENT_KIND_TOOL_REGISTER_METADATA: &str = "tool.register.metadata";
+pub const EVENT_KIND_GRAPHIFY_QUERY_RESULT: &str = "graphify.query_result";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +200,3 @@ mod tests {
         assert!(drain_pending_chain_events().is_empty());
     }
 }
-pub const EVENT_KIND_TOOL_REGISTER_METADATA: &str = "tool.register.metadata";
-pub const EVENT_KIND_GRAPHIFY_QUERY_RESULT: &str = "graphify.query_result";

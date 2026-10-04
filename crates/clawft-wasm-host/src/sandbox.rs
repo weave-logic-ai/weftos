@@ -891,8 +891,10 @@ mod tests {
             network: vec!["*".into()],
             ..Default::default()
         };
-        let mut resources = PluginResourceConfig::default();
-        resources.max_http_requests_per_minute = 10;
+        let resources = PluginResourceConfig {
+            max_http_requests_per_minute: 10,
+            ..PluginResourceConfig::default()
+        };
         let sandbox = PluginSandbox::from_manifest("test-plugin".into(), permissions, &resources);
         // Make 10 successful requests
         for i in 0..10 {
@@ -1070,9 +1072,11 @@ mod tests {
 
     #[test]
     fn test_sandbox_custom_resources() {
-        let mut resources = PluginResourceConfig::default();
-        resources.max_fuel = 500_000_000;
-        resources.max_memory_mb = 32;
+        let resources = PluginResourceConfig {
+            max_fuel: 500_000_000,
+            max_memory_mb: 32,
+            ..PluginResourceConfig::default()
+        };
 
         let sandbox =
             PluginSandbox::from_manifest("custom".into(), PluginPermissions::default(), &resources);
@@ -1118,8 +1122,10 @@ mod tests {
 
     #[test]
     fn t34_log_rate_limited() {
-        let mut resources = PluginResourceConfig::default();
-        resources.max_log_messages_per_minute = 5;
+        let resources = PluginResourceConfig {
+            max_log_messages_per_minute: 5,
+            ..PluginResourceConfig::default()
+        };
         let sandbox =
             PluginSandbox::from_manifest("test".into(), PluginPermissions::default(), &resources);
         // First 5 should succeed

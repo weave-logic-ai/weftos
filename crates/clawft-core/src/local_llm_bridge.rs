@@ -252,13 +252,15 @@ mod tests {
 
     #[test]
     fn kernel_llm_overrides_defaults() {
-        let mut config = Config::default();
-        config.kernel = KernelConfig {
-            llm: Some(LlmEndpointConfig {
-                service_url: Some("http://127.0.0.1:9000".into()),
-                model: Some("my-model".into()),
-            }),
-            ..KernelConfig::default()
+        let config = Config {
+            kernel: KernelConfig {
+                llm: Some(LlmEndpointConfig {
+                    service_url: Some("http://127.0.0.1:9000".into()),
+                    model: Some("my-model".into()),
+                }),
+                ..KernelConfig::default()
+            },
+            ..Config::default()
         };
         let r = resolve_local_llm(&config, "default");
         assert_eq!(r.service_url, "http://127.0.0.1:9000");

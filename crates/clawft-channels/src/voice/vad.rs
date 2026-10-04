@@ -798,7 +798,7 @@ mod tests {
 
         let learned = vad.silence_ms();
         assert!(
-            learned < 1_500 && learned >= 500,
+            (500..1_500).contains(&learned),
             "expected adaptive pull-down from 1500, got {learned}"
         );
         assert!(

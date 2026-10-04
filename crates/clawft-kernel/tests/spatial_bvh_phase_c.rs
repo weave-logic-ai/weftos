@@ -108,13 +108,11 @@ fn chain_manager_receives_bvh_events() {
     let events = cm.tail(0);
     let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
     assert!(
-        kinds.iter().any(|k| *k == EVENT_KIND_BVH_INSERT),
+        kinds.contains(&EVENT_KIND_BVH_INSERT),
         "expected bvh.insert in {kinds:?}"
     );
     assert!(
-        kinds
-            .iter()
-            .any(|k| *k == EVENT_KIND_BVH_REBALANCE_SEAL),
+        kinds.contains(&EVENT_KIND_BVH_REBALANCE_SEAL),
         "expected bvh.rebalance_seal in {kinds:?}"
     );
     assert!(cm.len() > before);

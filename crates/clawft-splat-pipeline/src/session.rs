@@ -326,7 +326,7 @@ mod tests {
         .unwrap();
         writeln!(
             poses,
-            r#"{{"frame_id":2,"t_ns":2000,"path":"frames/000002.jpg","quat_wxyz":[0.7071,0,0,0.7071],"coverage_bin":1}}"#
+            r#"{{"frame_id":2,"t_ns":2000,"path":"frames/000002.jpg","quat_wxyz":[0.6,0,0,0.8],"coverage_bin":1}}"#
         )
         .unwrap();
         std::fs::write(
@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(layout.poses.len(), 2);
         assert_eq!(layout.poses[0].frame_id, 1);
         assert_eq!(layout.poses[0].coverage_bin, Some(0));
-        assert_eq!(layout.poses[1].quat_wxyz[0], 0.7071);
+        assert_eq!(layout.poses[1].quat_wxyz[0], 0.6);
         let proto = layout.session_json.as_ref().unwrap()["protocol"]
             .as_str()
             .unwrap();

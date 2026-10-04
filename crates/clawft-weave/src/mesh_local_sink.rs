@@ -324,8 +324,8 @@ mod tests {
         let rec = Arc::new(Ctxs::default());
         let sink = MeshSink::new(rec.clone(), "me").with_negotiated_proto(proto);
         sink.deliver(stamped(origin)).await.unwrap();
-        let got = rec.0.lock().unwrap().remove(0);
-        got
+
+        rec.0.lock().unwrap().remove(0)
     }
 
     #[tokio::test]

@@ -84,7 +84,7 @@ async fn a_project_kernel_boots_with_the_effective_rules_limits_and_hash() {
     assert_eq!(k.process_table().max_processes(), 32);
     // spawn_budget (8 from the parent) caps concurrent agent spawns.
     let sub = &k.kernel_config().agent.as_ref().unwrap().subagents;
-    assert_eq!(sub.max_per_conv, 5.min(8));
+    assert_eq!(sub.max_per_conv, 5);
 
     let rt = k.governance_overlay().expect("overlay runtime");
     let hash = rt.rule_hash().expect("hash");

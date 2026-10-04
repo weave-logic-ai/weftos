@@ -113,7 +113,7 @@ fn multi_composition_surface_expands() {
     // Form expanded: last child wrapped in pressable.
     let form = &tree.root.children[1];
     assert_eq!(form.kind, IdentityIri::Stack);
-    assert!(form.attrs.get("submit_verb").is_none());
+    assert!(!form.attrs.contains_key("submit_verb"));
     assert_eq!(form.children.len(), 2);
     assert_eq!(form.children[0].kind, IdentityIri::Field);
     assert_eq!(form.children[1].kind, IdentityIri::Pressable);

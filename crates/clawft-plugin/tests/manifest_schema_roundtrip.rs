@@ -438,7 +438,7 @@ fn negative_wrong_version_not_semver_rejected() {
                 // Guard against accidental acceptance of clearly non-semver.
                 assert!(
                     bad != "not-semver"
-                        && bad != ""
+                        && !bad.is_empty()
                         && bad != "latest"
                         && bad != "v1.0.0"
                         && bad != "1"

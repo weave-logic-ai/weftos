@@ -308,9 +308,9 @@ mod tests {
     }
 
     /// Fake daemon that records `(method, auth)` for every request.
-    fn recording_daemon(
-        path: &std::path::Path,
-    ) -> std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>> {
+    type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+    fn recording_daemon(path: &std::path::Path) -> Seen {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let listener = UnixListener::bind(path).unwrap();
         let log = seen.clone();

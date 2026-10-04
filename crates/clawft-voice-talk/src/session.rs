@@ -157,8 +157,10 @@ mod legacy_flag_tests {
         if std::env::var("WEFTOS_LEGACY_TALK_FOREST").is_ok() {
             return;
         }
-        let mut cfg = TalkConfig::default();
-        cfg.use_legacy_talk_forest = false;
+        let cfg = TalkConfig {
+            use_legacy_talk_forest: false,
+            ..TalkConfig::default()
+        };
         assert!(!cfg.legacy_talk_forest_enabled());
     }
 }

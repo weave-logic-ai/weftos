@@ -1298,10 +1298,14 @@ mod tests {
     #[test]
     fn workspace_root_prefers_config_over_fallback() {
         // WEFT-83: two configured workspaces resolve independently of CWD.
-        let mut a = AgentsConfig::default();
-        a.workspace_root = Some(PathBuf::from("/workspaces/alpha"));
-        let mut b = AgentsConfig::default();
-        b.workspace_root = Some(PathBuf::from("/workspaces/beta"));
+        let a = AgentsConfig {
+            workspace_root: Some(PathBuf::from("/workspaces/alpha")),
+            ..AgentsConfig::default()
+        };
+        let b = AgentsConfig {
+            workspace_root: Some(PathBuf::from("/workspaces/beta")),
+            ..AgentsConfig::default()
+        };
 
         let cwd = PathBuf::from("/tmp");
         assert_eq!(

@@ -408,7 +408,13 @@ mod tests {
     #[test]
     fn single_node_centered() {
         let a = eid("a");
-        let positions = layout(&[a.clone()], &[], 800.0, 600.0, &LayeredConfig::default());
+        let positions = layout(
+            std::slice::from_ref(&a),
+            &[],
+            800.0,
+            600.0,
+            &LayeredConfig::default(),
+        );
         assert_eq!(positions.len(), 1);
         let (x, y) = positions[&a];
         assert!((x - 400.0).abs() < 0.01);
@@ -475,8 +481,8 @@ mod tests {
         for id in &nodes {
             let (x, y) = positions[id];
             assert!(x.is_finite() && y.is_finite());
-            assert!(x >= 0.0 && x <= 800.0);
-            assert!(y >= 0.0 && y <= 600.0);
+            assert!((0.0..=800.0).contains(&x));
+            assert!((0.0..=600.0).contains(&y));
         }
     }
 

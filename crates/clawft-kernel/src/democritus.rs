@@ -515,26 +515,24 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
 
-    /// Helper: build a fully wired DemocritusLoop with default HNSW backend.
-    fn make_loop() -> (
+    /// A wired loop plus the stores it was built over.
+    type LoopParts = (
         Arc<CausalGraph>,
         Arc<dyn VectorBackend>,
         Arc<ImpulseQueue>,
         Arc<CrossRefStore>,
         DemocritusLoop,
-    ) {
+    );
+
+    /// One stored `(id, key, vector, metadata)` entry of [`CountingBackend`].
+    type CountedEntry = (u64, String, Vec<f32>, serde_json::Value);
+
+    /// Helper: build a fully wired DemocritusLoop with default HNSW backend.
+    fn make_loop() -> LoopParts {
         make_loop_with_config(DemocritusConfig::default())
     }
 
-    fn make_loop_with_config(
-        config: DemocritusConfig,
-    ) -> (
-        Arc<CausalGraph>,
-        Arc<dyn VectorBackend>,
-        Arc<ImpulseQueue>,
-        Arc<CrossRefStore>,
-        DemocritusLoop,
-    ) {
+    fn make_loop_with_config(config: DemocritusConfig) -> LoopParts {
         let cg = Arc::new(CausalGraph::new());
         let vector: Arc<dyn VectorBackend> = Arc::new(HnswBackend::new(HnswServiceConfig {
             default_dimensions: 8,
@@ -559,7 +557,7 @@ mod tests {
     /// wiring-only over `VectorBackend` (no HNSW-specific path).
     struct CountingBackend {
         name: &'static str,
-        entries: Mutex<Vec<(u64, String, Vec<f32>, serde_json::Value)>>,
+        entries: Mutex<Vec<CountedEntry>>,
         inserts: AtomicUsize,
         searches: AtomicUsize,
     }
@@ -601,7 +599,7 @@ mod tests {
         fn search(&self, query: &[f32], k: usize) -> Vec<SearchResult> {
             self.searches.fetch_add(1, Ordering::Relaxed);
             let entries = self.entries.lock().expect("entries lock");
-            let mut scored: Vec<(f32, & (u64, String, Vec<f32>, serde_json::Value))> = entries
+            let mut scored: Vec<(f32, &CountedEntry)> = entries
                 .iter()
                 .map(|e| {
                     // Cosine similarity → distance = 1 - sim (match HnswBackend).

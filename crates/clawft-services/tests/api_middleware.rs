@@ -499,7 +499,7 @@ async fn admin_routing_decisions_returns_seeded_history() {
         let d = RoutingDecision {
             provider: "openai".into(),
             model: format!("m-{i}"),
-            reason: format!("tiered routing: complexity=0.5, tier=free, level=1, user=alice"),
+            reason: "tiered routing: complexity=0.5, tier=free, level=1, user=alice".to_string(),
             tier: Some("free".into()),
             cost_estimate_usd: Some(0.01),
             escalated: false,

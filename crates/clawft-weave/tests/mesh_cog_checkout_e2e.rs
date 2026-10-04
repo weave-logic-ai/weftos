@@ -261,7 +261,7 @@ fn peer_ctx(verified: bool, class: PeerClass) -> PeerCtx {
 
 impl Rig {
     /// What the kernel's mesh listener does with a message from a remote peer.
-    async fn from_remote(&self, ctx: PeerCtx, msg: KernelMessage) {
+    async fn deliver_from_remote(&self, ctx: PeerCtx, msg: KernelMessage) {
         let scope = Scope { user_id: self.x.user_id.clone(), project_id: None };
         self.svc.running().state.router.deliver(&ctx, Some(&scope), msg).await.unwrap();
     }
@@ -270,7 +270,7 @@ impl Rig {
     /// link (one registration's deliveries are in order).
     async fn flush(&self, from: PeerCtx) {
         let before = self.x.received().len();
-        self.from_remote(from, KernelMessage::text(0, MessageTarget::Topic("sentinel".into()), "s")).await;
+        self.deliver_from_remote(from, KernelMessage::text(0, MessageTarget::Topic("sentinel".into()), "s")).await;
         wait_until("sentinel arrives", || self.x.received().len() > before).await;
     }
 
@@ -317,14 +317,14 @@ async fn an_admitted_peer_is_stamped_and_served_through_the_real_service_and_dae
     let hash = r.seed_and_grant();
 
     // The sink built a verified node context from the service's stamp.
-    r.from_remote(peer_ctx(true, PeerClass::Node), KernelMessage::text(0, MessageTarget::Topic("plain".into()), "hi"))
+    r.deliver_from_remote(peer_ctx(true, PeerClass::Node), KernelMessage::text(0, MessageTarget::Topic("plain".into()), "hi"))
         .await;
     wait_until("plain message arrives", || !r.x.received().is_empty()).await;
     let got = r.x.received().remove(0);
     assert_eq!((got.peer_id.as_str(), got.verified, got.class), (PEER, true, PeerClass::Node));
 
     // And the tunnel serves the artifact: the descriptor comes back to the peer.
-    r.from_remote(peer_ctx(true, PeerClass::Node), tunnel_meta_request("s1", hash)).await;
+    r.deliver_from_remote(peer_ctx(true, PeerClass::Node), tunnel_meta_request("s1", hash)).await;
     wait_until("the peer gets a reply", || !r.sent.to(PEER, "mesh.artifact.tunnel").is_empty()).await;
     let first = r.sent.to(PEER, "mesh.artifact.tunnel").remove(0);
     assert_eq!(first["dir"], "rsp");
@@ -336,7 +336,7 @@ async fn an_admitted_peer_is_stamped_and_served_through_the_real_service_and_dae
 #[tokio::test]
 async fn a_checkout_from_an_admitted_peer_is_relayed_once_and_answered() {
     let r = rig(None).await;
-    r.from_remote(peer_ctx(true, PeerClass::Node), checkout_msg("c-1")).await;
+    r.deliver_from_remote(peer_ctx(true, PeerClass::Node), checkout_msg("c-1")).await;
     wait_until("the reply is sent", || !r.sent.to(PEER, "mesh.cog.checkout.reply").is_empty()).await;
     let reply = r.sent.to(PEER, "mesh.cog.checkout.reply").remove(0);
     assert_eq!(reply["request_id"], "c-1");
@@ -381,8 +381,8 @@ async fn unadmitted_legacy_and_leaf_peers_are_refused_by_the_daemon() {
     let r = rig(None).await;
     let hash = r.seed_and_grant();
     for ctx in [peer_ctx(false, PeerClass::Legacy), peer_ctx(false, PeerClass::Node), peer_ctx(true, PeerClass::Leaf)] {
-        r.from_remote(ctx.clone(), checkout_msg("u-1")).await;
-        r.from_remote(ctx.clone(), tunnel_meta_request("u1", hash)).await;
+        r.deliver_from_remote(ctx.clone(), checkout_msg("u-1")).await;
+        r.deliver_from_remote(ctx.clone(), tunnel_meta_request("u1", hash)).await;
         r.flush(ctx).await;
     }
     assert_eq!(r.cog.counters.refused_unverified.load(Ordering::SeqCst), 6);
@@ -404,7 +404,7 @@ async fn a_daemon_on_the_old_protocol_reads_every_delivery_as_unadmitted() {
     // no origin stamp: even a verified remote node is unadmitted to the daemon.
     let r = rig(Some((1, 1))).await;
     assert_eq!(r.x.state.get().unwrap().proto, Some(1));
-    r.from_remote(peer_ctx(true, PeerClass::Node), checkout_msg("o-1")).await;
+    r.deliver_from_remote(peer_ctx(true, PeerClass::Node), checkout_msg("o-1")).await;
     r.flush(peer_ctx(true, PeerClass::Node)).await;
     assert_eq!(r.cog.counters.refused_unverified.load(Ordering::SeqCst), 1);
     assert_eq!(r.licence.checkouts.load(Ordering::SeqCst), 0);

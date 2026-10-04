@@ -446,17 +446,26 @@ fn no_local_mesh_id_accepts_nothing() {
 fn duplicate_approval_is_idempotent_and_approvals_are_additive() {
     let fx = Fx::new();
     let (a, b) = (sha_of("aarch64"), sha_of("x86_64"));
-    assert_eq!(fx.approvals.accept(&approval(&[a.clone()])), Ok(Outcome::Applied));
-    assert_eq!(fx.approvals.accept(&approval(&[a.clone()])), Ok(Outcome::Duplicate));
+    assert_eq!(
+        fx.approvals.accept(&approval(std::slice::from_ref(&a))),
+        Ok(Outcome::Applied)
+    );
+    assert_eq!(
+        fx.approvals.accept(&approval(std::slice::from_ref(&a))),
+        Ok(Outcome::Duplicate)
+    );
     // Re-signed later (different approved_at): same content key, still a duplicate.
-    let mut later = approval_rec(&[a.clone()], &mesh());
+    let mut later = approval_rec(std::slice::from_ref(&a), &mesh());
     later.approved_at += 500;
     assert_eq!(
         fx.approvals.accept(&sign_approval(&later, &op()).unwrap()),
         Ok(Outcome::Duplicate)
     );
     // A second approval adds; it does not replace the first.
-    assert_eq!(fx.approvals.accept(&approval(&[b.clone()])), Ok(Outcome::Applied));
+    assert_eq!(
+        fx.approvals.accept(&approval(std::slice::from_ref(&b))),
+        Ok(Outcome::Applied)
+    );
     assert_eq!(fx.approvals.len(), 2);
     assert!(fx.approvals.covering("fall-detect", "1.2.0", &a).is_some());
     assert!(fx.approvals.covering("fall-detect", "1.2.0", &b).is_some());
@@ -478,7 +487,9 @@ fn approval_for_another_mesh_or_signer_is_refused() {
 fn approvals_persist_and_a_mesh_change_orphans_them() {
     let mut fx = Fx::new();
     let a = sha_of("aarch64");
-    fx.approvals.accept(&approval(&[a.clone()])).unwrap();
+    fx.approvals
+        .accept(&approval(std::slice::from_ref(&a)))
+        .unwrap();
     fx.restart();
     assert!(fx.approvals.covering("fall-detect", "1.2.0", &a).is_some());
     fx.local.set(Some(other_mesh()));

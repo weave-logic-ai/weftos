@@ -493,9 +493,11 @@ mod tests {
     }
 
     fn pipeline() -> SensorPipeline<HashEncoder> {
-        let mut cfg = PipelineConfig::default();
-        cfg.cluster = "test".into();
-        cfg.node_id = 42;
+        let cfg = PipelineConfig {
+            cluster: "test".into(),
+            node_id: 42,
+            ..PipelineConfig::default()
+        };
         SensorPipeline::with_hash(cfg, key())
     }
 

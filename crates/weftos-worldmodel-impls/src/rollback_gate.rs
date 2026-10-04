@@ -406,7 +406,7 @@ mod tests {
             // Different dims jump each step with alternating signs that
             // disagree across the buffer.
             for i in 0..LATENT_DIM {
-                let sign = if ((t as usize + i) % 3) == 0 {
+                let sign = if (t as usize + i).is_multiple_of(3) {
                     1.0
                 } else if ((t as usize + i) % 3) == 1 {
                     -1.0

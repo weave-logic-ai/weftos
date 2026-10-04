@@ -109,7 +109,8 @@ fn unknown_fields_and_unknown_types_are_tolerated() {
 #[test]
 fn version_negotiation_matrix() {
     // (service, client, expected)
-    let cases: [((u32, u32), (u32, u32), Option<u32>); 9] = [
+    type Case = ((u32, u32), (u32, u32), Option<u32>);
+    let cases: [Case; 9] = [
         ((1, 1), (1, 1), Some(1)),
         ((1, 3), (1, 5), Some(3)),   // newer client, service caps it
         ((1, 3), (1, 2), Some(2)),   // older client

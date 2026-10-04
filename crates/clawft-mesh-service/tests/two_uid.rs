@@ -56,5 +56,9 @@ async fn a_real_second_uid_is_identified_by_the_kernel_and_is_not_an_admin() {
     assert_eq!(refused["kind"], "forbidden");
 
     // And the service owner (an admin) is unaffected.
-    assert!(matches!(h.admin_ok(Message::Status {}).await["node_id"].as_str(), Some(_)));
+    assert!(
+        h.admin_ok(Message::Status {}).await["node_id"]
+            .as_str()
+            .is_some()
+    );
 }

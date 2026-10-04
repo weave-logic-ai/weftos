@@ -70,7 +70,7 @@ async fn anchor_without_registry_still_succeeds() {
     let turn = user_turn("t-noop", "still lands", 1);
     anchor.anchor_turn("conv-x", "t-noop", &turn).await;
     assert!(
-        chain.len() >= 1,
+        !chain.is_empty(),
         "turn still lands on the chain without a registry"
     );
 }

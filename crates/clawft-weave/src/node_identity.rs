@@ -24,9 +24,6 @@ use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
 
-#[cfg(test)]
-use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
-
 /// Loaded daemon identity: the node-id and whatever key material backs it.
 ///
 /// Cheap to clone. Collapsed daemons hold the node key; a daemon in service

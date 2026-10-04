@@ -386,10 +386,8 @@ mod tests {
         // Start at origin; goal has +1 on action-aligned dims 0,32,64,...
         // LinearPredPhi with a.code[0]=positive moves those dims toward goal.
         let mut goal = zero_latent();
-        for i in 0..LATENT_DIM {
-            if i % 32 == 0 {
-                goal[i] = 1.0;
-            }
+        for g in goal.iter_mut().step_by(32) {
+            *g = 1.0;
         }
         let mut planner = CemPlanner::with_seed(42).with_goal(goal);
         planner.population = 48;

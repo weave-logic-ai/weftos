@@ -13,7 +13,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clawft_types::runtime_paths::RuntimePaths;
 use clawft_weave::instance_lock::InstanceLock;
@@ -106,11 +106,12 @@ extern "C" fn on_term(_: i32) {
 }
 
 /// Survive `SIGTERM` (the handler only sets a flag; a thread writes `term.seen`).
-fn ignore_term(run: &PathBuf) {
+fn ignore_term(run: &Path) {
     use nix::sys::signal::{SigHandler, Signal, signal};
     // SAFETY: the handler only stores to an atomic.
-    unsafe { signal(Signal::SIGTERM, SigHandler::Handler(on_term)) }.expect("install SIGTERM handler");
-    let run = run.clone();
+    unsafe { signal(Signal::SIGTERM, SigHandler::Handler(on_term)) }
+        .expect("install SIGTERM handler");
+    let run = run.to_path_buf();
     std::thread::spawn(move || {
         while !TERM_SEEN.load(std::sync::atomic::Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_millis(5));

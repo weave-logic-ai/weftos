@@ -275,8 +275,8 @@ mod tests {
             ),
             tier: Some(tier.into()),
             cost_estimate_usd: Some(0.01 * n as f64),
-            escalated: n % 3 == 0,
-            budget_constrained: n % 5 == 0,
+            escalated: n.is_multiple_of(3),
+            budget_constrained: n.is_multiple_of(5),
             sender_id: Some(sender.into()),
         }
     }

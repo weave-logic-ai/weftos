@@ -61,7 +61,8 @@ fn issuing_twice_is_byte_identical() {
 fn tampering_with_every_field_fails() {
     let other = SigningKey::from_bytes(&[3u8; 32]);
     let other_pk = hex(&other.verifying_key().to_bytes());
-    let cases: Vec<(&str, Box<dyn Fn(&mut ProjectCert)>)> = vec![
+    type Mutator = Box<dyn Fn(&mut ProjectCert)>;
+    let cases: Vec<(&str, Mutator)> = vec![
         ("v", Box::new(|c| c.v = 2)),
         ("type", Box::new(|c| c.kind = "x".into())),
         ("project_id", Box::new(|c| c.project_id = OTHER_PID.into())),
@@ -249,7 +250,7 @@ fn tofu_rekey_then_old_cert_fails_the_revocation_view() {
     let new_cert = cert_for(PID, &new_key, 2);
     let register = ("project.register", json!({"cert": old}));
 
-    let v = view(&chain_with(&[register.clone()]), &[], &[]);
+    let v = view(&chain_with(std::slice::from_ref(&register)), &[], &[]);
     assert_eq!(v.bound_key_id(PID), Some(old.project_key_id.as_str()));
     v.check_cert(&old).unwrap();
     let pk = proj_key().verifying_key().to_bytes();
@@ -302,7 +303,7 @@ fn union_merge_cannot_resurrect_a_revoked_key() {
     let v = view(
         &chain_with(&[("project.register", json!({"cert": old}))]),
         &[JournalRecord::Register { cert: old.clone() }, revoke],
-        &[old.clone()],
+        std::slice::from_ref(&old),
     );
     assert_eq!(v.bound_key_id(PID), None);
     assert!(matches!(v.check_cert(&old), Err(IdentityError::KeyRevoked { .. })));
@@ -316,7 +317,7 @@ fn bindings_survive_when_only_the_journal_or_cert_file_remembers_them() {
     // Crash: the chain lost the event.
     for v in [
         view(&[], &[JournalRecord::Register { cert: old.clone() }], &[]),
-        view(&[], &[], &[old.clone()]),
+        view(&[], &[], std::slice::from_ref(&old)),
     ] {
         assert_eq!(v.plan_registration(PID, &pk).unwrap(), Registration::Existing(Box::new(old.clone())));
         assert!(matches!(v.plan_registration(PID, &other), Err(IdentityError::KeyConflict { .. })));
@@ -331,8 +332,10 @@ fn forged_certs_in_any_source_are_dropped() {
     tampered.serial = 7;
     let v = view(
         &chain_with(&[("project.register", json!({"cert": forged}))]),
-        &[JournalRecord::Register { cert: tampered.clone() }],
-        &[forged.clone()],
+        &[JournalRecord::Register {
+            cert: tampered.clone(),
+        }],
+        std::slice::from_ref(&forged),
     );
     assert_eq!(v.bound_key_id(PID), None);
     assert_eq!(v.rejected(), 3);

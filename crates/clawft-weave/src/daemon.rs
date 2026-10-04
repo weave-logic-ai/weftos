@@ -8955,7 +8955,7 @@ mod tests {
     #[tokio::test]
     async fn only_an_authorized_call_moves_the_idle_clock() {
         use crate::project_boot_run::test_hooks;
-        let _serial = test_hooks::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = test_hooks::SERIAL.lock().await;
         let kernel = Kernel::boot(
             clawft_types::config::Config::default(),
             isolated_kcfg(),
@@ -9061,7 +9061,7 @@ mod tests {
         use clawft_kernel::crossref::{CrossRef, CrossRefType, StructureTag, UniversalNodeId};
         use clawft_kernel::Kernel;
         use clawft_platform::NativePlatform;
-        use clawft_types::config::{Config, KernelConfig};
+        use clawft_types::config::Config;
         use std::sync::Arc;
 
         // Mirror `dual_write_turn`'s node metadata so the handler reads the same
@@ -9269,9 +9269,7 @@ mod tests {
     async fn ecc_vector_config_returns_active_backend_and_parameters() {
         use clawft_kernel::Kernel;
         use clawft_platform::NativePlatform;
-        use clawft_types::config::{
-            Config, KernelConfig, VectorBackendKind, VectorConfig, VectorHnswConfig,
-        };
+        use clawft_types::config::{Config, VectorBackendKind, VectorConfig, VectorHnswConfig};
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
@@ -9333,7 +9331,7 @@ mod tests {
     async fn ecc_vector_config_default_kernel_reports_hnsw() {
         use clawft_kernel::Kernel;
         use clawft_platform::NativePlatform;
-        use clawft_types::config::{Config, KernelConfig};
+        use clawft_types::config::Config;
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
@@ -9365,7 +9363,7 @@ mod tests {
     async fn conversation_graph_unknown_conv_is_empty() {
         use clawft_kernel::Kernel;
         use clawft_platform::NativePlatform;
-        use clawft_types::config::{Config, KernelConfig};
+        use clawft_types::config::Config;
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
@@ -9394,7 +9392,7 @@ mod tests {
     async fn conversation_graph_requires_conv_id() {
         use clawft_kernel::Kernel;
         use clawft_platform::NativePlatform;
-        use clawft_types::config::{Config, KernelConfig};
+        use clawft_types::config::Config;
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
@@ -9431,7 +9429,7 @@ mod tests {
         use clawft_kernel::crossref::{StructureTag, UniversalNodeId};
         use clawft_kernel::Kernel;
         use clawft_platform::NativePlatform;
-        use clawft_types::config::{Config, KernelConfig};
+        use clawft_types::config::Config;
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
@@ -9536,7 +9534,7 @@ mod tests {
         use clawft_kernel::crossref::{StructureTag, UniversalNodeId};
         use clawft_kernel::Kernel;
         use clawft_platform::NativePlatform;
-        use clawft_types::config::{Config, KernelConfig};
+        use clawft_types::config::Config;
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
@@ -9847,15 +9845,17 @@ mod tests {
         let platform = Arc::new(NativePlatform::new());
         // Force chain on (default ChainConfig is enabled, but pin it
         // so the test doesn't depend on KernelConfig::default drift).
-        let mut kcfg = KernelConfig::default();
-        kcfg.chain = Some(ChainConfig {
-            enabled: true,
-            checkpoint_interval: 1000,
-            chain_id: 0,
-            checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
-                .checkpoint_path,
-            external_anchor: None,
-        });
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig {
+                enabled: true,
+                checkpoint_interval: 1000,
+                chain_id: 0,
+                checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
+                    .checkpoint_path,
+                external_anchor: None,
+            }),
+            ..KernelConfig::default()
+        };
         let kernel = Kernel::boot(Config::default(), kcfg, platform)
             .await
             .expect("kernel boots");
@@ -9925,15 +9925,17 @@ mod tests {
         use clawft_types::config::ChainConfig;
 
         let platform = Arc::new(NativePlatform::new());
-        let mut kcfg = KernelConfig::default();
-        kcfg.chain = Some(ChainConfig {
-            enabled: true,
-            checkpoint_interval: 1000,
-            chain_id: 0,
-            checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
-                .checkpoint_path,
-            external_anchor: None,
-        });
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig {
+                enabled: true,
+                checkpoint_interval: 1000,
+                chain_id: 0,
+                checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
+                    .checkpoint_path,
+                external_anchor: None,
+            }),
+            ..KernelConfig::default()
+        };
         let kernel = Kernel::boot(Config::default(), kcfg, platform)
             .await
             .expect("kernel boots");
@@ -10020,15 +10022,17 @@ mod tests {
         use clawft_types::config::ChainConfig;
 
         let platform = Arc::new(NativePlatform::new());
-        let mut kcfg = KernelConfig::default();
-        kcfg.chain = Some(ChainConfig {
-            enabled: true,
-            checkpoint_interval: 1000,
-            chain_id: 0,
-            checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
-                .checkpoint_path,
-            external_anchor: None,
-        });
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig {
+                enabled: true,
+                checkpoint_interval: 1000,
+                chain_id: 0,
+                checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
+                    .checkpoint_path,
+                external_anchor: None,
+            }),
+            ..KernelConfig::default()
+        };
         let kernel = Kernel::boot(Config::default(), kcfg, platform)
             .await
             .expect("kernel boots");
@@ -10069,15 +10073,17 @@ mod tests {
         use clawft_types::config::ChainConfig;
 
         let platform = Arc::new(NativePlatform::new());
-        let mut kcfg = KernelConfig::default();
-        kcfg.chain = Some(ChainConfig {
-            enabled: true,
-            checkpoint_interval: 1000,
-            chain_id: 0,
-            checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
-                .checkpoint_path,
-            external_anchor: None,
-        });
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig {
+                enabled: true,
+                checkpoint_interval: 1000,
+                chain_id: 0,
+                checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
+                    .checkpoint_path,
+                external_anchor: None,
+            }),
+            ..KernelConfig::default()
+        };
         let kernel = Kernel::boot(Config::default(), kcfg, platform)
             .await
             .expect("kernel boots");

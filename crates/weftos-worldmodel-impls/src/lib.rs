@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn hash_encoder_is_deterministic_and_non_zero() {
-        let enc = HashEncoder::default();
+        let enc = HashEncoder;
         let a = enc.encode(b"frame-a").expect("a");
         let b = enc.encode(b"frame-a").expect("a2");
         let c = enc.encode(b"frame-b").expect("b");
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn hash_action_encoder_fills_code() {
-        let enc = HashActionEncoder::default();
+        let enc = HashActionEncoder;
         let a = enc.encode_bytes(b"steer-left").expect("act");
         assert_ne!(a, Action::null());
         assert_eq!(a.code.len(), ACTION_CODE_DIM);
@@ -164,8 +164,12 @@ mod tests {
         mon.min_samples = 4;
         for t in 0..20u64 {
             let mut z = zero_latent();
-            for i in 0..LATENT_DIM {
-                z[i] = if (t as usize + i) % 2 == 0 { 1.0 } else { -1.0 };
+            for (i, zi) in z.iter_mut().enumerate() {
+                *zi = if (t as usize + i).is_multiple_of(2) {
+                    1.0
+                } else {
+                    -1.0
+                };
             }
             let h = mon.update_at(&z, t * 1000).expect("update");
             if t >= 4 {

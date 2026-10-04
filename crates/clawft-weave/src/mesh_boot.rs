@@ -99,19 +99,6 @@ fn refuse_fresh_identity(policy: MeshServicePolicy, pinned: bool, has_node_key: 
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn auto_never_mints_a_node_key_on_a_machine_that_used_the_service() {
-        assert!(refuse_fresh_identity(MeshServicePolicy::Auto, true, false).is_err());
-        assert!(refuse_fresh_identity(MeshServicePolicy::Auto, true, true).is_ok(), "rollback keeps its key");
-        assert!(refuse_fresh_identity(MeshServicePolicy::Auto, false, false).is_ok(), "a new machine");
-        assert!(refuse_fresh_identity(MeshServicePolicy::Off, true, false).is_ok(), "off is a deliberate choice");
-    }
-}
-
 /// Chain sink used when the kernel has no chain: nothing can be appended, so
 /// events stay queued (bounded) and the doctor/handshake show the link anyway.
 struct NoChain;
@@ -165,4 +152,26 @@ pub fn stop_on_shutdown(handle: LinkHandle, mut rx: watch::Receiver<bool>) {
         }
         handle.shutdown().await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_never_mints_a_node_key_on_a_machine_that_used_the_service() {
+        assert!(refuse_fresh_identity(MeshServicePolicy::Auto, true, false).is_err());
+        assert!(
+            refuse_fresh_identity(MeshServicePolicy::Auto, true, true).is_ok(),
+            "rollback keeps its key"
+        );
+        assert!(
+            refuse_fresh_identity(MeshServicePolicy::Auto, false, false).is_ok(),
+            "a new machine"
+        );
+        assert!(
+            refuse_fresh_identity(MeshServicePolicy::Off, true, false).is_ok(),
+            "off is a deliberate choice"
+        );
+    }
 }
