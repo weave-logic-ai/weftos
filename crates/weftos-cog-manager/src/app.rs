@@ -59,6 +59,7 @@ pub struct Manager {
     /// Network tab (fleet P2): gateway drafts, the open node and its detail tab.
     pub(crate) gw_draft: String,
     pub(crate) gw_token_draft: String,
+    pub(crate) seeds_draft: String,
     pub(crate) fleet_node: Option<String>,
     pub(crate) fleet_tab: crate::views::fleet::NodeTab,
     /// Network tab: the edge node whose reported fields are expanded.
@@ -108,6 +109,7 @@ impl Manager {
             focus_step: client::setting("WEFTOS_STEP", "step", "").trim().parse().ok(),
             gw_draft,
             gw_token_draft,
+            seeds_draft: Settings::default().seeds.join(", "),
             // Deep link: `WEFTOS_NODE=<node id>` / `?node=` opens that node's detail on the
             // Network tab; `WEFTOS_NODE_TAB` / `?nodetab=` picks its tab.
             fleet_node: Some(client::setting("WEFTOS_NODE", "node", "")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),

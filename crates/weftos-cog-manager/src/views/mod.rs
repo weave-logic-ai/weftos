@@ -3,6 +3,7 @@
 pub(crate) mod catalog;
 pub(crate) mod cogs;
 pub(crate) mod fleet;
+mod fleet_seed;
 mod fleet_tabs;
 mod network;
 mod sensors;

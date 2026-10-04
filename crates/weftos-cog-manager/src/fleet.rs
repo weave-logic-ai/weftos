@@ -281,7 +281,8 @@ pub fn explain(provenance: &str) -> &'static str {
         "daemon_observed" => "seen by this daemon itself",
         "operator_claimed" => "set by an operator; not verified",
         "peer_claimed" => "what the peer says about itself; an unverified peer chooses it",
-        "self_reported" => "an edge node's own report; unauthenticated",
+        "self_reported" => "the device's own report about itself; unauthenticated",
+        "tailnet" => "from the connected cog-host's tailscale status",
         _ => "unknown provenance",
     }
 }

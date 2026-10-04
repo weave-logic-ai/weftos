@@ -7,6 +7,7 @@
 use super::fleet_tabs as tabs;
 use crate::app::Manager;
 use crate::fleet::{self, FleetRow};
+use crate::fleet_unify;
 use crate::sensor_detail::Event;
 use crate::style;
 use crate::{AMBER, GREEN, GREY, RED, WL};
@@ -55,100 +56,139 @@ impl NodeTab {
 }
 
 impl Manager {
-    /// The gateway settings and the node list (the Network tab's first section).
+    /// The fleet manager list (the Network tab's first section): every machine and device from
+    /// every source — mesh nodes (daemon snapshot via the gateway), Seeds, tailnet hosts and edge
+    /// nodes — merged into one table, each with the sources that reported it.
     pub(crate) fn fleet_section(&mut self, ui: &mut Ui) {
-        style::subhead(ui, "Mesh nodes (fleet snapshot)");
+        style::subhead(ui, "Fleet");
         ui.horizontal_wrapped(|ui| {
             ui.label(style::dim(ui, "gateway"));
-            ui.add(egui::TextEdit::singleline(&mut self.gw_draft).desired_width(220.0).hint_text("http://<daemon>:<gateway port>"));
+            ui.add(egui::TextEdit::singleline(&mut self.gw_draft).desired_width(200.0).hint_text("http://<daemon>:<gateway port>"));
             ui.label(style::dim(ui, "token"));
-            ui.add(egui::TextEdit::singleline(&mut self.gw_token_draft).password(true).desired_width(110.0).hint_text("read-only token"));
+            ui.add(egui::TextEdit::singleline(&mut self.gw_token_draft).password(true).desired_width(100.0).hint_text("read-only token"));
+            ui.label(style::dim(ui, "seeds"));
+            ui.add(egui::TextEdit::singleline(&mut self.seeds_draft).desired_width(200.0).hint_text("http://<seed>, ..."))
+                .on_hover_text("Cognitum Seed agents to read (comma-separated). The connected host's own agent is found automatically.");
             if ui.button("Use").clicked() {
                 let mut s = self.client.s.clone();
                 s.gateway = self.gw_draft.trim().to_string();
                 s.gateway_token = self.gw_token_draft.trim().to_string();
+                s.seeds = crate::client::parse_seeds(&self.seeds_draft);
                 self.client.reconnect(s);
                 self.fleet_node = None;
             }
         });
-        let fleet = self.client.snapshot().fleet.clone();
-        let snap = match fleet {
-            _ if self.client.s.gateway.trim().is_empty() => {
-                ui.label(style::dim(ui, "Set the gateway (WEFTOS_GATEWAY or ?gw=) to see every node the daemon knows. A read-only token is enough: weft token issue --read-only."));
-                return;
-            }
-            None => {
-                ui.label(style::dim(ui, "Querying the gateway…"));
-                return;
-            }
-            Some(Err(e)) => {
-                ui.colored_label(RED, format!("Can't read the fleet snapshot: {e}"));
-                return;
-            }
-            Some(Ok(v)) => v,
+        let (fleet, net, seeds) = {
+            let sh = self.client.snapshot();
+            (sh.fleet.clone(), sh.net.clone(), sh.seeds.values().cloned().collect::<Vec<_>>())
         };
-        let rows = fleet::rows(&snap);
+        let snap = fleet.as_ref().and_then(|r| r.as_ref().ok());
+        let net_ok = net.as_ref().and_then(|r| r.as_ref().ok());
+        let entries = fleet_unify::unify(snap, net_ok, &seeds);
         let now = now_unix();
-        ui.label(style::dim(ui, format!("{} node(s) · click a node for its detail", rows.len())));
-        egui::Grid::new("fleet_nodes").num_columns(9).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
-            for h in ["node", "state", "trust", "mesh", "rtt", "load", "seen", "cogs", "location"] {
+        // Why a source is missing, said once above the table.
+        if self.client.s.gateway.trim().is_empty() {
+            ui.label(style::dim(ui, "No gateway set, so mesh-node detail (trust, load, workloads) is not shown. Set WEFTOS_GATEWAY / ?gw= with a read-only token (weft token issue --read-only)."));
+        } else if let Some(Err(e)) = &fleet {
+            ui.colored_label(RED, format!("fleet snapshot unavailable: {e}"));
+        }
+        if let Some(Err(e)) = &net {
+            ui.colored_label(RED, format!("connected host's /network unavailable: {e}"));
+        }
+        let rows: std::collections::BTreeMap<String, FleetRow> =
+            snap.map(fleet::rows).unwrap_or_default().into_iter().map(|r| (r.id.clone(), r)).collect();
+        let online = entries.iter().filter(|e| e.online == Some(true)).count();
+        ui.label(style::dim(ui, format!("{} device(s), {online} online · click one for its detail", entries.len())));
+        egui::Grid::new("fleet_all").num_columns(9).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
+            for h in ["device", "class", "address", "os / chip", "firmware", "rtt", "load", "seen", "from"] {
                 ui.label(RichText::new(h).strong().small());
             }
             ui.end_row();
-            for r in &rows {
-                self.fleet_row(ui, r, now);
+            for e in &entries {
+                self.fleet_entry_row(ui, e, rows.get(e.node_id.as_deref().unwrap_or("")), now);
                 ui.end_row();
             }
         });
-        for d in snap["degraded"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-            ui.label(RichText::new(format!("not available: {d}")).color(GREY).small());
-        }
-        let open = self.fleet_node.clone();
-        if let Some(id) = open {
-            match fleet::node(&snap, &id) {
-                Some(n) => self.node_detail(ui, n, &id, now),
-                None => self.fleet_node = None,
+        if let Some(s) = snap {
+            for d in s["degraded"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                ui.label(RichText::new(format!("not available: {d}")).color(GREY).small());
             }
+        }
+        let Some(key) = self.fleet_node.clone() else { return };
+        let Some(e) = entries.iter().find(|e| e.key == key || e.node_id.as_deref() == Some(key.as_str())).cloned() else {
+            return;
+        };
+        if let Some(n) = e.node_id.as_deref().and_then(|id| snap.and_then(|s| fleet::node(s, id))) {
+            let id = e.node_id.clone().unwrap_or_default();
+            self.node_detail(ui, n, &id, now);
+        } else if let Some(sv) = e.seed.as_ref().and_then(|u| seeds.iter().find(|s| &s.url == u)) {
+            ui.add_space(style::GAP_S);
+            style::card_frame(ui).show(ui, |ui| {
+                self.entry_header(ui, &e);
+                super::fleet_seed::seed_detail(ui, sv);
+            });
+        } else {
+            ui.add_space(style::GAP_S);
+            style::card_frame(ui).show(ui, |ui| {
+                self.entry_header(ui, &e);
+                entry_facts(ui, &e);
+            });
         }
     }
 
-    fn fleet_row(&mut self, ui: &mut Ui, r: &FleetRow, now: u64) {
-        ui.horizontal(|ui| {
-            let live = r.heartbeat.as_deref() == Some("alive") || r.local;
-            style::dot(ui, if r.revoked { RED } else if live { GREEN } else { GREY });
-            let mut label = RichText::new(&r.name);
-            if r.local {
-                label = label.strong().color(WL);
-            }
-            let selected = self.fleet_node.as_deref() == Some(r.id.as_str());
-            if ui.selectable_label(selected, label).on_hover_text(&r.id).clicked() {
-                self.fleet_node = if selected { None } else { Some(r.id.clone()) };
-                self.fleet_tab = NodeTab::Overview;
-            }
-            if r.local {
-                ui.label(style::dim(ui, "this node"));
-            }
-            if r.revoked {
-                style::pill(ui, "revoked", RED);
-            }
-            if r.unknown {
-                style::pill(ui, "label only", GREY).on_hover_text("only an operator location label names this id");
+    fn entry_header(&mut self, ui: &mut Ui, e: &fleet_unify::Entry) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(style::h1(&e.name));
+            style::pill(ui, e.class.label(), WL);
+            if ui.small_button("close").clicked() {
+                self.fleet_node = None;
             }
         });
-        ui.label(RichText::new(&r.state).small());
-        ui.label(RichText::new(&r.trust).small());
-        let mesh = match &r.class {
-            Some(c) => format!("{c}{} {}", if r.verified { "" } else { " unverified" }, r.heartbeat.as_deref().unwrap_or("")),
-            None => "-".into(),
-        };
-        ui.label(RichText::new(mesh.trim()).small());
-        ui.label(RichText::new(r.rtt_ms.map_or_else(|| "-".into(), |v| format!("{v:.0} ms"))).small());
-        ui.label(RichText::new(r.load1.map_or_else(|| "-".into(), |v| format!("{v:.2}"))).small());
-        ui.label(RichText::new(r.seen_unix.map_or_else(|| "-".into(), |t| fleet::age(now, t))).small());
-        ui.label(RichText::new(r.cogs.to_string()).small());
-        ui.label(RichText::new(r.location.as_deref().unwrap_or("-")).small());
     }
 
+    fn fleet_entry_row(&mut self, ui: &mut Ui, e: &fleet_unify::Entry, r: Option<&FleetRow>, now: u64) {
+        ui.horizontal(|ui| {
+            let revoked = r.is_some_and(|r| r.revoked);
+            style::dot(ui, match (revoked, e.online) {
+                (true, _) => RED,
+                (_, Some(true)) => GREEN,
+                (_, Some(false)) => GREY,
+                _ => AMBER,
+            });
+            let mut label = RichText::new(&e.name);
+            if e.this_host || r.is_some_and(|r| r.local) {
+                label = label.strong().color(WL);
+            }
+            let selected = self.fleet_node.as_deref().is_some_and(|k| k == e.key || e.node_id.as_deref() == Some(k));
+            if ui.selectable_label(selected, label).on_hover_text(&e.key).clicked() {
+                self.fleet_node = if selected { None } else { Some(e.key.clone()) };
+                self.fleet_tab = NodeTab::Overview;
+                if e.class == fleet_unify::Class::Edge {
+                    self.edge_open = e.key.strip_prefix("edge:").map(str::to_owned);
+                }
+            }
+            if r.is_some_and(|r| r.local) {
+                ui.label(style::dim(ui, "this daemon"));
+            } else if e.this_host {
+                ui.label(style::dim(ui, "connected host"));
+            }
+            if revoked {
+                style::pill(ui, "revoked", RED);
+            }
+        });
+        ui.label(RichText::new(e.class.label()).small());
+        ui.label(RichText::new(if e.addrs.is_empty() { "-".into() } else { e.addrs.join(", ") }).small());
+        ui.label(RichText::new(e.os.as_deref().unwrap_or("-")).small());
+        ui.label(RichText::new(e.firmware.as_deref().unwrap_or("-")).small());
+        ui.label(RichText::new(r.and_then(|r| r.rtt_ms).map_or_else(|| "-".into(), |v| format!("{v:.0} ms"))).small());
+        ui.label(RichText::new(r.and_then(|r| r.load1).map_or_else(|| "-".into(), |v| format!("{v:.2}"))).small());
+        ui.label(RichText::new(r.and_then(|r| r.seen_unix).map_or_else(|| "-".into(), |t| fleet::age(now, t))).small());
+        ui.horizontal(|ui| {
+            for src in &e.sources {
+                style::pill(ui, src.kind, GREY).on_hover_text(format!("{}: {}", src.provenance, fleet::explain(src.provenance)));
+            }
+        });
+    }
     fn node_detail(&mut self, ui: &mut Ui, n: &Value, id: &str, now: u64) {
         ui.add_space(style::GAP_S);
         style::card_frame(ui).show(ui, |ui| {
@@ -295,5 +335,28 @@ impl Manager {
                 }
             }
         }
+    }
+}
+
+/// Detail for an entry with no richer source (a tailnet host, or an edge node).
+fn entry_facts(ui: &mut Ui, e: &fleet_unify::Entry) {
+    egui::Grid::new(("entry", &e.key)).num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
+        let rows = [
+            ("status", match e.online { Some(true) => "online".to_string(), Some(false) => "offline".into(), None => "unknown".into() }),
+            ("addresses", if e.addrs.is_empty() { "-".into() } else { e.addrs.join(", ") }),
+            ("os / chip", e.os.clone().unwrap_or_else(|| "-".into())),
+            ("firmware", e.firmware.clone().unwrap_or_else(|| "-".into())),
+            ("reported by", e.sources.iter().map(|s| format!("{} ({})", s.kind, s.provenance)).collect::<Vec<_>>().join(", ")),
+        ];
+        for (k, v) in rows {
+            ui.label(style::dim(ui, k));
+            ui.label(style::body(v));
+            ui.end_row();
+        }
+    });
+    if e.class == fleet_unify::Class::Host {
+        ui.label(style::dim(ui, "Only the tailnet knows this machine. It is not a mesh node, Seed or cog-host the console can read; join it to the mesh for trust, load and workloads."));
+    } else if e.class == fleet_unify::Class::Edge {
+        ui.label(style::dim(ui, "Self-reported edge heartbeat; the full report is in the edge table below."));
     }
 }

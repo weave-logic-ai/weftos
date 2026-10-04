@@ -251,6 +251,8 @@ pub struct Shared {
     pub fleet: Option<Result<serde_json::Value, String>>,
     /// RTT / load readings per node from successive snapshots (sparklines).
     pub fleet_hist: crate::fleet::History,
+    /// What each Seed agent reported, by base URL.
+    pub seeds: std::collections::BTreeMap<String, crate::fleet_unify::SeedView>,
 }
 
 /// One cog's export `/status` fetch (the cog's own endpoint, not a host endpoint).

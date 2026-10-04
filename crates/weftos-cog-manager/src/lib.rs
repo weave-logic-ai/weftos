@@ -11,6 +11,7 @@
 pub mod client;
 mod app;
 mod fleet;
+mod fleet_unify;
 mod hw_dex;
 mod hw_identify;
 mod sensor_detail;

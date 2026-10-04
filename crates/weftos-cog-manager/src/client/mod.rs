@@ -34,6 +34,9 @@ pub struct Client {
     net_fired: Option<Instant>,
     fleet_busy: Arc<AtomicBool>,
     fleet_fired: Option<Instant>,
+    seeds_fired: Option<Instant>,
+    /// Seed URLs with a read in flight (and since when), so a silent address never piles up requests.
+    seeds_busy: Arc<Mutex<std::collections::BTreeMap<String, Instant>>>,
     catalog_started: bool,
 }
 
@@ -48,6 +51,8 @@ impl Client {
             net_fired: None,
             fleet_busy: Arc::new(AtomicBool::new(false)),
             fleet_fired: None,
+            seeds_fired: None,
+            seeds_busy: Arc::new(Mutex::new(Default::default())),
             catalog_started: false,
         }
     }
@@ -69,6 +74,7 @@ impl Client {
         self.net_fired = None;
         self.net_busy.store(false, Ordering::Release);
         self.fleet_fired = None;
+        self.seeds_fired = None;
         self.fleet_busy.store(false, Ordering::Release);
         self.catalog_started = false;
     }
@@ -78,6 +84,7 @@ impl Client {
         self.poll_status(ctx);
         self.poll_network(ctx);
         self.poll_fleet(ctx);
+        self.poll_seeds(ctx);
         if !self.catalog_started {
             self.catalog_started = true;
             self.fetch_registries(ctx);
@@ -137,6 +144,73 @@ impl Client {
             busy.store(false, Ordering::Release);
             ctx.request_repaint();
         });
+    }
+
+    /// Read every Seed agent (listed ones, plus the connected host's own on :80) every 10 s:
+    /// identity, status, firmware and thermal. All four are open, CORS-enabled agent routes.
+    fn poll_seeds(&mut self, ctx: &eframe::egui::Context) {
+        let now = Instant::now();
+        if self.seeds_fired.is_some_and(|f| now.duration_since(f) < Duration::from_secs(10)) {
+            return;
+        }
+        self.seeds_fired = Some(now);
+        let mut targets: Vec<(String, bool)> = self.s.seeds.iter().map(|u| (u.clone(), false)).collect();
+        let host = crate::fleet_unify::host_of(&base(&self.s.host));
+        let auto = format!("http://{host}");
+        if !host.is_empty() && !targets.iter().any(|(u, _)| crate::fleet_unify::host_of(u) == host) {
+            targets.push((auto, true));
+        }
+        let shared = Arc::clone(&self.shared);
+        let epoch = epoch_of(&shared);
+        {
+            let mut sh = shared.lock().unwrap();
+            sh.seeds.retain(|u, _| targets.iter().any(|(t, _)| t == u));
+            for (u, auto) in &targets {
+                sh.seeds.entry(u.clone()).or_insert_with(|| crate::fleet_unify::SeedView { url: u.clone(), auto: *auto, ..Default::default() });
+            }
+        }
+        for (url, _) in targets {
+            {
+                let mut busy = self.seeds_busy.lock().unwrap();
+                if busy.get(&url).is_some_and(|t| now.duration_since(*t) < Duration::from_secs(60)) {
+                    continue;
+                }
+                busy.insert(url.clone(), now);
+            }
+            for (route, slot) in [("identity", 0u8), ("status", 1), ("firmware/status", 2), ("thermal/state", 3)] {
+                let shared = Arc::clone(&shared);
+                let ctx = ctx.clone();
+                let key = url.clone();
+                let busy = Arc::clone(&self.seeds_busy);
+                let req = ehttp::Request::get(format!("{url}/api/v1/{route}"));
+                ehttp::fetch(req, move |res| {
+                    if slot == 0 {
+                        busy.lock().unwrap().remove(&key);
+                    }
+                    let parsed = parse_json::<serde_json::Value>(&res);
+                    apply(&shared, epoch, |sh| {
+                        if let Some(sv) = sh.seeds.get_mut(&key) {
+                            match parsed {
+                                Ok(v) => {
+                                    let cell = match slot { 0 => &mut sv.identity, 1 => &mut sv.status, 2 => &mut sv.firmware, _ => &mut sv.thermal };
+                                    *cell = Some(v);
+                                    if slot == 0 {
+                                        sv.error = None;
+                                    }
+                                }
+                                // Only the identity call decides whether the agent is there.
+                                Err(e) if slot == 0 => {
+                                    sv.identity = None;
+                                    sv.error = Some(e);
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                    });
+                    ctx.request_repaint();
+                });
+            }
+        }
     }
 
     fn poll_status(&mut self, ctx: &eframe::egui::Context) {

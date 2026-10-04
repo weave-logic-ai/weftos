@@ -18,6 +18,18 @@ pub struct Settings {
     /// Gateway bearer token; a read-only one is enough (`weft token issue --read-only`).
     /// `WEFTOS_GATEWAY_TOKEN`, or `?gwtoken=` in the browser.
     pub gateway_token: String,
+    /// Cognitum Seed agent base URLs to read (`WEFTOS_SEEDS` / `?seeds=`, comma-separated). The
+    /// connected cog-host's own agent is probed as well, without being listed here.
+    pub seeds: Vec<String>,
+}
+
+/// Comma- or space-separated Seed URLs; a bare host gets `http://`.
+pub fn parse_seeds(s: &str) -> Vec<String> {
+    s.split(|c: char| c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .map(|x| if x.starts_with("http://") || x.starts_with("https://") { x.trim_end_matches('/').to_string() } else { format!("http://{}", x.trim_end_matches('/')) })
+        .collect()
 }
 
 impl Default for Settings {
@@ -28,6 +40,7 @@ impl Default for Settings {
             token: setting("WEFTOS_HOST_TOKEN", "token", ""),
             gateway: setting("WEFTOS_GATEWAY", "gw", ""),
             gateway_token: setting("WEFTOS_GATEWAY_TOKEN", "gwtoken", ""),
+            seeds: parse_seeds(&setting("WEFTOS_SEEDS", "seeds", "")),
             our_registry: setting("WEFTOS_WL_REGISTRY", "wl", ""),
             cognitum_registry: setting(
                 "WEFTOS_COGNITUM_REGISTRY",
