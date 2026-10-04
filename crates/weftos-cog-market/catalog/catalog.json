@@ -17,7 +17,8 @@
         "ky-038",
         "ads1115-board",
         "pi-zero-2w"
-      ]
+      ],
+      "hash": "wh_5f06e572e61977f0"
     },
     {
       "id": "rd-03e",
@@ -32,7 +33,8 @@
       "modules": [
         "rd-03e-module",
         "pi-zero-2w"
-      ]
+      ],
+      "hash": "wh_f3b244c76dba2eef"
     },
     {
       "id": "hlk-as201",
@@ -47,7 +49,8 @@
       "modules": [
         "hlk-as201-module",
         "pi-zero-2w"
-      ]
+      ],
+      "hash": "wh_0e536ec6b40b44b9"
     }
   ],
   "modules": [
@@ -110,7 +113,8 @@
         "docs/MODULES.md",
         ".metaharness/ingest/findings/hardware/hw-acconeer-a121-xm125.json",
         ".metaharness/ingest/findings/hardware/hw-acconeer-a121-pcr.json"
-      ]
+      ],
+      "hash": "wh_3eab2bed077b95bd"
     },
     {
       "id": "ad8232-board",
@@ -157,7 +161,8 @@
       ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_e0f794e84bf17eb2"
     },
     {
       "id": "ads1115-board",
@@ -216,7 +221,8 @@
       "seen_in": [
         "docs/hardware/sensors.md",
         "crates/weftos-cog-market/catalog/catalog.json"
-      ]
+      ],
+      "hash": "wh_b7c902f536bd3052"
     },
     {
       "id": "ads1299-emg",
@@ -264,7 +270,8 @@
       "seen_in": [
         "docs/MODULES.md",
         "docs/TRAINING_RIG.md"
-      ]
+      ],
+      "hash": "wh_44bda281b3d0dc67"
     },
     {
       "id": "airmar-b45-b260-m260",
@@ -301,7 +308,8 @@
       ],
       "seen_in": [
         ".planning/sonobuoy/build/commercial-comparison.md"
-      ]
+      ],
+      "hash": "wh_ca203a27600bb1bf"
     },
     {
       "id": "airmar-d-235khz",
@@ -337,7 +345,8 @@
       "seen_in": [
         ".planning/sonobuoy/build/build-buoy-p79.md",
         ".planning/sonobuoy/SYNTHESIS.md"
-      ]
+      ],
+      "hash": "wh_7daad71ed1f47dd0"
     },
     {
       "id": "airmar-p79",
@@ -383,7 +392,8 @@
       "seen_in": [
         ".planning/sonobuoy/build/build-buoy-p79.md",
         ".planning/sonobuoy/SYNTHESIS.md"
-      ]
+      ],
+      "hash": "wh_693d84bead917898"
     },
     {
       "id": "akm-ak5816aim",
@@ -420,7 +430,8 @@
       "buy": [],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-ak5816aim-60ghz-aim.json"
-      ]
+      ],
+      "hash": "wh_5c9c477f4a66b14d"
     },
     {
       "id": "andar-adte2104-carrier",
@@ -464,7 +475,8 @@
       "buy": [],
       "seen_in": [
         "docs/research/hardware/hlk-ld6002-andar-board-2026-08-24.md"
-      ]
+      ],
+      "hash": "wh_ab1a10df16ea452c"
     },
     {
       "id": "aquarian-h1a-h2a",
@@ -496,7 +508,8 @@
       "seen_in": [
         ".planning/sonobuoy/SYNTHESIS.md",
         ".planning/sonobuoy/build/build-hydrophone-epoxy.md"
-      ]
+      ],
+      "hash": "wh_3642d8c39f7540cf"
     },
     {
       "id": "arduino-uno-r3",
@@ -531,7 +544,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_cc6993dc90063e7c"
     },
     {
       "id": "atheros-ar9580-nic",
@@ -562,7 +576,8 @@
       "seen_in": [
         "reference/whitsentry/docs/research/ruview-primer.md",
         "ruview/archive/v1/docs/user-guide/getting-started.md"
-      ]
+      ],
+      "hash": "wh_a18300909773d411"
     },
     {
       "id": "bananapi-m1",
@@ -594,7 +609,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_ea63a59028fe0996"
     },
     {
       "id": "bananapro",
@@ -626,7 +642,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_cbd9b758e99dc02d"
     },
     {
       "id": "bluerobotics-ping1d",
@@ -656,7 +673,8 @@
       "buy": [],
       "seen_in": [
         ".planning/sonobuoy/"
-      ]
+      ],
+      "hash": "wh_fa2cf78ab94f196f"
     },
     {
       "id": "bluerobotics-ping360",
@@ -693,7 +711,8 @@
       ],
       "seen_in": [
         ".planning/sonobuoy/"
-      ]
+      ],
+      "hash": "wh_f1aa30448f572f19"
     },
     {
       "id": "bme280",
@@ -770,7 +789,8 @@
         "docs/node_a1/BUILD_AND_WIRING.md",
         "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md",
         "ruview/CHANGELOG.md"
-      ]
+      ],
+      "hash": "wh_ca2b47a7d30438c8"
     },
     {
       "id": "bme680-env-gas",
@@ -820,7 +840,8 @@
         "firmware/node-a1-bringup/src/bme680.c",
         "docs/EMBODIED_COACHING.md",
         "docs/node_a1/BUILD_PLAN.md"
-      ]
+      ],
+      "hash": "wh_e7765b2585143121"
     },
     {
       "id": "bno055-imu",
@@ -876,7 +897,8 @@
         "docs/hardware/sensors.md",
         "docs/weftos/splat-capture-sensor-head.md",
         ".metaharness/ingest/findings/hardware/hw-liu-2022-pubmed36365854.json"
-      ]
+      ],
+      "hash": "wh_94a1dd84236974e3"
     },
     {
       "id": "bno085-imu",
@@ -923,7 +945,8 @@
       "seen_in": [
         "docs/MODULES.md",
         "docs/TRAINING_RIG.md"
-      ]
+      ],
+      "hash": "wh_46fa4f022be7a145"
     },
     {
       "id": "bruel-kjaer-8104",
@@ -953,7 +976,8 @@
       "buy": [],
       "seen_in": [
         ".planning/sonobuoy/"
-      ]
+      ],
+      "hash": "wh_8c5bbbfa7440ac7a"
     },
     {
       "id": "decawave-dwm1001",
@@ -996,7 +1020,8 @@
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-liu-2022-pubmed36365854.json",
         ".metaharness/ingest/findings/hardware/hw-volpi-2023-pubmed36772163.json"
-      ]
+      ],
+      "hash": "wh_38cade551288fbc8"
     },
     {
       "id": "dfrobot-c1001",
@@ -1046,7 +1071,8 @@
         ".metaharness/ingest/findings/hardware/hw-c1001-60ghz-dfrobot.json",
         "docs/research/hardware-alternatives-and-life-detection.md",
         "docs/research/hardware-cost-matrix.md"
-      ]
+      ],
+      "hash": "wh_06bd5124d4848333"
     },
     {
       "id": "dfrobot-c4002",
@@ -1086,7 +1112,8 @@
       ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-c4002-24ghz-dfrobot.json"
-      ]
+      ],
+      "hash": "wh_55fa26e88ac228a2"
     },
     {
       "id": "dfrobot-sen0628-vl53l7cx",
@@ -1140,7 +1167,8 @@
         "firmware/node-a1-bringup/src/sen0628.c",
         "weftos-mic-node/src/tof_sensor.h",
         "weftos-bridge.py"
-      ]
+      ],
+      "hash": "wh_9b27ae70c96473d5"
     },
     {
       "id": "ds18b20",
@@ -1186,7 +1214,8 @@
       "seen_in": [
         ".planning/sonobuoy/build/build-hydrophone-simple.md",
         ".planning/sonobuoy/build/build-buoy-p79.md"
-      ]
+      ],
+      "hash": "wh_f7692198bba4b1da"
     },
     {
       "id": "dwm3001c",
@@ -1243,7 +1272,8 @@
       "seen_in": [
         "Downloads/DWM3001C Data Sheet.pdf",
         "scripts/n6 (dw3000-id, DWM3000EVB)"
-      ]
+      ],
+      "hash": "wh_8c8012414cb1a184"
     },
     {
       "id": "elecrow-7in-rgb-tft-touch",
@@ -1282,7 +1312,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_db15981d635fd153"
     },
     {
       "id": "elecrow-crowpanel-7",
@@ -1326,7 +1357,8 @@
       ],
       "seen_in": [
         "docs/whitsentry-synergy-report.md"
-      ]
+      ],
+      "hash": "wh_25096ed02e76c6ad"
     },
     {
       "id": "esp32-c5-waveshare",
@@ -1362,7 +1394,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_8a1d93f6054042d3"
     },
     {
       "id": "esp32-s2-mini",
@@ -1402,7 +1435,8 @@
       "seen_in": [
         "docs/MODULES.md",
         "docs/TRAINING_RIG.md"
-      ]
+      ],
+      "hash": "wh_60205553c5412ffa"
     },
     {
       "id": "esp32-s3-n16r8",
@@ -1449,7 +1483,8 @@
         "docs/research/hardware-cost-matrix.md",
         "reference/whitsentry/docs/hardware/phase0-parts-list.md",
         "docs/planning/sensing-roadmap-and-sku.md"
-      ]
+      ],
+      "hash": "wh_83f4817ea454cec4"
     },
     {
       "id": "espargos-array",
@@ -1485,7 +1520,8 @@
       "seen_in": [
         "docs/hardware/sdr-radio.md",
         "docs/research/espargos/"
-      ]
+      ],
+      "hash": "wh_7320e3df2bd4812c"
     },
     {
       "id": "fdc2214-cap-sensing",
@@ -1528,7 +1564,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_2299b90598844dea"
     },
     {
       "id": "flir-lepton-35",
@@ -1569,7 +1606,8 @@
       ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_29e2010a721df65c"
     },
     {
       "id": "galaxy-s25-ultra-swarm-node",
@@ -1608,7 +1646,8 @@
       "buy": [],
       "seen_in": [
         "docs/SAMSUNG_GALAXY_SWARM_NODE_RESEARCH.md"
-      ]
+      ],
+      "hash": "wh_84a6083f5d60f18a"
     },
     {
       "id": "galaxy-s25u-main-cam-hp2",
@@ -1643,7 +1682,8 @@
       "buy": [],
       "seen_in": [
         "docs/SAMSUNG_GALAXY_SWARM_NODE_RESEARCH.md"
-      ]
+      ],
+      "hash": "wh_feb53a766fbdaf5b"
     },
     {
       "id": "galaxy-s25u-periscope5x-imx984",
@@ -1678,7 +1718,8 @@
       "buy": [],
       "seen_in": [
         "docs/SAMSUNG_GALAXY_SWARM_NODE_RESEARCH.md"
-      ]
+      ],
+      "hash": "wh_4da311a986966bca"
     },
     {
       "id": "galaxy-s25u-tele3x-imx754",
@@ -1713,7 +1754,8 @@
       "buy": [],
       "seen_in": [
         "docs/SAMSUNG_GALAXY_SWARM_NODE_RESEARCH.md"
-      ]
+      ],
+      "hash": "wh_20391977ccd68ca9"
     },
     {
       "id": "galaxy-s25u-ultrawide-jn1",
@@ -1747,7 +1789,8 @@
       "buy": [],
       "seen_in": [
         "docs/SAMSUNG_GALAXY_SWARM_NODE_RESEARCH.md"
-      ]
+      ],
+      "hash": "wh_51f76ef78f5a4eae"
     },
     {
       "id": "generic-24g-presence-board",
@@ -1790,7 +1833,8 @@
       ],
       "seen_in": [
         "docs/hardware/radar-protocols.md"
-      ]
+      ],
+      "hash": "wh_ba2aa848000087ad"
     },
     {
       "id": "gt-u7-gps",
@@ -1831,7 +1875,8 @@
       "photo": "",
       "datasheet": "https://www.u-blox.com/en/product/neo-6-series",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_16655b323d5bda9b"
     },
     {
       "id": "gt911-touch",
@@ -1873,7 +1918,8 @@
       "seen_in": [
         "docs/hardware/microcontrollers.md",
         ".planning/devices/crowpanel-display/"
-      ]
+      ],
+      "hash": "wh_c824286918e7d6e0"
     },
     {
       "id": "hackrf-one",
@@ -1913,7 +1959,8 @@
       ],
       "seen_in": [
         "docs/hardware/sdr-radio.md"
-      ]
+      ],
+      "hash": "wh_f9dda9259689d29e"
     },
     {
       "id": "hc-sr04",
@@ -1956,7 +2003,8 @@
       ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_131dd534f9a97074"
     },
     {
       "id": "heltec-v4-esp32-s3-lora",
@@ -1989,7 +2037,8 @@
       "buy": [],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_f0033c63b2fce0af"
     },
     {
       "id": "hglrc-m100-pro-gps",
@@ -2039,7 +2088,8 @@
           "url": "https://www.amazon.com/HGLRC-M100-Pro-GPS-Generation/dp/B0DPH8FV7K/",
           "ships_from": "Amazon"
         }
-      ]
+      ],
+      "hash": "wh_8bc808282a138739"
     },
     {
       "id": "hlk-as201-module",
@@ -2082,7 +2132,8 @@
       "seen_in": [
         "docs/hardware/radar-protocols.md",
         "crates/weftos-cog-market/catalog/catalog.json"
-      ]
+      ],
+      "hash": "wh_5949c4b02ae4a809"
     },
     {
       "id": "hlk-ld1115h",
@@ -2121,7 +2172,8 @@
       "buy": [],
       "seen_in": [
         "docs/hardware/radar-protocols.md"
-      ]
+      ],
+      "hash": "wh_1526948f61da7e75"
     },
     {
       "id": "hlk-ld1125h-24g",
@@ -2167,7 +2219,8 @@
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/hlk_ld1125h.h",
         "firmware/node-a1-bringup/src/CMakeLists.txt"
-      ]
+      ],
+      "hash": "wh_18bd4c4c627fc409"
     },
     {
       "id": "hlk-ld2410c",
@@ -2219,7 +2272,8 @@
         ".metaharness/ingest/findings/hardware/hw-hlk-ld2410c-24ghz-wake.json",
         "docs/research/cognitum-multi-radar-architecture.md",
         "docs/research/hardware-cost-matrix.md"
-      ]
+      ],
+      "hash": "wh_518db84414bf1c69"
     },
     {
       "id": "hlk-ld2450",
@@ -2277,7 +2331,8 @@
         "docs/research/hardware-alternatives-and-life-detection.md",
         "docs/planning/sensing-roadmap-and-sku.md",
         "docs/planning/sku-wall-wart.md"
-      ]
+      ],
+      "hash": "wh_a2305f6c35cedba3"
     },
     {
       "id": "hlk-ld6002",
@@ -2338,7 +2393,8 @@
         "docs/research/hardware/dual-radar-baseline-2026-08-24.md",
         "docs/research/hardware-cost-matrix.md",
         "docs/planning/sensing-roadmap-and-sku.md"
-      ]
+      ],
+      "hash": "wh_89e25fec30db5fe6"
     },
     {
       "id": "hlk-ld6002b",
@@ -2387,7 +2443,8 @@
       "seen_in": [
         "docs/MODULES.md",
         "docs/EMBODIED_COACHING.md"
-      ]
+      ],
+      "hash": "wh_aa520f730d388573"
     },
     {
       "id": "hlk-ld6004",
@@ -2442,7 +2499,8 @@
         "docs/research/hardware-alternatives-and-life-detection.md",
         "reference/whitsentry/docs/hardware/phase0-parts-list.md",
         "docs/planning/sensing-roadmap-and-sku.md"
-      ]
+      ],
+      "hash": "wh_a65938c040927ff4"
     },
     {
       "id": "icm-20948-imu",
@@ -2491,7 +2549,8 @@
       "seen_in": [
         "docs/MODULES.md",
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_b74e1267e7d21b96"
     },
     {
       "id": "infineon-bgt60tr13c",
@@ -2534,7 +2593,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_13bb45929f33a0de"
     },
     {
       "id": "infineon-demo-bgt60tr13c",
@@ -2583,7 +2643,8 @@
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-bgt60tr13c-demo.json",
         ".metaharness/ingest/findings/hardware/hw-brandstetter-2025-pubmed41002864.json"
-      ]
+      ],
+      "hash": "wh_6612334fae386fa6"
     },
     {
       "id": "inmp441-mic",
@@ -2653,7 +2714,8 @@
         "firmware/node-a1-bringup/src/mic_inmp441.h",
         "firmware/node-a1-bringup/src/mic_inmp441.c",
         "docs/TRAINING_RIG.md"
-      ]
+      ],
+      "hash": "wh_d153109a64d3cbb6"
     },
     {
       "id": "innomaker-usb-uvc-ircut-camera",
@@ -2691,7 +2753,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_d4b511be90e2f25a"
     },
     {
       "id": "intel-5300-nic",
@@ -2720,7 +2783,8 @@
       "seen_in": [
         "reference/whitsentry/docs/research/ruview-primer.md",
         "ruview/archive/v1/docs/user-guide/getting-started.md"
-      ]
+      ],
+      "hash": "wh_1d562e3f55c75dfb"
     },
     {
       "id": "intel-realsense-d435",
@@ -2758,7 +2822,8 @@
       ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_f8c6ed06e7ffca6e"
     },
     {
       "id": "jfet-hydrophone",
@@ -2808,7 +2873,8 @@
         ".planning/sonobuoy/build/build-hydrophone-simple.md",
         ".planning/sonobuoy/build/build-hydrophone-oil.md",
         ".planning/sonobuoy/build/build-hydrophone-epoxy.md"
-      ]
+      ],
+      "hash": "wh_a1576ef46fe81a62"
     },
     {
       "id": "jsn-sr04t",
@@ -2843,7 +2909,8 @@
       "buy": [],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_1682fcddb13346a3"
     },
     {
       "id": "ky-038",
@@ -2892,7 +2959,8 @@
       ],
       "seen_in": [
         "crates/weftos-cog-market/catalog/catalog.json"
-      ]
+      ],
+      "hash": "wh_d258860454cef22a"
     },
     {
       "id": "limesdr-usb",
@@ -2932,7 +3000,8 @@
       ],
       "seen_in": [
         "docs/hardware/sdr-radio.md"
-      ]
+      ],
+      "hash": "wh_3d387c466114e38e"
     },
     {
       "id": "load-cell-hx711",
@@ -2978,7 +3047,8 @@
       ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_4630dce21bbfb6e2"
     },
     {
       "id": "lsm6dsv-imu",
@@ -3019,7 +3089,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_1362368046ba1dd4"
     },
     {
       "id": "marvelmind-ultrasonic",
@@ -3055,7 +3126,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_bcca0b07546aa76f"
     },
     {
       "id": "max30102-ppg",
@@ -3107,7 +3179,8 @@
       "seen_in": [
         "docs/MODULES.md",
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_f7d064f311b8fb2b"
     },
     {
       "id": "max98357a-i2s-amp",
@@ -3148,7 +3221,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_c3f2441e0fd3505f"
     },
     {
       "id": "melexis-mlx90640-breakout",
@@ -3192,7 +3266,8 @@
       ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_6db2b9733f62e65b"
     },
     {
       "id": "mentra-live-accelerometer",
@@ -3234,7 +3309,8 @@
         "MENTRA_LIVE_DEVICE_PROFILE.md",
         "docs/BES2700_UART_PROTOCOL.md",
         "mentra-glass-hub/src/app/sensors/page.tsx"
-      ]
+      ],
+      "hash": "wh_87c1d9703f874312"
     },
     {
       "id": "mentra-live-battery-fuelgauge",
@@ -3277,7 +3353,8 @@
         "docs/BES2700_UART_PROTOCOL.md",
         "MENTRA_LIVE_DEVICE_PROFILE.md",
         "mentra-glass-hub/src/lib/parsers/battery"
-      ]
+      ],
+      "hash": "wh_d2f1608ae456b833"
     },
     {
       "id": "mentra-live-camera",
@@ -3326,7 +3403,8 @@
         "MENTRA_LIVE_DEVICE_PROFILE.md",
         "docs/mentraos/asg-client-architecture.md",
         "mentra-glass-hub/src/app/camera/page.tsx"
-      ]
+      ],
+      "hash": "wh_613006012d4e45d3"
     },
     {
       "id": "mentra-live-display",
@@ -3363,7 +3441,8 @@
       "seen_in": [
         "MENTRA_LIVE_DEVICE_PROFILE.md",
         "mentra-glass-hub/src/app/leds/page.tsx"
-      ]
+      ],
+      "hash": "wh_24e73addb2d048ba"
     },
     {
       "id": "mentra-live-glasses",
@@ -3408,7 +3487,8 @@
         "docs/COGNITIVE_EDGE_ARCHITECTURE.md",
         "docs/BES2700_UART_PROTOCOL.md",
         "docs/mentraos/asg-client-architecture.md"
-      ]
+      ],
+      "hash": "wh_fa2dbe738e37d21d"
     },
     {
       "id": "mentra-live-gyroscope",
@@ -3448,7 +3528,8 @@
       "seen_in": [
         "MENTRA_LIVE_DEVICE_PROFILE.md",
         "mentra-glass-hub/src/app/sensors/page.tsx"
-      ]
+      ],
+      "hash": "wh_32f385a11d0ed726"
     },
     {
       "id": "mentra-live-microphone",
@@ -3493,7 +3574,8 @@
         "docs/BES2700_UART_PROTOCOL.md",
         "MENTRA_LIVE_DEVICE_PROFILE.md",
         "docs/MENTRA_AUDIO_PIPE_SPEC.md"
-      ]
+      ],
+      "hash": "wh_85e49317e4ebedeb"
     },
     {
       "id": "mentra-live-rgb-led",
@@ -3535,7 +3617,8 @@
         "docs/BES2700_UART_PROTOCOL.md",
         "mentra-glass-hub/src/app/leds/page.tsx",
         "docs/mentraos/asg-client-architecture.md"
-      ]
+      ],
+      "hash": "wh_40c9c0c6a3ffa14a"
     },
     {
       "id": "mentra-live-speaker",
@@ -3576,7 +3659,8 @@
         "docs/BES2700_UART_PROTOCOL.md",
         "docs/TTS_BENCHMARK_RESULTS.md",
         "docs/COGNITIVE_EDGE_ARCHITECTURE.md"
-      ]
+      ],
+      "hash": "wh_0b6e2034f69c8b63"
     },
     {
       "id": "mentraos-nrf5340-mcu-glasses",
@@ -3616,7 +3700,8 @@
       ],
       "seen_in": [
         "docs/mentraos/cloud-and-phone-architecture.md"
-      ]
+      ],
+      "hash": "wh_6d2796dea2cffe8e"
     },
     {
       "id": "mlx90614-ir-temp",
@@ -3662,7 +3747,8 @@
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/mlx90614.h",
         "firmware/node-a1-bringup/src/CMakeLists.txt"
-      ]
+      ],
+      "hash": "wh_d9b57ff22c372943"
     },
     {
       "id": "mpu-6050-imu",
@@ -3711,7 +3797,8 @@
       "seen_in": [
         "docs/hardware/sensors.md",
         "docs/weftos/splat-capture-sensor-head.md"
-      ]
+      ],
+      "hash": "wh_d5e43e470881c2ac"
     },
     {
       "id": "myoware-2",
@@ -3752,7 +3839,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_00c224012cdcdb54"
     },
     {
       "id": "nanopi",
@@ -3784,7 +3872,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_32ead6333696b24a"
     },
     {
       "id": "node-a1-esp32-s3-wroom-1-n16r8",
@@ -3833,7 +3922,8 @@
         "docs/MODULES.md",
         "docs/node_a1/BUILD_PLAN.md",
         "docs/node_a1/BUILD_AND_WIRING.md"
-      ]
+      ],
+      "hash": "wh_6817f1678337a0dd"
     },
     {
       "id": "novelda-xethru",
@@ -3863,7 +3953,8 @@
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-pallesen-2018-pubmed29991417.json",
         ".metaharness/ingest/findings/hardware/hw-heglum-2022-pubmed35794011.json"
-      ]
+      ],
+      "hash": "wh_24216bb194b9322b"
     },
     {
       "id": "novelic-24ghz-cw",
@@ -3901,7 +3992,8 @@
       ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-malesevic-2020-pubmed32326190.json"
-      ]
+      ],
+      "hash": "wh_aa9be5c25bea3526"
     },
     {
       "id": "nuand-bladerf-2micro",
@@ -3946,7 +4038,8 @@
       "seen_in": [
         "docs/hardware/sdr-radio.md",
         "docs/research/rf-sensing-head.md"
-      ]
+      ],
+      "hash": "wh_1720e7cacf2233a9"
     },
     {
       "id": "nucleo-n657x0-q-stm32n6",
@@ -3982,7 +4075,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_fd6d8e6313ce7f8b"
     },
     {
       "id": "oceansonics-iclisten",
@@ -4013,7 +4107,8 @@
       "buy": [],
       "seen_in": [
         ".planning/sonobuoy/build/commercial-comparison.md"
-      ]
+      ],
+      "hash": "wh_ac6cd6648ec86e1a"
     },
     {
       "id": "odroid-c1",
@@ -4045,7 +4140,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_5121a499267f521e"
     },
     {
       "id": "odroid-xu4",
@@ -4077,7 +4173,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_a911e529e8d2e3ea"
     },
     {
       "id": "orangepi",
@@ -4109,7 +4206,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_763791707e3192c0"
     },
     {
       "id": "orbbec-gemini-2",
@@ -4140,7 +4238,8 @@
       "buy": [],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_410c967f9446627b"
     },
     {
       "id": "ov5640-camera",
@@ -4193,7 +4292,8 @@
         "docs/node_a1/ENCLOSURE.md",
         "docs/TRAINING_RIG.md",
         "docs/RUVIEW_INTEGRATION.md"
-      ]
+      ],
+      "hash": "wh_72e1f6cca3c1d179"
     },
     {
       "id": "pi-camera-module",
@@ -4235,7 +4335,8 @@
       "seen_in": [
         "docs/weftos/splat-capture-sensor-head.md",
         "docs/weftos/splat-multimodal-sensing.md"
-      ]
+      ],
+      "hash": "wh_e661e203c7ce4eb6"
     },
     {
       "id": "pi-zero-2w",
@@ -4288,7 +4389,8 @@
       ],
       "seen_in": [
         "reference/whitsentry/docs/hardware/phase0-parts-list.md"
-      ]
+      ],
+      "hash": "wh_e2ed5480839872ec"
     },
     {
       "id": "piezo-contact-mic-18mm",
@@ -4330,7 +4432,8 @@
       "seen_in": [
         "docs/MODULES.md",
         "docs/TRAINING_RIG.md"
-      ]
+      ],
+      "hash": "wh_80d19e267581e29b"
     },
     {
       "id": "piezo-disc-35mm",
@@ -4374,7 +4477,8 @@
         ".planning/sonobuoy/build/build-hydrophone-simple.md",
         ".planning/sonobuoy/build/build-hydrophone-oil.md",
         ".planning/sonobuoy/build/requirements.md"
-      ]
+      ],
+      "hash": "wh_bc0320d8b16edb7b"
     },
     {
       "id": "pir-motion-module",
@@ -4416,7 +4520,8 @@
       "seen_in": [
         "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md",
         "ruview/CHANGELOG.md"
-      ]
+      ],
+      "hash": "wh_3eedb4e0c886775d"
     },
     {
       "id": "plutosdr-zynq7010",
@@ -4459,7 +4564,8 @@
       ],
       "seen_in": [
         "docs/hardware/sdr-radio.md"
-      ]
+      ],
+      "hash": "wh_e2c2c7eed5da2eeb"
     },
     {
       "id": "polar-h10",
@@ -4502,7 +4608,8 @@
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-brandstetter-2025-pubmed41002864.json",
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_0aee9b65d656a870"
     },
     {
       "id": "qorvo-dw3110-uwb",
@@ -4546,7 +4653,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_0eea503a0ab4b755"
     },
     {
       "id": "qorvo-dwm3000",
@@ -4596,7 +4704,8 @@
         ".metaharness/ingest/findings/hardware/hw-dwm3000-tdoa-2026.json",
         "docs/research/hardware-alternatives-and-life-detection.md",
         "docs/research/hardware-cost-matrix.md"
-      ]
+      ],
+      "hash": "wh_bb8dfe34ff31e20c"
     },
     {
       "id": "qorvo-mdek1001",
@@ -4633,7 +4742,8 @@
       ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-volpi-2023-pubmed36772163.json"
-      ]
+      ],
+      "hash": "wh_90749d77b496431b"
     },
     {
       "id": "raspberry-pi-5",
@@ -4682,7 +4792,8 @@
         "docs/MODULES.md",
         "reference/whitsentry/docs/hardware/phase0-parts-list.md",
         "reference/whitsentry/docs/research/ruview-primer.md"
-      ]
+      ],
+      "hash": "wh_7d60fae708b6418c"
     },
     {
       "id": "rd-03d-module",
@@ -4730,7 +4841,8 @@
       ],
       "seen_in": [
         "docs/hardware/radar-protocols.md"
-      ]
+      ],
+      "hash": "wh_19396e36f44b835b"
     },
     {
       "id": "rd-03e-module",
@@ -4781,7 +4893,8 @@
       "seen_in": [
         "docs/hardware/radar-protocols.md",
         "crates/weftos-cog-market/catalog/catalog.json"
-      ]
+      ],
+      "hash": "wh_40754cee9fc40fff"
     },
     {
       "id": "reed-switch-contact",
@@ -4821,7 +4934,8 @@
       ],
       "seen_in": [
         "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md"
-      ]
+      ],
+      "hash": "wh_9289bfd18fd8b927"
     },
     {
       "id": "reson-tc4032",
@@ -4851,7 +4965,8 @@
       "buy": [],
       "seen_in": [
         ".planning/sonobuoy/"
-      ]
+      ],
+      "hash": "wh_533678aff78c068d"
     },
     {
       "id": "rpi-1-a",
@@ -4883,7 +4998,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_6e8153cd2b96022b"
     },
     {
       "id": "rpi-1-a-plus",
@@ -4915,7 +5031,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_df5f45b0ef5d3213"
     },
     {
       "id": "rpi-1-b",
@@ -4947,7 +5064,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_5eef99711d336d66"
     },
     {
       "id": "rpi-1-b-plus",
@@ -4979,7 +5097,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_1577f2d6aec75fa0"
     },
     {
       "id": "rpi-2-b",
@@ -5011,7 +5130,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_09de3a74f34f9cb7"
     },
     {
       "id": "rpi-3-a-plus",
@@ -5043,7 +5163,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_f32efdfad4b1dbec"
     },
     {
       "id": "rpi-3-b",
@@ -5075,7 +5196,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_cbac36e635f4d267"
     },
     {
       "id": "rpi-3-b-plus",
@@ -5107,7 +5229,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_9240f1f14763da71"
     },
     {
       "id": "rpi-cm1",
@@ -5139,7 +5262,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_a7adac173a346757"
     },
     {
       "id": "rpi-cm3",
@@ -5171,7 +5295,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_c0dd9d0a9c89cbfc"
     },
     {
       "id": "rpi-cm3-plus",
@@ -5203,7 +5328,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_b3d9d8ffbb92d2f3"
     },
     {
       "id": "rpi-zero",
@@ -5235,7 +5361,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_e28b00268e35145a"
     },
     {
       "id": "rpi-zero-w",
@@ -5267,7 +5394,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_196feaf6ac4c96d8"
     },
     {
       "id": "rtl-sdr",
@@ -5323,7 +5451,8 @@
         "rtl_433/",
         "rtl-sdr/",
         "docs/hardware/sdr-radio.md"
-      ]
+      ],
+      "hash": "wh_312f62070de6a3e2"
     },
     {
       "id": "scd41-co2",
@@ -5370,7 +5499,8 @@
       ],
       "seen_in": [
         "docs/hardware/sensors.md"
-      ]
+      ],
+      "hash": "wh_8337b109455cb357"
     },
     {
       "id": "seeed-mr60bha2",
@@ -5421,7 +5551,8 @@
         "docs/research/hardware/dual-radar-baseline-2026-08-24.md",
         "reference/whitsentry/docs/hardware/phase0-parts-list.md",
         "firmware-backups/xiao-c6-mr60bha2-factory-esphome-4mb.bin"
-      ]
+      ],
+      "hash": "wh_f784fdf284501536"
     },
     {
       "id": "seeed-mr60fda1",
@@ -5462,7 +5593,8 @@
         ".metaharness/ingest/findings/hardware/hw-mr60fda1-60ghz-fall.json",
         "docs/research/hardware-alternatives-and-life-detection.md",
         "docs/research/hardware-cost-matrix.md"
-      ]
+      ],
+      "hash": "wh_17219395dae86b91"
     },
     {
       "id": "seeed-mr60fda2",
@@ -5496,7 +5628,8 @@
       "buy": [],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-mr60fda2-60ghz-fall.json"
-      ]
+      ],
+      "hash": "wh_2457e14d01d9623a"
     },
     {
       "id": "seeed-xiao-esp32c6",
@@ -5547,7 +5680,8 @@
         "docs/research/hardware/mr60bha2-board-teardown-2026-08-24.md",
         "docs/planning/ruview-wavlink/03-esp32-node-runbook.md",
         ".metaharness/ingest/findings/hardware/hw-espressif-esp-csi-wifi-sensing.json"
-      ]
+      ],
+      "hash": "wh_52f2b416970386d2"
     },
     {
       "id": "sen0213-ecg",
@@ -5596,7 +5730,8 @@
       "seen_in": [
         "docs/hardware/sensors.md",
         "docs/hardware/README.md"
-      ]
+      ],
+      "hash": "wh_ac29d692c1978c35"
     },
     {
       "id": "sen0628-tof",
@@ -5650,7 +5785,8 @@
         "docs/hardware/sensors.md",
         "docs/hardware/README.md",
         "docs/weftos/splat-capture-sensor-head.md"
-      ]
+      ],
+      "hash": "wh_3a654a9bd8c73b94"
     },
     {
       "id": "sensirion-sgp30-sgp41",
@@ -5693,7 +5829,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_c735ce16261ce90b"
     },
     {
       "id": "sgp40-voc",
@@ -5740,7 +5877,8 @@
       ],
       "seen_in": [
         "docs/hardware/sensors.md"
-      ]
+      ],
+      "hash": "wh_1c76589ddbf95d28"
     },
     {
       "id": "sparkfun-acconeer-a111",
@@ -5782,7 +5920,8 @@
       ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-oreskovic-2023-pubmed38875668.json"
-      ]
+      ],
+      "hash": "wh_e02c640376f94fc6"
     },
     {
       "id": "ssd1306-oled",
@@ -5827,7 +5966,8 @@
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/ssd1306.h",
         "firmware/node-a1-bringup/src/CMakeLists.txt"
-      ]
+      ],
+      "hash": "wh_cb1e7d87eee2a985"
     },
     {
       "id": "synovoip-bpi",
@@ -5859,7 +5999,8 @@
       "photo": "",
       "datasheet": "https://www.pi4j.com/1.2/",
       "mouser_query": "",
-      "buy": []
+      "buy": [],
+      "hash": "wh_06c6ec5a10c7e6b5"
     },
     {
       "id": "ti-awr1642-evm",
@@ -5899,7 +6040,8 @@
       ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-fu-2023-pubmed37289651.json"
-      ]
+      ],
+      "hash": "wh_5139452bba984f20"
     },
     {
       "id": "ti-awr1843boost",
@@ -5937,7 +6079,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_c8e6b5193dcdcb3e"
     },
     {
       "id": "ti-dca1000evm",
@@ -5980,7 +6123,8 @@
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md",
         ".metaharness/ingest/findings/hardware/hw-iwr6843isk-60ghz.json"
-      ]
+      ],
+      "hash": "wh_985bf80c3d127024"
     },
     {
       "id": "ti-iwr6843isk",
@@ -6029,7 +6173,8 @@
         "docs/corpus/ring-x1-master-build-plan.md",
         ".metaharness/ingest/findings/hardware/hw-pei-2025-pubmed40006426.json",
         ".metaharness/ingest/findings/hardware/hw-szmola-2025-pubmed40285284.json"
-      ]
+      ],
+      "hash": "wh_6e1beef7f594e598"
     },
     {
       "id": "ti-iwr6843isk-dca1000",
@@ -6070,7 +6215,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_ea7d4ff084fd4f70"
     },
     {
       "id": "ti-iwrl6432wmod",
@@ -6120,7 +6266,8 @@
       ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-ti-iwrl6432wmod-certified-module.json"
-      ]
+      ],
+      "hash": "wh_eb863c6d3aec8eec"
     },
     {
       "id": "ublox-neo-6m-gps",
@@ -6172,7 +6319,8 @@
           "url": "https://www.amazon.com/dp/B0DTK7T6VW/",
           "ships_from": "Amazon"
         }
-      ]
+      ],
+      "hash": "wh_2dbb9f192f871165"
     },
     {
       "id": "ublox-neo-7m-gps",
@@ -6223,7 +6371,8 @@
           "url": "https://www.amazon.com/dp/B09WV19K9P/",
           "ships_from": "Amazon"
         }
-      ]
+      ],
+      "hash": "wh_d07673e785e87177"
     },
     {
       "id": "usrp-b210",
@@ -6265,7 +6414,8 @@
       ],
       "seen_in": [
         "docs/hardware/sdr-radio.md"
-      ]
+      ],
+      "hash": "wh_6347aa70a3c08117"
     },
     {
       "id": "vayyar-home-care",
@@ -6301,7 +6451,8 @@
       ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-hruby-2023-pubmed37638902.json"
-      ]
+      ],
+      "hash": "wh_496c19874d823a69"
     },
     {
       "id": "velostat-pressure-mat",
@@ -6344,7 +6495,8 @@
       ],
       "seen_in": [
         "docs/MODULES.md"
-      ]
+      ],
+      "hash": "wh_6f69a3d6e65d5903"
     },
     {
       "id": "vibration-sensor",
@@ -6383,7 +6535,8 @@
       "seen_in": [
         "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md",
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_516918af04c9d795"
     },
     {
       "id": "vl53l1x-tof",
@@ -6440,7 +6593,8 @@
       "seen_in": [
         "docs/hardware/sensors.md",
         "docs/corpus/ring-x1-master-build-plan.md"
-      ]
+      ],
+      "hash": "wh_fbe9de3e3508b99c"
     },
     {
       "id": "waveshare-esp32-s3-audio",
@@ -6489,7 +6643,8 @@
       "seen_in": [
         "spike-sentry/firmware/audio-node/README.md",
         "firmware-backups/waveshare-s3-audio-beehive-full-16mb.bin"
-      ]
+      ],
+      "hash": "wh_e8f58e7ce7b8ac81"
     },
     {
       "id": "waveshare-vl53l7cx-tof",
@@ -6536,7 +6691,8 @@
       "seen_in": [
         "weftos-mic-node/src/tof_sensor.h",
         "weftos-bridge.py"
-      ]
+      ],
+      "hash": "wh_c46452b70093733d"
     },
     {
       "id": "wavlink-wn586x3-router",
@@ -6567,7 +6723,8 @@
       "seen_in": [
         "docs/planning/demo-readiness-2026-09-17.md",
         "docs/planning/ruview-wavlink/"
-      ]
+      ],
+      "hash": "wh_38d69e49104c636a"
     },
     {
       "id": "nucleo-f031k6",
@@ -6603,7 +6760,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-F031K6",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_c9bf575b184b378b"
     },
     {
       "id": "nucleo-f303re",
@@ -6641,7 +6799,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-F303RE",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_73e50fdbeb26a5c7"
     },
     {
       "id": "nucleo-f401re",
@@ -6679,7 +6838,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-F401RE",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_e634a0fd238dbdf4"
     },
     {
       "id": "nucleo-f411re",
@@ -6717,7 +6877,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-F411RE",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_7af1817311d6a42b"
     },
     {
       "id": "nucleo-f446re",
@@ -6755,7 +6916,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-F446RE",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_6201f76e07a1609a"
     },
     {
       "id": "nucleo-f746zg",
@@ -6793,7 +6955,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-F746ZG",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_03ea38ebd39c7415"
     },
     {
       "id": "nucleo-g031k8",
@@ -6831,7 +6994,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-G031K8",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_292d849f983f0124"
     },
     {
       "id": "nucleo-g071rb",
@@ -6869,7 +7033,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-G071RB",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_dc392ea6a860cb1b"
     },
     {
       "id": "nucleo-g431rb",
@@ -6907,7 +7072,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-G431RB",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_f608a86f57461055"
     },
     {
       "id": "nucleo-g474re",
@@ -6945,7 +7111,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-G474RE",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_9d3b15d867641547"
     },
     {
       "id": "nucleo-h503rb",
@@ -6983,7 +7150,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-H503RB",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_a01461b1119e957e"
     },
     {
       "id": "nucleo-h563zi",
@@ -7021,7 +7189,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-H563ZI",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_c2fb8c7e9474e5c5"
     },
     {
       "id": "nucleo-h743zi",
@@ -7059,7 +7228,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-H743ZI",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_88f7c73c7bb56852"
     },
     {
       "id": "nucleo-l053r8",
@@ -7097,7 +7267,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-L053R8",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_4dda04a2bb01b45c"
     },
     {
       "id": "nucleo-l432kc",
@@ -7133,7 +7304,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-L432KC",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_eb1591f3af6b3c34"
     },
     {
       "id": "nucleo-l452re",
@@ -7169,7 +7341,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-L452RE",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_bc2be2100e028bfc"
     },
     {
       "id": "nucleo-l476rg",
@@ -7207,7 +7380,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-L476RG",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_2a1ced1c53dd043a"
     },
     {
       "id": "nucleo-l552ze-q",
@@ -7245,7 +7419,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-L552ZE-Q",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_d1de70560deae5df"
     },
     {
       "id": "nucleo-u575zi-q",
@@ -7283,7 +7458,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-U575ZI-Q",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_d2bf381de5639bd1"
     },
     {
       "id": "nucleo-u083rc",
@@ -7319,7 +7495,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-U083RC",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_68f6f2d3a926d413"
     },
     {
       "id": "nucleo-wb55rg",
@@ -7358,7 +7535,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-WB55RG",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_8b8e804e5934ad88"
     },
     {
       "id": "nucleo-wl55jc",
@@ -7397,7 +7575,8 @@
           "url": "https://octopart.com/search?q=NUCLEO-WL55JC",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_7385f54c49811b9a"
     },
     {
       "id": "stm32f4discovery",
@@ -7432,7 +7611,8 @@
           "url": "https://octopart.com/search?q=STM32F4DISCOVERY",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_a903d848fa302629"
     },
     {
       "id": "stm32f429i-disc1",
@@ -7467,7 +7647,8 @@
           "url": "https://octopart.com/search?q=STM32F429I-DISC1",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_acbcc6dc29021312"
     },
     {
       "id": "stm32h747i-disco",
@@ -7502,7 +7683,8 @@
           "url": "https://octopart.com/search?q=STM32H747I-DISCO",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_a09c4cc1a62a8471"
     },
     {
       "id": "stm32h7b3i-dk",
@@ -7537,7 +7719,8 @@
           "url": "https://octopart.com/search?q=STM32H7B3I-DK",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_609444b3d41743a4"
     },
     {
       "id": "stm32l4r9i-disco",
@@ -7572,7 +7755,8 @@
           "url": "https://octopart.com/search?q=STM32L4R9I-DISCO",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_9560d54a7c9fef29"
     },
     {
       "id": "b-l475e-iot01a",
@@ -7607,7 +7791,8 @@
           "url": "https://octopart.com/search?q=B-L475E-IOT01A",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_c795eb8e84a2761f"
     },
     {
       "id": "b-u585i-iot02a",
@@ -7642,7 +7827,8 @@
           "url": "https://octopart.com/search?q=B-U585I-IOT02A",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_c1a7080967c9d1c6"
     },
     {
       "id": "stm32u5a9j-dk",
@@ -7677,7 +7863,8 @@
           "url": "https://octopart.com/search?q=STM32U5A9J-DK",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_3b149f4f5c3481fa"
     },
     {
       "id": "stm32mp157f-dk2",
@@ -7714,7 +7901,8 @@
           "url": "https://octopart.com/search?q=STM32MP157F-DK2",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_da6e3043f2c84522"
     },
     {
       "id": "stm32n6570-dk",
@@ -7751,7 +7939,8 @@
           "url": "https://octopart.com/search?q=STM32N6570-DK",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_80d1452153d52044"
     },
     {
       "id": "stm32h743i-eval",
@@ -7786,7 +7975,8 @@
           "url": "https://octopart.com/search?q=STM32H743I-EVAL",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_3015f6dc860a49ec"
     },
     {
       "id": "stm32f429i-eval",
@@ -7821,7 +8011,8 @@
           "url": "https://octopart.com/search?q=STM32F429I-EVAL",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_0065d6aa2856b850"
     },
     {
       "id": "stm32u575i-ev",
@@ -7856,7 +8047,8 @@
           "url": "https://octopart.com/search?q=STM32U575I-EV",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_491e4118d7eff959"
     },
     {
       "id": "stlink-v3set",
@@ -7888,7 +8080,8 @@
           "url": "https://octopart.com/search?q=STLINK-V3SET",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_951613df8864a175"
     },
     {
       "id": "stlink-v3minie",
@@ -7920,7 +8113,8 @@
           "url": "https://octopart.com/search?q=STLINK-V3MINIE",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_4a7e102b69fe664e"
     },
     {
       "id": "st-link-v2",
@@ -7952,7 +8146,8 @@
           "url": "https://octopart.com/search?q=ST-LINK/V2",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_079aedf4e30b5b7e"
     },
     {
       "id": "x-nucleo-iks01a3",
@@ -7984,7 +8179,8 @@
           "url": "https://octopart.com/search?q=X-NUCLEO-IKS01A3",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_c87be989a80a8769"
     },
     {
       "id": "x-nucleo-iks4a1",
@@ -8016,7 +8212,8 @@
           "url": "https://octopart.com/search?q=X-NUCLEO-IKS4A1",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_2357d29e24f444df"
     },
     {
       "id": "x-nucleo-53l5a1",
@@ -8048,7 +8245,8 @@
           "url": "https://octopart.com/search?q=X-NUCLEO-53L5A1",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_8860b5734618444d"
     },
     {
       "id": "x-nucleo-bnrg2a1",
@@ -8080,7 +8278,8 @@
           "url": "https://octopart.com/search?q=X-NUCLEO-BNRG2A1",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_37ea5353bbd92d8b"
     },
     {
       "id": "x-nucleo-nfc08a1",
@@ -8112,7 +8311,8 @@
           "url": "https://octopart.com/search?q=X-NUCLEO-NFC08A1",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_0bad228a4861ca9b"
     },
     {
       "id": "x-nucleo-ihm07m1",
@@ -8144,7 +8344,8 @@
           "url": "https://octopart.com/search?q=X-NUCLEO-IHM07M1",
           "ships_from": "aggregator"
         }
-      ]
+      ],
+      "hash": "wh_bacb60aefb227529"
     },
     {
       "id": "hakko-fx-888d",
@@ -8181,7 +8382,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_f4e3e55d1fc48a6e"
     },
     {
       "id": "pinecil-v2",
@@ -8218,7 +8420,8 @@
           "ships_from": "US / global"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_a4e04b23ac721775"
     },
     {
       "id": "weller-we1010",
@@ -8253,7 +8456,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_275de2aa5fcaae63"
     },
     {
       "id": "jbc-cd-2be",
@@ -8290,7 +8494,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_2faa8b7fb6ffa234"
     },
     {
       "id": "quick-861dw",
@@ -8327,7 +8532,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_3d17014ec7597d97"
     },
     {
       "id": "hakko-fr-301",
@@ -8363,7 +8569,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_1cf1072242c90f27"
     },
     {
       "id": "miniware-mhp30",
@@ -8400,7 +8607,8 @@
           "ships_from": "global"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_fd8b013bef0fa6da"
     },
     {
       "id": "fluke-87v",
@@ -8438,7 +8646,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_4cf6d1eaafbf6934"
     },
     {
       "id": "fluke-117",
@@ -8473,7 +8682,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_3e3a62f6c88f791d"
     },
     {
       "id": "brymen-bm235",
@@ -8509,7 +8719,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_43ba061f08aa1286"
     },
     {
       "id": "aneng-an8008",
@@ -8545,7 +8756,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_d86af59f11ea1c51"
     },
     {
       "id": "rigol-dm3058e",
@@ -8579,7 +8791,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_b25014e5a88bac38"
     },
     {
       "id": "rigol-dho804",
@@ -8617,7 +8830,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_8aead2488cdb542c"
     },
     {
       "id": "rigol-dho914s",
@@ -8653,7 +8867,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_aa7ca3462f1d1f5b"
     },
     {
       "id": "siglent-sds1104x-e",
@@ -8690,7 +8905,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_9c3e97b85d5de8b6"
     },
     {
       "id": "rigol-ds1054z",
@@ -8727,7 +8943,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_1cab296873ccec62"
     },
     {
       "id": "keysight-dsox1204g",
@@ -8762,7 +8979,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_8cf32e482f04d82e"
     },
     {
       "id": "saleae-logic-8",
@@ -8798,7 +9016,8 @@
           "ships_from": "US / global"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_57a4662c24deca18"
     },
     {
       "id": "dslogic-plus",
@@ -8832,7 +9051,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_c38c26639138ba9a"
     },
     {
       "id": "fx2-8ch-logic",
@@ -8870,7 +9090,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_dc32fa6d243eed66"
     },
     {
       "id": "korad-ka3005p",
@@ -8908,7 +9129,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_92afc2cffc0a4f83"
     },
     {
       "id": "rigol-dp832",
@@ -8944,7 +9166,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_e93fd2b35950e042"
     },
     {
       "id": "siglent-spd3303x",
@@ -8978,7 +9201,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_2a688c085ee14355"
     },
     {
       "id": "siglent-sdg1032x",
@@ -9015,7 +9239,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_d9d14247b784a402"
     },
     {
       "id": "segger-jlink-base",
@@ -9052,7 +9277,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_860c41c8dff0704c"
     },
     {
       "id": "st-link-v3",
@@ -9089,7 +9315,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_92c7eedfed7a780a"
     },
     {
       "id": "black-magic-probe",
@@ -9125,7 +9352,8 @@
           "ships_from": "US / global"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_6fe0e14ddd57db7d"
     },
     {
       "id": "daplink-cmsis-dap",
@@ -9161,7 +9389,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_39cb19e1584f40b7"
     },
     {
       "id": "nordic-ppk2",
@@ -9198,7 +9427,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_d76917818eb535a6"
     },
     {
       "id": "otii-arc-pro",
@@ -9232,7 +9462,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_e1fb26653b08dbc2"
     },
     {
       "id": "amscope-se400-z",
@@ -9269,7 +9500,8 @@
           "ships_from": "US"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_139cf93b941f7084"
     },
     {
       "id": "usb-microscope-generic",
@@ -9306,7 +9538,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_8c32d559cd813b50"
     },
     {
       "id": "rtl-sdr-blog-v4",
@@ -9344,7 +9577,8 @@
           "ships_from": "global"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_c18573d72e2b626a"
     },
     {
       "id": "airspy-mini",
@@ -9380,7 +9614,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_5a1098608f7b7c23"
     },
     {
       "id": "hakko-chp-170",
@@ -9415,7 +9650,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_f16d45a32d0d0e2b"
     },
     {
       "id": "engineer-pa-09",
@@ -9450,7 +9686,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_54b153f8e3b6f140"
     },
     {
       "id": "esd-tweezers-set",
@@ -9486,7 +9723,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_e4faf7b632524c20"
     },
     {
       "id": "stickvise",
@@ -9519,7 +9757,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_233346a462a458b6"
     },
     {
       "id": "panavise-201",
@@ -9552,7 +9791,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_50797fa748d892af"
     },
     {
       "id": "third-hand-helping",
@@ -9587,7 +9827,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_22c9f8096c531b0c"
     },
     {
       "id": "kester-6337-leaded-solder",
@@ -9624,7 +9865,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_d70deac851e1e284"
     },
     {
       "id": "sac305-leadfree-solder",
@@ -9660,7 +9902,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_69053cfd73e8179c"
     },
     {
       "id": "flux-paste-pen",
@@ -9696,7 +9939,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_f0435531cadffb7c"
     },
     {
       "id": "solder-wick",
@@ -9732,7 +9976,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_ba66acc00ace6bed"
     },
     {
       "id": "kapton-tape",
@@ -9766,7 +10011,8 @@
         }
       ],
       "notes": [],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_5aa0e43d29d9235a"
     },
     {
       "id": "ipa-99",
@@ -9802,7 +10048,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_08e7ab1cd284b638"
     },
     {
       "id": "esd-wrist-mat-kit",
@@ -9838,7 +10085,8 @@
           "ships_from": "US / global (distributors)"
         }
       ],
-      "kind": "tool"
+      "kind": "tool",
+      "hash": "wh_5500df90729d160c"
     }
   ],
   "chips": [
@@ -9867,7 +10115,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Acconeer/A111-001-TR?qs=eP2BKZSCXI7cb1tJ4izqfA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_9526255db1a2faae"
     },
     {
       "id": "acconeer-a121",
@@ -9903,7 +10152,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Acconeer/A121-001-TR?qs=amGC7iS6iy%2F9krRiPHmNkQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_683d68e1bcd9bcac"
     },
     {
       "id": "ad8021",
@@ -9931,7 +10181,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD8021?qs=%252BEew9%252B0nqrDbZWW9lvGbNw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_b04daf5903b2deb2"
     },
     {
       "id": "ad8232",
@@ -9962,7 +10213,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD8232?qs=%252BEew9%252B0nqrD7yQn%252BwQPzuQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_70dffc1df19498f8"
     },
     {
       "id": "ad9361",
@@ -9992,7 +10244,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD9361?qs=%252BEew9%252B0nqrBf3l0E4vxEaQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_511f949a387f4f0b"
     },
     {
       "id": "ad9363",
@@ -10022,7 +10275,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD9363?qs=%252BEew9%252B0nqrBwHRXLs%2FKdJg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_282befc50a12b9b9"
     },
     {
       "id": "adg704",
@@ -10051,7 +10305,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/ADG704?qs=%252BEew9%252B0nqrAnnOcJPSXWrg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_e6e9904a19f823fd"
     },
     {
       "id": "adi-ad5940",
@@ -10079,7 +10334,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD5940BCBZ-RL?qs=MLItCLRbWsy43l4k5gcZVQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_cfa16ff77ef50db1"
     },
     {
       "id": "adi-max86141",
@@ -10107,7 +10363,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices-Maxim-Integrated/MAX8614AETD%2bT?qs=Jw2w9zrI6w8I33eG24821Q%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_cd083b4eec64691f"
     },
     {
       "id": "ads1115",
@@ -10144,7 +10401,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1115IDGSR?qs=IK5e5L0zOXjKCJoVMhYO%2FQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_61298f0c7bc4c5e7"
     },
     {
       "id": "ads1299",
@@ -10175,7 +10433,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1299-4PAGR?qs=9lcNTSmDlCrUT6jt7VGEHw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_d6ddafd64a78f2bf"
     },
     {
       "id": "ads9224r",
@@ -10205,7 +10464,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS9224REVM-PDK?qs=lc2O%252BfHJPVZHm79NUPjbDw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_930e8f596374b790"
     },
     {
       "id": "adt6101p",
@@ -10229,7 +10489,8 @@
       },
       "mouser_query": "Andar ADT6101P",
       "datasheet": "https://files.seeedstudio.com/wiki/mmwave-for-xiao/mr60/datasheet/MR60BHA2_Breathing_and_Heartbeat_Module.pdf",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_953dfd45854dd018"
     },
     {
       "id": "akm-ak5816",
@@ -10250,7 +10511,8 @@
       },
       "mouser_query": "AKM AK5816",
       "datasheet": "https://www.akm.com/global/en/about-us/news/2026/20260715-ak5816aim/",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_42ddda9670b79b53"
     },
     {
       "id": "allwinner-a20",
@@ -10269,7 +10531,8 @@
         "source": "Pi4J 1.2 supported platforms + vendor specs"
       },
       "mouser_query": "",
-      "datasheet": "https://linux-sunxi.org/A20"
+      "datasheet": "https://linux-sunxi.org/A20",
+      "hash": "wh_4904463d30f8f185"
     },
     {
       "id": "allwinner-h3",
@@ -10288,7 +10551,8 @@
         "source": "Pi4J 1.2 supported platforms + vendor specs"
       },
       "mouser_query": "",
-      "datasheet": "https://linux-sunxi.org/H3"
+      "datasheet": "https://linux-sunxi.org/H3",
+      "hash": "wh_17ddf591ee1d0ea5"
     },
     {
       "id": "amlogic-s805",
@@ -10306,7 +10570,8 @@
         "source": "Pi4J 1.2 supported platforms + vendor specs"
       },
       "mouser_query": "",
-      "datasheet": ""
+      "datasheet": "",
+      "hash": "wh_435896e2ecc04924"
     },
     {
       "id": "ap2112",
@@ -10334,7 +10599,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Diodes-Incorporated/AP2112K-3.3TRG1?qs=x6A8l6qLYDDPYHosCdzh%2FA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_79780f7c8385068b"
     },
     {
       "id": "as201-imu",
@@ -10360,7 +10626,8 @@
       },
       "mouser_query": "HLK-AS201",
       "datasheet": "https://hlktech.net/index.php?id=1380",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_210d47d80864398e"
     },
     {
       "id": "avia-hx711",
@@ -10389,7 +10656,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Adafruit/5974?qs=IKkN%2F947nfAOkaWgHqoH5Q%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_a84551c44dbd13ec"
     },
     {
       "id": "awr1843",
@@ -10418,7 +10686,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/AWR1843ABGABLRQ1?qs=%252B6g0mu59x7LDewSwpLCJ2g%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_ef9eabc06cc5be38"
     },
     {
       "id": "bcm2710a1",
@@ -10438,7 +10707,8 @@
       },
       "mouser_query": "",
       "datasheet": "https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_0f0bacac1b38941c"
     },
     {
       "id": "bcm2835",
@@ -10457,7 +10727,8 @@
         "source": "Pi4J 1.2 supported platforms + vendor specs"
       },
       "mouser_query": "",
-      "datasheet": "https://datasheets.raspberrypi.com/bcm2835/bcm2835-peripherals.pdf"
+      "datasheet": "https://datasheets.raspberrypi.com/bcm2835/bcm2835-peripherals.pdf",
+      "hash": "wh_232d347ed1ff94e1"
     },
     {
       "id": "bcm2836",
@@ -10475,7 +10746,8 @@
         "source": "Pi4J 1.2 supported platforms + vendor specs"
       },
       "mouser_query": "",
-      "datasheet": "https://datasheets.raspberrypi.com/bcm2836/bcm2836-peripherals.pdf"
+      "datasheet": "https://datasheets.raspberrypi.com/bcm2836/bcm2836-peripherals.pdf",
+      "hash": "wh_09e007d7b5579c3a"
     },
     {
       "id": "bcm2837",
@@ -10493,7 +10765,8 @@
         "source": "Pi4J 1.2 supported platforms + vendor specs"
       },
       "mouser_query": "",
-      "datasheet": "https://www.raspberrypi.com/documentation/computers/processors.html"
+      "datasheet": "https://www.raspberrypi.com/documentation/computers/processors.html",
+      "hash": "wh_ee1c3ec7fd276143"
     },
     {
       "id": "bcm2837b0",
@@ -10511,7 +10784,8 @@
         "source": "Pi4J 1.2 supported platforms + vendor specs"
       },
       "mouser_query": "",
-      "datasheet": "https://www.raspberrypi.com/documentation/computers/processors.html"
+      "datasheet": "https://www.raspberrypi.com/documentation/computers/processors.html",
+      "hash": "wh_0f6f2d7d97ceb354"
     },
     {
       "id": "bes2700",
@@ -10533,7 +10807,8 @@
       },
       "mouser_query": "BES2700",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_51dc065b0fb06e9c"
     },
     {
       "id": "bgt60tr13c",
@@ -10572,7 +10847,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT60TR13CE6327XUMA1?qs=sPbYRqrBIVnK9rZEOIh6SA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_8c9aba3fa88103f3"
     },
     {
       "id": "bme280",
@@ -10608,7 +10884,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME280?qs=2OnyuXx6vpj2fK9HX7qb3g%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_43d5accef2050316"
     },
     {
       "id": "bme680",
@@ -10638,7 +10915,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME680?qs=v271MhAjFHjo0yA%2FC4OnDQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_6a15b648d6d11297"
     },
     {
       "id": "bno055",
@@ -10673,7 +10951,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BNO055?qs=QhAb4EtQfbV8Z2YmISucWw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_2b6af69d23c3346d"
     },
     {
       "id": "bno085",
@@ -10707,7 +10986,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/CEVA/BNO085?qs=ulEaXIWI0c9BFVeZDQCmmQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_b7b665112e3e68ba"
     },
     {
       "id": "broadcom-bcm43455",
@@ -10727,7 +11007,8 @@
       },
       "mouser_query": "BCM43455",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_250f0642eb1ef1dc"
     },
     {
       "id": "cp2104",
@@ -10754,7 +11035,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Silicon-Labs/CP2104?qs=sPbYRqrBIVlsUr7kFX0IgQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_e0d53eb0ce3f7032"
     },
     {
       "id": "decawave-dw1000",
@@ -10782,7 +11064,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Qorvo/DW1000-I-TR13?qs=TiOZkKH1s2SHqHtNDSAfuQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_b96f4eb466c35b33"
     },
     {
       "id": "drv8837",
@@ -10811,7 +11094,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/DRV8837EVM?qs=l6ZoeTYLMwO%2FAXsfbn6BiA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_fc93fc6af01b2448"
     },
     {
       "id": "ds18b20",
@@ -10840,7 +11124,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices-Maxim-Integrated/DS18B20?qs=7H2Jq%252ByxpJJTnlhWtKViXg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_b7b74439e168cd30"
     },
     {
       "id": "dw3110",
@@ -10876,7 +11161,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Qorvo/DW3110TR13?qs=hWgE7mdIu5Tls8vsL0LU5w%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_993e45dd0b65119f"
     },
     {
       "id": "es7210",
@@ -10905,7 +11191,8 @@
           "url": "https://www.lcsc.com/product-detail/C365743.html",
           "ships_from": "www.lcsc.com"
         }
-      ]
+      ],
+      "hash": "wh_c74c39a601946acd"
     },
     {
       "id": "esp32-c6",
@@ -10935,7 +11222,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-C6?qs=Imq1NPwxi75noDtUpuVuWw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_c7d5caff36e074bf"
     },
     {
       "id": "esp32-s2fh4",
@@ -10964,7 +11252,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-S2?qs=GBLSl2Akirtmlui%2FgtDaSQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_07d545816a4369b7"
     },
     {
       "id": "esp32-s3",
@@ -10994,7 +11283,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-S3?qs=Rp5uXu7WBW%2FNWuUy%252BBihNw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_8dc79116ec690434"
     },
     {
       "id": "exynos-5422",
@@ -11012,7 +11302,8 @@
         "source": "Pi4J 1.2 supported platforms + vendor specs"
       },
       "mouser_query": "",
-      "datasheet": ""
+      "datasheet": "",
+      "hash": "wh_6604fc7d3ee041fd"
     },
     {
       "id": "fdc2214",
@@ -11040,7 +11331,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/FDC2214EVM?qs=cGEy3R83DS8RC6lg1bYP8A%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_65d2f0b159986641"
     },
     {
       "id": "gt911",
@@ -11063,7 +11355,8 @@
       },
       "mouser_query": "Goodix GT911",
       "datasheet": "https://www.goodix.com/en/product/touch/touch_screen_controller",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_d87fbffc8d62ed30"
     },
     {
       "id": "icm-20948",
@@ -11097,7 +11390,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICM-20948?qs=u4fy%2FsgLU9OtGc31yF%2Friw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_9c8b83681aed8a93"
     },
     {
       "id": "ics-41350",
@@ -11125,7 +11419,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICS-41350?qs=u4fy%2FsgLU9MU%252BiFhvX73lg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_a149bdb9f56f65f5"
     },
     {
       "id": "ics-43432",
@@ -11153,7 +11448,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICS-43432?qs=u4fy%2FsgLU9PhEy4uYlgedw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_d9bb7522b9dc96dc"
     },
     {
       "id": "infineon-bgt60ltr11aip",
@@ -11185,7 +11481,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT60LTR11AIPE6327XUMA2?qs=iLbezkQI%252BshzShzFWLPiPQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_d12fcb0d025e044e"
     },
     {
       "id": "infineon-bgt60utr11aip",
@@ -11219,7 +11516,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT-60UTR11AIP?qs=bpu3f%2FCR1jyMYZ7mMRau4Q%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_24d7b728140f2634"
     },
     {
       "id": "inmp441",
@@ -11252,7 +11550,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/TDK/INMP441?qs=A6eO%252BMLsxmQ7QOONrFN3Pg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_95b561e181c322b7"
     },
     {
       "id": "irlz44n",
@@ -11280,7 +11579,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/IRLZ44NPBF?qs=9%252BKlkBgLFf15OZZk%252BD0ibg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_f5d669543152ce08"
     },
     {
       "id": "iwr6843",
@@ -11313,7 +11613,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/IWR6843ABGABL?qs=zW32dvEIR3v7NcgbkVUeyA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_e2d5804132cec09b"
     },
     {
       "id": "j201-jfet",
@@ -11341,7 +11642,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/InterFET/J201?qs=OxRSArmBDfyvD8SbvWteMw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_0da2bc01a3c6ede7"
     },
     {
       "id": "lm393",
@@ -11371,7 +11673,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/onsemi/LM393?qs=%252BEew9%252B0nqrBJ%252B4%2FlC%252BRjvw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_006e0ceada6e1c67"
     },
     {
       "id": "lsm6dsv",
@@ -11400,7 +11703,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/LSM6DSV80XTR?qs=bN4HulGPsrFs7nx%2F3S8HMg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_16092a11ae251cf4"
     },
     {
       "id": "max30102",
@@ -11433,7 +11737,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0518?qs=MyNHzdoqoQJAnv7sQmwMqQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_602e1c4620e2d92e"
     },
     {
       "id": "max98357a",
@@ -11463,7 +11768,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices-Maxim-Integrated/MAX98357AETE%2bT?qs=AAveGqk956HhNpoJjF5x2g%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_efffe8964e260828"
     },
     {
       "id": "mcp33131d",
@@ -11495,7 +11801,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Microchip-Technology/MCP33131D-10-E-MS?qs=byeeYqUIh0NhU4NZQbhNiA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_95102eefdcd10e48"
     },
     {
       "id": "mcp6022",
@@ -11524,7 +11831,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Microchip-Technology/MCP6022-I-ST?qs=cQYLKLPzRJmFw784uzHvww%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_081fc278fa8a335f"
     },
     {
       "id": "melexis-mlx90640",
@@ -11553,7 +11861,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Melexis/MLX90640ESF-BAB-000-SP?qs=y6ZabgHbY%252BwqHrvRZCHRaw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_14b5a100459dd897"
     },
     {
       "id": "mlx90614",
@@ -11582,7 +11891,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Melexis/MLX90614KSF-AAA-000-TU?qs=KuGPmAKtFKW%2FY2%2Fu%252BHWs0g%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_e7ca04fa592f7576"
     },
     {
       "id": "mpu-6050",
@@ -11612,7 +11922,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/MPU-6050?qs=u4fy%2FsgLU9O14B5JgyQFvg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_5f1f633b6597c327"
     },
     {
       "id": "mt6761-helio-a22",
@@ -11637,7 +11948,8 @@
       },
       "mouser_query": "MediaTek MT6761",
       "datasheet": "https://www.mediatek.com/products/smartphones-2/mediatek-helio-a22",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_18bf1d7f099f92b4"
     },
     {
       "id": "neo-6m",
@@ -11668,7 +11980,8 @@
           "url": "https://octopart.com/search?q=NEO-6M",
           "ships_from": "octopart.com"
         }
-      ]
+      ],
+      "hash": "wh_2941d83ac22dd671"
     },
     {
       "id": "neo-7m",
@@ -11699,7 +12012,8 @@
           "url": "https://octopart.com/search?q=NEO-7M",
           "ships_from": "octopart.com"
         }
-      ]
+      ],
+      "hash": "wh_9424d41dc2b6c7dc"
     },
     {
       "id": "nrf52833",
@@ -11728,7 +12042,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Nordic-Semiconductor/NRF52833-QIAA-B-R7?qs=QNEnbhJQKvZG956Q2JL0ZA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_25fa0c8c33f68125"
     },
     {
       "id": "nrf5340",
@@ -11758,7 +12073,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Nordic-Semiconductor/nRF5340-QKAA-AB0-R?qs=wnTfsH77Xs6JoJgUBaaeFw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_e2d035bec5d10142"
     },
     {
       "id": "ov5640",
@@ -11789,7 +12105,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Leopard-Imaging/LI-OV5640-MIPI-AF-NIR?qs=EU6FO9ffTwfbx6p%2FOnJjPg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_2b6206cf3e355209"
     },
     {
       "id": "qmc5883l",
@@ -11819,7 +12136,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Olimex-Ltd/MOD-QMC5883L?qs=9vOqFld9vZVvvZuY%2FZj%252B1g%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_b71fba828bd77c68"
     },
     {
       "id": "qorvo-dw3000",
@@ -11841,7 +12159,8 @@
       },
       "mouser_query": "Qorvo DW3000",
       "datasheet": "https://www.qorvo.com/products/p/DW3000",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_ed53b4291c911e03"
     },
     {
       "id": "rp2040",
@@ -11872,7 +12191,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Olimex-Ltd/RP2040-PICO-HDR?qs=By6Nw2ByBD2goXzQ69qDzg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_a248b4ef4ee15e36"
     },
     {
       "id": "rtl2832u",
@@ -11901,7 +12221,8 @@
           "url": "https://octopart.com/search?q=RTL2832",
           "ships_from": "octopart.com"
         }
-      ]
+      ],
+      "hash": "wh_499290a89bbc798b"
     },
     {
       "id": "s3km111l",
@@ -11926,7 +12247,8 @@
       },
       "mouser_query": "S3KM111L",
       "datasheet": "https://docs.ai-thinker.com/_media/rd-03e_v1.0.0_specification.pdf",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_9176a6a9891b8a9d"
     },
     {
       "id": "samsung-hp2",
@@ -11947,7 +12269,8 @@
       },
       "mouser_query": "Samsung ISOCELL HP2",
       "datasheet": "https://semiconductor.samsung.com/image-sensor/mobile-image-sensor/isocell-hp2/",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_7fd967381c76d271"
     },
     {
       "id": "samsung-jn1",
@@ -11967,7 +12290,8 @@
       },
       "mouser_query": "Samsung ISOCELL JN1",
       "datasheet": "https://semiconductor.samsung.com/image-sensor/mobile-image-sensor/isocell-jn1/",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_0faf5f03564d45cc"
     },
     {
       "id": "scd41",
@@ -11997,7 +12321,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SCD41-D-R2?qs=HBWAp0VN4Ri4o7ei4T3s0g%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_2f5750f618cb2f99"
     },
     {
       "id": "sgp30",
@@ -12026,7 +12351,8 @@
           "url": "https://octopart.com/search?q=SGP30-2.5K",
           "ships_from": "octopart.com"
         }
-      ]
+      ],
+      "hash": "wh_46d64d4fac511517"
     },
     {
       "id": "sgp40",
@@ -12056,7 +12382,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SGP40-D-R4?qs=yqaQSyyJnNgaRqiZfsbS1Q%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_6782829393200242"
     },
     {
       "id": "sgp41",
@@ -12085,7 +12412,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SGP41-D-R4?qs=A6eO%252BMLsxmRqwfOE5NYPVA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_53dd231994010292"
     },
     {
       "id": "sony-imx754",
@@ -12106,7 +12434,8 @@
       },
       "mouser_query": "Sony IMX754",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_f4170885fd750c2d"
     },
     {
       "id": "sony-imx984",
@@ -12126,7 +12455,8 @@
       },
       "mouser_query": "Sony IMX984",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "hash": "wh_ded37d862537e730"
     },
     {
       "id": "sph0645",
@@ -12155,7 +12485,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Knowles/SPH0645LM4H?qs=HoCaDK9Nz5fqtWhkh%252Bc4dA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_a74e5df3a2c5cb93"
     },
     {
       "id": "ssd1306",
@@ -12184,7 +12515,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Soldered/333100?qs=QpmGXVUTftEn%2F3JlHkGqIQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_d70ef3b1b87c5049"
     },
     {
       "id": "st-mp34dt06",
@@ -12212,7 +12544,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/X-NUCLEO-CCA02M2?qs=%252B6g0mu59x7LKdoCpRE%2FD%252Bg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_87fb0224c4037a3c"
     },
     {
       "id": "stm32l431",
@@ -12240,7 +12573,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/STM32L431RCI6?qs=U58vgkJzipS9PA5TnW5u0Q%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_49577233f327540e"
     },
     {
       "id": "stm32n6",
@@ -12269,7 +12603,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/STM32N647L0H3Q?qs=a2MtRaTmNORGIIDIKba9rQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_46057100c5778478"
     },
     {
       "id": "sx1262",
@@ -12298,7 +12633,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Semtech/SX1262DVK1PAS?qs=byeeYqUIh0PVhfehId%2F8eQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_aed3eaa5bde5f267"
     },
     {
       "id": "tc4427a",
@@ -12326,7 +12662,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Microchip-Technology/TC4427AVOA?qs=C%252BuF95oynlkMQjvJbjR6DA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_6cf640bb8e147e48"
     },
     {
       "id": "ti-ads1292r",
@@ -12354,7 +12691,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1292RECG-FE?qs=TI%2F9gtmDCEH%2FF3CVCRj00A%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_ea1c219562f7b16a"
     },
     {
       "id": "ti-awr1642",
@@ -12381,7 +12719,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/AWR1642BOOST?qs=5aG0NVq1C4x%2FRPjTzpqDvA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_221a241b29fd219c"
     },
     {
       "id": "ti-iwrl6432",
@@ -12412,7 +12751,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/IWRL6432FSPEVM?qs=efUn273yAhd%2FNWaW28Y9Iw%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_6430e58c21d04c9e"
     },
     {
       "id": "tp4056",
@@ -12440,7 +12780,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Soldered/333014?qs=QpmGXVUTftHxSOIE2GqfAg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_f0d28f9bbccc6620"
     },
     {
       "id": "tps61023",
@@ -12468,7 +12809,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/TPS61023DRLR?qs=BJlw7L4Cy7%2FfEnwYuWeGOg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_9f1dfdd28a1a7374"
     },
     {
       "id": "ublox-m10",
@@ -12500,7 +12842,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/u-blox/MAX-M10S-00B?qs=A6eO%252BMLsxmT0PfQYPb7LLQ%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_fe971fc1d4ec3e3b"
     },
     {
       "id": "vl53l1x",
@@ -12533,7 +12876,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L1X-SATEL?qs=MLItCLRbWsy6f0tjWUkKGA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_725f4ce863ba75e0"
     },
     {
       "id": "vl53l5cx",
@@ -12561,7 +12905,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L5CX-SATEL?qs=QNEnbhJQKvYJC8TLRg4rBg%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_d79f8586985651d7"
     },
     {
       "id": "vl53l7cx",
@@ -12594,7 +12939,8 @@
           "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/P-NUCLEO-53L7A1?qs=By6Nw2ByBD3a6GVZ%252B3LpcA%3D%3D",
           "ships_from": "Mouser"
         }
-      ]
+      ],
+      "hash": "wh_48711684f250f298"
     },
     {
       "id": "hangzhou-silan-microelectronics-sc7a20htr",
@@ -12623,7 +12969,8 @@
           "url": "https://www.lcsc.com/product-detail/C19274408.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_f90502d6f0b98553"
     },
     {
       "id": "qst-qma6100p",
@@ -12652,7 +12999,8 @@
           "url": "https://www.lcsc.com/product-detail/C2887190.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_46d70c0b0c22f1fd"
     },
     {
       "id": "tdk-icm-42607-c",
@@ -12682,7 +13030,8 @@
           "url": "https://www.lcsc.com/product-detail/C2879807.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_0a4e6d1d34752264"
     },
     {
       "id": "st-lsm6ds3tr-c",
@@ -12712,7 +13061,8 @@
           "url": "https://www.lcsc.com/product-detail/C967633.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_b258614db17198c4"
     },
     {
       "id": "rohm-kxtj3-1057",
@@ -12743,7 +13093,8 @@
           "url": "https://www.lcsc.com/product-detail/C442603.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_2e46256a5d547755"
     },
     {
       "id": "bosch-bmi260",
@@ -12773,7 +13124,8 @@
           "url": "https://www.lcsc.com/product-detail/C7544197.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_00d8e941de8ddaef"
     },
     {
       "id": "st-lsm6dsoetr3",
@@ -12799,7 +13151,8 @@
           "url": "https://www.lcsc.com/product-detail/C5122483.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_aa652173ad9c7e80"
     },
     {
       "id": "st-lis2dw12tr",
@@ -12829,7 +13182,8 @@
           "url": "https://www.lcsc.com/product-detail/C189624.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_1278da1a6f5cabfe"
     },
     {
       "id": "qst-qmi8658a",
@@ -12859,7 +13213,8 @@
           "url": "https://www.lcsc.com/product-detail/C3021082.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_3523bf1e98da82e2"
     },
     {
       "id": "st-lis2dux12tr",
@@ -12889,7 +13244,8 @@
           "url": "https://www.lcsc.com/product-detail/C17548754.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_878920fcc06aceba"
     },
     {
       "id": "msksemi-lis2dw12tr-ms",
@@ -12919,7 +13275,8 @@
           "url": "https://www.lcsc.com/product-detail/C50385411.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_f468fbd6bcff9576"
     },
     {
       "id": "bosch-bma253",
@@ -12949,7 +13306,8 @@
           "url": "https://www.lcsc.com/product-detail/C165275.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_943432e39e05a4ba"
     },
     {
       "id": "st-lis2hh12tr",
@@ -12979,7 +13337,8 @@
           "url": "https://www.lcsc.com/product-detail/C221446.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_976d65cc29867b5b"
     },
     {
       "id": "adi-adxl345bccz",
@@ -13009,7 +13368,8 @@
           "url": "https://www.lcsc.com/product-detail/C9667.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_4b0851bfdfc9f6c8"
     },
     {
       "id": "st-lsm303agrtr",
@@ -13039,7 +13399,8 @@
           "url": "https://www.lcsc.com/product-detail/C126671.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_1e9050017fa4fe73"
     },
     {
       "id": "tdk-icm-42670-p",
@@ -13069,7 +13430,8 @@
           "url": "https://www.lcsc.com/product-detail/C3288646.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_3bec093bb9fc139f"
     },
     {
       "id": "st-lsm6dsltr",
@@ -13099,7 +13461,8 @@
           "url": "https://www.lcsc.com/product-detail/C126672.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_083c1c633e786634"
     },
     {
       "id": "tdk-icm-20602",
@@ -13129,7 +13492,8 @@
           "url": "https://www.lcsc.com/product-detail/C97633.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_24605a656438653c"
     },
     {
       "id": "rohm-kx126-1063",
@@ -13159,7 +13523,8 @@
           "url": "https://www.lcsc.com/product-detail/C2982519.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_48bb4be9eff4bc0e"
     },
     {
       "id": "rohm-kx022-1020",
@@ -13189,7 +13554,8 @@
           "url": "https://www.lcsc.com/product-detail/C694095.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_a0360dc92e68f2f4"
     },
     {
       "id": "st-lsm6dsv16xtr",
@@ -13218,7 +13584,8 @@
           "url": "https://www.lcsc.com/product-detail/C5267406.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_7c939aca6534bb91"
     },
     {
       "id": "sensortek-stk8321",
@@ -13248,7 +13615,8 @@
           "url": "https://www.lcsc.com/product-detail/C966924.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_083edb917ab577da"
     },
     {
       "id": "st-lis2dhtr",
@@ -13277,7 +13645,8 @@
           "url": "https://www.lcsc.com/product-detail/C155670.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_69ab083ba46edff4"
     },
     {
       "id": "st-ais2ihtr",
@@ -13303,7 +13672,8 @@
           "url": "https://www.lcsc.com/product-detail/C3215588.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_07dd0a34c13cef8c"
     },
     {
       "id": "st-lsm6dsrtr",
@@ -13332,7 +13702,8 @@
           "url": "https://www.lcsc.com/product-detail/C784817.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e4aa1051999158aa"
     },
     {
       "id": "st-lsm6dsdtr",
@@ -13362,7 +13733,8 @@
           "url": "https://www.lcsc.com/product-detail/C472550.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_48ce30b9f5e33a37"
     },
     {
       "id": "hxy-mosfet-lis2dw12tr-hxy",
@@ -13392,7 +13764,8 @@
           "url": "https://www.lcsc.com/product-detail/C46550686.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_d8a267853942b9a4"
     },
     {
       "id": "st-lsm6dsv32xtr",
@@ -13420,7 +13793,8 @@
           "url": "https://www.lcsc.com/product-detail/C22461202.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_655f256aaaf695a6"
     },
     {
       "id": "st-lsm6dsotr",
@@ -13449,7 +13823,8 @@
           "url": "https://www.lcsc.com/product-detail/C2655100.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_1bb78e9a87954510"
     },
     {
       "id": "hxy-mosfet-bma253-hxy",
@@ -13479,7 +13854,8 @@
           "url": "https://www.lcsc.com/product-detail/C46550685.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_28e867b7ce9cca98"
     },
     {
       "id": "bosch-bhi160b",
@@ -13509,7 +13885,8 @@
           "url": "https://www.lcsc.com/product-detail/C464452.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_fef21009d9bcd86c"
     },
     {
       "id": "bosch-bmi325",
@@ -13535,7 +13912,8 @@
           "url": "https://www.lcsc.com/product-detail/C41398783.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_40ba5e77f156d886"
     },
     {
       "id": "st-lsm6dsvdtr",
@@ -13561,7 +13939,8 @@
           "url": "https://www.lcsc.com/product-detail/C46570983.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_9f7cc52bae25c21e"
     },
     {
       "id": "st-lsm6dsmtr",
@@ -13590,7 +13969,8 @@
           "url": "https://www.lcsc.com/product-detail/C94048.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_5cb6dfbaa9c943cb"
     },
     {
       "id": "memsic-mxc6655xa",
@@ -13620,7 +14000,8 @@
           "url": "https://www.lcsc.com/product-detail/C5189050.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_0a1a1c9aa162fc12"
     },
     {
       "id": "tdk-mpu-6500",
@@ -13650,7 +14031,8 @@
           "url": "https://www.lcsc.com/product-detail/C50278.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_a4f11459fd8ac902"
     },
     {
       "id": "sensortek-stk8328-c",
@@ -13680,7 +14062,8 @@
           "url": "https://www.lcsc.com/product-detail/C49230199.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_8bea575bad0cc752"
     },
     {
       "id": "tdk-icm-42688-p",
@@ -13710,7 +14093,8 @@
           "url": "https://www.lcsc.com/product-detail/C1850418.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_790ca367ed3310c6"
     },
     {
       "id": "mems-msa3s02",
@@ -13740,7 +14124,8 @@
           "url": "https://www.lcsc.com/product-detail/C51928204.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_0c79b6a1816c7ca9"
     },
     {
       "id": "bosch-bmi088",
@@ -13766,7 +14151,8 @@
           "url": "https://www.lcsc.com/product-detail/C194919.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_08ab7a755b3d5b8c"
     },
     {
       "id": "jlcpcb-assembly-pressure-sensorpt135",
@@ -13792,7 +14178,8 @@
           "url": "https://www.lcsc.com/product-detail/C9900040517.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_d69c18bf9dafc7d6"
     },
     {
       "id": "jlcpcb-assembly-xgzp168-pressure-sensor",
@@ -13818,7 +14205,8 @@
           "url": "https://www.lcsc.com/product-detail/C9900241192.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_8740551f93699057"
     },
     {
       "id": "jlcpcb-assembly-absolute-pressure-sensor",
@@ -13844,7 +14232,8 @@
           "url": "https://www.lcsc.com/product-detail/C9900045709.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_13df6befb824e900"
     },
     {
       "id": "waveshare-bmp388-barometric-pressure-sensor",
@@ -13870,7 +14259,8 @@
           "url": "https://www.lcsc.com/product-detail/C431939.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_856c82c05b6d0d93"
     },
     {
       "id": "jlcpcb-assembly-barometric-pressure-sensor-module",
@@ -13896,7 +14286,8 @@
           "url": "https://www.lcsc.com/product-detail/C9900249845.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_9f674f7e7fdae363"
     },
     {
       "id": "rohm-bh1750fvi",
@@ -13924,7 +14315,8 @@
           "url": "https://www.lcsc.com/product-detail/C78960.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_6e0a9a4fa405dd8a"
     },
     {
       "id": "newopto-xyc-pt19c-l1",
@@ -13950,7 +14342,8 @@
           "url": "https://www.lcsc.com/product-detail/C2693594.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_06c215104fb489b5"
     },
     {
       "id": "tonyu-dy-pd234-6b",
@@ -13976,7 +14369,8 @@
           "url": "https://www.lcsc.com/product-detail/C841508.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e1d38372e2d1d416"
     },
     {
       "id": "everlight-elec-als-pdic243-3b",
@@ -14002,7 +14396,8 @@
           "url": "https://www.lcsc.com/product-detail/C141718.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_65d5fcae50f325a9"
     },
     {
       "id": "rohm-bh1730fvc",
@@ -14031,7 +14426,8 @@
           "url": "https://www.lcsc.com/product-detail/C79616.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_b1fcf585eb5f743a"
     },
     {
       "id": "everlight-elec-als-pd70-01c-tr7",
@@ -14057,7 +14453,8 @@
           "url": "https://www.lcsc.com/product-detail/C5274866.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_5cc3a90241ecc680"
     },
     {
       "id": "tonyu-dy-pd673b-a2",
@@ -14083,7 +14480,8 @@
           "url": "https://www.lcsc.com/product-detail/C841510.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_64ee11359415e6b9"
     },
     {
       "id": "lite-on-ltr-303als-01",
@@ -14112,7 +14510,8 @@
           "url": "https://www.lcsc.com/product-detail/C364577.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_d6903dbb896e56c0"
     },
     {
       "id": "newopto-xyc-pt0805bc-b1-s",
@@ -14138,7 +14537,8 @@
           "url": "https://www.lcsc.com/product-detail/C6081300.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_0773315616858a3a"
     },
     {
       "id": "everlight-elec-als-pt243-3c-l177",
@@ -14164,7 +14564,8 @@
           "url": "https://www.lcsc.com/product-detail/C146239.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_d965aca568b4f299"
     },
     {
       "id": "tonyu-dy-fpd4134c-a3",
@@ -14190,7 +14591,8 @@
           "url": "https://www.lcsc.com/product-detail/C841506.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_c45407a5c2385179"
     },
     {
       "id": "everlight-elec-als-pdt144-6c-l451",
@@ -14216,7 +14618,8 @@
           "url": "https://www.lcsc.com/product-detail/C2892766.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_8b8258636ea9d200"
     },
     {
       "id": "everlight-elec-als-pdic144-6c-l378",
@@ -14242,7 +14645,8 @@
           "url": "https://www.lcsc.com/product-detail/C2943463.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_13b6fbb0d189cadb"
     },
     {
       "id": "ti-opt3004dnpr",
@@ -14270,7 +14674,8 @@
           "url": "https://www.lcsc.com/product-detail/C2655153.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_4eb1e81f7111a4be"
     },
     {
       "id": "rohm-bh1721fvc",
@@ -14299,7 +14704,8 @@
           "url": "https://www.lcsc.com/product-detail/C184130.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_215e59edd1b254de"
     },
     {
       "id": "lite-on-ltr-381rgb-01",
@@ -14328,7 +14734,8 @@
           "url": "https://www.lcsc.com/product-detail/C2944020.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_210a5eccf88b8d34"
     },
     {
       "id": "everlight-elec-als-pdic243-3c",
@@ -14354,7 +14761,8 @@
           "url": "https://www.lcsc.com/product-detail/C264277.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_4511b91dda42e22f"
     },
     {
       "id": "sharp-microelectronics-is486e",
@@ -14380,7 +14788,8 @@
           "url": "https://www.lcsc.com/product-detail/C17539067.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_2bd199d7552162ad"
     },
     {
       "id": "newopto-xyc-pt0805bc-l4-d",
@@ -14406,7 +14815,8 @@
           "url": "https://www.lcsc.com/product-detail/C6081326.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_f743ec5fbb7a64c1"
     },
     {
       "id": "eg-micro-eg4003c",
@@ -14432,7 +14842,8 @@
           "url": "https://www.lcsc.com/product-detail/C2929101.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_b8036bf28a81c42b"
     },
     {
       "id": "vishay-intertech-veml6030",
@@ -14461,7 +14872,8 @@
           "url": "https://www.lcsc.com/product-detail/C132182.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_31b44a1ccfabe568"
     },
     {
       "id": "vishay-intertech-temt6200fx01",
@@ -14487,7 +14899,8 @@
           "url": "https://www.lcsc.com/product-detail/C143695.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_78f010356b67a72e"
     },
     {
       "id": "vishay-intertech-temt6000x01",
@@ -14513,7 +14926,8 @@
           "url": "https://www.lcsc.com/product-detail/C94098.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_88c2c2e5193a2155"
     },
     {
       "id": "newopto-xyc-pt76b30-l1",
@@ -14539,7 +14953,8 @@
           "url": "https://www.lcsc.com/product-detail/C2693591.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e55892f5fd74a3b9"
     },
     {
       "id": "tonyu-dy-fpd333b-a5",
@@ -14565,7 +14980,8 @@
           "url": "https://www.lcsc.com/product-detail/C841505.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_d346c85dc7bb5d00"
     },
     {
       "id": "vishay-intertech-veml7700-tt",
@@ -14594,7 +15010,8 @@
           "url": "https://www.lcsc.com/product-detail/C1850416.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_b37fcc7b0588ad41"
     },
     {
       "id": "vishay-intertech-vcnl36821s",
@@ -14623,7 +15040,8 @@
           "url": "https://www.lcsc.com/product-detail/C1850419.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_df6768e13801901a"
     },
     {
       "id": "ti-opt4048dtsr",
@@ -14652,7 +15070,8 @@
           "url": "https://www.lcsc.com/product-detail/C6174012.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_a6640f6f6c6ee174"
     },
     {
       "id": "jsmsemi-jsm8223",
@@ -14678,7 +15097,8 @@
           "url": "https://www.lcsc.com/product-detail/C2837268.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_3dffdcaa47f48e48"
     },
     {
       "id": "mysentech-mlc12g",
@@ -14706,7 +15126,8 @@
           "url": "https://www.lcsc.com/product-detail/C47127167.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_dc23d7e147a7e2ee"
     },
     {
       "id": "jsmsemi-jsm8233",
@@ -14732,7 +15153,8 @@
           "url": "https://www.lcsc.com/product-detail/C963376.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_83723941a120bc60"
     },
     {
       "id": "ti-opt3101rhfr",
@@ -14758,7 +15180,8 @@
           "url": "https://www.lcsc.com/product-detail/C2867533.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_0e5da98277659ea5"
     },
     {
       "id": "mysentech-mc12g",
@@ -14786,7 +15209,8 @@
           "url": "https://www.lcsc.com/product-detail/C7472379.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_737b1d168ec54172"
     },
     {
       "id": "sharp-microelectronics-gp2ap03vt00f",
@@ -14814,7 +15238,8 @@
           "url": "https://www.lcsc.com/product-detail/C691375.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_1b0c337708eeced1"
     },
     {
       "id": "ti-fdc1004qdgsrq1",
@@ -14840,7 +15265,8 @@
           "url": "https://www.lcsc.com/product-detail/C2652097.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_c8f791216c6756e3"
     },
     {
       "id": "semtech-sx9324icstrt",
@@ -14868,7 +15294,8 @@
           "url": "https://www.lcsc.com/product-detail/C6689390.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_834a89530c3cc006"
     },
     {
       "id": "infineon-cypress-cy8cmbr3110-sx2i",
@@ -14896,7 +15323,8 @@
           "url": "https://www.lcsc.com/product-detail/C2953562.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_fd1c38336cf74543"
     },
     {
       "id": "sensortek-stk36c61-a",
@@ -14924,7 +15352,8 @@
           "url": "https://www.lcsc.com/product-detail/C49230205.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_7cf225853cfa6cf0"
     },
     {
       "id": "light-mx0400s",
@@ -14950,7 +15379,8 @@
           "url": "https://www.lcsc.com/product-detail/C53925148.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_9f4c72070290cb5d"
     },
     {
       "id": "goodix-gh6212",
@@ -14976,7 +15406,8 @@
           "url": "https://www.lcsc.com/product-detail/C2942336.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_6b072596a08ee531"
     },
     {
       "id": "conntek-kth5763aq3dne",
@@ -15004,7 +15435,8 @@
           "url": "https://www.lcsc.com/product-detail/C7544671.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_155eacc7f4a99a45"
     },
     {
       "id": "allegro-microsystems-a1335lletr",
@@ -15032,7 +15464,8 @@
           "url": "https://www.lcsc.com/product-detail/C2655192.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_033cb1591cf91bc2"
     },
     {
       "id": "allegro-microsystems-a1339llptr-dd",
@@ -15060,7 +15493,8 @@
           "url": "https://www.lcsc.com/product-detail/C2153695.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_24d6dfbbfbecc418"
     },
     {
       "id": "allegro-microsystems-aas33001lleatr-5",
@@ -15088,7 +15522,8 @@
           "url": "https://www.lcsc.com/product-detail/C3825030.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_dced2268eecb9da9"
     },
     {
       "id": "allegro-microsystems-a31315lolatr-xy-s-ar-10",
@@ -15114,7 +15549,8 @@
           "url": "https://www.lcsc.com/product-detail/C3824753.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_4a687fa3a1427757"
     },
     {
       "id": "allegro-microsystems-a1333lletr",
@@ -15142,7 +15578,8 @@
           "url": "https://www.lcsc.com/product-detail/C3825364.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_fc75f6eca1075835"
     },
     {
       "id": "jlcpcb-assembly-ic-sensormotionhalleffect",
@@ -15168,7 +15605,8 @@
           "url": "https://www.lcsc.com/product-detail/C9900277426.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_3c666cebc898805c"
     },
     {
       "id": "vishay-intertech-351he0a1wa1s22",
@@ -15194,7 +15632,8 @@
           "url": "https://www.lcsc.com/product-detail/C3824758.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_c0f92533c77df397"
     },
     {
       "id": "vishay-intertech-351he0a4wa1s22",
@@ -15220,7 +15659,8 @@
           "url": "https://www.lcsc.com/product-detail/C3824851.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_279944671c39bc21"
     },
     {
       "id": "vishay-intertech-351he1b1wa1s22",
@@ -15246,7 +15686,8 @@
           "url": "https://www.lcsc.com/product-detail/C3824921.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_4128fd496766b07f"
     },
     {
       "id": "vishay-intertech-rmhe1a4wa",
@@ -15272,7 +15713,8 @@
           "url": "https://www.lcsc.com/product-detail/C3824924.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_36b1486954c698c8"
     },
     {
       "id": "vishay-intertech-981he0a2wb1f16",
@@ -15298,7 +15740,8 @@
           "url": "https://www.lcsc.com/product-detail/C3825026.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_30519e331e74af99"
     },
     {
       "id": "msksemi-mtdc-gp22s",
@@ -15324,7 +15767,8 @@
           "url": "https://www.lcsc.com/product-detail/C50385427.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_c560711502bb1dd6"
     },
     {
       "id": "hydz-hy40a16t12-1",
@@ -15350,7 +15794,8 @@
           "url": "https://www.lcsc.com/product-detail/C17701106.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_a677411e9a5c35f2"
     },
     {
       "id": "hydz-hy25a16t12-1",
@@ -15376,7 +15821,8 @@
           "url": "https://www.lcsc.com/product-detail/C17701108.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_2edc9d2db2ea7e02"
     },
     {
       "id": "inghai-gu1610b-40tr",
@@ -15402,7 +15848,8 @@
           "url": "https://www.lcsc.com/product-detail/C242189.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_9d7e941cabacf3c0"
     },
     {
       "id": "murata-ma300d1-1",
@@ -15428,7 +15875,8 @@
           "url": "https://www.lcsc.com/product-detail/C527583.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_ad63fc7dcc482c98"
     },
     {
       "id": "inghai-gu16b01l03-a09",
@@ -15454,7 +15902,8 @@
           "url": "https://www.lcsc.com/product-detail/C242195.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_738a77ee866484ad"
     },
     {
       "id": "msksemi-msk1022",
@@ -15480,7 +15929,8 @@
           "url": "https://www.lcsc.com/product-detail/C50385425.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_ffdcd68addd709a9"
     },
     {
       "id": "msksemi-msk1922",
@@ -15506,7 +15956,8 @@
           "url": "https://www.lcsc.com/product-detail/C50385426.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_bc29858dd9f4a303"
     },
     {
       "id": "inghai-gu14095b-40tr",
@@ -15532,7 +15983,8 @@
           "url": "https://www.lcsc.com/product-detail/C242186.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_a19daa13a7d5bce0"
     },
     {
       "id": "tdk-ch201-00abr",
@@ -15558,7 +16010,8 @@
           "url": "https://www.lcsc.com/product-detail/C1513114.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_778ba3b9a8231eb3"
     },
     {
       "id": "inghai-gf1409a-40kp",
@@ -15584,7 +16037,8 @@
           "url": "https://www.lcsc.com/product-detail/C55497088.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_368c31dbd582c98b"
     },
     {
       "id": "inghai-gf15509a1-58kl45m2-0t",
@@ -15610,7 +16064,8 @@
           "url": "https://www.lcsc.com/product-detail/C55497091.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_5732130cb4b2d7f5"
     },
     {
       "id": "inghai-gu1812a-40tr",
@@ -15636,7 +16091,8 @@
           "url": "https://www.lcsc.com/product-detail/C242192.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_0d9c737921fc1ae4"
     },
     {
       "id": "inghai-gf1612a-40k",
@@ -15662,7 +16118,8 @@
           "url": "https://www.lcsc.com/product-detail/C55497093.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_6f16694a5265e55e"
     },
     {
       "id": "inghai-gu1007c-40t-gu1007c-40r",
@@ -15688,7 +16145,8 @@
           "url": "https://www.lcsc.com/product-detail/C242176.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_f78723edcb1d1a3d"
     },
     {
       "id": "saiya-sensor-sy-us-18brtd",
@@ -15714,7 +16172,8 @@
           "url": "https://www.lcsc.com/product-detail/C5380075.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_673742bb117609fa"
     },
     {
       "id": "diodes-incorporated-ap4313ktr-g1",
@@ -15740,7 +16199,8 @@
           "url": "https://www.lcsc.com/product-detail/C24445.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_304dd0536007f41f"
     },
     {
       "id": "ti-ina169na-3k",
@@ -15768,7 +16228,8 @@
           "url": "https://www.lcsc.com/product-detail/C44322.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e0e4d06a8d988834"
     },
     {
       "id": "ti-ina193aidbvr",
@@ -15794,7 +16255,8 @@
           "url": "https://www.lcsc.com/product-detail/C19548.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_0a7ccd7df087e0c2"
     },
     {
       "id": "ti-ina226aidgsr",
@@ -15820,7 +16282,8 @@
           "url": "https://www.lcsc.com/product-detail/C49851.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_4ead116d04285aad"
     },
     {
       "id": "ti-ina138na-3k",
@@ -15848,7 +16311,8 @@
           "url": "https://www.lcsc.com/product-detail/C47914.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_4fde1aa1eb83b3c0"
     },
     {
       "id": "ti-ina194aidbvr",
@@ -15874,7 +16338,8 @@
           "url": "https://www.lcsc.com/product-detail/C37807.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_609172b38bbcdff0"
     },
     {
       "id": "maxim-max4080sasa",
@@ -15900,7 +16365,8 @@
           "url": "https://www.lcsc.com/product-detail/C16945.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_441e69ebff08b89c"
     },
     {
       "id": "diodes-incorporated-zxct1010e5ta",
@@ -15926,7 +16392,8 @@
           "url": "https://www.lcsc.com/product-detail/C14151.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_5cabae588cdb0bed"
     },
     {
       "id": "st-tsm102aidt",
@@ -15952,7 +16419,8 @@
           "url": "https://www.lcsc.com/product-detail/C27384.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e625bafdfa2ef556"
     },
     {
       "id": "ti-ina195aidbvr",
@@ -15978,7 +16446,8 @@
           "url": "https://www.lcsc.com/product-detail/C34542.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_3383e3c87f648942"
     },
     {
       "id": "jlcpcb-assembly-gnssmodule",
@@ -16004,7 +16473,8 @@
           "url": "https://www.lcsc.com/product-detail/C9900136573.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_fa5af87bcc70cb16"
     },
     {
       "id": "linx-rxm-gnss-gm",
@@ -16032,7 +16502,8 @@
           "url": "https://www.lcsc.com/product-detail/C7353832.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_265d5d8ecbda02f8"
     },
     {
       "id": "te-connectivity-rxm-gnss-tm",
@@ -16058,7 +16529,8 @@
           "url": "https://www.lcsc.com/product-detail/C22445020.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_9e9d79958d56922b"
     },
     {
       "id": "jlcpcb-assembly-k823gnssmodule",
@@ -16084,7 +16556,8 @@
           "url": "https://www.lcsc.com/product-detail/C9900014514.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_061c8c5d301b48c2"
     },
     {
       "id": "jlcpcb-assembly-k802-gnss-module",
@@ -16110,7 +16583,8 @@
           "url": "https://www.lcsc.com/product-detail/C9900177544.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_18b2935b3a2e3dc1"
     },
     {
       "id": "st-x-nucleo-gnss1a1",
@@ -16136,7 +16610,8 @@
           "url": "https://www.lcsc.com/product-detail/C17629442.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_1ff85ccba00aa14f"
     },
     {
       "id": "linx-aek-gnsscp-th25l1",
@@ -16162,7 +16637,8 @@
           "url": "https://www.lcsc.com/product-detail/C17443511.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_2f7a83e0390c2028"
     },
     {
       "id": "linx-aek-gnsscp-th18l1",
@@ -16188,7 +16664,8 @@
           "url": "https://www.lcsc.com/product-detail/C17513986.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_42333343adfdc596"
     },
     {
       "id": "infineon-bgt-24ltr11n16-e6327",
@@ -16215,7 +16692,8 @@
           "url": "https://www.lcsc.com/product-detail/C534254.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_c6f90a671e85a9f8"
     },
     {
       "id": "chengdu-ebyte-elec-tech-e54-05ld06a",
@@ -16241,7 +16719,8 @@
           "url": "https://www.lcsc.com/product-detail/C52160462.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_b67f746691c10398"
     },
     {
       "id": "psemi-pe44820b-x",
@@ -16267,7 +16746,8 @@
           "url": "https://www.lcsc.com/product-detail/C6250847.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_7ded3c2cdb48b0c3"
     },
     {
       "id": "hi-link-hlk-ld101v",
@@ -16293,7 +16773,8 @@
           "url": "https://www.lcsc.com/product-detail/C38964830.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e2c9360d41ae7eb5"
     },
     {
       "id": "adi-adf5901acpz",
@@ -16320,7 +16801,8 @@
           "url": "https://www.lcsc.com/product-detail/C654718.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e8f8959cf82712ec"
     },
     {
       "id": "nxp-tef8102en-n1",
@@ -16349,7 +16831,8 @@
           "url": "https://www.lcsc.com/product-detail/C430885.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_4b4fd10018e54723"
     },
     {
       "id": "feng-niao-rf-fld02",
@@ -16375,7 +16858,8 @@
           "url": "https://www.lcsc.com/product-detail/C5118065.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_f160a9b4b9157470"
     },
     {
       "id": "adi-adf5902wccpz",
@@ -16404,7 +16888,8 @@
           "url": "https://www.lcsc.com/product-detail/C654721.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_f2b3616ca58ede05"
     },
     {
       "id": "macom-maps-010145-tr0500",
@@ -16430,7 +16915,8 @@
           "url": "https://www.lcsc.com/product-detail/C7297957.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_ecec2c1a40ee9902"
     },
     {
       "id": "ti-awr6843arbgalprq1",
@@ -16456,7 +16942,8 @@
           "url": "https://www.lcsc.com/product-detail/C3178330.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_860431c9ff559735"
     },
     {
       "id": "ti-awr2243abgablrq1",
@@ -16485,7 +16972,8 @@
           "url": "https://www.lcsc.com/product-detail/C2869803.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_daf16752a2a70838"
     },
     {
       "id": "ti-awr1243fbigablrq1",
@@ -16514,7 +17002,8 @@
           "url": "https://www.lcsc.com/product-detail/C2151602.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_2488d094c6fa5bf0"
     },
     {
       "id": "adi-ad8285wbcpz",
@@ -16542,7 +17031,8 @@
           "url": "https://www.lcsc.com/product-detail/C652659.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_7b66bd16a8b0eddd"
     },
     {
       "id": "adi-adrv9009bbcz",
@@ -16570,7 +17060,8 @@
           "url": "https://www.lcsc.com/product-detail/C659657.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_a74e20cc6656d9a6"
     },
     {
       "id": "adi-hmc951blp4etr",
@@ -16596,7 +17087,8 @@
           "url": "https://www.lcsc.com/product-detail/C662804.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_89e450e7e4e29314"
     },
     {
       "id": "macom-maps-010144-tr0500",
@@ -16622,7 +17114,8 @@
           "url": "https://www.lcsc.com/product-detail/C5126704.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_91aca62b5344ae24"
     },
     {
       "id": "adi-hmc649alp6etr",
@@ -16648,7 +17141,8 @@
           "url": "https://www.lcsc.com/product-detail/C514400.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_13f513ead1c5c00c"
     },
     {
       "id": "ti-iwr1443fqagabl",
@@ -16677,7 +17171,8 @@
           "url": "https://www.lcsc.com/product-detail/C1558318.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_60e672840d610da1"
     },
     {
       "id": "ti-awr1443fqigablrq1",
@@ -16706,7 +17201,8 @@
           "url": "https://www.lcsc.com/product-detail/C2151611.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_9c42c164fecb1e58"
     },
     {
       "id": "adi-hmc443lp4etr",
@@ -16732,7 +17228,8 @@
           "url": "https://www.lcsc.com/product-detail/C661864.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_10d52a38e98e55c1"
     },
     {
       "id": "goodix-gh3018",
@@ -16761,7 +17258,8 @@
           "url": "https://www.lcsc.com/product-detail/C2942338.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_dd8b3c14bf5a00a0"
     },
     {
       "id": "adi-ad8233acbz",
@@ -16787,7 +17285,8 @@
           "url": "https://www.lcsc.com/product-detail/C209349.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_5f7e1bc7bdd6659c"
     },
     {
       "id": "maxim-max86174aene",
@@ -16816,7 +17315,8 @@
           "url": "https://www.lcsc.com/product-detail/C5669018.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_54af46a7b074535e"
     },
     {
       "id": "zettasensing-zspd4018lg",
@@ -16842,7 +17342,8 @@
           "url": "https://www.lcsc.com/product-detail/C53452855.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_a75f7754f032f227"
     },
     {
       "id": "zettasensing-zspd4000qn",
@@ -16868,7 +17369,8 @@
           "url": "https://www.lcsc.com/product-detail/C53452854.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_902b897223ee586a"
     },
     {
       "id": "zettasensing-zspd4003lg",
@@ -16894,7 +17396,8 @@
           "url": "https://www.lcsc.com/product-detail/C53452856.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_05ded4152d23b3e5"
     },
     {
       "id": "epticore-microelectronics-shanghai-em7028",
@@ -16922,7 +17425,8 @@
           "url": "https://www.lcsc.com/product-detail/C91478.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_76c30389db5b2c14"
     },
     {
       "id": "partron-pps964a",
@@ -16948,7 +17452,8 @@
           "url": "https://www.lcsc.com/product-detail/C328757.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_83f8f0488f539756"
     },
     {
       "id": "partron-ppsi262",
@@ -16976,7 +17481,8 @@
           "url": "https://www.lcsc.com/product-detail/C328758.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_eb1c7d601b21d2b6"
     },
     {
       "id": "trusignal-microelec-ts9514",
@@ -17002,7 +17508,8 @@
           "url": "https://www.lcsc.com/product-detail/C383866.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_7ae1693b1896bb89"
     },
     {
       "id": "skyworks-silicon-labs-si1172e2-b3-gm",
@@ -17030,7 +17537,8 @@
           "url": "https://www.lcsc.com/product-detail/C430202.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_985881a618178c32"
     },
     {
       "id": "skyworks-silicon-labs-si1175e2-b2-gm",
@@ -17058,7 +17566,8 @@
           "url": "https://www.lcsc.com/product-detail/C430205.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_98407bb34437e418"
     },
     {
       "id": "skyworks-silicon-labs-si1181-b4-gm",
@@ -17084,7 +17593,8 @@
           "url": "https://www.lcsc.com/product-detail/C430207.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_99eac57b9ff704cc"
     },
     {
       "id": "skyworks-silicon-labs-si1182-b3-gm",
@@ -17110,7 +17620,8 @@
           "url": "https://www.lcsc.com/product-detail/C430208.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_842c37167d3e209b"
     },
     {
       "id": "ams-as7026gg-colt",
@@ -17136,7 +17647,8 @@
           "url": "https://www.lcsc.com/product-detail/C1854945.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e24408431e7ec4b6"
     },
     {
       "id": "skyworks-silicon-labs-si1144-a10-gmr",
@@ -17162,7 +17674,8 @@
           "url": "https://www.lcsc.com/product-detail/C2153080.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e0d2a5b3b44de664"
     },
     {
       "id": "goodix-gh300",
@@ -17191,7 +17704,8 @@
           "url": "https://www.lcsc.com/product-detail/C2680487.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_e4ca13f877064028"
     },
     {
       "id": "goodix-gh301",
@@ -17219,7 +17733,8 @@
           "url": "https://www.lcsc.com/product-detail/C2680488.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_ba2383df74e3cbee"
     },
     {
       "id": "saiya-sensor-sy-gf-35bpm",
@@ -17245,7 +17760,8 @@
           "url": "https://www.lcsc.com/product-detail/C7421565.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_9f6ca5a5a4c34523"
     },
     {
       "id": "sensirion-sfm3505-300",
@@ -17271,7 +17787,8 @@
           "url": "https://www.lcsc.com/product-detail/C53108350.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_1dbfdac479b1c161"
     },
     {
       "id": "omron-d6f-p0010a1",
@@ -17297,7 +17814,8 @@
           "url": "https://www.lcsc.com/product-detail/C6533106.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_d5e467e9549d0f7d"
     },
     {
       "id": "consensic-cafs5008b-50l-min-iv-a",
@@ -17323,7 +17841,8 @@
           "url": "https://www.lcsc.com/product-detail/C28646463.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_283ea1daf93dad78"
     },
     {
       "id": "consensic-cafs3000-3000ml-min-iv-a",
@@ -17349,7 +17868,8 @@
           "url": "https://www.lcsc.com/product-detail/C28646454.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_7912234abd6e0b3a"
     },
     {
       "id": "consensic-cafs6002-10l-min-iv-a",
@@ -17375,7 +17895,8 @@
           "url": "https://www.lcsc.com/product-detail/C28646462.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_fcb6140ff4f4e721"
     },
     {
       "id": "consensic-cafs4000-50l-min-iv-a",
@@ -17401,7 +17922,8 @@
           "url": "https://www.lcsc.com/product-detail/C28646455.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_32582615e8f420b1"
     },
     {
       "id": "sensirion-sli-0430-liquid-flow-meter",
@@ -17427,7 +17949,8 @@
           "url": "https://www.lcsc.com/product-detail/C3662618.html",
           "ships_from": "LCSC/China"
         }
-      ]
+      ],
+      "hash": "wh_650a05a9bbb4e3b0"
     },
     {
       "id": "stm32f030r8",
@@ -17448,7 +17971,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32F030R8",
-      "datasheet": "https://www.st.com/en/product/stm32f030r8.html"
+      "datasheet": "https://www.st.com/en/product/stm32f030r8.html",
+      "hash": "wh_52f00cdc56b4b3d8"
     },
     {
       "id": "stm32f103c8",
@@ -17470,7 +17994,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32F103C8",
-      "datasheet": "https://www.st.com/en/product/stm32f103c8.html"
+      "datasheet": "https://www.st.com/en/product/stm32f103c8.html",
+      "hash": "wh_60bb50e6955c2838"
     },
     {
       "id": "stm32f303re",
@@ -17493,7 +18018,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32F303RE",
-      "datasheet": "https://www.st.com/en/product/stm32f303re.html"
+      "datasheet": "https://www.st.com/en/product/stm32f303re.html",
+      "hash": "wh_cc379069532ff8ea"
     },
     {
       "id": "stm32f401re",
@@ -17516,7 +18042,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32F401RE",
-      "datasheet": "https://www.st.com/en/product/stm32f401re.html"
+      "datasheet": "https://www.st.com/en/product/stm32f401re.html",
+      "hash": "wh_7faade2bc05f8ae9"
     },
     {
       "id": "stm32f411re",
@@ -17539,7 +18066,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32F411RE",
-      "datasheet": "https://www.st.com/en/product/stm32f411re.html"
+      "datasheet": "https://www.st.com/en/product/stm32f411re.html",
+      "hash": "wh_f83474524746b87e"
     },
     {
       "id": "stm32f446re",
@@ -17562,7 +18090,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32F446RE",
-      "datasheet": "https://www.st.com/en/product/stm32f446re.html"
+      "datasheet": "https://www.st.com/en/product/stm32f446re.html",
+      "hash": "wh_b6b80bd9abc5e4f1"
     },
     {
       "id": "stm32f746zg",
@@ -17586,7 +18115,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32F746ZG",
-      "datasheet": "https://www.st.com/en/product/stm32f746zg.html"
+      "datasheet": "https://www.st.com/en/product/stm32f746zg.html",
+      "hash": "wh_b26e9ba0d2640bb1"
     },
     {
       "id": "stm32g031k8",
@@ -17607,7 +18137,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32G031K8",
-      "datasheet": "https://www.st.com/en/product/stm32g031k8.html"
+      "datasheet": "https://www.st.com/en/product/stm32g031k8.html",
+      "hash": "wh_fea8eeb5e225075c"
     },
     {
       "id": "stm32g071rb",
@@ -17629,7 +18160,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32G071RB",
-      "datasheet": "https://www.st.com/en/product/stm32g071rb.html"
+      "datasheet": "https://www.st.com/en/product/stm32g071rb.html",
+      "hash": "wh_15553c4f24e396a4"
     },
     {
       "id": "stm32g431rb",
@@ -17653,7 +18185,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32G431RB",
-      "datasheet": "https://www.st.com/en/product/stm32g431rb.html"
+      "datasheet": "https://www.st.com/en/product/stm32g431rb.html",
+      "hash": "wh_887acf6bd3294ee6"
     },
     {
       "id": "stm32g474re",
@@ -17677,7 +18210,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32G474RE",
-      "datasheet": "https://www.st.com/en/product/stm32g474re.html"
+      "datasheet": "https://www.st.com/en/product/stm32g474re.html",
+      "hash": "wh_bddf5ab2afcbcb7d"
     },
     {
       "id": "stm32h503rb",
@@ -17699,7 +18233,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32H503RB",
-      "datasheet": "https://www.st.com/en/product/stm32h503rb.html"
+      "datasheet": "https://www.st.com/en/product/stm32h503rb.html",
+      "hash": "wh_35ebbe24048bca1d"
     },
     {
       "id": "stm32h563zi",
@@ -17722,7 +18257,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32H563ZI",
-      "datasheet": "https://www.st.com/en/product/stm32h563zi.html"
+      "datasheet": "https://www.st.com/en/product/stm32h563zi.html",
+      "hash": "wh_afdcdad40f36bcc9"
     },
     {
       "id": "stm32h743zi",
@@ -17746,7 +18282,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32H743ZI",
-      "datasheet": "https://www.st.com/en/product/stm32h743zi.html"
+      "datasheet": "https://www.st.com/en/product/stm32h743zi.html",
+      "hash": "wh_382c526d8bc5f3c9"
     },
     {
       "id": "stm32l053r8",
@@ -17768,7 +18305,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32L053R8",
-      "datasheet": "https://www.st.com/en/product/stm32l053r8.html"
+      "datasheet": "https://www.st.com/en/product/stm32l053r8.html",
+      "hash": "wh_984dff77b2ecb087"
     },
     {
       "id": "stm32l476rg",
@@ -17792,7 +18330,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32L476RG",
-      "datasheet": "https://www.st.com/en/product/stm32l476rg.html"
+      "datasheet": "https://www.st.com/en/product/stm32l476rg.html",
+      "hash": "wh_96889ff440b2a736"
     },
     {
       "id": "stm32l552ze",
@@ -17815,7 +18354,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32L552ZE",
-      "datasheet": "https://www.st.com/en/product/stm32l552ze.html"
+      "datasheet": "https://www.st.com/en/product/stm32l552ze.html",
+      "hash": "wh_08c9ea471cc02504"
     },
     {
       "id": "stm32u575zi",
@@ -17838,7 +18378,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32U575ZI",
-      "datasheet": "https://www.st.com/en/product/stm32u575zi.html"
+      "datasheet": "https://www.st.com/en/product/stm32u575zi.html",
+      "hash": "wh_3ed8aca681b85d85"
     },
     {
       "id": "stm32wb55rg",
@@ -17863,7 +18404,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32WB55RG",
-      "datasheet": "https://www.st.com/en/product/stm32wb55rg.html"
+      "datasheet": "https://www.st.com/en/product/stm32wb55rg.html",
+      "hash": "wh_ec1d384a72170945"
     },
     {
       "id": "stm32wl55jc",
@@ -17887,7 +18429,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32WL55JC",
-      "datasheet": "https://www.st.com/en/product/stm32wl55jc.html"
+      "datasheet": "https://www.st.com/en/product/stm32wl55jc.html",
+      "hash": "wh_d74a593103526523"
     },
     {
       "id": "stm32mp157f",
@@ -17911,7 +18454,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STM32MP157F",
-      "datasheet": "https://www.st.com/en/product/stm32mp157f.html"
+      "datasheet": "https://www.st.com/en/product/stm32mp157f.html",
+      "hash": "wh_55ea0f026d6fc1cb"
     },
     {
       "id": "st-lps22hh",
@@ -17935,7 +18479,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "LPS22HH",
-      "datasheet": "https://www.st.com/en/product/lps22hh.html"
+      "datasheet": "https://www.st.com/en/product/lps22hh.html",
+      "hash": "wh_f25f00bc17b2d5de"
     },
     {
       "id": "st-lps28dfw",
@@ -17959,7 +18504,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "LPS28DFW",
-      "datasheet": "https://www.st.com/en/product/lps28dfw.html"
+      "datasheet": "https://www.st.com/en/product/lps28dfw.html",
+      "hash": "wh_f42f27533e6a7796"
     },
     {
       "id": "st-lis3mdl",
@@ -17982,7 +18528,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "LIS3MDL",
-      "datasheet": "https://www.st.com/en/product/lis3mdl.html"
+      "datasheet": "https://www.st.com/en/product/lis3mdl.html",
+      "hash": "wh_35a128af02bf0b55"
     },
     {
       "id": "st-iis2mdc",
@@ -18006,7 +18553,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "IIS2MDC",
-      "datasheet": "https://www.st.com/en/product/iis2mdc.html"
+      "datasheet": "https://www.st.com/en/product/iis2mdc.html",
+      "hash": "wh_f57ad05120da6a45"
     },
     {
       "id": "st-hts221",
@@ -18030,7 +18578,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "HTS221",
-      "datasheet": "https://www.st.com/en/product/hts221.html"
+      "datasheet": "https://www.st.com/en/product/hts221.html",
+      "hash": "wh_45112427c3cbbf22"
     },
     {
       "id": "st-stts22h",
@@ -18052,7 +18601,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "STTS22H",
-      "datasheet": "https://www.st.com/en/product/stts22h.html"
+      "datasheet": "https://www.st.com/en/product/stts22h.html",
+      "hash": "wh_83d5c72b946c82db"
     },
     {
       "id": "st-vl53l8cx",
@@ -18078,7 +18628,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "VL53L8CX",
-      "datasheet": "https://www.st.com/en/product/vl53l8cx.html"
+      "datasheet": "https://www.st.com/en/product/vl53l8cx.html",
+      "hash": "wh_1a1d599663a4835b"
     },
     {
       "id": "st-imp23absu",
@@ -18100,7 +18651,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "IMP23ABSU",
-      "datasheet": "https://www.st.com/en/product/imp23absu.html"
+      "datasheet": "https://www.st.com/en/product/imp23absu.html",
+      "hash": "wh_8dbc4f0cfa570ca2"
     },
     {
       "id": "st-mp23db01hp",
@@ -18122,7 +18674,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "MP23DB01HP",
-      "datasheet": "https://www.st.com/en/product/mp23db01hp.html"
+      "datasheet": "https://www.st.com/en/product/mp23db01hp.html",
+      "hash": "wh_a3bf44de9bd89274"
     },
     {
       "id": "st-ism330dhcx",
@@ -18148,7 +18701,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "ISM330DHCX",
-      "datasheet": "https://www.st.com/en/product/ism330dhcx.html"
+      "datasheet": "https://www.st.com/en/product/ism330dhcx.html",
+      "hash": "wh_e2fd9ac379a3e13d"
     },
     {
       "id": "st-h3lis331dl",
@@ -18171,7 +18725,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "H3LIS331DL",
-      "datasheet": "https://www.st.com/en/product/h3lis331dl.html"
+      "datasheet": "https://www.st.com/en/product/h3lis331dl.html",
+      "hash": "wh_b7357d9fa28105f0"
     },
     {
       "id": "st-ais2dw12",
@@ -18196,7 +18751,8 @@
         "source": "ST product knowledge (staged, unverified)"
       },
       "mouser_query": "AIS2DW12",
-      "datasheet": "https://www.st.com/en/product/ais2dw12.html"
+      "datasheet": "https://www.st.com/en/product/ais2dw12.html",
+      "hash": "wh_d049dbf382c1ef7e"
     }
   ]
 }

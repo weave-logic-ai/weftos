@@ -52,6 +52,10 @@ pub struct Project {
     /// Module ids this project uses (resolve via [`HwCatalog::module`]).
     #[serde(default)]
     pub modules: Vec<String>,
+    /// Stable unique item hash: `"wh_" + hex(sha256("<type>:<id>"))[..16]`. Matches the Sensor
+    /// Explorer's hash so a catalog item is addressable the same everywhere.
+    #[serde(default)]
+    pub hash: String,
 }
 
 /// One distributor offer for a module or chip (filled by the Mouser/distributor pull).
@@ -102,6 +106,9 @@ pub struct Module {
     pub mouser_query: String,
     #[serde(default)]
     pub buy: Vec<BuyLink>,
+    /// Stable unique item hash: `"wh_" + hex(sha256("<type>:<id>"))[..16]` (type `module`).
+    #[serde(default)]
+    pub hash: String,
 }
 
 /// A chip (the silicon on a module).
@@ -123,6 +130,9 @@ pub struct Chip {
     pub mouser_query: String,
     #[serde(default)]
     pub datasheet: String,
+    /// Stable unique item hash: `"wh_" + hex(sha256("<type>:<id>"))[..16]` (type `chip`).
+    #[serde(default)]
+    pub hash: String,
 }
 
 impl HwCatalog {
