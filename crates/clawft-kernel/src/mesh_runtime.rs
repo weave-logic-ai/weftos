@@ -122,6 +122,10 @@ pub struct PeerDetail {
     pub last_seen: Option<std::time::SystemTime>,
     /// Smoothed ping round-trip time in milliseconds, same condition.
     pub rtt_ms: Option<f64>,
+    /// Pings that timed out since the last counted pong.
+    pub missed_pongs: Option<u32>,
+    /// Load the peer attached to its last pong (peer-claimed, unsigned).
+    pub load: Option<crate::mesh_load::LoadSample>,
 }
 
 /// Count of live routes registered by one serving connection. Lets the
@@ -1011,6 +1015,8 @@ impl MeshRuntime {
                         .and_then(|d| d.heartbeat.lock().ok()?.peer_state(e.key())),
                     last_seen: None,
                     rtt_ms: None,
+                    missed_pongs: None,
+                    load: None,
                 }
             })
             .collect();
@@ -1020,6 +1026,8 @@ impl MeshRuntime {
                 if let Some(l) = lv.peer(&d.node_id) {
                     d.last_seen = Some(l.last_seen);
                     d.rtt_ms = Some(l.rtt_ms);
+                    d.missed_pongs = Some(l.missed);
+                    d.load = l.load;
                 }
             }
         }

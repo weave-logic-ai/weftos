@@ -61,6 +61,8 @@ pub struct Manager {
     pub(crate) gw_token_draft: String,
     pub(crate) fleet_node: Option<String>,
     pub(crate) fleet_tab: crate::views::fleet::NodeTab,
+    /// Network tab: the edge node whose reported fields are expanded.
+    pub(crate) edge_open: Option<String>,
 }
 
 impl Manager {
@@ -108,6 +110,7 @@ impl Manager {
             gw_token_draft,
             fleet_node: None,
             fleet_tab: Default::default(),
+            edge_open: None,
         };
         // Deep link: `WEFTOS_GUIDE=<cog id>` / `?guide=` opens that cog's bundled guide.
         let g = client::setting("WEFTOS_GUIDE", "guide", "");

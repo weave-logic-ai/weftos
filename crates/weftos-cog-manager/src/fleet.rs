@@ -19,6 +19,8 @@ pub struct FleetRow {
     pub verified: bool,
     pub heartbeat: Option<String>,
     pub rtt_ms: Option<f64>,
+    /// 1-minute load average (own or peer-reported).
+    pub load1: Option<f64>,
     /// Unix seconds of the last liveness pong, else of the last announce.
     pub seen_unix: Option<u64>,
     pub cogs: usize,
@@ -69,6 +71,7 @@ fn row(n: &Value) -> FleetRow {
         verified: mesh["verified"] == true,
         heartbeat: text(&mesh["heartbeat"]),
         rtt_ms: mesh["rtt_ms"].as_f64(),
+        load1: val(n, "load")["load1"].as_f64(),
         seen_unix: mesh["last_seen_unix"].as_u64().or_else(|| cluster["last_announce_unix"].as_u64()),
         cogs: val(n, "instances").as_array().map_or(0, Vec::len),
         location: loc.is_object().then(|| {
@@ -130,6 +133,145 @@ pub fn instances(node: &Value) -> Vec<Instance> {
             }
         })
         .collect()
+}
+
+/// Load as the node (or this daemon) reported it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LoadView {
+    pub load1: f64,
+    pub load5: f64,
+    pub cores: Option<u64>,
+    pub mem_avail: Option<u64>,
+    pub mem_total: Option<u64>,
+    pub provenance: String,
+}
+
+pub fn load(node: &Value) -> Option<LoadView> {
+    let l = val(node, "load");
+    Some(LoadView {
+        load1: l["load1"].as_f64()?,
+        load5: l["load5"].as_f64().unwrap_or(0.0),
+        cores: l["cores"].as_u64(),
+        mem_avail: l["mem_avail"].as_u64(),
+        mem_total: l["mem_total"].as_u64(),
+        provenance: provenance(node, "load").unwrap_or("").to_owned(),
+    })
+}
+
+fn caps(node: &Value) -> impl Iterator<Item = &Value> {
+    val(node, "facts")["facts"]["capabilities"].as_array().into_iter().flatten()
+}
+
+/// Signed capacity: capabilities busy or reserved, the total, and free host memory.
+pub fn capacity(node: &Value) -> Option<(usize, usize, Option<u64>)> {
+    let all: Vec<&Value> = caps(node).collect();
+    if all.is_empty() {
+        return None;
+    }
+    let busy = all.iter().filter(|c| matches!(c["state"].as_str(), Some("busy" | "reserved"))).count();
+    let free = all
+        .iter()
+        .find(|c| c["id"] == "mem.unified")
+        .or_else(|| all.iter().find(|c| c["id"] == "mem.system"))
+        .and_then(|c| c["attrs"]["free"].as_u64());
+    Some((busy, all.len(), free))
+}
+
+/// Software and hardware identity from the signed facts: OS, kernel, CPU, board.
+pub fn software(node: &Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for c in caps(node) {
+        let id = c["id"].as_str().unwrap_or("");
+        let attrs = &c["attrs"];
+        let keep: &[&str] = if id.starts_with("os.") {
+            &["distro", "version", "kernel"]
+        } else if id.starts_with("cpu.arch.") {
+            &["model", "cores"]
+        } else if id.starts_with("board.") {
+            &["model"]
+        } else {
+            continue;
+        };
+        out.push((id.to_owned(), String::new()));
+        for k in keep {
+            if let Some(v) = attrs.get(*k).filter(|v| !v.is_null()) {
+                out.push((format!("  {k}"), v.as_str().map_or_else(|| v.to_string(), str::to_owned)));
+            }
+        }
+    }
+    out
+}
+
+/// Trust and licence facts for the Trust tab.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TrustView {
+    pub tier: Option<String>,
+    pub tier_source: Option<String>,
+    pub received_at: Option<u64>,
+    pub expires_at: Option<u64>,
+    pub delta_seq: Option<u64>,
+    pub signed: bool,
+    pub revoked: Option<String>,
+}
+
+pub fn trust(node: &Value) -> TrustView {
+    let f = val(node, "facts");
+    TrustView {
+        tier: text(&f["trust_tier"]),
+        tier_source: text(&f["tier_source"]),
+        received_at: f["received_at"].as_u64(),
+        expires_at: f["expires_at"].as_u64(),
+        delta_seq: f["delta_seq"].as_u64(),
+        signed: provenance(node, "facts") == Some("signed_fact") && f["signed"].is_object(),
+        revoked: val(node, "revoked").is_object().then(|| text(&val(node, "revoked")["reason"]).unwrap_or_default()),
+    }
+}
+
+/// Admin commands the console shows (never runs) for a node.
+pub fn admin_commands(id: &str, revoked: bool, local: bool) -> Vec<(&'static str, String)> {
+    let mut out = vec![if revoked {
+        ("remove the revocation", format!("weaver mesh peer unrevoke {id}"))
+    } else {
+        ("refuse and disconnect this node", format!("weaver mesh peer revoke {id} --reason \"<why>\""))
+    }];
+    out.push(("label its location", format!("weaver fleet location set {id} --site <site> --room <room>")));
+    if local {
+        out.push(("show the Seed binding", "weaver workload node status".into()));
+        out.push((
+            "bind a Seed to this mesh",
+            "weaver workload node bind <seed-node-id> --operator-key <key> --grant-pubkey <hex> --grant-fingerprint <ed25519:...>".into(),
+        ));
+    }
+    out
+}
+
+/// One RTT / load reading kept by the console for the sparklines.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sample {
+    pub t: u64,
+    pub rtt_ms: Option<f64>,
+    pub load1: Option<f64>,
+}
+
+pub type History = std::collections::BTreeMap<String, std::collections::VecDeque<Sample>>;
+
+/// Append each node's reading from a snapshot, at most `cap` per node. A
+/// snapshot already seen (same `fetched_at`) adds nothing; nodes that left
+/// the snapshot are dropped.
+pub fn push_history(hist: &mut History, snap: &Value, cap: usize) {
+    let Some(t) = snap["fetched_at"].as_u64() else { return };
+    let rows = rows(snap);
+    hist.retain(|id, _| rows.iter().any(|r| &r.id == id));
+    for r in rows {
+        let q = hist.entry(r.id.clone()).or_default();
+        if q.back().is_some_and(|s| s.t >= t) {
+            continue;
+        }
+        q.push_back(Sample { t, rtt_ms: r.rtt_ms, load1: r.load1 });
+        while q.len() > cap {
+            q.pop_front();
+        }
+    }
 }
 
 /// What a provenance label means, for the hover text.

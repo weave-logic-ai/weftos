@@ -79,7 +79,11 @@ async fn pongs_that_were_not_asked_for_or_come_unverified_are_ignored() {
 async fn a_verified_ping_is_answered_and_an_unverified_one_is_not() {
     let (rt, _rx, _rx2) = rig();
     let lv = Liveness::new(&rt, LivenessConfig::default());
-    assert_eq!(lv.on_peer_control(&ctx("p1", true), 0, &json!({"t": "ping", "n": 7})), vec![json!({"t": "pong", "n": 7})]);
+    let reply = lv.on_peer_control(&ctx("p1", true), 0, &json!({"t": "ping", "n": 7}));
+    assert_eq!(reply.len(), 1);
+    assert_eq!((reply[0]["t"].as_str(), reply[0]["n"].as_u64()), (Some("pong"), Some(7)));
+    #[cfg(unix)]
+    assert!(LoadSample::from_json(&reply[0]["load"]).is_some(), "the pong carries this host's load: {}", reply[0]);
     assert!(lv.on_peer_control(&ctx("x", false), 0, &json!({"t": "ping", "n": 7})).is_empty());
     assert!(lv.on_peer_control(&ctx("p1", true), 0, &json!({"t": "ping"})).is_empty(), "no nonce, no answer");
 }
@@ -110,9 +114,29 @@ async fn peer_details_carry_last_seen_and_rtt_once_liveness_runs() {
     // The spawned loop's first tick fires immediately; take that ping.
     let frame = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await.unwrap().unwrap();
     let n = ping_nonce(&frame).unwrap();
-    lv.on_peer_control(&ctx("p1", true), 0, &json!({"t": "pong", "n": n}));
+    lv.on_peer_control(&ctx("p1", true), 0, &json!({"t": "pong", "n": n, "load": {"load1": 1.5, "load5": 0.25}}));
     let d = rt.peer_details().into_iter().find(|d| d.node_id == "p1").unwrap();
     assert!(d.last_seen.is_some() && d.rtt_ms.is_some());
+    assert_eq!((d.load.map(|l| l.load5), d.missed_pongs), (Some(0.25), Some(0)));
     let u = rt.peer_details().into_iter().find(|d| d.node_id == "u1").unwrap();
     assert!(u.last_seen.is_none() && u.rtt_ms.is_none());
+}
+
+#[tokio::test]
+async fn a_pong_carries_the_peers_load_and_a_bad_load_is_dropped_but_still_counts() {
+    let (rt, mut rx, _rx2) = rig();
+    let lv = Liveness::new(&rt, LivenessConfig::default());
+    lv.tick().await;
+    let n = ping_nonce(&rx.try_recv().unwrap()).unwrap();
+    let load = json!({"load1": 0.5, "load5": 0.25, "cores": 4, "mem_avail": 10, "mem_total": 20});
+    lv.on_peer_control(&ctx("p1", true), 0, &json!({"t": "pong", "n": n, "load": load}));
+    let l = lv.peer("p1").unwrap().load.expect("load kept");
+    assert_eq!((l.load1, l.cores), (0.5, Some(4)));
+
+    lv.tick().await;
+    let n2 = ping_nonce(&rx.try_recv().unwrap()).unwrap();
+    lv.on_peer_control(&ctx("p1", true), 0, &json!({"t": "pong", "n": n2, "load": {"load1": -3}}));
+    let p = lv.peer("p1").unwrap();
+    assert!(p.load.is_none(), "an out-of-range load is not shown");
+    assert_eq!(p.missed, 0, "the pong itself still counted");
 }

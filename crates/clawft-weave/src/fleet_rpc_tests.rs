@@ -64,12 +64,15 @@ fn raw() -> Raw {
             heartbeat: Some("alive"),
             last_seen: None,
             rtt_ms: None,
+            missed_pongs: None,
+            load: None,
         }]),
         revoked: vec![clawft_kernel::revocation::RevokedHost {
             host_id: "bad-node".into(),
             revoked_at: 5,
             reason: "leaked key".into(),
         }],
+        local_load: None,
     }
 }
 
@@ -379,4 +382,17 @@ async fn a_bad_label_request_changes_nothing() {
     assert!(!dir.path().join(fleet_labels::FILE).exists());
     let chain = k.read().await.chain_manager().cloned().unwrap();
     assert!(chain.tail(200).iter().all(|e| e.kind != fleet_labels::CHAIN_KIND));
+}
+
+#[test]
+fn load_is_labelled_by_who_measured_it() {
+    let mut r = raw();
+    r.local_load = Some(json!({ "load1": 0.5, "load5": 0.4 }));
+    r.mesh.as_mut().unwrap()[0].load = Some(json!({ "load1": 2.0, "load5": 1.0, "cores": 4 }));
+    let snap = assemble(r, Extra::default(), 1);
+    let me = node(&snap, "local-node");
+    assert_eq!((me["load"]["value"]["load1"].as_f64(), me["load"]["provenance"].as_str()), (Some(0.5), Some("daemon_observed")));
+    let z = node(&snap, "zeta");
+    assert_eq!((z["load"]["value"]["cores"].as_u64(), z["load"]["provenance"].as_str()), (Some(4), Some("peer_claimed")));
+    assert!(node(&snap, "bad-node").get("load").is_none(), "no sample, no section");
 }

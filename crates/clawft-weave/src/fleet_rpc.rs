@@ -12,7 +12,8 @@
 //! | `cluster` | state, first seen and `last_announce` (when a verified join, recovery or announce last arrived; per-pong liveness is `mesh.last_seen`) | `daemon_observed` |
 //! | `announced` | platform and address the peer announced (an unverified peer chooses them) | `peer_claimed` |
 //! | `facts` | signed node facts cache (`cluster.facts`) | `signed_fact` |
-//! | `mesh` | live connection detail (class, verified, heartbeat, last pong, smoothed RTT) | `daemon_observed` |
+//! | `mesh` | live connection detail (class, verified, heartbeat, last pong, smoothed RTT, missed pongs) | `daemon_observed` |
+//! | `load` | load average, cores, memory: this daemon's own, or what a verified peer attached to its last pong | `daemon_observed` (own) / `peer_claimed` (peer) |
 //! | `revoked` | host revocation list (`mesh.revoked`) | `daemon_observed` |
 //! | `instances` | placement controller's own records and lifecycle (no error text) | `daemon_observed` |
 //! | `location` | operator labels (`fleet.location.set`) | `operator_claimed` |
@@ -106,6 +107,8 @@ pub(crate) struct Raw {
     /// `None` when the mesh runtime is not in this process (service mode).
     pub mesh: Option<Vec<MeshPeer>>,
     pub revoked: Vec<clawft_kernel::revocation::RevokedHost>,
+    /// This daemon's own load sample (`LoadSample` JSON), when the OS gives one.
+    pub local_load: Option<Value>,
 }
 
 /// One live mesh connection.
@@ -121,6 +124,10 @@ pub(crate) struct MeshPeer {
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     /// Smoothed round-trip time, milliseconds; `None` until measured.
     pub rtt_ms: Option<f64>,
+    /// Pings that timed out since the last counted pong.
+    pub missed_pongs: Option<u32>,
+    /// The load the peer attached to its last pong (`LoadSample` JSON).
+    pub load: Option<Value>,
 }
 
 #[cfg(feature = "mesh")]
@@ -144,6 +151,8 @@ fn mesh_peers(k: &Kernel<NativePlatform>) -> Option<Vec<MeshPeer>> {
                 },
                 last_seen: d.last_seen.map(chrono::DateTime::<chrono::Utc>::from),
                 rtt_ms: d.rtt_ms,
+                missed_pongs: d.missed_pongs,
+                load: d.load.map(|l| l.to_json()),
             })
             .collect(),
     )
@@ -166,7 +175,17 @@ pub(crate) fn collect(k: &Kernel<NativePlatform>) -> Raw {
         facts: crate::node_facts_rpc::facts_entries(membership, None),
         mesh: mesh_peers(k),
         revoked: k.revocation_list().list_revoked(),
+        local_load: local_load(),
     }
+}
+
+#[cfg(feature = "mesh")]
+fn local_load() -> Option<Value> {
+    clawft_kernel::mesh_load::LoadSample::local().map(|l| l.to_json())
+}
+#[cfg(not(feature = "mesh"))]
+fn local_load() -> Option<Value> {
+    None
 }
 
 /// Daemon-wide inputs besides [`Raw`].
@@ -198,6 +217,15 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
     let mut degraded: Vec<String> = Vec::new();
     let mut nodes: Nodes = BTreeMap::new();
     touch(&mut nodes, &raw.local_id).insert("local".into(), json!(true));
+    if let Some(l) = &raw.local_load {
+        touch(&mut nodes, &raw.local_id).insert("load".into(), field(l.clone(), DAEMON_OBSERVED));
+    }
+    for d in raw.mesh.iter().flatten() {
+        if let Some(l) = &d.load {
+            // Sent by the peer over its verified connection; not signed.
+            touch(&mut nodes, &d.node_id).insert("load".into(), field(l.clone(), PEER_CLAIMED));
+        }
+    }
     for p in &raw.peers {
         let n = touch(&mut nodes, &p.id);
         n.insert("name".into(), field(json!(p.name), PEER_CLAIMED));
@@ -240,6 +268,7 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
                             "last_seen": d.last_seen.map(rfc3339),
                             "last_seen_unix": d.last_seen.map(|t| t.timestamp()),
                             "rtt_ms": d.rtt_ms.map(|r| (r * 10.0).round() / 10.0),
+                            "missed_pongs": d.missed_pongs,
                         }),
                         DAEMON_OBSERVED,
                     ),
@@ -370,57 +399,6 @@ pub(crate) fn filter_to_project(controller: &mut Value, project: Option<&str>) {
     }
 }
 
-#[cfg(all(feature = "placement", unix))]
-fn controller_view() -> Option<Value> {
-    crate::workload_place_rpc::controller_view()
-}
-#[cfg(not(all(feature = "placement", unix)))]
-fn controller_view() -> Option<Value> {
-    None
-}
-
-#[cfg(all(feature = "placement", unix))]
-fn licence_status() -> Option<Value> {
-    crate::licence_boot::runtime().map(|rt| licence_summary(&crate::licence_boot::status(&rt)))
-}
-
-/// The binding facts a fleet view needs, from `workload.node.binding`: no
-/// device id, no grant key, no steward detail, and not the signed record.
-/// The `binding` comes from an operator-signed record, so it is a `signed_fact`.
-pub(crate) fn licence_summary(status: &Value) -> Value {
-    let binding = match status["binding"].as_object() {
-        Some(b) => field(
-            json!({
-                "state": b.get("state"),
-                "mesh_id": b.get("mesh_id"),
-                "seq": b.get("seq"),
-                "grant_fingerprint": b.get("grant_fingerprint"),
-                "orphaned": b.get("orphaned"),
-            }),
-            SIGNED_FACT,
-        ),
-        None => field(Value::Null, SIGNED_FACT),
-    };
-    json!({ "mesh_id": status["mesh_id"], "genesis_pinned": status["genesis_pinned"], "binding": binding })
-}
-#[cfg(not(all(feature = "placement", unix)))]
-fn licence_status() -> Option<Value> {
-    None
-}
-
-#[cfg(all(feature = "placement", unix))]
-async fn infer_status() -> (Option<Value>, String) {
-    let r = crate::infer_rpc::handle("infer.status", Value::Null).await;
-    match (r.ok, r.result) {
-        (true, Some(v)) => (Some(v), String::new()),
-        _ => (None, "inference placement is off".into()),
-    }
-}
-#[cfg(not(all(feature = "placement", unix)))]
-async fn infer_status() -> (Option<Value>, String) {
-    (None, "built without placement".into())
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LocationParams {
@@ -492,6 +470,12 @@ pub(crate) async fn set_location(dir: &std::path::Path, params: Value, kernel: &
         Response::error("a location label is recorded on the chain, and this build has none")
     }
 }
+
+#[path = "fleet_rpc_sources.rs"]
+mod sources;
+#[cfg(test)]
+use sources::licence_summary;
+use sources::{controller_view, infer_status, licence_status};
 
 #[cfg(test)]
 #[path = "fleet_rpc_tests.rs"]

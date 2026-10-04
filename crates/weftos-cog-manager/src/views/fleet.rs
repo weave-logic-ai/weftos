@@ -4,6 +4,7 @@
 //! on the connected cog-host (the same host POSTs as the Cogs tab); remote work is shown with the
 //! CLI command that does it.
 
+use super::fleet_tabs as tabs;
 use crate::app::Manager;
 use crate::fleet::{self, FleetRow};
 use crate::sensor_detail::Event;
@@ -18,14 +19,16 @@ pub(crate) enum NodeTab {
     Overview,
     Workloads,
     Health,
+    Trust,
+    Software,
     Raw,
 }
 
-fn now_unix() -> u64 {
+pub(crate) fn now_unix() -> u64 {
     web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn prov_pill(ui: &mut Ui, p: Option<&str>) {
+pub(crate) fn prov_pill(ui: &mut Ui, p: Option<&str>) {
     if let Some(p) = p {
         let color = match p {
             "signed_fact" => GREEN,
@@ -73,8 +76,8 @@ impl Manager {
         let rows = fleet::rows(&snap);
         let now = now_unix();
         ui.label(style::dim(ui, format!("{} node(s) · click a node for its detail", rows.len())));
-        egui::Grid::new("fleet_nodes").num_columns(8).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
-            for h in ["node", "state", "trust", "mesh", "rtt", "seen", "cogs", "location"] {
+        egui::Grid::new("fleet_nodes").num_columns(9).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
+            for h in ["node", "state", "trust", "mesh", "rtt", "load", "seen", "cogs", "location"] {
                 ui.label(RichText::new(h).strong().small());
             }
             ui.end_row();
@@ -126,6 +129,7 @@ impl Manager {
         };
         ui.label(RichText::new(mesh.trim()).small());
         ui.label(RichText::new(r.rtt_ms.map_or_else(|| "-".into(), |v| format!("{v:.0} ms"))).small());
+        ui.label(RichText::new(r.load1.map_or_else(|| "-".into(), |v| format!("{v:.2}"))).small());
         ui.label(RichText::new(r.seen_unix.map_or_else(|| "-".into(), |t| fleet::age(now, t))).small());
         ui.label(RichText::new(r.cogs.to_string()).small());
         ui.label(RichText::new(r.location.as_deref().unwrap_or("-")).small());
@@ -146,7 +150,14 @@ impl Manager {
                 }
             });
             ui.horizontal(|ui| {
-                for (t, label) in [(NodeTab::Overview, "Overview"), (NodeTab::Workloads, "Workloads / cogs"), (NodeTab::Health, "Health"), (NodeTab::Raw, "Raw (all details)")] {
+                for (t, label) in [
+                    (NodeTab::Overview, "Overview"),
+                    (NodeTab::Workloads, "Workloads / cogs"),
+                    (NodeTab::Health, "Health"),
+                    (NodeTab::Trust, "Trust / licence"),
+                    (NodeTab::Software, "Software / firmware"),
+                    (NodeTab::Raw, "Raw (all details)"),
+                ] {
                     ui.selectable_value(&mut self.fleet_tab, t, label);
                 }
             });
@@ -154,8 +165,16 @@ impl Manager {
             match self.fleet_tab {
                 NodeTab::Overview => self.node_overview(ui, n, id),
                 NodeTab::Workloads => self.node_workloads(ui, n),
-                NodeTab::Health => node_health(ui, n, now),
-                NodeTab::Raw => node_raw(ui, n),
+                NodeTab::Health => {
+                    let hist = self.client.snapshot().fleet_hist.get(id).cloned().unwrap_or_default();
+                    tabs::node_health(ui, n, now, &hist);
+                }
+                NodeTab::Trust => {
+                    let licence = self.client.snapshot().fleet.as_ref().and_then(|r| r.as_ref().ok()).map(|s| s["licence"].clone());
+                    tabs::node_trust(ui, n, id, now, licence.as_ref());
+                }
+                NodeTab::Software => tabs::node_software(ui, n),
+                NodeTab::Raw => tabs::node_raw(ui, n),
             }
         });
     }
@@ -263,52 +282,4 @@ impl Manager {
             }
         }
     }
-}
-
-fn node_health(ui: &mut Ui, n: &Value, now: u64) {
-    let mesh = fleet::val(n, "mesh");
-    let cluster = fleet::val(n, "cluster");
-    let age = |v: &Value| v.as_u64().map_or_else(|| "-".into(), |t| fleet::age(now, t));
-    let s = |v: &Value| v.as_str().map_or_else(|| "-".into(), str::to_owned);
-    let mut rows: Vec<(&str, String, Option<&str>)> = vec![
-        ("cluster state", s(&cluster["state"]), fleet::provenance(n, "cluster")),
-        ("last announce", age(&cluster["last_announce_unix"]), fleet::provenance(n, "cluster")),
-    ];
-    if mesh.is_object() {
-        rows.extend([
-            ("mesh class", s(&mesh["class"]), fleet::provenance(n, "mesh")),
-            ("verified", mesh["verified"].to_string(), fleet::provenance(n, "mesh")),
-            ("heartbeat", s(&mesh["heartbeat"]), fleet::provenance(n, "mesh")),
-            ("connected at", s(&mesh["connected_at"]), fleet::provenance(n, "mesh")),
-            ("last pong", age(&mesh["last_seen_unix"]), fleet::provenance(n, "mesh")),
-            ("rtt (smoothed)", mesh["rtt_ms"].as_f64().map_or_else(|| "not measured yet".into(), |v| format!("{v:.1} ms")), fleet::provenance(n, "mesh")),
-        ]);
-    } else {
-        rows.push(("mesh", "not connected to this daemon now".into(), None));
-    }
-    egui::Grid::new("node_health").num_columns(3).spacing([14.0, 4.0]).show(ui, |ui| {
-        for (k, v, p) in rows {
-            ui.label(style::dim(ui, k));
-            ui.label(style::body(v));
-            prov_pill(ui, p);
-            ui.end_row();
-        }
-    });
-    ui.label(style::dim(ui, "load and per-class telemetry land with fleet P3"));
-}
-
-fn node_raw(ui: &mut Ui, n: &Value) {
-    ui.horizontal_wrapped(|ui| {
-        for (section, p) in fleet::sections(n) {
-            ui.label(style::dim(ui, section));
-            prov_pill(ui, Some(&p));
-        }
-    });
-    let text = serde_json::to_string_pretty(n).unwrap_or_default();
-    if ui.small_button("copy JSON").clicked() {
-        ui.ctx().copy_text(text.clone());
-    }
-    egui::ScrollArea::vertical().max_height(360.0).id_salt("node_raw").show(ui, |ui| {
-        ui.add(egui::Label::new(RichText::new(text).monospace().small()).selectable(true));
-    });
 }

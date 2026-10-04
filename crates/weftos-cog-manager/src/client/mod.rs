@@ -128,7 +128,12 @@ impl Client {
                 }
                 _ => parse_json::<serde_json::Value>(&res),
             };
-            apply(&shared, epoch, |sh| sh.fleet = Some(parsed));
+            apply(&shared, epoch, |sh| {
+                if let Ok(v) = &parsed {
+                    crate::fleet::push_history(&mut sh.fleet_hist, v, 120);
+                }
+                sh.fleet = Some(parsed);
+            });
             busy.store(false, Ordering::Release);
             ctx.request_repaint();
         });

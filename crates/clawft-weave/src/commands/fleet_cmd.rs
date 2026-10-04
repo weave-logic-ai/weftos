@@ -118,6 +118,14 @@ fn val<'a>(n: &'a Value, section: &str) -> &'a Value {
     &n[section]["value"]
 }
 
+/// `0.42 /4 cores`, marked `(peer)` when the peer reported it about itself.
+fn load_cell(l: &Value, provenance: Option<&str>) -> String {
+    let Some(l1) = l["load1"].as_f64() else { return "-".to_owned() };
+    let cores = l["cores"].as_u64().map(|c| format!(" /{c} cores")).unwrap_or_default();
+    let who = if provenance == Some("peer_claimed") { " (peer)" } else { "" };
+    format!("{l1:.2}{cores}{who}")
+}
+
 fn cell(v: &Value) -> String {
     v.as_str().map_or_else(|| "-".to_owned(), str::to_owned)
 }
@@ -127,7 +135,7 @@ pub fn render(snap: &Value, now: u64) -> String {
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL_CONDENSED);
     table.set_header(vec![
-        "Node", "State", "Trust", "Address", "Last announce", "Mesh", "Cogs", "Location",
+        "Node", "State", "Trust", "Address", "Last announce", "Mesh", "Load", "Cogs", "Location",
     ]);
     for n in snap["nodes"].as_array().into_iter().flatten() {
         let id = n["node_id"].as_str().unwrap_or("?");
@@ -159,6 +167,7 @@ pub fn render(snap: &Value, now: u64) -> String {
             .to_owned(),
             _ => "-".to_owned(),
         };
+        let load = load_cell(val(n, "load"), n["load"]["provenance"].as_str());
         let cogs = val(n, "instances").as_array().map_or(0, Vec::len);
         let loc = match val(n, "location") {
             l if l.is_object() => format!("{} / {}", cell(&l["site"]), cell(&l["room"])),
@@ -172,6 +181,7 @@ pub fn render(snap: &Value, now: u64) -> String {
             cell(&val(n, "announced")["address"]),
             seen,
             mesh,
+            load,
             cogs.to_string(),
             loc,
         ]);
@@ -209,7 +219,8 @@ mod tests {
                   "location": { "value": { "site": "Lab", "room": "R1" } } },
                 { "node_id": "cccccccccccccccccccc",
                   "mesh": { "value": { "class": "node", "verified": true, "heartbeat": "alive",
-                                       "rtt_ms": 4.2, "last_seen_unix": 995 } } },
+                                       "rtt_ms": 4.2, "last_seen_unix": 995 } },
+                  "load": { "value": { "load1": 0.42, "load5": 0.3, "cores": 4 }, "provenance": "peer_claimed" } },
                 { "node_id": "bbbbbbbbbbbbbbbbbbbb",
                   "cluster": { "value": { "state": "suspect", "last_announce_unix": 100 } },
                   "mesh": { "value": { "class": "leaf", "verified": false, "heartbeat": "suspect" } },
@@ -231,6 +242,7 @@ mod tests {
         assert!(out.contains("bbbbbbbb... REVOKED"), "{out}");
         assert!(out.contains("leaf unverified suspect"), "{out}");
         assert!(out.contains("node alive 4ms, pong 5s ago"), "{out}");
+        assert!(out.contains("0.42 /4 cores (peer)"), "{out}");
         assert!(out.contains("mesh id: mesh-1") && out.contains("revoked hosts: 1"), "{out}");
         assert!(out.contains("not available: placement:"), "{out}");
     }

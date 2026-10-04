@@ -6,8 +6,9 @@
 //! this node actually sent and has not yet seen answered. A counted pong
 //! feeds the heartbeat tracker ([`MeshRuntime::record_heartbeat`], which
 //! drives `Alive`/`Recovered` and cluster `last_heartbeat`) and a smoothed
-//! RTT. Unverified peers are never pinged, and their pings and pongs are
-//! ignored. Everything here is in memory; nothing is persisted.
+//! RTT. A pong may carry the responder's [`LoadSample`] (fleet P3); old peers
+//! send none. Unverified peers are never pinged, and their pings and pongs
+//! are ignored. Everything here is in memory; nothing is persisted.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
@@ -17,6 +18,7 @@ use serde_json::{Value, json};
 
 use crate::ipc::{KernelMessage, MessagePayload, MessageTarget};
 use crate::mesh_delivery::PeerCtx;
+use crate::mesh_load::LoadSample;
 use crate::mesh_runtime::{MeshRuntime, PING_TOPIC, PeerControlSink};
 
 /// Tunables.
@@ -43,6 +45,9 @@ pub struct PeerLiveness {
     pub rtt_ms: f64,
     /// Pings sent that timed out since the last counted pong.
     pub missed: u32,
+    /// The load the peer attached to its last counted pong (it says so;
+    /// not signed). `None` from a peer that sends none.
+    pub load: Option<LoadSample>,
 }
 
 /// At most this many pings in flight per peer; a slow peer cannot grow the table.
@@ -128,7 +133,7 @@ impl Liveness {
     }
 
     /// Count a pong from a verified `peer` for nonce `n`. Returns true when it counted.
-    fn on_pong(&self, peer: &str, n: u64) -> bool {
+    fn on_pong(&self, peer: &str, n: u64, load: Option<LoadSample>) -> bool {
         let rtt_ms = {
             let mut st = self.state.lock().unwrap();
             let Some(sent) = st.outstanding.remove(&(peer.to_string(), n)) else { return false };
@@ -137,10 +142,12 @@ impl Liveness {
                 last_seen: SystemTime::now(),
                 rtt_ms: sample,
                 missed: 0,
+                load: None,
             });
             e.rtt_ms = e.rtt_ms * 0.8 + sample * 0.2;
             e.last_seen = SystemTime::now();
             e.missed = 0;
+            e.load = load;
             e.rtt_ms
         };
         if let Some(rt) = self.rt.upgrade() {
@@ -159,9 +166,16 @@ impl PeerControlSink for Liveness {
         }
         let Some(n) = payload.get("n").and_then(Value::as_u64) else { return Vec::new() };
         match payload.get("t").and_then(Value::as_str) {
-            Some("ping") => vec![json!({"t": "pong", "n": n})],
+            Some("ping") => {
+                let mut pong = json!({"t": "pong", "n": n});
+                if let Some(l) = LoadSample::local() {
+                    pong["load"] = l.to_json();
+                }
+                vec![pong]
+            }
             Some("pong") => {
-                self.on_pong(&ctx.peer_id, n);
+                let load = payload.get("load").and_then(LoadSample::from_json);
+                self.on_pong(&ctx.peer_id, n, load);
                 Vec::new()
             }
             _ => Vec::new(),

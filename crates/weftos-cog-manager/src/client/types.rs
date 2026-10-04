@@ -175,6 +175,26 @@ pub struct FleetNode {
     pub age_s: u64,
     #[serde(default)]
     pub online: bool,
+    // ---- heartbeat v2 (self-reported, unauthenticated; display only) ----
+    #[serde(default)]
+    pub uptime_s: Option<u64>,
+    /// Fraction of one core busy.
+    #[serde(default)]
+    pub load: Option<f64>,
+    #[serde(default)]
+    pub free_heap: Option<u64>,
+    #[serde(default)]
+    pub reset_reason: Option<String>,
+    #[serde(default)]
+    pub chip: Option<String>,
+    #[serde(default)]
+    pub mac: Option<String>,
+    #[serde(default)]
+    pub channel: Option<u32>,
+    #[serde(default)]
+    pub sample_hz: Option<f64>,
+    #[serde(default)]
+    pub provenance: String,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -229,6 +249,8 @@ pub struct Shared {
     pub node_facts_at: Option<Instant>,
     /// The daemon's `fleet.snapshot` through the gateway (None = not fetched / not configured).
     pub fleet: Option<Result<serde_json::Value, String>>,
+    /// RTT / load readings per node from successive snapshots (sparklines).
+    pub fleet_hist: crate::fleet::History,
 }
 
 /// One cog's export `/status` fetch (the cog's own endpoint, not a host endpoint).
