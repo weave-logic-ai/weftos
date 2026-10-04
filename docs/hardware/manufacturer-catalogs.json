@@ -1,7 +1,7 @@
 {
   "generated": "2026-10-03",
   "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool.",
-  "count": 71,
+  "count": 72,
   "manufacturers": [
     {
       "manufacturer": "Adafruit",
@@ -155,6 +155,17 @@
       "access_notes": "Parametric catalog: i.MX (RT/8/9) MPUs, Kinetis/LPC/MCX MCUs, FRDM/EVK dev boards, wireless (JN/KW). NXP is a major Mouser line.",
       "approx_products": 8000,
       "best_ingest_path": "Mouser pull for board-relevant SKUs (FRDM, i.MX RT eval, MCX dev boards, LPC/Kinetis); parametric pages for family metadata. Scope to dev boards + flagship MCU/MPU to stay bounded.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "Pololu",
+      "area": "boards",
+      "website": "https://www.pololu.com",
+      "catalog_source": "https://www.pololu.com category tree (stable /category/<id>/ scheme), e.g. /7/sensors, /136/voltage-regulators, /120/stepper-motor-drivers, /11/brushed-dc-motor-drivers, /212/tic-stepper-motor-controllers, /102/maestro-usb-servo-controllers, /9/motors-and-gearboxes, /1/robots-and-kits",
+      "source_type": "product-listing",
+      "access_notes": "US robotics/electronics vendor (Las Vegas, NV); sells direct, NOT a Mouser line. Signature strengths: switching voltage regulators (buck D24Vxx, boost U1V/U3V, buck-boost S7V/S9V/S13V), power/MOSFET slide switches with reverse-voltage protection, motor driver carriers (A4988/DRV8825/DRV8434/TB67S/MP6xxx steppers; DRV8833/TB6612/DRV8256/MP6550 brushed DC) and smart controllers (Tic stepper, Motoron, Jrk G2, Simple Motor Controller, Maestro servo), sensor carrier boards (ST ToF VLxxx incl. VL53L1X/L5CX/L7CX/L8CX, ST MEMS IMUs AltIMU-10/MinIMU-9 = LSM6DSO/LIS3MDL/LPS22, Allegro ACS current sensors, QTR reflectance, encoders), gearmotors/steppers/servos, robot platforms (3pi+/Zumo/Romi/Balboa/A-Star). Carriers put known chips on 0.1-inch breadboard boards with onboard regulator + level shifters (2.6-5.5 V, I2C/SPI). Several carriers expose chips already in our catalog (VL53L7CX = SEN0628 ToF, VL53L1X candidate, ST IMU parts) - drop-in alternatives. Product pages carry full specs + datasheets.",
+      "approx_products": 1500,
+      "best_ingest_path": "Scrape pololu.com /category/<id>/ pages (stable scheme) + per-product pages for specs/datasheets; no distributor pull (sells direct). Prioritize regulators + ST ToF/IMU carriers + Allegro current sensors + smart motor/servo controllers for our fleet-power + actuator-cog story. See pololu.md.",
       "status": "found"
     },
     {

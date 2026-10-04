@@ -1,6 +1,6 @@
 # Manufacturer catalog sources
 
-Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 71 manufacturers across 5 areas. Generated 2026-10-03 by the catalog-source sweep.
+Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 72 manufacturers across 5 areas. Generated 2026-10-03 by the catalog-source sweep (Pololu added 2026-10-04).
 
 > `best_ingest_path` is how WE pull it today (Mouser API by manufacturer+category) and the authoritative fuller source (parametric CSV export / Octopart-Nexar / first-party scrape). Many first-party selectors are bot-walled; the distributor/CSV paths are the practical ones.
 
@@ -75,7 +75,7 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **Teledyne FLIR (OEM thermal camera cores)** | https://oem.flir.com/categories/infrared-camera-cores/modelselector (model selector for LWIR cores: Boson, Boson+, Lepton, Tau 2, Hadron, Tura) | parametric-selector | 60 | Scrape oem.flir.com model selector pages; DigiKey/GroupGets for Lepton breakout/orderable variants. | found |
 | **Vishay Intertechnology** | https://www.vishay.com/en/optoelectronics/ (interactive parametric product tables: IR emitters, PIN photodiodes, phototransistors, reflective/transmissive optical sensors, ambient light/proximity sensors, optocouplers) + selector guide PDFs (sg2123, sg2166) | parametric-selector | 2000 | Mouser keyword pull (Vishay photodiode / phototransistor / IR emitter / proximity sensor) + Vishay parametric table scrape. | found |
 
-## boards  (20)
+## boards  (21)
 
 | Manufacturer | Catalog source | Type | ~SKUs | Best ingest path | Status |
 |---|---|---|---|---|---|
@@ -93,6 +93,7 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **MediaTek** | https://www.mediatek.com/products (product families); Genio IoT dev boards at https://www.mediatek.com/products/iot | product-listing | 100 | Scrape mediatek.com Genio/IoT product pages for EVK metadata (reference). No clean distribution parts feed; Genio EVKs sold via partners (ADLINK, etc.). Limited board pool relevance. | partial |
 | **Microchip** | https://www.microchip.com/en-us/products (parametric product pages); dev tools at https://www.microchip.com/en-us/tools-resources | parametric-selector | 10000 | Mouser pull for MCU/dev-board SKUs (board-relevant: Curiosity, Explorer, SAM-D/E eval, ATmega/SAMD boards); use parametric pages for family-level metadata. Scope to dev boards + common MCUs to stay bounded. | found |
 | **NXP** | https://www.nxp.com/products (parametric product tree); dev boards at https://www.nxp.com/design/design-center/development-boards-and-designs | parametric-selector | 8000 | Mouser pull for board-relevant SKUs (FRDM, i.MX RT eval, MCX dev boards, LPC/Kinetis); parametric pages for family metadata. Scope to dev boards + flagship MCU/MPU to stay bounded. | found |
+| **Pololu** | https://www.pololu.com (category tree, e.g. https://www.pololu.com/category/7/sensors, /136/voltage-regulators, /9/motors-and-gearboxes) | product-listing | 1500 | Scrape pololu.com category pages (stable /category/<id>/ scheme) + per-product pages for specs; Pololu sells direct (not a Mouser line). Signature families: switching voltage regulators (buck/boost/buck-boost), motor drivers & smart controllers (Tic/Motoron/Jrk/Maestro), sensor carriers (ST ToF VLxxx, ST MEMS IMUs, Allegro current sensors), gearmotors/steppers/servos, robot platforms (3pi+/Zumo/Romi/Balboa). Carriers expose chips already in our catalog (VL53L7CX, LSM6DSO/LIS3MDL/LPS22, ADS1115-paired current sensors) — drop-in alternatives. See [pololu.md](pololu.md). | found |
 | **Raspberry Pi** | https://www.raspberrypi.com/products/ | product-listing | 40 | Scrape products index + per-product datasheet PDFs; also Mouser (Raspberry Pi is a Mouser line) for the Pico/RP2040/CM modules. | found |
 | **Samsung** | https://semiconductor.samsung.com/processor/ (Exynos processors); Artik line discontinued | product-listing | 30 | No distribution ingest path for boards/modules. Record product-listing page for reference only; Exynos SoCs reach makers only inside finished devices. Essentially out of practical scope for a board/module pool. | partial |
 | **Seeed Studio** | https://www.seeedstudio.com/catalogsearch/result/?q= (store categories); SBC tag https://www.seeedstudio.com/tag/SBC.html | product-listing | 400 | Mouser pull for Grove/XIAO/Wio SKUs; scrape store category pages + 2025 catalog PDF for SBC/reComputer families not on Mouser. | found |
