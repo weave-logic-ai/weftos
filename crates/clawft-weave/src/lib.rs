@@ -195,6 +195,8 @@ pub mod node_facts_rpc;
 pub mod fleet_labels;
 /// `fleet.snapshot` and `fleet.location.set` (fleet manager P1).
 pub mod fleet_rpc;
+#[cfg(feature = "ecc")]
+pub mod spatial_rpc;
 pub mod protocol;
 pub mod service_units;
 pub mod service_units_system;

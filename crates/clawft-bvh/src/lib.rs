@@ -23,7 +23,7 @@ mod vector_join;
 
 pub use aabb::{Aabb, Frustum, Ray, Vec3};
 pub use chain::{BvhChainKind, ChainSink, NullChainSink, RecordingChainSink};
-pub use leaf::{BranchId, BranchMeta, DiffEntry, IdentityKind, Leaf, LeafId};
+pub use leaf::{BranchId, BranchMeta, DiffEntry, IdentityKind, Leaf, LeafId, tags};
 pub use query::{RayHit, query_aabb, query_knn, query_point, query_ray, query_sphere};
 pub use registry::{NarrowPhaseFn, SpatialRegistry};
 pub use store::{BvhError, BvhResult, BvhStore, BvhStoreConfig};

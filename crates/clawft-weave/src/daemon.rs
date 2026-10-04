@@ -8040,6 +8040,8 @@ async fn dispatch(
             }))
         }
         #[cfg(feature = "ecc")]
+        m if m.starts_with("ecc.spatial.") => crate::spatial_rpc::handle(m, &params, &kernel).await,
+        #[cfg(feature = "ecc")]
         "ecc.calibrate" => {
             let k = kernel.read().await;
             if let Some(cal) = k.ecc_calibration() {

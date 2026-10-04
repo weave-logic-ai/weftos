@@ -1,9 +1,7 @@
 //! WEFT-720 Phase E E2E: `ecc.spatial` insert → query → branch → diff + replay.
 //!
-//! **Ignored (2026-07-31):** `spatial_rpc` was dropped when `BvhStore` /
-//! parse helpers diverged from the Phase E scaffold. Re-enable when a
-//! SpatialService-backed RPC surface is reattached to the daemon.
-//! Unit coverage for BVH remains in `clawft-bvh` / kernel spatial tests.
+//! Runs against the daemon's `ecc.spatial.*` RPCs over the kernel `SpatialService`
+//! (reattached 2026-10-04; it was ignored from 2026-07-31 while the RPC surface was gone).
 
 #![cfg(unix)]
 #![cfg(feature = "ecc")]
@@ -58,7 +56,7 @@ fn minimal_kernel_config() -> KernelConfig {
         ipc_tcp: None,
         llm: None,
         agent: None,
-        spatial: None,
+        spatial: Some(clawft_types::config::SpatialConfig { enabled: true, ..Default::default() }),
     }
 }
 
@@ -130,7 +128,6 @@ async fn rpc(
 }
 
 #[tokio::test]
-#[ignore = "spatial_rpc module deferred until SpatialService reattach (WEFT-720 residual)"]
 async fn spatial_insert_query_branch_diff_replay() {
     let (_tmp, sock, shutdown) = spawn_test_daemon().await;
 

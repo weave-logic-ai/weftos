@@ -151,6 +151,59 @@ fn hex_nibble(c: u8) -> Option<u8> {
 pub struct BvhBackend {
     store: Mutex<BvhStore>,
     max_leaves: Option<usize>,
+    /// In-process record of every mutation (for `ecc.spatial.events` / replay checks), fed
+    /// alongside any ExoChain sink.
+    log: Arc<EventLog>,
+}
+
+/// Most mutation events kept in memory; older ones are dropped and replay is reported as
+/// incomplete rather than wrong.
+pub const EVENT_LOG_CAP: usize = 100_000;
+
+/// Bounded in-memory mutation log.
+#[derive(Default)]
+pub struct EventLog {
+    events: Mutex<Vec<clawft_bvh::BvhChainKind>>,
+    truncated: std::sync::atomic::AtomicBool,
+}
+
+impl ChainSink for EventLog {
+    fn on_event(&self, event: &clawft_bvh::BvhChainKind) {
+        let mut ev = self.events.lock().expect("event log poisoned");
+        if ev.len() >= EVENT_LOG_CAP {
+            ev.remove(0);
+            self.truncated.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        ev.push(event.clone());
+    }
+}
+
+/// Fans one event out to the log and the optional external (ExoChain) sink.
+struct TeeSink {
+    log: Arc<EventLog>,
+    inner: Option<Arc<dyn ChainSink>>,
+}
+
+impl ChainSink for TeeSink {
+    fn on_event(&self, event: &clawft_bvh::BvhChainKind) {
+        self.log.on_event(event);
+        if let Some(ref s) = self.inner {
+            s.on_event(event);
+        }
+    }
+}
+
+/// Result of rebuilding the store from its mutation log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayReport {
+    /// Events replayed.
+    pub events: usize,
+    /// The replica has the same branches and the same leaf ids per branch as the live store.
+    pub ok: bool,
+    /// The log dropped old events (replay cannot be complete).
+    pub truncated: bool,
+    /// Branches compared.
+    pub branches: usize,
 }
 
 impl BvhBackend {
@@ -161,9 +214,12 @@ impl BvhBackend {
         } else {
             Some(config.max_leaves)
         };
+        let log = Arc::new(EventLog::default());
+        let tee: Arc<dyn ChainSink> = Arc::new(TeeSink { log: log.clone(), inner: None });
         Self {
-            store: Mutex::new(BvhStore::new(config)),
+            store: Mutex::new(BvhStore::with_sink(config, tee)),
             max_leaves: max,
+            log,
         }
     }
 
@@ -179,16 +235,49 @@ impl BvhBackend {
         } else {
             Some(config.max_leaves)
         };
+        let log = Arc::new(EventLog::default());
+        let tee: Arc<dyn ChainSink> = Arc::new(TeeSink { log: log.clone(), inner: Some(sink) });
         Self {
-            store: Mutex::new(BvhStore::with_sink(config, sink)),
+            store: Mutex::new(BvhStore::with_sink(config, tee)),
             max_leaves: max,
+            log,
         }
     }
 
     /// Attach / replace the chain sink after construction (boot order).
     pub fn set_chain_sink(&self, sink: Arc<dyn ChainSink>) {
         let mut store = self.store.lock().expect("BvhStore lock poisoned");
-        store.set_sink(sink);
+        store.set_sink(Arc::new(TeeSink { log: self.log.clone(), inner: Some(sink) }));
+    }
+
+    /// Run `f` with the store locked (branch-scoped insert / remove / query for the daemon's
+    /// `ecc.spatial.*` RPCs). Mutations still go through the store's chain sink.
+    pub fn with_store<R>(&self, f: impl FnOnce(&mut BvhStore) -> R) -> R {
+        let mut store = self.store.lock().expect("BvhStore lock poisoned");
+        f(&mut store)
+    }
+
+    /// Mutation events recorded so far, and whether old ones were dropped.
+    pub fn events(&self) -> (Vec<clawft_bvh::BvhChainKind>, bool) {
+        let ev = self.log.events.lock().expect("event log poisoned").clone();
+        (ev, self.log.truncated.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Rebuild a replica from the mutation log and compare it with the live store (branches
+    /// and leaf ids per branch). The live store is not replaced.
+    pub fn verify_replay(&self) -> ReplayReport {
+        let (events, truncated) = self.events();
+        let store = self.store.lock().expect("BvhStore lock poisoned");
+        let mut replica = BvhStore::new(store.config().clone());
+        let applied = events.iter().all(|e| replica.apply_chain_event(e).is_ok());
+        let branches = store.branch_count();
+        let ids = |s: &BvhStore, b: u64| -> Option<Vec<u64>> {
+            let mut v: Vec<u64> = s.snapshot_leaves(BranchId(b)).ok()?.into_iter().map(|(id, _)| id.0).collect();
+            v.sort_unstable();
+            Some(v)
+        };
+        let same = replica.branch_count() == branches && (0..branches as u64).all(|b| ids(&store, b) == ids(&replica, b));
+        ReplayReport { events: events.len(), ok: applied && same && !truncated, truncated, branches }
     }
 
     /// Snapshot leaves on the main branch (restart equality tests).
