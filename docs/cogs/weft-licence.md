@@ -345,7 +345,7 @@ Recorded on 2026-10-02 (release profile, already stripped):
 
 ## Running cogs on the Seed
 
-`weft-licence` holds the licence; `weft-cog-host` enforces it at start (ADR-106, "Phase 3 `weft-cog-host` start check"). The host reads its own licence directory, `<root>/.licence` by default (`$WEFT_COG_HOST_LICENCE_DIR` or `serve --licence-dir` override), so on a Seed that is `~/.weftos/cogs/.licence`. Without the directory the host behaves as before. With it, every `source: cognitum` cog needs a grant and an operator hash approval to start, including cogs installed earlier.
+`weft-licence` holds the licence; `weft-cog-host` enforces it at start (ADR-106, "Phase 3 `weft-cog-host` start check"). The host reads its own licence directory, `<root>/.licence` by default (`$WEFT_COG_HOST_LICENCE_DIR` or `serve --licence-dir` override), so on a Seed that is `~/.weftos/cogs/.licence`. Without the directory the host behaves as before. Once it exists, every `source: cognitum` cog is refused (`binding_inactive`) until the binding is imported, and then needs a grant and an operator hash approval to start, including cogs installed earlier, so create the directory when the records are ready. The grant key the binding names must not be one of the operator keys in `trust.json`.
 
 Set it up, as the user the host runs as:
 

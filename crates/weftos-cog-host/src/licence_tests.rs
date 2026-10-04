@@ -371,10 +371,18 @@ fn a_licence_dir_without_config_fails_closed() {
 }
 
 #[test]
-fn configured_but_never_bound_keeps_the_old_path() {
+fn configured_but_never_bound_fails_closed_for_cognitum_cogs() {
     let (_d, lic, _) = fixture();
     assert_eq!(lic.status()["state"], "ready");
-    assert_eq!(code(&lic), Ok(()));
+    // A configured directory means a binding is intended: nothing Cognitum-origin starts before it.
+    let e = check_start(&lic, &rec(Source::Cognitum), BIN).unwrap_err();
+    assert_eq!(e.code, "binding_inactive");
+    assert!(e.reason.contains("no binding yet"), "{}", e.reason);
+    // Cogs that are not Cognitum-origin (and not claimed) are untouched.
+    assert!(check_start(&lic, &rec(Source::WeaveLogic), BIN).unwrap().is_none());
+    // Importing the binding moves the refusal on to the grant.
+    lic.import(&Records { binding: Some(binding()), ..Default::default() }).unwrap();
+    assert_eq!(code(&lic), Err("no_grant"));
 }
 
 #[test]

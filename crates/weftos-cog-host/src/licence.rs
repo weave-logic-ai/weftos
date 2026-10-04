@@ -24,6 +24,8 @@
 //!
 //! - **No directory**: the gate does not apply (`NotSeedBound`), exactly as a
 //!   kernel node that never held a binding.
+//! - **Configured, no binding yet**: fail closed, `binding_inactive`: a directory
+//!   with `config.json` and `trust.json` means the operator intends to bind.
 //! - **Directory present but unreadable** (no or bad config or trust file, a
 //!   poisoned store, an unreadable revocation list): fail closed, every
 //!   Cognitum-origin start is refused `binding_inactive`.
@@ -328,6 +330,15 @@ impl CognitumRunGate for HostLicence {
             State::Broken(e) => Err(RunRefusal::BindingInactive(format!("licence state unusable: {e}"))),
             State::Ready(s) => {
                 let v = check_run(&s.grants, Some(&s.approvals), req)?;
+                // A configured directory means the operator intends to bind this Seed: until a
+                // binding is imported, a Cognitum-origin start is refused rather than let through.
+                // (No directory at all stays `NotSeedBound`.)
+                if matches!(v, RunVerdict::NotSeedBound) {
+                    return Err(RunRefusal::BindingInactive(format!(
+                        "the licence directory {} is configured but holds no binding yet: import the signed binding first",
+                        self.dir.display()
+                    )));
+                }
                 if let (RunVerdict::Permit(_), Some(e)) = (&v, s.revocations.subjects_error()) {
                     return Err(RunRefusal::BindingInactive(format!("revocation list unreadable: {e}")));
                 }
