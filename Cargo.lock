@@ -10771,6 +10771,7 @@ dependencies = [
  "blake3",
  "clawft-kernel",
  "ed25519-dalek",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

@@ -369,6 +369,8 @@ weft-cog-host licence status
 
 `records.json` is `{"binding": <SignedBinding>, "grants": [..], "approvals": [..], "revocations": [..]}`; every field is optional. Each record is judged on its own and the answer lists, in order, `applied`, `duplicate`, `ignored`, `applied_unsaved` or `refused` with the reason. The binding is the operator-signed v2 binding, the grants come from `weft-licence`, the approvals are the operator's hash approvals, and an `artifact_hash` revocation notice stops a running cog. No `weaver` verb writes this file today; the signed records are the ones the licence holder already has.
 
+The check gates the host's supervised start path. It does not protect against a process with the host's own uid, which can edit this directory; for that, keep the directory root-owned and read-only to the host user and import as root (ADR-106, "Limits"). `GET /licence` and `POST /licence/records` both need the host bearer token.
+
 A refused start shows in `GET /cogs` as `licence_refusal` with the stable code, and in the host log with the remedy. The state is re-read when its files change, so no restart is needed after an import.
 
 ## Pending Cognitum (phase 4)

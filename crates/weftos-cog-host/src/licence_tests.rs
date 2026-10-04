@@ -224,17 +224,33 @@ fn the_bytes_that_were_hashed_are_the_bytes_that_run() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert_eq!(std::fs::read_to_string(&ran).unwrap().trim(), "original");
-    // The private copy is 0700 and goes away with the instance.
+    // Where a file copy is used (not Linux memfd), it is 0700, content-addressed and cleared at host start.
     let run_dir = root.path().join(".run");
-    let copies: Vec<_> = std::fs::read_dir(&run_dir).unwrap().flatten().collect();
-    assert_eq!(copies.len(), 1);
-    {
+    if let Ok(rd) = std::fs::read_dir(&run_dir) {
         use std::os::unix::fs::PermissionsExt;
+        let copies: Vec<_> = rd.flatten().collect();
+        assert_eq!(copies.len(), 1);
         assert_eq!(copies[0].metadata().unwrap().permissions().mode() & 0o777, 0o700);
         assert_eq!(std::fs::metadata(&run_dir).unwrap().permissions().mode() & 0o777, 0o700);
+        s.stop("fall-detect").unwrap();
+        let _fresh = Supervisor::new(root.path().to_path_buf());
+        assert!(!run_dir.exists());
+    } else {
+        s.stop("fall-detect").unwrap();
     }
-    s.stop("fall-detect").unwrap();
-    assert_eq!(std::fs::read_dir(&run_dir).unwrap().count(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_dangling_or_unreadable_licence_dir_fails_closed_not_open() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join(".licence");
+    std::os::unix::fs::symlink(root.path().join("nowhere"), &dir).unwrap();
+    let lic = HostLicence::open(dir);
+    assert_eq!(lic.status()["state"], "broken");
+    let e = check_start(&lic, &rec(Source::Cognitum), b"bytes").unwrap_err();
+    assert_eq!(e.code, "binding_inactive");
+    assert!(lic.import(&Records::default()).unwrap_err().contains("dangling"));
 }
 
 #[test]

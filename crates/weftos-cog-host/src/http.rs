@@ -3,7 +3,7 @@
 //!   POST /cogs/<id>/start|stop -> enable/disable + spawn/kill
 //!   POST /install              -> verify (Ed25519/sha256) + write + reload  (body: InstallReq JSON)
 //!   POST /reload               -> re-read records from disk
-//!   GET  /licence              -> the ADR-106 licence state the start check uses
+//!   GET  /licence              -> the ADR-106 licence state the start check uses (needs the token)
 //!   POST /licence/records      -> verify + apply signed binding/grants/approvals/revocations
 //!   GET  /healthz              -> ok
 //!   /hw/*                      -> USB inventory, identify, Hardware Dex (see `hw_http`)
@@ -81,9 +81,9 @@ fn respond(s: &mut TcpStream, code: &str, payload: String, cors: &str) -> std::i
 }
 
 /// CORS headers for this request. Browsers get them only from an allowlisted origin on `/hw/*`
-/// and for POSTs; the legacy GET routes (and edge heartbeats) keep `*`.
+/// `/licence*` and for POSTs; the legacy GET routes (and edge heartbeats) keep `*`.
 fn cors_headers(method: &str, path: &str, h: &Headers, policy: &Policy) -> String {
-    let open = !path.starts_with("/hw/") && (method == "GET" || path == "/fleet/heartbeat");
+    let open = !path.starts_with("/hw/") && !path.starts_with("/licence") && (method == "GET" || path == "/fleet/heartbeat");
     if open {
         return "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\n".into();
     }
@@ -109,6 +109,16 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licenc
             content_len = content_length(&buf[..p]);
             let head = String::from_utf8_lossy(&buf[..p]);
             let path = head.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("/");
+            if path.starts_with("/licence") {
+                // Authenticate before reading any body: the state is private and imports are big.
+                let method = head.lines().next().unwrap_or("").split_whitespace().next().unwrap_or("");
+                let h = parse_headers(&head);
+                let auth = if method == "POST" { policy.check_post(&h).and_then(|_| policy.check_token(&h)) } else { policy.check_token(&h) };
+                if let Err((code, payload)) = auth {
+                    let cors = cors_headers(method, path, &h, policy);
+                    return respond(&mut s, code, payload, &cors);
+                }
+            }
             let cap = if path.starts_with("/hw/") {
                 HW_BODY_CAP
             } else if path == "/fleet/heartbeat" {
@@ -172,7 +182,10 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licenc
     let (code, payload) = match hw_http::handle(&hw, &root, policy) {
         Some(r) => r,
         None => match (method, path) {
-            ("GET", "/licence") => ("200 OK", licence.status().to_string()),
+            ("GET", "/licence") => match policy.check_token(&headers) {
+                Ok(()) => ("200 OK", licence.status().to_string()),
+                Err((code, payload)) => (code, payload),
+            },
             ("POST", "/licence/records") => licence_route(body, licence),
             _ => route(method, path, body, peer_ip, &sup),
         },
@@ -456,8 +469,14 @@ mod tests {
         assert!(st.contains("400") && body.contains("no licence directory"), "{st} {body}");
         let (st, _, body) = send(a, &post("/licence/records", &format!("{JSON}{TOK}"), r#"{"nope":1}"#));
         assert!(st.contains("400") && body.contains("bad licence records"), "{st} {body}");
-        let (st, _, body) = send(a, "GET /licence HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
-        assert!(st.contains("200") && body.contains("unconfigured"), "{st} {body}");
+        // The state names the mesh, grants and hashes: token only, and never `*` CORS.
+        let (st, h, body) = send(a, "GET /licence HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(st.contains("401") && !body.contains("unconfigured") && !h.contains("access-control-allow-origin"), "{st} {h} {body}");
+        let (st, h, body) = send(a, &format!("GET /licence HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n{TOK}\r\n"));
+        assert!(st.contains("200") && body.contains("unconfigured") && !h.contains("access-control-allow-origin"), "{st} {h} {body}");
+        // An oversized import is refused for the missing token before its size is considered.
+        let raw = format!("POST /licence/records HTTP/1.1\r\nHost: 127.0.0.1\r\n{JSON}Content-Length: {}\r\n\r\n", MAX_IMPORT_BYTES + 1);
+        assert!(send(a, &raw).0.contains("401"));
         let raw = format!("POST /licence/records HTTP/1.1\r\nHost: 127.0.0.1\r\n{JSON}{TOK}Content-Length: {}\r\n\r\n", MAX_IMPORT_BYTES + 1);
         assert!(send(a, &raw).0.contains("413"));
         assert!(!root.path().join(".licence").exists());

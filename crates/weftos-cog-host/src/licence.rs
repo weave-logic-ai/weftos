@@ -115,9 +115,28 @@ fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Whether the licence directory is there: `Ok(false)` only for a definite not-found. Any other
+/// stat error (permissions, I/O, a dangling symlink loop) is not "absent": the gate must not fail open.
+fn dir_present(dir: &Path) -> Result<bool, String> {
+    match std::fs::metadata(dir) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // A dangling symlink is NotFound from metadata but is still something put there.
+            match std::fs::symlink_metadata(dir) {
+                Ok(_) => Err(format!("{}: dangling link", dir.display())),
+                Err(e2) if e2.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(e2) => Err(format!("{}: {e2}", dir.display())),
+            }
+        }
+        Err(e) => Err(format!("{}: {e}", dir.display())),
+    }
+}
+
 fn load(dir: &Path, clock: &Clock) -> State {
-    if !dir.exists() {
-        return State::Unconfigured;
+    match dir_present(dir) {
+        Ok(false) => return State::Unconfigured,
+        Err(e) => return State::Broken(e),
+        Ok(true) => {}
     }
     let cfg = read_capped(&dir.join(CONFIG_FILE)).and_then(|b| {
         serde_json::from_slice::<HostConfig>(&b).map_err(|e| format!("{CONFIG_FILE}: {e}"))
@@ -239,7 +258,7 @@ impl HostLicence {
         {
             return Err(format!("at most {MAX_IMPORT_RECORDS} records of each kind per import"));
         }
-        if !self.dir.exists() {
+        if !dir_present(&self.dir)? {
             return Err(format!(
                 "no licence directory at {}: create it with {CONFIG_FILE} and {TRUST_FILE} first",
                 self.dir.display()
@@ -367,13 +386,18 @@ pub struct LicensedStart {
 /// apply. Only `gate` decides; nothing in the cog's bytes or arguments does.
 pub fn check_start(gate: &dyn CognitumRunGate, rec: &CogRecord, bytes: &[u8]) -> Result<Option<LicensedStart>, StartRefused> {
     let (sha256, blake3) = hashes(bytes);
-    if rec.source != Source::Cognitum && !gate.claims(&sha256, &blake3) {
+    check_start_hashed(gate, rec, &sha256, &blake3)
+}
+
+/// [`check_start`] for hashes already computed from the bytes that will run.
+pub fn check_start_hashed(gate: &dyn CognitumRunGate, rec: &CogRecord, sha256: &str, blake3: &str) -> Result<Option<LicensedStart>, StartRefused> {
+    if rec.source != Source::Cognitum && !gate.claims(sha256, blake3) {
         return Ok(None);
     }
-    let req = RunRequest { cog_id: &rec.id, version: &rec.version, sha256: &sha256, blake3: &blake3 };
+    let req = RunRequest { cog_id: &rec.id, version: &rec.version, sha256, blake3 };
     match gate.check(&req) {
         Ok(RunVerdict::NotSeedBound) => Ok(None),
-        Ok(RunVerdict::Permit(permit)) => Ok(Some(LicensedStart { blake3, permit })),
+        Ok(RunVerdict::Permit(permit)) => Ok(Some(LicensedStart { blake3: blake3.to_string(), permit })),
         Err(e) => Err(StartRefused {
             code: e.code(),
             reason: format!(
