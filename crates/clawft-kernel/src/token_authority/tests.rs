@@ -591,3 +591,12 @@ fn read_tokens_are_read_only_and_survive_a_rebuild() {
     let b = auth(&c);
     assert_eq!(b.validate(&secret).expect("rebuilt from the chain").scope, TokenScope::Read);
 }
+
+#[test]
+fn an_unknown_scope_in_the_chain_is_not_a_token_not_an_owner_token() {
+    use super::TokenScope;
+    assert_eq!(TokenScope::parse(None), Some(TokenScope::Owner));
+    assert_eq!(TokenScope::parse(Some("read")), Some(TokenScope::Read));
+    assert_eq!(TokenScope::parse(Some("superuser")), None);
+    assert_eq!(TokenScope::parse(Some("")), None);
+}

@@ -60,8 +60,17 @@ zero-width characters), but a console must still escape labels, names and every
 other string it shows from a snapshot.
 
 `mesh.rtt_ms` is `null` with a note: nothing in this build measures round-trip
-time, and a zero would read as a perfect link. `cluster.last_seen` is the
-peer's last heartbeat (RFC 3339), also in `cluster.nodes`.
+time, and a zero would read as a perfect link.
+
+`cluster.last_announce` (also `last_announce` in `cluster.nodes`, formerly
+`last_seen`) is when a verified join, recovery or announce from the peer last
+arrived. It is not liveness: nothing in this build pings peers, so a node that
+went quiet keeps its old time and one that is up can look old. A periodic
+ping/pong between verified peers (which would also give a real RTT) is the fix.
+
+A read-only token can also read `/api/chain/events`, which shows operator
+activity: location labels, node ids, and token issue and revoke ids. It holds
+no secrets, but treat it as operator-visible.
 
 ## How the console gets a token
 

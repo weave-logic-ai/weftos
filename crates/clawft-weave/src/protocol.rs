@@ -229,9 +229,11 @@ pub struct ClusterNodeInfo {
     pub platform: String,
     pub state: String,
     pub address: Option<String>,
-    /// RFC 3339 time of the peer's last heartbeat; empty when the membership
+    /// RFC 3339 time the membership last heard a verified join, recovery or announce
+    /// from the peer (not liveness: nothing pings peers); empty when the membership
     /// has no record of the peer.
-    pub last_seen: String,
+    #[serde(alias = "last_seen")]
+    pub last_announce: String,
 }
 
 impl ClusterNodeInfo {
@@ -248,7 +250,7 @@ impl ClusterNodeInfo {
             name: peer.as_ref().map_or_else(|| id.to_owned(), |p| p.name.clone()),
             platform: platform.to_string(),
             state: state.to_string(),
-            last_seen: peer.as_ref().map_or_else(String::new, |p| {
+            last_announce: peer.as_ref().map_or_else(String::new, |p| {
                 p.last_heartbeat.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             }),
             address: peer.and_then(|p| p.address),

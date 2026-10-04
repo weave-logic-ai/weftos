@@ -23,7 +23,7 @@ pub struct FleetArgs {
 /// Fleet subcommands.
 #[derive(Subcommand)]
 pub enum FleetAction {
-    /// Show every known node with trust, last seen, placed cogs and location.
+    /// Show every known node with trust, last announce, placed cogs and location.
     Status {
         /// Print the raw snapshot JSON (every field with its provenance).
         #[arg(long)]
@@ -127,7 +127,7 @@ pub fn render(snap: &Value, now: u64) -> String {
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL_CONDENSED);
     table.set_header(vec![
-        "Node", "State", "Trust", "Address", "Last seen", "Mesh", "Cogs", "Location",
+        "Node", "State", "Trust", "Address", "Last announce", "Mesh", "Cogs", "Location",
     ]);
     for n in snap["nodes"].as_array().into_iter().flatten() {
         let id = n["node_id"].as_str().unwrap_or("?");
@@ -141,7 +141,7 @@ pub fn render(snap: &Value, now: u64) -> String {
                 None => t.to_owned(),
             },
         );
-        let seen = val(n, "cluster")["last_seen_unix"]
+        let seen = val(n, "cluster")["last_announce_unix"]
             .as_u64()
             .map_or_else(|| "-".to_owned(), |t| age(now, t));
         let mesh = match val(n, "mesh") {
@@ -181,7 +181,7 @@ pub fn render(snap: &Value, now: u64) -> String {
         out.push_str(&format!("revoked hosts: {revoked}\n"));
     }
     out.push_str(
-        "name and address are announced by the peer; location is operator-set; trust and last seen are observed by this daemon.\n",
+        "name and address are announced by the peer; location is operator-set; trust and last announce are observed by this daemon.\n",
     );
     for d in snap["degraded"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         out.push_str(&format!("not available: {d}\n"));
@@ -199,12 +199,12 @@ mod tests {
             "nodes": [
                 { "node_id": "aaaaaaaaaaaaaaaaaaaa", "local": true, "name": { "value": "mac" },
                   "announced": { "value": { "address": "10.0.0.2:9" } },
-                  "cluster": { "value": { "state": "active", "last_seen_unix": 990 } },
+                  "cluster": { "value": { "state": "active", "last_announce_unix": 990 } },
                   "facts": { "value": { "trust_tier": "pinned", "tier_source": "operator" } },
                   "instances": { "value": [{}, {}] },
                   "location": { "value": { "site": "Lab", "room": "R1" } } },
                 { "node_id": "bbbbbbbbbbbbbbbbbbbb",
-                  "cluster": { "value": { "state": "suspect", "last_seen_unix": 100 } },
+                  "cluster": { "value": { "state": "suspect", "last_announce_unix": 100 } },
                   "mesh": { "value": { "class": "leaf", "verified": false, "heartbeat": "suspect" } },
                   "revoked": { "value": { "reason": "x" } } },
             ],

@@ -9,7 +9,7 @@
 //! | section | source | provenance |
 //! |---|---|---|
 //! | `name` | the peer's own announced name | `peer_claimed` |
-//! | `cluster` | state, first/last seen (a peer's `last_seen` moves only on verified paths) | `daemon_observed` |
+//! | `cluster` | state, first seen and `last_announce` (when a verified join, recovery or announce last arrived; NOT liveness, nothing pings peers) | `daemon_observed` |
 //! | `announced` | platform and address the peer announced (an unverified peer chooses them) | `peer_claimed` |
 //! | `facts` | signed node facts cache (`cluster.facts`) | `signed_fact` |
 //! | `mesh` | live connection detail (class, verified, heartbeat) | `daemon_observed` |
@@ -203,8 +203,8 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
                 json!({
                     "state": p.state.to_string(),
                     "first_seen": rfc3339(p.first_seen),
-                    "last_seen": rfc3339(p.last_heartbeat),
-                    "last_seen_unix": p.last_heartbeat.timestamp(),
+                    "last_announce": rfc3339(p.last_heartbeat),
+                    "last_announce_unix": p.last_heartbeat.timestamp(),
                 }),
                 DAEMON_OBSERVED,
             ),
@@ -444,40 +444,37 @@ pub(crate) async fn set_location(dir: &std::path::Path, params: Value, kernel: &
         };
         let (node, site, room) = (p.node.clone(), p.site.trim().to_owned(), p.room.trim().to_owned());
         let d = dir.to_path_buf();
-        // Read first (a corrupt file refuses before anything is recorded).
-        let previous = match tokio::task::spawn_blocking({
-            let (d, node) = (d.clone(), node.clone());
-            move || fleet_labels::load(&d).map(|m| m.get(&node).cloned())
-        })
-        .await
-        {
-            Ok(Ok(prev)) => prev,
-            Ok(Err(e)) => return Response::error(e),
-            Err(_) => return Response::error("label read failed"),
-        };
-        // Chain first: a label that was set is always on the chain. If saving
-        // then fails the event stands and the caller is told to retry.
-        let ev = chain.append(
-            fleet_labels::CHAIN_SOURCE,
-            fleet_labels::CHAIN_KIND,
-            Some(json!({ "node": node, "site": site, "room": room, "previous": previous })),
-        );
-        let hash: String = ev.hash.iter().map(|b| format!("{b:02x}")).collect();
-        let chain_ref = json!({ "sequence": ev.sequence, "hash": hash });
-        let saved = {
+        // One critical section: read `previous`, record on the chain FIRST (a
+        // label that was set is always on the chain), then save. If saving
+        // fails the event stands and the caller is told to retry.
+        let done = tokio::task::spawn_blocking({
             let (node, site, room) = (node.clone(), site.clone(), room.clone());
-            tokio::task::spawn_blocking(move || fleet_labels::set(&d, &node, &site, &room, now_secs())).await
-        };
-        match saved {
-            Ok(Ok((_, loc))) => Response::success(json!({
-                "node": node, "site": loc.site, "room": loc.room, "set_at": loc.set_at,
-                "previous": previous, "chain": chain_ref,
-            })),
-            Ok(Err(e)) => Response::error(format!(
-                "recorded on the chain (event {}) but not saved: {e}; run the command again",
-                ev.sequence
-            )),
-            Err(_) => Response::error("recorded on the chain but the save task failed; run the command again"),
+            move || -> Result<Value, String> {
+                let _g = fleet_labels::lock();
+                let previous = fleet_labels::load(&d)?.get(&node).cloned();
+                let ev = chain.append(
+                    fleet_labels::CHAIN_SOURCE,
+                    fleet_labels::CHAIN_KIND,
+                    Some(json!({ "node": node, "site": site, "room": room, "previous": previous })),
+                );
+                let hash: String = ev.hash.iter().map(|b| format!("{b:02x}")).collect();
+                match fleet_labels::set_locked(&d, &node, &site, &room, now_secs()) {
+                    Ok((_, loc)) => Ok(json!({
+                        "node": node, "site": loc.site, "room": loc.room, "set_at": loc.set_at,
+                        "previous": previous, "chain": { "sequence": ev.sequence, "hash": hash },
+                    })),
+                    Err(e) => Err(format!(
+                        "recorded on the chain (event {}) but not saved: {e}; run the command again",
+                        ev.sequence
+                    )),
+                }
+            }
+        })
+        .await;
+        match done {
+            Ok(Ok(v)) => Response::success(v),
+            Ok(Err(e)) => Response::error(e),
+            Err(_) => Response::error("label task failed; run the command again"),
         }
     }
     #[cfg(not(feature = "exochain"))]

@@ -943,6 +943,13 @@ impl ClusterMembership {
                 verified,
             } => self.mesh_upsert(node_id, address.as_deref(), None, *verified),
             MeshPeerEvent::Alive { node_id } => {
+                // An unverified id never gets liveness credit.
+                if self
+                    .get_peer(node_id)
+                    .is_some_and(|p| p.state == NodeState::Unverified)
+                {
+                    return Ok(false);
+                }
                 if self.peers.contains_key(node_id) {
                     let _ = self.heartbeat(node_id);
                     if self
@@ -2332,6 +2339,23 @@ mod tests {
             assert_eq!(p.address.as_deref(), Some("10.0.0.6:9489"));
             // A verified announce does refresh it.
             cluster.apply_mesh_peer_event(&joined("real", true)).unwrap();
+            assert!(cluster.get_peer("real").unwrap().last_heartbeat > old);
+        }
+
+        #[test]
+        fn an_alive_event_for_an_unverified_id_gets_no_liveness_credit() {
+            let cluster = make_cluster(ClusterConfig::default());
+            cluster.apply_mesh_peer_event(&joined("claimed", false)).unwrap();
+            let old = chrono::DateTime::from_timestamp(1_000_000, 0).unwrap();
+            cluster.peers.get_mut("claimed").unwrap().last_heartbeat = old;
+            assert!(!cluster
+                .apply_mesh_peer_event(&MeshPeerEvent::Alive { node_id: "claimed".into() })
+                .unwrap());
+            assert_eq!(cluster.get_peer("claimed").unwrap().last_heartbeat, old);
+            // A verified peer's Alive still counts.
+            cluster.apply_mesh_peer_event(&joined("real", true)).unwrap();
+            cluster.peers.get_mut("real").unwrap().last_heartbeat = old;
+            cluster.apply_mesh_peer_event(&MeshPeerEvent::Alive { node_id: "real".into() }).unwrap();
             assert!(cluster.get_peer("real").unwrap().last_heartbeat > old);
         }
 

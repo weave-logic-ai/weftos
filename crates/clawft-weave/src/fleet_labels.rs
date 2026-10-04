@@ -52,6 +52,19 @@ static DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Serialises read-modify-write of the label file inside this process.
 static WRITE: Mutex<()> = Mutex::new(());
 
+/// `s` cut to at most `max` bytes at a character boundary, with `...` appended
+/// when something was cut (chain-event detail lines hold operator text).
+pub fn truncate_chars(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_owned();
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
+}
+
 /// Record the runtime directory (daemon boot).
 pub fn init(dir: &Path) {
     let _ = DIR.set(dir.to_path_buf());
@@ -126,8 +139,24 @@ pub fn set(
     room: &str,
     now: u64,
 ) -> Result<(Option<Location>, Location), String> {
+    let _guard = lock();
+    set_locked(dir, node, site, room, now)
+}
+
+/// The write lock; hold it across a read-then-set (see [`set_locked`]).
+pub fn lock() -> std::sync::MutexGuard<'static, ()> {
+    WRITE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// [`set`] for a caller that already holds [`lock`].
+pub fn set_locked(
+    dir: &Path,
+    node: &str,
+    site: &str,
+    room: &str,
+    now: u64,
+) -> Result<(Option<Location>, Location), String> {
     let (node, site, room) = validate(node, site, room)?;
-    let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let mut nodes = load(dir)?;
     if !nodes.contains_key(&node) && nodes.len() >= MAX_LABELS {
         return Err(format!("{MAX_LABELS} labels is the limit"));
@@ -223,6 +252,20 @@ mod tests {
         assert!(validate("n", "Zürich \u{4e2d}\u{6587}", "r").is_ok());
         assert!(validate("n", &"s".repeat(MAX_LABEL_LEN + 1), "r").is_err());
         assert!(validate("5e1c-a9f0:node@host.local_1", "s", "r").is_ok());
+    }
+
+    #[test]
+    fn truncation_never_splits_a_multibyte_character() {
+        // A non-ASCII label straddling byte 60 of the serialised payload.
+        let payload = serde_json::json!({ "node": "n", "site": format!("{}Zürich 東京", "x".repeat(40)) }).to_string();
+        for cut in 55..70 {
+            let out = truncate_chars(&payload, cut);
+            assert!(out.ends_with("...") || out == payload);
+        }
+        let at_u = payload.find('ü').unwrap();
+        let out = truncate_chars(&payload, at_u + 1); // lands inside the two-byte 'ü'
+        assert!(out.starts_with(&payload[..at_u]) && out.ends_with("..."));
+        assert_eq!(truncate_chars("short", 60), "short");
     }
 
     #[test]

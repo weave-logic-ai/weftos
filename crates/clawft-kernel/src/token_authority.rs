@@ -80,11 +80,14 @@ impl TokenScope {
         }
     }
 
-    fn parse(s: Option<&str>) -> Self {
+    /// An absent scope is an old owner token; an unknown one is `None`, so
+    /// the token is dropped (fail closed) rather than promoted to owner.
+    fn parse(s: Option<&str>) -> Option<Self> {
         match s {
-            Some("project") => TokenScope::Project,
-            Some("read") => TokenScope::Read,
-            _ => TokenScope::Owner,
+            None | Some("owner") => Some(TokenScope::Owner),
+            Some("project") => Some(TokenScope::Project),
+            Some("read") => Some(TokenScope::Read),
+            Some(_) => None,
         }
     }
 
@@ -220,7 +223,7 @@ fn parse_issued(p: &Value) -> Option<Entry> {
                 .to_owned(),
             issued_at,
             expires_at,
-            scope: TokenScope::parse(p.get("scope").and_then(Value::as_str)),
+            scope: TokenScope::parse(p.get("scope").and_then(Value::as_str))?,
             project: p.get("project").and_then(Value::as_str).map(str::to_owned),
         },
     })

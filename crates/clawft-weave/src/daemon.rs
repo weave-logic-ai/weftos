@@ -6457,12 +6457,7 @@ async fn dispatch(
                                     }
                                     if parts.is_empty() {
                                         // Fallback: show first 60 chars of payload
-                                        let s = p.to_string();
-                                        if s.len() > 60 {
-                                            format!("{}...", &s[..60])
-                                        } else {
-                                            s
-                                        }
+                                        crate::fleet_labels::truncate_chars(&p.to_string(), 60)
                                     } else {
                                         parts.join(" ")
                                     }

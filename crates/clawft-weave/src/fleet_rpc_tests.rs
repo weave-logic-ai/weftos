@@ -112,8 +112,8 @@ fn snapshot_merges_every_source_and_labels_each_field() {
 
     let z = node(&snap, "zeta");
     assert_eq!(z["cluster"]["provenance"], "daemon_observed");
-    assert_eq!(z["cluster"]["value"]["last_seen"], "2023-11-14T22:13:20Z");
-    assert_eq!(z["cluster"]["value"]["last_seen_unix"], 1_700_000_000);
+    assert_eq!(z["cluster"]["value"]["last_announce"], "2023-11-14T22:13:20Z");
+    assert_eq!(z["cluster"]["value"]["last_announce_unix"], 1_700_000_000);
     assert_eq!(z["mesh"]["provenance"], "daemon_observed");
     assert_eq!(z["mesh"]["value"]["class"], "leaf");
     assert_eq!(z["mesh"]["value"]["heartbeat"], "alive");
@@ -236,18 +236,18 @@ fn missing_sources_are_reported_not_hidden() {
 }
 
 #[test]
-fn cluster_nodes_reports_last_seen_from_the_peer_heartbeat() {
+fn cluster_nodes_reports_last_announce_from_the_peer_record() {
     let row = crate::protocol::ClusterNodeInfo::from_peer(
         "zeta",
         &NodeState::Active,
         &NodePlatform::Edge,
         Some(peer("zeta", "zeta-box", 1_700_000_000)),
     );
-    assert_eq!(row.last_seen, "2023-11-14T22:13:20Z");
+    assert_eq!(row.last_announce, "2023-11-14T22:13:20Z");
     assert_eq!(row.name, "zeta-box");
     assert_eq!(row.address.as_deref(), Some("192.168.1.9:9000"));
     let gone = crate::protocol::ClusterNodeInfo::from_peer("zeta", &NodeState::Active, &NodePlatform::Edge, None);
-    assert_eq!((gone.last_seen.as_str(), gone.name.as_str()), ("", "zeta"));
+    assert_eq!((gone.last_announce.as_str(), gone.name.as_str()), ("", "zeta"));
 }
 
 #[test]
