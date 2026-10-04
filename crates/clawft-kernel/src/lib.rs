@@ -435,6 +435,8 @@ pub mod mesh_process;
 #[cfg(feature = "mesh")]
 pub mod mesh_runtime;
 #[cfg(feature = "mesh")]
+pub mod mesh_leaf;
+#[cfg(feature = "mesh")]
 pub mod mesh_sensor;
 #[cfg(feature = "mesh")]
 pub mod mesh_serve;

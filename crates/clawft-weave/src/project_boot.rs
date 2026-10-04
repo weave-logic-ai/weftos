@@ -105,6 +105,9 @@ pub enum BootError {
 pub struct ChildBoot {
     /// This child's paths (also installed as the process's runtime paths).
     pub paths: RuntimePaths,
+    /// Host root used in the certificate binding (guest path may differ).
+    pub host_root: PathBuf,
+    pub container: Option<clawft_rpc::mesh_local::ContainerRegistration>,
     /// The project key; the node key and the chain signing key.
     pub key: SigningKey,
     /// The certificate in force (verified).
@@ -291,8 +294,9 @@ pub async fn bootstrap_with(
     timeout: Duration,
     retry: Retry,
 ) -> Result<ChildBoot, BootError> {
+    let trust_dir = std::env::var_os("WEFTOS_TRUST_DIR").map(PathBuf::from);
     let spawn = SpawnFile::read_and_consume(
-        &run_dir.join(clawft_types::runtime_paths::SPAWN_JSON_FILE),
+        &trust_dir.as_deref().unwrap_or(run_dir).join(clawft_types::runtime_paths::SPAWN_JSON_FILE),
         now,
     )?;
     if spawn.project_id != project_id {
@@ -307,7 +311,16 @@ pub async fn bootstrap_with(
             run_dir.display()
         )));
     }
-    let paths = RuntimePaths::child_at(run_dir, project_id, &spawn.root)
+    if let Some(c) = &spawn.container {
+        if run_dir != c.guest_runtime_root
+            || trust_dir.as_deref() != Some(c.guest_trust_root.as_path()) {
+            return Err(BootError::NotSpawned("container runtime and trust mounts differ from the protected spawn contract".into()));
+        }
+    }
+    let paths = match &spawn.container {
+        Some(c) => RuntimePaths::child_container_at(run_dir, &c.guest_trust_root, project_id, &c.guest_project_root),
+        None => RuntimePaths::child_at(run_dir, project_id, &spawn.root),
+    }
         .ok_or_else(|| BootError::NotSpawned("project id is not a safe path component".into()))?;
     let revoked = paths.revoked_marker();
     if revoked.exists() {
@@ -317,6 +330,9 @@ pub async fn bootstrap_with(
         BootError::Untrusted("spawn.json user_pubkey is not 32 bytes of hex".into())
     })?;
     check_pin(&paths, &user_pubkey)?;
+    if spawn.container.is_some() && !paths.trust_root().join(clawft_kernel::overlay_runtime::USER_PIN_FILE).is_file() {
+        return Err(BootError::Untrusted("container boot requires a parent-owned user.pub pin".into()));
+    }
     let key_path = paths
         .project_key()
         .ok_or_else(|| BootError::Io("no project key path".into()))?;
@@ -327,11 +343,14 @@ pub async fn bootstrap_with(
     let cached = read_cached_cert(&cert_path, &key, project_id, &user_pubkey, now);
 
     let params = LinkParams {
-        socket: spawn.parent_socket.clone(),
+        socket: spawn.container.as_ref().map_or_else(|| spawn.parent_socket.clone(), |c| c.guest_parent_socket.clone()),
         project_id: project_id.to_owned(),
         user_pubkey,
         user_key_id: spawn.user_key_id.clone(),
         own_socket: paths.socket(),
+        host_socket: spawn.container.as_ref().map(|c| c.host_child_socket.clone()),
+        container_id: spawn.container.as_ref().map(|c| c.container_id.clone()),
+        container_engine: spawn.container.as_ref().map(|c| c.engine.clone()),
         root: spawn.root.clone(),
         timeout,
     };
@@ -371,9 +390,14 @@ pub async fn bootstrap_with(
         };
     let boot = ChildBoot {
         paths,
+        host_root: spawn.root.clone(),
+        container: spawn.container.as_ref().map(|c| clawft_rpc::mesh_local::ContainerRegistration {
+            engine: c.engine.clone(), container_id: c.container_id.clone(),
+            host_socket: c.host_child_socket.to_string_lossy().into_owned(),
+        }),
         key,
         cert,
-        parent_socket: spawn.parent_socket.clone(),
+        parent_socket: spawn.container.as_ref().map_or_else(|| spawn.parent_socket.clone(), |c| c.guest_parent_socket.clone()),
         user_pubkey,
         user_key_id: spawn.user_key_id.clone(),
         session,
@@ -423,7 +447,7 @@ async fn register_retrying(
 /// `spawn.json` names.
 fn check_pin(paths: &RuntimePaths, user_pubkey: &[u8; 32]) -> Result<(), BootError> {
     let pin = paths
-        .root()
+        .trust_root()
         .join(clawft_kernel::overlay_trust::USER_PIN_FILE);
     match std::fs::read_to_string(&pin) {
         Ok(t) if hex_decode::<32>(t.trim()).as_ref() == Some(user_pubkey) => Ok(()),
@@ -508,6 +532,10 @@ pub struct LinkParams {
     pub user_key_id: String,
     /// This child's own socket (registered as its address).
     pub own_socket: PathBuf,
+    /// Parent-selected host socket and inspected engine identity, when isolated.
+    pub host_socket: Option<PathBuf>,
+    pub container_id: Option<String>,
+    pub container_engine: Option<String>,
     /// Canonical project root.
     pub root: PathBuf,
     /// Per-call deadline.
@@ -591,13 +619,18 @@ pub async fn register_once(
     .map_err(|e| RegError::Untrusted(format!("cannot sign the proof of possession: {e}")))?;
     let socket_str = p.own_socket.to_string_lossy().into_owned();
     let pid = std::process::id();
-    let bind = key.sign(&bind_signed_bytes(
-        &p.project_id,
-        &ch.nonce,
-        &client_nonce,
-        &socket_str,
-        pid,
-    ));
+    let container = match (&p.host_socket, &p.container_id, &p.container_engine) {
+        (Some(host), Some(id), Some(engine)) => Some(clawft_rpc::mesh_local::ContainerRegistration {
+            engine: engine.clone(), container_id: id.clone(),
+            host_socket: host.to_string_lossy().into_owned(),
+        }),
+        _ => None,
+    };
+    let bind_bytes = match &container {
+        Some(c) => clawft_rpc::mesh_local::bind_container_bytes(&p.project_id, &ch.nonce, &client_nonce, &socket_str, pid, c),
+        None => bind_signed_bytes(&p.project_id, &ch.nonce, &client_nonce, &socket_str, pid),
+    };
+    let bind = key.sign(&bind_bytes);
     let req = RegisterRequest {
         protocol: PROTOCOL_TAG.to_owned(),
         role: MeshRole::Project,
@@ -612,6 +645,7 @@ pub async fn register_once(
             .to_owned(),
         pid,
         socket: socket_str,
+        container,
         bind_sig: hex_encode(&bind.to_bytes()),
         features: vec!["anchor".to_owned(), "subscribe".to_owned()],
         client_nonce: client_nonce.clone(),

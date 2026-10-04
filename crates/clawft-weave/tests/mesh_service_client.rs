@@ -126,7 +126,7 @@ fn deps(
     chain: Arc<ChainQueue>,
     state: Arc<MeshStateCell>,
 ) -> LinkDeps {
-    LinkDeps { delivery, gate, chain, state, timings: fast() }
+    LinkDeps { delivery, gate, chain, project_env: None, state, timings: fast() }
 }
 
 fn open_chain() -> (Arc<ChainQueue>, Arc<Mutex<Vec<(String, Value)>>>) {

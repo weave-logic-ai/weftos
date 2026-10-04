@@ -36,13 +36,9 @@ use serde_json::json;
 use crate::chain::ChainManager;
 use crate::chain_rule_hash::RuleHashCell;
 use crate::gate::{GateBackend, GateDecision, GovernanceGate, GovernanceSnapshot};
-use crate::governance_overlay::{
-    Effective, Overlay, OverlayError, load_overlay, merge,
-};
+use crate::governance_overlay::{Effective, Overlay, OverlayError, load_overlay, merge};
 pub use crate::overlay_trust::{REVOKED_FILE, USER_PIN_FILE, VERSION_PIN_FILE, write_user_pin};
-use crate::overlay_trust::{
-    chain_history, check_version, load_user_pubkey, read_pin, write_pin,
-};
+use crate::overlay_trust::{chain_history, check_version, load_user_pubkey, read_pin, write_pin};
 use crate::parent_policy::{
     ParentPolicy, ParentPolicyError, load_parent_policy, verify_parent_policy,
 };
@@ -89,7 +85,10 @@ pub mod test_support {
     }
 
     pub(super) fn child_paths() -> Option<RuntimePaths> {
-        CHILD_PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        CHILD_PATHS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// A project the child-boot tests run as.
@@ -239,6 +238,7 @@ impl Applied {
 /// Everything boot learned about a project's governance, before the chain
 /// exists.
 pub struct Prepared {
+    nested: bool,
     paths: RuntimePaths,
     user_pubkey: [u8; 32],
     user_pin: bool,
@@ -268,6 +268,7 @@ pub fn prepare(paths: &RuntimePaths) -> Result<Prepared, OverlayError> {
     let cell = Arc::new(RuleHashCell::new());
     cell.set(Some(effective.effective_hash));
     Ok(Prepared {
+        nested: false,
         paths,
         user_pubkey,
         user_pin,
@@ -298,7 +299,10 @@ impl Prepared {
         // highest version ever applied, so neither the file's version nor the
         // pin may be below it.
         if let Some(max) = h.max_parent_version {
-            for have in [Some(self.parent.version), self.pinned].into_iter().flatten() {
+            for have in [Some(self.parent.version), self.pinned]
+                .into_iter()
+                .flatten()
+            {
                 if have < max {
                     return Err(ParentPolicyError::Rollback { have, pinned: max }.into());
                 }
@@ -375,12 +379,18 @@ impl Prepared {
         chain.append(
             "governance",
             "governance.overlay.applied",
-            Some(applied_payload(&applied, "boot", self.user_pin, &self.user_pubkey)),
+            Some(applied_payload(
+                &applied,
+                "boot",
+                self.user_pin,
+                &self.user_pubkey,
+            )),
         );
         let rt = Arc::new(OverlayRuntime {
             gate: Arc::clone(&gate),
             cell: self.cell,
             chain,
+            nested: self.nested,
             paths: self.paths,
             user_pubkey: self.user_pubkey,
             user_pin: self.user_pin,
@@ -418,6 +428,7 @@ struct State {
 
 /// The running project governance.
 pub struct OverlayRuntime {
+    nested: bool,
     gate: Arc<OverlayGate>,
     cell: Arc<RuleHashCell>,
     chain: Arc<ChainManager>,
@@ -443,7 +454,11 @@ impl OverlayRuntime {
     /// Re-check that the trust root is unchanged: certificate, expiry,
     /// revocation and the user-key pin (see [`load_user_pubkey`]).
     fn recheck_trust(&self) -> Result<(), OverlayError> {
-        let (pk, pinned) = load_user_pubkey(&self.paths)?;
+        let (pk, pinned) = if self.nested {
+            nested_pin(&self.paths).map(|pk| (pk, true))?
+        } else {
+            load_user_pubkey(&self.paths)?
+        };
         if self.user_pin && !pinned {
             return Err(OverlayError::Cert(
                 "the user.pub pin that was in use is gone".into(),
@@ -473,6 +488,12 @@ impl OverlayRuntime {
             let mut parent = s.parent.clone();
             let disk = load_parent_policy(&self.paths.parent_policy())?;
             verify_parent_policy(&disk, &self.user_pubkey)?;
+            if self.nested && disk.sig != s.parent.sig {
+                return Err(OverlayError::Cert(
+                    "nested master policy changes require a new signed boot contract and restart"
+                        .into(),
+                ));
+            }
             // An older (validly signed) file on disk is ignored, not applied.
             if disk.version >= parent.version {
                 parent = disk;
@@ -492,6 +513,12 @@ impl OverlayRuntime {
         let result = (|| {
             self.recheck_trust()?;
             verify_parent_policy(&policy, &self.user_pubkey)?;
+            if self.nested && policy.sig != s.parent.sig {
+                return Err(OverlayError::Cert(
+                    "nested master policy changes require a new signed boot contract and restart"
+                        .into(),
+                ));
+            }
             let overlay = s.overlay.clone();
             self.apply_locked(&mut s, policy, overlay)
         })();
@@ -575,4 +602,68 @@ impl OverlayRuntime {
     pub fn overlay_path(&self) -> Option<PathBuf> {
         self.paths.overlay()
     }
+}
+
+// Only the verified nested-user boot path installs this contract. A config
+// string cannot select this trust path or turn off certificate checks for projects.
+static NESTED_POLICY: std::sync::OnceLock<(RuntimePaths, [u8; 32], ParentPolicy)> =
+    std::sync::OnceLock::new();
+
+pub fn install_nested_policy(
+    run: PathBuf,
+    home: PathBuf,
+    id: &str,
+    master: [u8; 32],
+    policy: ParentPolicy,
+) -> Result<(), String> {
+    verify_parent_policy(&policy, &master).map_err(|e| e.to_string())?;
+    let paths = RuntimePaths::child_at(&run, id, &home)
+        .ok_or_else(|| "invalid nested instance id".to_owned())?;
+    NESTED_POLICY
+        .set((paths, master, policy))
+        .map_err(|_| "nested policy already installed".into())
+}
+
+fn nested_pin(paths: &RuntimePaths) -> Result<[u8; 32], OverlayError> {
+    if paths.revoked_marker().exists() {
+        return Err(OverlayError::Cert("nested instance revoked".into()));
+    }
+    let text = std::fs::read_to_string(paths.root().join(USER_PIN_FILE))
+        .map_err(|e| OverlayError::Cert(e.to_string()))?;
+    clawft_types::project::canon::hex_decode::<32>(text.trim())
+        .ok_or_else(|| OverlayError::Cert("missing or malformed nested master pin".into()))
+}
+
+/// The existing overlay runtime handles nested users too: signature verification,
+/// version history, limits, gate swap and every event's rule hash are unchanged.
+pub fn prepare_nested() -> Result<Option<Prepared>, OverlayError> {
+    let Some((paths, master, parent)) = NESTED_POLICY.get() else {
+        return Ok(None);
+    };
+    if nested_pin(paths)? != *master {
+        return Err(OverlayError::Cert("nested master pin changed".into()));
+    }
+    verify_parent_policy(parent, master)?;
+    let pinned = read_pin(paths)?;
+    check_version(parent, pinned)?;
+    let overlay_present = paths.overlay().is_some_and(|p| p.exists());
+    let overlay = match paths.overlay() {
+        Some(p) => load_overlay(&p)?,
+        None => Overlay::empty(),
+    };
+    let effective = merge(parent, &overlay)?;
+    let cell = Arc::new(RuleHashCell::new());
+    cell.set(Some(effective.effective_hash));
+    Ok(Some(Prepared {
+        nested: true,
+        paths: paths.clone(),
+        user_pubkey: *master,
+        user_pin: true,
+        parent: parent.clone(),
+        overlay,
+        overlay_present,
+        pinned,
+        effective,
+        cell,
+    }))
 }

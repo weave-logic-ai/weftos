@@ -17,6 +17,12 @@ license = "MIT OR Apache-2.0"
 # stays out of the host workspace build.
 publish = false
 
+[features]
+default = []
+# Explicit bring-up of the pre-ADR-103 plaintext mesh transport. Production
+# leaf publishing uses the provisioned IDF firmware instead.
+legacy-unsigned-mesh-bringup = []
+
 [dependencies]
 # ── ESP HAL + runtime ────────────────────────────────────────────────
 # Mirrors infinition/waveshare-watch-rs (the LX7 reference firmware).

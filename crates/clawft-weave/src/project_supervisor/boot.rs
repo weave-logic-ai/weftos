@@ -10,6 +10,77 @@ const BOOT_RETRY: Duration = Duration::from_secs(3);
 const CASCADE_RETRY: Duration = Duration::from_secs(2);
 
 impl Supervisor {
+    pub(super) async fn prove_child(&self, id: &str, socket: &std::path::Path) -> Result<(), String> {
+        use ed25519_dalek::Verifier;
+        use rand::RngCore;
+        let mut raw = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut raw);
+        let nonce = hex::encode(raw);
+        let signature = self.deps.io.prove(socket, &nonce).await.ok_or("child supplied no project-key proof")?;
+        let sig = clawft_types::project::canon::hex_decode::<64>(&signature).ok_or("invalid proof signature")?;
+        let view = crate::project_cert_rpc::current_view(&self.deps.cert_env).map_err(|e| e.to_string())?;
+        let cert = view.current_cert(id).ok_or("no current project certificate")?;
+        let pk = clawft_types::project::canon::hex_decode::<32>(&cert.project_pubkey).ok_or("bad certified project key")?;
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&pk).map_err(|e| e.to_string())?;
+        key.verify(format!("weftos-project-handshake-v1\n{id}\n{nonce}").as_bytes(),
+            &ed25519_dalek::Signature::from_bytes(&sig)).map_err(|e| e.to_string())
+    }
+
+    /// Inspect persisted immutable identity and demand a signed answer on
+    /// the parent-selected host socket. Uncertainty remains a leftover.
+    pub(super) async fn scan_one_container(&self, id: &str) -> Option<Found> {
+        let saved = state::read(&self.run_dir(id))?.container?;
+        let cid = saved.id.clone();
+        let binding = clawft_rpc::mesh_local::ContainerRegistration {
+            engine: saved.engine, container_id: cid.clone(),
+            host_socket: saved.host_socket.to_string_lossy().into_owned(),
+        };
+        let host_pid = match self.launcher.verify_container(id, &binding).await {
+            Ok(pid) => pid,
+            Err(reason) => return Some(Found::UnverifiableContainer { id: id.into(), container_id: cid, reason }),
+        };
+        let Some(handshake) = self.deps.io.handshake(&saved.host_socket).await else {
+            return Some(Found::UnverifiableContainer { id: id.into(), container_id: cid,
+                reason: "inspected container did not answer on its host socket".into() });
+        };
+        if handshake.project_id.as_deref() != Some(id) || handshake.pid == 0 {
+            return Some(Found::UnverifiableContainer { id: id.into(), container_id: cid,
+                reason: "child handshake named another project or no guest PID".into() });
+        }
+        if let Err(reason) = self.prove_child(id, &saved.host_socket).await {
+            return Some(Found::UnverifiableContainer { id: id.into(), container_id: cid, reason });
+        }
+        Some(Found::AdoptedContainer { id: id.into(), container_id: cid, host_pid, guest_pid: handshake.pid })
+    }
+
+    pub(super) async fn adopt_one_container(self: &Arc<Self>, id: &str, host_pid: u32, guest_pid: u32, slot: &Arc<Slot>) -> Result<(), String> {
+        let (w, manifest) = match self.prepare(id) {
+            Ok(x) => x,
+            Err(SupError::Revoked(_)) => {
+                self.launcher.adopt_container(id, host_pid).await?;
+                let c = state::read(&self.run_dir(id)).and_then(|s| s.container).ok_or("missing container state")?;
+                let stopped = self.launcher.terminate(&ChildRef { project_id: id.into(), identity: ChildIdentity::Container {
+                    engine: c.engine, immutable_container_id: c.id, host_pid,
+                } }, self.cfg.term_grace).await;
+                self.launcher.forget(id);
+                return Err(format!("revoked container stop: {stopped:?}"));
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        self.launcher.adopt_container(id, host_pid).await?;
+        let handle = self.host.load(&w, &Self::host_cfg(id)).await.map_err(|e| e.to_string())?;
+        let generation = {
+            let mut st = slot.st();
+            st.handle = Some(handle);
+            st.tracker = Some(self.tracker_for(&manifest));
+            st.generation += 1;
+            st.generation
+        };
+        self.file_adopted_session(id, guest_pid);
+        self.set_state(id, slot, ChildState::Running);
+        self.spawn_monitor(id.into(), Arc::clone(slot), generation);
+        Ok(())
+    }
     /// File an expired registry session for an adopted child so it can
     /// re-register without a spawn nonce. Uses the REAL certified project
     /// key: a zero or default key would silently break the child's signed
@@ -25,6 +96,9 @@ impl Supervisor {
             project_id: id.to_owned(),
             socket: self.socket(id),
             pid,
+            container: state::read(&self.run_dir(id)).and_then(|s| s.container).map(|c| clawft_rpc::mesh_local::ContainerRegistration {
+                engine: c.engine, container_id: c.id, host_socket: c.host_socket.to_string_lossy().into_owned(),
+            }),
             addresses: vec![id.to_owned()],
             topic_prefixes: vec![format!("chain/{id}/")],
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -83,7 +157,7 @@ impl Supervisor {
         self.launcher.adopt(id, pid);
         let stopped = self
             .launcher
-            .terminate(&ChildRef { project_id: id.to_owned(), pid }, self.cfg.term_grace)
+            .terminate(&ChildRef { project_id: id.to_owned(), identity: ChildIdentity::Native { host_pid: pid } }, self.cfg.term_grace)
             .await;
         let alive = self.launcher.pid_of(id).is_some();
         self.launcher.forget(id);
@@ -99,6 +173,15 @@ impl Supervisor {
     /// Verify and adopt children left by an earlier daemon (see [`adopt`]).
     pub async fn adopt_on_boot(self: &Arc<Self>) -> Vec<Found> {
         let mut found = adopt::scan(&self.cfg.run_root, &self.cfg.exe, self.deps.io.as_ref()).await;
+        if let Ok(dirs) = std::fs::read_dir(&self.cfg.run_root) {
+            for dir in dirs.flatten() {
+                let id = dir.file_name().to_string_lossy().into_owned();
+                if clawft_types::project::validate_id(&id).is_ok()
+                    && let Some(one) = self.scan_one_container(&id).await {
+                    found.push(one);
+                }
+            }
+        }
         for f in &mut found {
             match f {
                 Found::Adopted { id, pid } => {
@@ -113,6 +196,17 @@ impl Supervisor {
                     tracing::warn!(project = %id, pid = ?pid, %reason, "leftover project kernel not adopted and not signalled");
                 }
                 Found::Unverifiable { .. } => {}
+                Found::AdoptedContainer { id, container_id, host_pid, guest_pid } => {
+                    let (id2, cid, host, guest) = (id.clone(), container_id.clone(), *host_pid, *guest_pid);
+                    let slot = self.slot(&id2);
+                    let _g = slot.gate.lock().await;
+                    if let Err(reason) = self.adopt_one_container(&id2, host, guest, &slot).await {
+                        *f = Found::UnverifiableContainer { id: id2, container_id: cid, reason };
+                    }
+                }
+                Found::UnverifiableContainer { id, container_id, reason } => {
+                    tracing::warn!(project = %id, container = %container_id, %reason, "container left unverified; duplicate launch blocked");
+                }
             }
         }
         self.retry_handshake_leftovers(&mut found, self.cfg.ready_timeout.min(BOOT_RETRY)).await;
@@ -356,12 +450,11 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
         return;
     };
     let Ok(exe) = std::env::current_exe() else { return };
-    let paths = clawft_types::runtime_paths::RuntimePaths::resolve();
     // The run root the revoked-marker writer uses too (one derivation).
     let Some(run_root) = crate::project_cert_rpc::user_run_root() else { return };
     let mut cfg = SupervisorConfig::new(&home, exe);
+    cfg.parent_socket = crate::user_daemon::child_socket_path(&run_root);
     cfg.run_root = run_root;
-    cfg.parent_socket = paths.socket();
     cfg.manifests_dir = manifests_dir.clone();
     let gate = kernel.governance_gate().cloned();
     // The parent's real caps, so a child's merged limits start from them

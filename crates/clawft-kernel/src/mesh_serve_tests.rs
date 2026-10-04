@@ -13,15 +13,58 @@ use crate::mesh::MeshTransport;
 use crate::mesh_delivery::{LocalDelivery, PeerCtx};
 use crate::mesh_ipc::{MeshIpcEnvelope, Scope};
 use crate::mesh_noise::{NoiseChannel, NoiseConfig, NoisePattern};
+use crate::mesh_noise::EncryptedChannel;
+use ed25519_dalek::SigningKey;
+use weftos_leaf_types::link::{LeafCertificate, PublishAck, SignedPublish, FRAME_MAGIC, ACK_MAGIC};
+
+struct MemoryChannel {
+    inbound: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
+}
+
+#[async_trait]
+impl EncryptedChannel for MemoryChannel {
+    async fn send_encrypted(&mut self, bytes: &[u8]) -> Result<(), crate::mesh::MeshError> {
+        self.outbound.send(bytes.to_vec()).await.map_err(|e| crate::mesh::MeshError::Transport(e.to_string()))
+    }
+    async fn recv_encrypted(&mut self) -> Result<Vec<u8>, crate::mesh::MeshError> {
+        self.inbound.lock().await.recv().await.ok_or_else(|| crate::mesh::MeshError::Transport("closed".into()))
+    }
+    fn remote_static_key(&self) -> Option<&[u8]> { None }
+    async fn close(&mut self) -> Result<(), crate::mesh::MeshError> { Ok(()) }
+}
+
+fn memory_leaf_connection(rt: Arc<MeshRuntime>) -> (tokio::sync::mpsc::Sender<Vec<u8>>, tokio::sync::mpsc::Receiver<Vec<u8>>, tokio::task::JoinHandle<()>) {
+    let (client, inbound) = tokio::sync::mpsc::channel(8);
+    let (outbound, reply) = tokio::sync::mpsc::channel(8);
+    let channel = Box::new(MemoryChannel { inbound: tokio::sync::Mutex::new(inbound), outbound });
+    let (route_tx, route_rx) = tokio::sync::mpsc::channel(8);
+    let task = tokio::spawn(async move {
+        pump(&rt, channel, ChannelKind::Passthrough, "memory-leaf", &crate::mesh_admit::AllowAll,
+            Limits::default(), route_tx, route_rx, None, RouteTally::default(), false, true).await;
+    });
+    (client, reply, task)
+}
+
+#[tokio::test]
+async fn certified_leaf_listener_rejects_unsigned_first_frame() {
+    let (rt, rec) = runtime("machine");
+    let (sender, mut reply, task) = memory_leaf_connection(rt);
+    sender.send(frame("legacy", "mesh.leaf.legacy.input")).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap();
+    assert!(reply.try_recv().is_err());
+    assert!(rec.0.lock().unwrap().is_empty());
+}
 
 #[derive(Default)]
-struct Rec(Mutex<Vec<String>>);
+struct Rec(Mutex<Vec<String>>, Mutex<Vec<(Option<Scope>, Option<Scope>)>>);
 
 #[async_trait]
 impl LocalDelivery for Rec {
-    async fn deliver(&self, _: &PeerCtx, _: Option<&Scope>, m: KernelMessage) -> KernelResult<()> {
+    async fn deliver(&self, ctx: &PeerCtx, dest: Option<&Scope>, m: KernelMessage) -> KernelResult<()> {
         if let MessageTarget::Topic(t) = m.target {
             self.0.lock().unwrap().push(t);
+            self.1.lock().unwrap().push((ctx.src_scope.clone(), dest.cloned()));
         }
         Ok(())
     }
@@ -87,6 +130,103 @@ async fn listen(
         Arc::clone(rt), l, noise, "tcp", "x", Arc::new(crate::mesh_admit::AllowAll),
     ));
     (addr, task)
+}
+
+#[tokio::test]
+async fn certified_leaf_publish_replay_is_suppressed_after_committed_floor() {
+    let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap(); }
+    let parent = SigningKey::from_bytes(&[31; 32]);
+    let user_id = clawft_types::project::cert::key_id(&parent.verifying_key().to_bytes());
+    let machine = SigningKey::from_bytes(&[32; 32]);
+    let leaf = SigningKey::from_bytes(&[33; 32]);
+    let cert = LeafCertificate::issue(&parent, format!("user:{user_id}"), machine.verifying_key().to_bytes(), leaf.verifying_key().to_bytes(), 1, 1, u64::MAX, vec!["input.publish".into()]).unwrap();
+    let id = cert.leaf_id();
+    let topic = format!("mesh.leaf.{id}.input");
+    let msg = KernelMessage::new(0, MessageTarget::Topic("ipc.publish".into()),
+        crate::ipc::MessagePayload::Json(serde_json::json!({"topic": topic, "message": "touch"})));
+    let mut inner = MeshIpcEnvelope::new(id.clone(), "srv".into(), msg);
+    inner.src_scope = Some(Scope { user_id: "a".repeat(32), project_id: None });
+    inner.dest_scope = Some(Scope { user_id: "b".repeat(32), project_id: None });
+    let envelope = inner.to_bytes().unwrap();
+    let publish = SignedPublish::sign(cert.clone(), &leaf, 1, topic.clone(), envelope).unwrap();
+    let public = serde_json::json!({"node_id":id,"cert":cert});
+    let (rt, rec) = runtime("srv");
+    let ingress = crate::mesh_leaf::LeafIngress::open(dir.path(), machine.clone()).unwrap();
+    std::fs::write(dir.path().join("registry").join(format!("{id}.json")), public.to_string()).unwrap();
+    rt.set_leaf_ingress(Arc::new(ingress)).ok().unwrap();
+    let (client, mut replies, task) = memory_leaf_connection(Arc::clone(&rt));
+    let mut wire = FRAME_MAGIC.to_vec();
+    wire.extend_from_slice(&weftos_leaf_types::encode(&publish).unwrap());
+    client.send(wire.clone()).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(5), replies.recv()).await.unwrap().unwrap();
+    assert!(reply.starts_with(ACK_MAGIC));
+    let ack: PublishAck = weftos_leaf_types::decode(&reply[ACK_MAGIC.len()..]).unwrap();
+    ack.verify(&machine.verifying_key().to_bytes(), &publish).unwrap();
+    assert!(seen(&rec, &topic).await);
+    assert_eq!(rec.0.lock().unwrap().len(), 1);
+    assert_eq!(rec.1.lock().unwrap().as_slice(), &[(None, Some(Scope { user_id: user_id.clone(), project_id: None }))]);
+    task.abort();
+    drop(client);
+
+    // New listener and gate process state: the exact replay gets its ACK,
+    // but the local router never receives a second effect.
+    let (rt2, rec2) = runtime("srv");
+    rt2.set_leaf_ingress(Arc::new(crate::mesh_leaf::LeafIngress::open(dir.path(), machine).unwrap())).ok().unwrap();
+    let (retry, mut replies, task) = memory_leaf_connection(Arc::clone(&rt2));
+    retry.send(wire).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(5), replies.recv()).await.unwrap().unwrap();
+    assert!(reply.starts_with(ACK_MAGIC));
+    assert!(rec2.0.lock().unwrap().is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn certified_leaf_duplicate_subscribe_restores_route_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap(); }
+    let parent = SigningKey::from_bytes(&[41; 32]);
+    let user_id = clawft_types::project::cert::key_id(&parent.verifying_key().to_bytes());
+    let machine = SigningKey::from_bytes(&[42; 32]);
+    let leaf = SigningKey::from_bytes(&[43; 32]);
+    let cert = LeafCertificate::issue(&parent, format!("user:{user_id}"), machine.verifying_key().to_bytes(), leaf.verifying_key().to_bytes(), 1, 1, u64::MAX, vec!["push.subscribe".into()]).unwrap();
+    let id = cert.leaf_id();
+    let topic = weftos_leaf_types::push_topic(&id);
+    let msg = KernelMessage::new(0, MessageTarget::Topic("mesh.subscribe".into()),
+        crate::ipc::MessagePayload::Json(serde_json::json!({"topic": topic})));
+    let envelope = MeshIpcEnvelope::new(id.clone(), "srv".into(), msg).to_bytes().unwrap();
+    let frame = SignedPublish::sign(cert.clone(), &leaf, 1, "mesh.subscribe".into(), envelope).unwrap();
+    let mut wire = FRAME_MAGIC.to_vec();
+    wire.extend_from_slice(&weftos_leaf_types::encode(&frame).unwrap());
+    let (rt, _) = runtime("srv");
+    let ingress = crate::mesh_leaf::LeafIngress::open(dir.path(), machine.clone()).unwrap();
+    std::fs::write(dir.path().join("registry").join(format!("{id}.json")), serde_json::json!({"node_id":id,"cert":cert}).to_string()).unwrap();
+    rt.set_leaf_ingress(Arc::new(ingress)).ok().unwrap();
+    let (client, mut replies, task) = memory_leaf_connection(Arc::clone(&rt));
+    client.send(wire.clone()).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(5), replies.recv()).await.unwrap().unwrap();
+    assert!(reply.starts_with(ACK_MAGIC));
+    assert!(until(|| rt.peers_for_topic(&topic).contains(&id)).await);
+    task.abort();
+    drop(client);
+
+    let (rt2, _) = runtime("srv");
+    rt2.set_leaf_ingress(Arc::new(crate::mesh_leaf::LeafIngress::open(dir.path(), machine).unwrap())).ok().unwrap();
+    let (retry, mut replies, task) = memory_leaf_connection(Arc::clone(&rt2));
+    retry.send(wire).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(5), replies.recv()).await.unwrap().unwrap();
+    assert!(reply.starts_with(ACK_MAGIC));
+    assert!(until(|| rt2.peers_for_topic(&topic).contains(&id)).await);
+    // An idle subscribed leaf must lose its push route without sending
+    // another frame after enrollment is removed.
+    std::fs::remove_file(dir.path().join("registry").join(format!("{id}.json"))).unwrap();
+    let push = MeshIpcEnvelope::new("srv".into(), id.clone(),
+        KernelMessage::text(0, MessageTarget::Topic(topic.clone()), "revoked push"));
+    let _ = rt2.send_to_peer(&id, push).await;
+    assert!(until(|| !rt2.peers_for_topic(&topic).contains(&id)).await);
+    tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap();
+    assert!(replies.try_recv().is_err(), "revoked leaf received a pushed frame");
+    drop(retry);
 }
 
 fn noise_cfg() -> Arc<NoiseConfig> {

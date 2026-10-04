@@ -124,6 +124,13 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
 /// they do not belong to any one project). Denied under `deny_all`. The
 /// routes are registered by other Phase 1 packages; the names are stable.
 pub const USER_LEVEL_ALLOW: &[&str] = &[
+    // Owner control of the user daemon remains Admin-only.
+    "kernel.shutdown",
+    "instance.nested.register",
+    "instance.nested.start",
+    "instance.nested.stop",
+    "instance.nested.grant",
+    "instance.nested.revoke",
     "auth.token.issue",
     "auth.token.revoke",
     "auth.token.list",

@@ -168,6 +168,11 @@ pub fn with_user_profile(mut h: Handshake, user_key_id: Option<String>) -> Hands
         h.user_id = crate::user_daemon::local_uid();
         h.user_key_id = user_key_id;
     }
+    #[cfg(all(unix, feature = "exochain"))]
+    if let Some(nested) = crate::nested_boot::active() {
+        h.depth = nested.instance.depth;
+        h.parent = Some(nested.instance.parent.clone());
+    }
     h.mesh = crate::mesh_state::global().get();
     h
 }
@@ -210,8 +215,18 @@ pub fn current_handshake(kernel: &Kernel<NativePlatform>) -> Handshake {
 /// `kernel.handshake` handler (registered in `rpc_ext::ROUTES`, `Read`).
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
-        let h = current_handshake(&*call.ctx.kernel.read().await);
-        Response::success(handshake_value(&h))
+        use ed25519_dalek::Signer;
+        let kernel = call.ctx.kernel.read().await;
+        let h = current_handshake(&*kernel);
+        let mut value = handshake_value(&h);
+        if let (Some(id), Some(nonce)) = (h.project_id.as_deref(), call.params.get("challenge").and_then(|v| v.as_str()))
+            && nonce.len() == 64 && nonce.bytes().all(|b| b.is_ascii_hexdigit())
+            && let Some(key) = kernel.chain_manager().and_then(|c| c.signing_key_clone())
+        {
+            let bytes = format!("weftos-project-handshake-v1\n{id}\n{nonce}");
+            value["project_proof"] = serde_json::json!(hex::encode(key.sign(bytes.as_bytes()).to_bytes()));
+        }
+        Response::success(value)
     })
 }
 

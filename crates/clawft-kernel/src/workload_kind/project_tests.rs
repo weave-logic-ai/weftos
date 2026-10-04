@@ -19,7 +19,7 @@ use crate::workload_governance::{
 };
 use crate::workload_pkg::{KIND_COG, ManifestEnvelope};
 use crate::workload_runtime::{
-    ChildLauncher, ChildProbe, ChildRef, ChildSpec, HostContract, LogicalRuntime, RunMode, RuntimeError,
+    ChildIdentity, ChildLauncher, ChildProbe, ChildRef, ChildSpec, HostContract, LogicalRuntime, RunMode, RuntimeError,
     VerifiedWorkload, WorkloadConfig, WorkloadHost, WorkloadRuntime, WorkloadSource,
 };
 
@@ -221,15 +221,15 @@ impl ChildLauncher for Fake {
     async fn spawn(&self, spec: &ChildSpec) -> Result<ChildRef, RuntimeError> {
         self.log.lock().unwrap().push(format!("spawn {}", spec.project_id));
         *self.running.lock().unwrap() = true;
-        Ok(ChildRef { project_id: spec.project_id.clone(), pid: 4242 })
+        Ok(ChildRef { project_id: spec.project_id.clone(), identity: ChildIdentity::Native { host_pid: 4242 } })
     }
     async fn terminate(&self, c: &ChildRef, _g: Duration) -> Result<Option<i32>, RuntimeError> {
-        self.log.lock().unwrap().push(format!("terminate {}", c.pid));
+        self.log.lock().unwrap().push(format!("terminate {}", c.identity.host_pid()));
         *self.running.lock().unwrap() = false;
         Ok(Some(0))
     }
     async fn probe(&self, _id: &str) -> ChildProbe {
-        if *self.running.lock().unwrap() { ChildProbe::Running { pid: 4242 } } else { ChildProbe::NotStarted }
+        if *self.running.lock().unwrap() { ChildProbe::Running { identity: ChildIdentity::Native { host_pid: 4242 } } } else { ChildProbe::NotStarted }
     }
 }
 

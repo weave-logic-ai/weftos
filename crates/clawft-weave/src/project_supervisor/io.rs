@@ -36,6 +36,9 @@ pub struct ChildHandshake {
 pub trait ChildIo: Send + Sync {
     /// `kernel.handshake` at `socket`; `None` when nothing answers.
     async fn handshake(&self, socket: &Path) -> Option<ChildHandshake>;
+    /// Signature over a parent-chosen challenge from the certified project
+    /// key. Containers require it for readiness and adoption.
+    async fn prove(&self, _socket: &Path, _nonce: &str) -> Option<String> { None }
     /// Ask the kernel at `socket` (project `project_id`) to shut down
     /// gracefully. Errors are ignored: the caller escalates to a signal.
     async fn shutdown(&self, socket: &Path, project_id: &str);
@@ -69,6 +72,17 @@ impl ChildIo for RpcChildIo {
             let resp = client.call(Request::new("kernel.handshake")).await.ok()?;
             let h: Handshake = serde_json::from_value(resp.result?).ok()?;
             Some(ChildHandshake { project_id: h.project_id, pid: h.pid, sha: h.sha, version: h.version })
+        };
+        tokio::time::timeout(CALL_TIMEOUT, call).await.ok().flatten()
+    }
+
+    async fn prove(&self, socket: &Path, nonce: &str) -> Option<String> {
+        let call = async {
+            let mut client = DaemonClient::connect_path(socket).await?;
+            let mut req = Request::new("kernel.handshake");
+            req.params = serde_json::json!({"challenge": nonce});
+            let resp = client.call(req).await.ok()?;
+            resp.result?.get("project_proof")?.as_str().map(str::to_owned)
         };
         tokio::time::timeout(CALL_TIMEOUT, call).await.ok().flatten()
     }

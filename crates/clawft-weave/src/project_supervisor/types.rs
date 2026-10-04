@@ -9,7 +9,6 @@ use clawft_kernel::token_authority::TokenAuthority;
 use clawft_kernel::workload_runtime::RuntimeError;
 use clawft_rpc::Response;
 use clawft_types::project::ChildState;
-use clawft_types::runtime_paths::SOCKET_NAME;
 use serde_json::Value;
 
 use super::idle::ActivitySource;
@@ -73,7 +72,7 @@ impl SupervisorConfig {
         let run_root = clawft_types::runtime_paths::user_runtime_root(home);
         Self {
             home: home.to_path_buf(),
-            parent_socket: run_root.join(SOCKET_NAME),
+            parent_socket: crate::user_daemon::child_socket_path(&run_root),
             run_root,
             manifests_dir: crate::user_daemon::manifests_dir(home),
             exe,
@@ -134,6 +133,8 @@ pub enum SupError {
     Revoked(String),
     /// Certificate or identity check failed.
     Identity(String),
+    /// A nested project is outside its declared master or its master is not registered.
+    Nested(String),
     /// The restart budget is spent; `project.restart` clears it.
     Failed(String),
     /// The child did not become ready.
@@ -158,6 +159,7 @@ impl SupError {
             Self::SocketPathTooLong(_) => "socket_path_too_long",
             Self::Revoked(_) => "project_revoked",
             Self::Identity(_) => "project_identity_error",
+            Self::Nested(_) => "nested_project_refused",
             Self::Failed(_) => "project_failed",
             Self::NotReady(_) => "project_not_ready",
             Self::LiveLeftover(_) => "leftover_kernel",
@@ -206,6 +208,7 @@ impl std::fmt::Display for SupError {
                  the marker is <run_root>/{id}/revoked"
             ),
             Self::Identity(m) => write!(f, "{m}"),
+            Self::Nested(m) => write!(f, "nested project refused: {m}"),
             Self::Failed(m) => write!(
                 f,
                 "project kernel failed ({m}); fix the cause, then `weaver kernel restart --project <id>` \
@@ -246,6 +249,9 @@ pub struct Status {
     pub state: ChildState,
     /// Live pid.
     pub pid: Option<u32>,
+    /// Immutable engine identity for a Linux container, when selected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<super::state::ContainerState>,
     /// Child socket.
     pub socket: PathBuf,
     /// Automatic restarts so far.
@@ -274,4 +280,3 @@ impl Status {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 }
-

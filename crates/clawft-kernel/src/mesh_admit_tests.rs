@@ -247,20 +247,31 @@ fn scope() -> Scope {
 #[test]
 fn src_scope_is_kept_only_for_verified_peers() {
     let bytes = env_bytes("n", "t", Some(scope()));
-    let trusted = Active { bound: Some("n".into()), limits: PeerLimits::None, trust_scope: true, admitted: true, class: PeerClass::Node, remote_static: None };
+    let trusted = Active { bound: Some("n".into()), limits: PeerLimits::None, trust_scope: true, admitted: true, class: PeerClass::Node, remote_static: None, signed_leaf: false, leaf_cert: None };
     let kept = screen_frame(bytes.clone(), &trusted).unwrap();
     assert!(MeshIpcEnvelope::from_bytes(&kept).unwrap().src_scope.is_some());
 
-    let untrusted = Active { bound: None, limits: PeerLimits::None, trust_scope: false, admitted: false, class: PeerClass::Legacy, remote_static: None };
+    let untrusted = Active { bound: None, limits: PeerLimits::None, trust_scope: false, admitted: false, class: PeerClass::Legacy, remote_static: None, signed_leaf: false, leaf_cert: None };
     let stripped = screen_frame(bytes, &untrusted).unwrap();
     assert!(MeshIpcEnvelope::from_bytes(&stripped).unwrap().src_scope.is_none());
 }
 
 #[test]
 fn source_node_must_match_the_bound_id() {
-    let act = Active { bound: Some("n".into()), limits: PeerLimits::None, trust_scope: false, admitted: false, class: PeerClass::Legacy, remote_static: None };
+    let act = Active { bound: Some("n".into()), limits: PeerLimits::None, trust_scope: false, admitted: false, class: PeerClass::Legacy, remote_static: None, signed_leaf: false, leaf_cert: None };
     assert!(screen_frame(env_bytes("n", "t", None), &act).is_some());
     assert!(screen_frame(env_bytes("evil", "t", None), &act).is_none());
+}
+
+#[test]
+fn admitted_noise_leaf_keeps_only_its_own_substrate_prefix() {
+    let act = Active { bound: Some("leaf-a".into()), limits: PeerLimits::Leaf, trust_scope: false,
+        admitted: true, class: PeerClass::Leaf, remote_static: None, signed_leaf: false, leaf_cert: None };
+    assert!(screen_frame(env_bytes("leaf-a", "substrate/leaf-a/sensor", None), &act).is_some());
+    assert!(screen_frame(env_bytes("leaf-a", "mesh.subscribe", None), &act).is_some());
+    assert!(screen_frame(env_bytes("leaf-a", "substrate/leaf-b/sensor", None), &act).is_none());
+    assert!(screen_frame(env_bytes("leaf-a", "mesh.leaf.leaf-a.input", None), &act).is_none());
+    assert!(screen_frame(env_bytes("leaf-a", "kernel.admin", None), &act).is_none());
 }
 
 // ── listener, end to end over TCP ────────────────────────────────

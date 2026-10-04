@@ -265,12 +265,10 @@ pub fn post_boot(kernel: &Kernel<NativePlatform>, pre: &PreBoot) -> anyhow::Resu
         user_pubkey: boot.user_pubkey,
         user_key_id: boot.user_key_id.clone(),
         own_socket: boot.paths.socket(),
-        root: match &boot.paths.source() {
-            clawft_types::runtime_paths::RootSource::Child { project_root, .. } => {
-                project_root.clone()
-            }
-            _ => anyhow::bail!("not a child root"),
-        },
+        host_socket: boot.container.as_ref().map(|c| c.host_socket.clone().into()),
+        container_id: boot.container.as_ref().map(|c| c.container_id.clone()),
+        container_engine: boot.container.as_ref().map(|c| c.engine.clone()),
+        root: boot.host_root.clone(),
         timeout: crate::project_boot::CALL_TIMEOUT,
     };
     let transport = Arc::new(RpcParentTransport::new(
@@ -671,11 +669,16 @@ mod tests {
             user_pubkey: [0u8; 32],
             user_key_id: String::new(),
             own_socket: paths.socket(),
+            host_socket: None,
+            container_id: None,
+            container_engine: None,
             root: dir.join("proj"),
             timeout: Duration::from_secs(2),
         };
         let boot = ChildBoot {
             paths,
+            host_root: dir.join("proj"),
+            container: None,
             key: key.clone(),
             cert: c.clone(),
             parent_socket: socket.clone(),

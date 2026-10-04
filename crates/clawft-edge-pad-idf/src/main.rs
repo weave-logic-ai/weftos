@@ -42,7 +42,7 @@ use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::units::Hertz;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
-use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition};
 use log::{error, info};
 
 use weftos_leaf_display::Compositor;
@@ -66,6 +66,9 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
     let sysloop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
+    // Leaf queue state uses its own NVS namespace. Failure is fatal for
+    // signed operation: sequence numbers must survive power loss.
+    let leaf_nvs = EspDefaultNvs::new(nvs.clone(), "weft_leaf", true)?;
 
     // ── Step 1+2: board-enable + control GPIOs LOW, then settle. ────
     //
@@ -178,23 +181,28 @@ fn main() -> anyhow::Result<()> {
     // The bare-metal port spawned this as an embassy task; here we
     // dedicate a FreeRTOS-backed std thread. 100 Hz polling matches
     // the bare-metal port (20 ms sleeps).
+    // A bounded channel applies backpressure to GT911 polling when the
+    // durable NVS journal is full; the mesh owner persists each event
+    // before any network send.
+    let (touch_tx, touch_rx) = std::sync::mpsc::sync_channel(64);
     thread::Builder::new()
         .name("touch".into())
         .stack_size(4096)
-        .spawn(move || touch_loop(i2c))?;
+        .spawn(move || touch_loop(i2c, touch_tx))?;
 
     // ── Step 10c: mesh client on the main thread. ──────────────────
     //
     // Owns the display stack (surface + compositor); blocks forever
     // running the subscribe + receive + render loop.
     let compositor = Compositor::new();
-    mesh::run(surface, compositor)
+    mesh::run(surface, compositor, leaf_nvs, touch_rx)
 }
 
 /// Touch-input loop. Blocks on the GT911 I²C bus at ~50 Hz; ports the
 /// `touch_task` in the bare-metal `main.rs`.
-fn touch_loop(i2c: I2cDriver<'static>) {
+fn touch_loop(i2c: I2cDriver<'static>, tx: std::sync::mpsc::SyncSender<weftos_leaf_scene::InputEvent>) {
     use drivers::gt911::Gt911;
+    use weftos_leaf_scene::{InputEvent, px};
 
     // Small bus settle window — the PCA9557 reset already gave the
     // GT911 time to boot its scan engine; this is just I²C-line idle.
@@ -218,6 +226,7 @@ fn touch_loop(i2c: I2cDriver<'static>) {
 
     let mut poll: u32 = 0;
     let mut last_info: u8 = 0xAA;
+    let mut previous = [None; 256];
     loop {
         match gt911.read_frame() {
             Ok((info, frame)) => {
@@ -225,14 +234,29 @@ fn touch_loop(i2c: I2cDriver<'static>) {
                     info!("[edge-pad-idf] GT911 POINT_INFO: 0x{info:02x}");
                     last_info = info;
                 }
-                if let Some(frame) = frame {
+                if info & 0x80 != 0 {
+                    let mut current = [None; 256];
+                    if let Some(frame) = frame {
                     for i in 0..frame.touch_count as usize {
                         let p = &frame.points[i];
-                        info!(
-                            "[edge-pad-idf] touch[{i}]: x={} y={} size={} id={}",
-                            p.x, p.y, p.size, p.id
-                        );
+                        current[p.id as usize] = Some((p.x, p.y));
+                        let event = if previous[p.id as usize].is_some() {
+                            InputEvent::PointerMove { pointer_id: p.id, x: px(p.x as i32), y: px(p.y as i32), pressure_q8: 0 }
+                        } else {
+                            InputEvent::PointerDown { pointer_id: p.id, x: px(p.x as i32), y: px(p.y as i32), pressure_q8: 0 }
+                        };
+                        if tx.send(event).is_err() { return; }
                     }
+                    }
+                    for (id, old) in previous.iter().enumerate() {
+                        if current[id].is_none() {
+                            if let Some((x, y)) = old {
+                                let event = InputEvent::PointerUp { pointer_id: id as u8, x: px(*x as i32), y: px(*y as i32) };
+                                if tx.send(event).is_err() { return; }
+                            }
+                        }
+                    }
+                    previous = current;
                 }
             }
             Err(e) => {

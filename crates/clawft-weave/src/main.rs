@@ -133,8 +133,18 @@ enum Commands {
     Version,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(error) = clawft_weave::project_supervisor::sandbox::run_helper(&args) {
+        anyhow::bail!("{error}");
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     // Best-effort load of `.env` from the current working directory,
     // before any subcommand reads env vars. Lets `OPENROUTER_API_KEY`,
     // `LLM_SERVICE_URL`, `LLM_MODEL`, etc. live in a project-local

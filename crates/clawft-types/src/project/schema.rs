@@ -130,6 +130,23 @@ pub enum ServeVia {
     ChildKernel,
 }
 
+/// OS boundary for a supervised project kernel. Logical isolation is the
+/// default; container images are configured by the operator.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectSandbox {
+    #[default]
+    #[serde(alias = "native")]
+    Logical,
+    /// macOS Seatbelt, installed in the child before exec.
+    Seatbelt,
+    LinuxContainer,
+}
+
+fn is_logical_sandbox(value: &ProjectSandbox) -> bool {
+    *value == ProjectSandbox::Logical
+}
+
 /// Default idle stop for `child-kernel` projects, seconds.
 pub const DEFAULT_IDLE_STOP_SECS: u64 = 1800;
 /// Default for [`ServeSection::restart_max`].
@@ -154,6 +171,9 @@ pub enum ChildState {
 pub struct ServeSection {
     #[serde(default)]
     pub via: ServeVia,
+    /// Boundary for a child kernel. Unsupported drivers fail at start.
+    #[serde(default, skip_serializing_if = "is_logical_sandbox")]
+    pub sandbox: ProjectSandbox,
     /// Override pointing weft at a legacy project-local daemon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_dir: Option<PathBuf>,

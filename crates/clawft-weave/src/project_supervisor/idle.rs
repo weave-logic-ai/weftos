@@ -165,6 +165,7 @@ mod tests {
             project_id: id.to_owned(),
             socket: "/tmp/x.sock".into(),
             pid: 1,
+            container: None,
             addresses: vec![id.to_owned()],
             topic_prefixes: vec![format!("chain/{id}/")],
             version: "0".into(),

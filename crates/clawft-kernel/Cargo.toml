@@ -52,6 +52,7 @@ tilezero = [
 ]
 mesh = [
     "dep:ed25519-dalek",
+    "dep:weftos-leaf-types",
     "dep:rand",
     "dep:tokio-tungstenite",
     "dep:futures-util",
@@ -112,6 +113,7 @@ rvf-runtime = { workspace = true, optional = true }
 ciborium = { workspace = true, optional = true }
 cognitum-gate-tilezero = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }
+weftos-leaf-types = { path = "../weftos-leaf-types", optional = true }
 rand = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
@@ -144,6 +146,7 @@ serde_yaml = { workspace = true, optional = true }
 sha2 = { workspace = true }
 weft-licence-wire = { path = "../weft-licence-wire" }
 chrono = { workspace = true }
+hex = "0.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

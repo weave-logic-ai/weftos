@@ -251,3 +251,10 @@ pub mod cog_ingest_serve;
 /// This node's `workload-host`, served to other controllers (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;
+
+#[cfg(all(unix, feature = "exochain"))]
+pub mod nested_boot;
+#[cfg(all(unix, feature = "exochain"))]
+pub mod nested_supervisor;
+#[cfg(all(unix, feature = "exochain"))]
+pub mod nested_rpc;

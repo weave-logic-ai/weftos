@@ -344,7 +344,7 @@ pub fn an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed() {
         let l = Arc::clone(sup.launcher());
         let (id, p) = (fx.id.clone(), pid);
         let term = tokio::spawn(async move {
-            l.terminate(&ChildRef { project_id: id, pid: p }, Duration::from_millis(100)).await
+            l.terminate(&ChildRef { project_id: id, identity: clawft_kernel::workload_runtime::ChildIdentity::Native { host_pid: p } }, Duration::from_millis(100)).await
         });
         // SIGTERM went out (the fake survives it and says so)...
         let dir = fx.run_dir();

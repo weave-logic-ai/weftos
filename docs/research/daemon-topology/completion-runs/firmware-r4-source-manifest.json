@@ -1,0 +1,252 @@
+[
+  {
+    "path": "clawft-edge-pad-idf/Cargo.toml",
+    "sha256": "7b604a930c386414aa53962a1ff03caeed5c1d1634d16dad51e608ba509ea47b",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/Cargo.lock",
+    "sha256": "78e20ace8bbb6c75d51e51d6930e56446373173fd9df1b69b22b251f5c5308bb",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/build.rs",
+    "sha256": "5fca052c8ca8dd609413eceff1d7cbc5a7dcb6ae06b457f3add9e9fa6f3e24e1",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/README.md",
+    "sha256": "9432309ff20d0be720b193fb4a12c3859fe237a55079125bf401ee04c9fe70b5",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/.gitignore",
+    "sha256": "656399fe045a7f77c34ee8983e4e7d0484e64583186c443c4b5d2f8855eb0633",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/rust-toolchain.toml",
+    "sha256": "415735ecec119f8f73f48c7b8386bc8a1c62097574d26045c7cfb1bd0faff3bf",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/sdkconfig.defaults",
+    "sha256": "31a4a306cfffc5da83d1cb73f541e408ba88aa9b1be768f5ab37304c8ea85813",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/.cargo/config.toml",
+    "sha256": "d53e58ae1c32bbba58b30cfb6cbbdd4bdfe4c9f8e10311fdf33a0cd873f132aa",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/display.rs",
+    "sha256": "3d741eb3373ec838f828b6345357caa29970b6df84c5b3f1fa61bca6541ef0ec",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/mesh.rs",
+    "sha256": "eba2e7dd306cd2068889ffe56aee819b76a0a3d0125f3a4ae80c8468a1da9b73",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/net.rs",
+    "sha256": "82252f555c1fddce820a2c901d1b446f3e934e7c02fbf587eb78a074d6dd3ddc",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/board.rs",
+    "sha256": "9b90eb4edf22eff0f7414dea2be812824aa61991910117a566da5aeeb19f48cb",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/wifi_secrets.rs.example",
+    "sha256": "4ff6cf6c9ccd7a65e45baa59ba942a78e52ec4adf73eb02a7f54c59a5e004156",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/main.rs",
+    "sha256": "8f8c3d366c076555dd5892eac25f9802544f67e0679b5bfd71e6a6601938f95e",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/drivers/pca9557.rs",
+    "sha256": "f94977950087242f8fd3ffe98975d78160cac5355adb8c2f3f85f991e8fdb208",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/drivers/mod.rs",
+    "sha256": "1797601998fe2d19bc59a798d88e1be8f686c05ed5783c8fd1df8b15d0f97230",
+    "snapshot_matches": true
+  },
+  {
+    "path": "clawft-edge-pad-idf/src/drivers/gt911.rs",
+    "sha256": "70ff2255a1483e5c924e9ed8e86aefe247225fbb1dd5a5c3026eb91666637372",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-types/Cargo.toml",
+    "sha256": "535ff09b9af901243c83d5089939744349b56446cdd78ac046dfe2132be192e3",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-types/src/lib.rs",
+    "sha256": "57dd5183a0c3debcad88f279cbd6e699436a4ba2bddcc68d1160d12e532c9887",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-types/src/link.rs",
+    "sha256": "6bfe87088a0b8e81b5ec9b4736643858b8839ac738fba99d4b8cb0d499029b35",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-types/src/spatial/primitives.rs",
+    "sha256": "33b9d15641987d772df7f1739ec3bf434950ec3a3c866fffad10c3bd4ac5cfe2",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-types/src/spatial/tags.rs",
+    "sha256": "fe64be6a550cfc4a6f49731a5bec9fcb8381214bc8dcadf9635b8a8bd2789750",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-types/src/spatial/mod.rs",
+    "sha256": "08b5c337c1046dc306713a0631d3d6c2cf137a03ab4941327415d529474ff72f",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-types/src/spatial/vector_ref.rs",
+    "sha256": "ebeebe625d91f4be1f6ebf4ef214c8addefe9393f10416932afe927bb46d93db",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-display/Cargo.toml",
+    "sha256": "0c9e600efda8cbfae455c2d26aba98ae9922d842d8a0335f11564883cb3d10a9",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-display/src/lib.rs",
+    "sha256": "8633d045cafd5194a6c81f9c5019f5130bd3c918f4955af6c0adbfeec203f281",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-display/src/sim.rs",
+    "sha256": "1653b5af6a3b3633a0a22ba1a3552c3b4c38474d0df22ab6a1296b864c2d18da",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-display/src/surface.rs",
+    "sha256": "0004ffb1c0fef1243ff86da121af7a7d24057dc52e16aec77177fc1c53b103b1",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-display/src/compositor.rs",
+    "sha256": "474a8a53edefbb76ccff6949bfcc3f2505791430a2ba27c471d3f367d2fd9f5d",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/Cargo.toml",
+    "sha256": "0d9eb886643cd55533eaca4b102e1f597c5adda7bba27c1796bedab3a96ff62b",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/Cargo.lock",
+    "sha256": "451ea5b1bedf8c106c041926803c24efcd531139b28513424c0079896d8b781a",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/README.md",
+    "sha256": "ab6e68bcda842c181f6d41e5c0b9f76f115125677f81a9b003828e9867af512c",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/tests/hit_test.rs",
+    "sha256": "e5676dd3cdbc97f8b1760c5415b18509870b429460c2008271c9fa12dd33c392",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/tests/snapshot.rs",
+    "sha256": "3ab5d9406b7106a8eb08d83c0abed4c0415bd0d77ab31491af78d82f2a963233",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/tests/codec.rs",
+    "sha256": "dfcffd4af68c032a768ca4aa19709188b8d6be1b35f39085a5cb2127a959481c",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/tests/damage.rs",
+    "sha256": "bf0d0a2355e1cf09433f9249705494a99fb9c6efe77e20e9932228e3b79ad489",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/tests/coalescing.rs",
+    "sha256": "0cba9c21839590b2057b288f7c32c55906714c962c3e8df636e3ae37df53706b",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/scene.rs",
+    "sha256": "790e20f817c98467e77e186ed81af3340372aa4c8ee42820b6bc2cbe7e0f36ec",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/id.rs",
+    "sha256": "30d42fcdcf2cd31c84bd2208985bccf042b05ee520517bda7ff9d7d42df69ffe",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/color.rs",
+    "sha256": "c1aafce536b81243d8ea8c5388362a5c5ba6d806ff4f70b47c83d1c76f80e716",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/lib.rs",
+    "sha256": "7eade93b52eeb93b344b2e99cd29cac4087b647315024404ab45834c49c036eb",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/store.rs",
+    "sha256": "ff1deffa6df7fc079dc82ff3632d46276ea233616e484b01a840365b563db869",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/envelope.rs",
+    "sha256": "96fa33ee081b7722f830228ec5a42c8bccdae7805a15d757c1601f4db95ebe5c",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/node.rs",
+    "sha256": "01c3af81410e12c9c5dcd85c000540e42c484847ddb1a198acd9357583272b61",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/codec.rs",
+    "sha256": "2e81c2b72a62d8d3bb94c36ffa0fd62fc4f4a2cef387057bf5af6d73f1082a3c",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/geometry.rs",
+    "sha256": "f56f39459e9c6300716c6dd429151585b1bdfd5f4a669f84a891e2d398a2bf75",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/tween.rs",
+    "sha256": "20d75beb8dcb893d8e1b628f800dc596578dc997d6620de156e9ddad78d2f39b",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/op.rs",
+    "sha256": "392ca6ba33c9890fcb2bee66a2ff943ef16d65d6bf610244cfeb3494a1eeb29f",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/damage.rs",
+    "sha256": "7477b7e78d7e1add7c032c0368c5123979420de917e986a3907af4bf1bed40b4",
+    "snapshot_matches": true
+  },
+  {
+    "path": "weftos-leaf-scene/src/primitive.rs",
+    "sha256": "717d6b6bb2993ab417a15de40b8d97c25279100f71ba14996fe5d309e9e1afa9",
+    "snapshot_matches": true
+  }
+]

@@ -79,13 +79,15 @@ pub fn unverifiable_leftovers() {
         let sup = fx.supervisor();
         let mut found = sup.adopt_on_boot().await;
         found.sort_by_key(|f| match f {
-            Found::Adopted { id, .. } | Found::Unverifiable { id, .. } => id.clone(),
+            Found::Adopted { id, .. } | Found::Unverifiable { id, .. }
+            | Found::AdoptedContainer { id, .. } | Found::UnverifiableContainer { id, .. } => id.clone(),
         });
         let reasons: std::collections::HashMap<String, Skip> = found
             .iter()
             .map(|f| match f {
                 Found::Unverifiable { id, reason, .. } => (id.clone(), reason.clone()),
                 Found::Adopted { id, .. } => panic!("adopted {id}"),
+                Found::AdoptedContainer { id, .. } | Found::UnverifiableContainer { id, .. } => panic!("unexpected container {id}"),
             })
             .collect();
         assert!(matches!(reasons[&fx.id], Skip::WrongExe { .. }), "{:?}", reasons[&fx.id]);
@@ -176,7 +178,7 @@ pub fn adopted_zombie_counts_as_dead() {
         std::fs::create_dir_all(fx.run_dir()).unwrap();
         std::fs::write(fx.run_dir().join("kernel.pid"), pid.to_string()).unwrap();
         sup.launcher().adopt(&fx.id, pid);
-        assert_eq!(sup.launcher().probe(&fx.id).await, ChildProbe::Running { pid });
+        assert_eq!(sup.launcher().probe(&fx.id).await, ChildProbe::Running { identity: clawft_kernel::workload_runtime::ChildIdentity::Native { host_pid: pid } });
         zombie.kill().unwrap(); // dies; stays a zombie until reaped
         wait_until("zombie reads as dead", 5, || sup.launcher().pid_of(&fx.id).is_none()).await;
         assert!(matches!(sup.launcher().probe(&fx.id).await, ChildProbe::Exited { .. }));

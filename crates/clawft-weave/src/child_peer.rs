@@ -21,11 +21,9 @@
 //! legacy `handle_connection` wrapper do not classify and default to
 //! [`PeerClass::Owner`].
 //!
-//! Honest limit: this is a narrowing, not a boundary. A process that leaves
-//! the group (`setsid`, `setpgid`) or double-forks away escapes it; the real
-//! boundary is a separate uid or a sandbox (Phase 4). The peer pid comes from
-//! the socket's peer credentials (`SO_PEERCRED` / `LOCAL_PEERPID`) and is
-//! looked up once, at accept.
+//! The process-group check alone is a narrowing: `setsid` and `setpgid` can
+//! escape it. A sandboxed project child instead uses the separate child-only
+//! parent socket, whose method ceiling does not depend on process group.
 
 /// What kind of caller a unix-socket peer is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

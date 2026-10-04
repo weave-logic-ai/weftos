@@ -28,6 +28,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use clawft_kernel::chain::ChainManager;
@@ -51,6 +53,115 @@ use store::current_view_locked;
 #[cfg(test)]
 use store::read_cert_files as store_read_certs;
 pub use store::{current_view, repair};
+
+static PROJECT_CLAIMS_CHANGED: OnceLock<tokio::sync::Notify> = OnceLock::new();
+type ClaimSyncReply = tokio::sync::oneshot::Sender<Result<(), String>>;
+type ClaimSyncSender = tokio::sync::mpsc::UnboundedSender<ClaimSyncReply>;
+static CLAIM_SYNC: OnceLock<std::sync::Mutex<ClaimSyncState>> = OnceLock::new();
+static CLAIM_SYNC_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Default)]
+struct ClaimSyncState {
+    /// Set as soon as the daemon selects service mode. A missing sender may
+    /// mean the first session is not polling yet, or that an old machine
+    /// registration still has project claims pending cleanup.
+    service_required: bool,
+    active: Option<(u64, ClaimSyncSender)>,
+}
+
+pub(crate) fn project_claims_changed() -> &'static tokio::sync::Notify {
+    PROJECT_CLAIMS_CHANGED.get_or_init(tokio::sync::Notify::new)
+}
+
+fn claim_sync_slot() -> &'static std::sync::Mutex<ClaimSyncState> {
+    CLAIM_SYNC.get_or_init(|| std::sync::Mutex::new(ClaimSyncState::default()))
+}
+
+fn claim_sync_sender(state: &ClaimSyncState) -> Result<Option<ClaimSyncSender>, String> {
+    match &state.active {
+        Some((_, sender)) => Ok(Some(sender.clone())),
+        None if state.service_required => Err("project claim service session is unavailable; machine cleanup is not confirmed".into()),
+        None => Ok(None), // collapsed or never connected: no service claims exist
+    }
+}
+
+/// Installed only while the mesh-local session can apply and acknowledge
+/// project address changes. A stale session cannot clear its successor.
+pub(crate) struct ClaimSyncLease(u64);
+
+impl Drop for ClaimSyncLease {
+    fn drop(&mut self) {
+        let mut slot = claim_sync_slot().lock().expect("claim sync lock");
+        if slot.active.as_ref().is_some_and(|(generation, _)| *generation == self.0) { slot.active = None; }
+    }
+}
+
+pub(crate) fn install_claim_sync(sender: ClaimSyncSender) -> ClaimSyncLease {
+    let generation = CLAIM_SYNC_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let mut slot = claim_sync_slot().lock().expect("claim sync lock");
+    slot.service_required = true;
+    slot.active = Some((generation, sender));
+    ClaimSyncLease(generation)
+}
+
+/// Called before publishing a service-mode boot result, so a project RPC
+/// cannot succeed in the gap before the link task installs its ACK channel.
+pub(crate) fn require_claim_sync() {
+    claim_sync_slot().lock().expect("claim sync lock").service_required = true;
+}
+
+/// A journal mutation may return success only after the connected machine
+/// service has acknowledged the new current address set. A session that was
+/// connected but is now unavailable may still have claims pending cleanup on
+/// the machine, so its absence must report an incomplete mutation.
+pub(crate) async fn sync_claims_barrier() -> Result<(), String> {
+    let sender = claim_sync_sender(&claim_sync_slot().lock().expect("claim sync lock"))?;
+    let Some(sender) = sender else { return Ok(()); };
+    await_claim_sync(sender).await
+}
+
+async fn await_claim_sync(sender: ClaimSyncSender) -> Result<(), String> {
+    let (reply, received) = tokio::sync::oneshot::channel();
+    sender.send(reply).map_err(|_| "project claim session ended before sync".to_string())?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), received)
+        .await.map_err(|_| "project claim sync did not acknowledge within five seconds".to_string())?
+        .map_err(|_| "project claim session ended before acknowledgement".to_string())?
+}
+
+#[cfg(test)]
+mod claim_sync_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mutation_barrier_waits_for_machine_ack_and_propagates_failure() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let first = tokio::spawn(await_claim_sync(tx.clone()));
+        let ack = rx.recv().await.expect("sync request");
+        assert!(!first.is_finished(), "journal mutation must wait for service ACK");
+        ack.send(Ok(())).unwrap();
+        assert!(first.await.unwrap().is_ok());
+
+        let second = tokio::spawn(await_claim_sync(tx));
+        rx.recv().await.unwrap().send(Err("machine refused address.remove".into())).unwrap();
+        assert!(second.await.unwrap().unwrap_err().contains("machine refused"));
+    }
+
+    #[test]
+    fn disconnect_gap_is_incomplete_until_successor_installs() {
+        let mut state = ClaimSyncState::default();
+        assert!(claim_sync_sender(&state).unwrap().is_none(), "collapsed or never-service has no claims");
+        let (old, _) = tokio::sync::mpsc::unbounded_channel();
+        state.service_required = true; // selected service mode, before first session poll
+        assert!(claim_sync_sender(&state).err().expect("first-session gap must fail closed").contains("cleanup is not confirmed"));
+        state.active = Some((1, old));
+        assert!(claim_sync_sender(&state).unwrap().is_some());
+        state.active = None; // lease dropped before remote connection cleanup
+        assert!(claim_sync_sender(&state).err().expect("disconnect must fail closed").contains("cleanup is not confirmed"));
+        let (new, _) = tokio::sync::mpsc::unbounded_channel();
+        state.active = Some((2, new));
+        assert!(claim_sync_sender(&state).unwrap().is_some());
+    }
+}
 
 #[path = "project_cert_nonce.rs"]
 mod nonce;
@@ -669,9 +780,14 @@ pub(crate) async fn env_from_kernel(kernel: &crate::rpc_ext::KernelRef) -> Resul
 /// `mesh.register`; H verifies the spawn nonce and issued the PoP nonce.
 pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Issued, IssueError> {
     let env = env_from(ctx).await?;
-    tokio::task::spawn_blocking(move || register(&env, req, Utc::now()))
+    let issued = tokio::task::spawn_blocking(move || register(&env, req, Utc::now()))
         .await
-        .map_err(|e| IssueError::Store(format!("task failed: {e}")))?
+        .map_err(|e| IssueError::Store(format!("task failed: {e}")))?;
+    if issued.is_ok() {
+        project_claims_changed().notify_waiters();
+        sync_claims_barrier().await.map_err(|e| IssueError::Incomplete(format!("project certificate was journalled but {e}")))?;
+    }
+    issued
 }
 
 /// A project's key was revoked (writes the terminal marker; the child is
@@ -681,6 +797,7 @@ pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Is
 /// there is no child to stop.
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub async fn on_identity_change(id: &str, method: &str) -> Result<(), MarkerError> {
+    project_claims_changed().notify_waiters();
     let marker = (method == "project.revoke").then(|| write_revoked_marker(id, "revoked"));
     if let Some(sup) = crate::project_supervisor::global() {
         if method == "project.revoke" {
@@ -695,6 +812,7 @@ pub async fn on_identity_change(id: &str, method: &str) -> Result<(), MarkerErro
 /// See the supervised variant; without placement there is no supervisor.
 #[cfg(not(all(unix, feature = "exochain", feature = "placement")))]
 pub async fn on_identity_change(id: &str, method: &str) -> Result<(), MarkerError> {
+    project_claims_changed().notify_waiters();
     if method == "project.revoke" {
         write_revoked_marker(id, "revoked")?;
     }
@@ -731,6 +849,7 @@ pub fn handle(call: ExtCall) -> ExtFuture {
                 params.get("id").and_then(Value::as_str).map(str::to_owned),
             )
         });
+        let needs_claim_sync = after.is_some() || is_repair;
         let out = tokio::task::spawn_blocking(move || match method.as_str() {
             "project.cert.show" => show(&env, &params),
             "project.cert.challenge" => challenge(&env, &params),
@@ -796,6 +915,14 @@ pub fn handle(call: ExtCall) -> ExtFuture {
                     unwritten.get_or_insert(e.response(id));
                 }
             }
+        }
+        if needs_claim_sync
+            && let Err(e) = sync_claims_barrier().await
+        {
+            return Response::error_with_kind(
+                "project_claim_sync_incomplete",
+                format!("project identity was journalled but {e}; the machine service claim is not confirmed"),
+            );
         }
         unwritten.or(incomplete).unwrap_or_else(|| Response::success(v))
     })

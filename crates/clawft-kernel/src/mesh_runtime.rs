@@ -136,6 +136,15 @@ pub struct DiscoveryState {
     pub heartbeat: Mutex<HeartbeatTracker>,
 }
 
+/// Admission material owned by this runtime. Nested seed dials must use this
+/// gate after verifying a reciprocal hello; a configured node-id is not proof.
+pub struct MeshAuthentication {
+    pub gate: Arc<dyn crate::mesh_admit::AdmissionGate>,
+    pub identity: Arc<crate::mesh_admit::DialIdentity>,
+    pub noise_static: [u8; 32],
+    pub require_authenticated_seeds: bool,
+}
+
 /// The mesh runtime orchestrates transport, connections, and message bridging.
 ///
 /// It maintains a set of active peer connections (keyed by node ID) and
@@ -144,6 +153,9 @@ pub struct DiscoveryState {
 /// 2. Receive an envelope from a peer and inject it into the local
 ///    [`A2ARouter`].
 pub struct MeshRuntime {
+    /// Installed ADR-103 leaf certificate and replay gate.
+    leaf_ingress: std::sync::OnceLock<Arc<crate::mesh_leaf::LeafIngress>>,
+    authentication: std::sync::OnceLock<MeshAuthentication>,
     /// Local node identifier.
     node_id: String,
     /// Active peer connections: node_id -> PeerConnection.
@@ -189,6 +201,22 @@ pub struct MeshRuntime {
 }
 
 impl MeshRuntime {
+    /// Install the service-owned leaf gate before the listener starts.
+    pub fn set_leaf_ingress(&self, ingress: Arc<crate::mesh_leaf::LeafIngress>) -> Result<(), Arc<crate::mesh_leaf::LeafIngress>> {
+        self.leaf_ingress.set(ingress)
+    }
+
+    pub fn leaf_ingress(&self) -> Option<&Arc<crate::mesh_leaf::LeafIngress>> {
+        self.leaf_ingress.get()
+    }
+    pub fn set_authentication(&self, auth: MeshAuthentication) -> bool {
+        self.authentication.set(auth).is_ok()
+    }
+
+    pub fn authentication(&self) -> Option<&MeshAuthentication> {
+        self.authentication.get()
+    }
+
     /// Say whether admission is `enforce` (see the field). Takes effect for
     /// the peer events emitted after the call.
     pub fn set_enforcing(&self, enforcing: bool) {
@@ -209,6 +237,8 @@ impl MeshRuntime {
     /// Create a new mesh runtime for the given local node.
     pub fn new(node_id: String) -> Self {
         Self {
+            leaf_ingress: std::sync::OnceLock::new(),
+            authentication: std::sync::OnceLock::new(),
             node_id,
             peers: DashMap::new(),
             local_router: None,
@@ -232,6 +262,8 @@ impl MeshRuntime {
     /// table. Heartbeat tracking starts with default configuration.
     pub fn with_discovery(node_id: String, kademlia_id: [u8; 32]) -> Self {
         Self {
+            leaf_ingress: std::sync::OnceLock::new(),
+            authentication: std::sync::OnceLock::new(),
             node_id,
             peers: DashMap::new(),
             local_router: None,
@@ -868,6 +900,9 @@ impl MeshRuntime {
                         .await
                 {
                     warn!(from = %ctx.peer_id, topic, "mesh.subscribe refused by local delivery");
+                    if ctx.node_verified && ctx.class == crate::mesh_admit::PeerClass::Leaf {
+                        return Err(KernelError::Mesh("certified leaf subscription scope refused".into()));
+                    }
                     return Ok(());
                 }
                 self.register_peer_topic(topic, &ctx.peer_id);

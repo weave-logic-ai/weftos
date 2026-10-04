@@ -37,6 +37,7 @@ embedded-svc = "0.29"
 log = "0.4"
 anyhow = "1"
 thiserror = "1"
+serde_json = "1"
 
 # ── Graphics ─────────────────────────────────────────────────────────
 # Same versions as clawft-edge-pad. embedded-graphics is std-compatible
@@ -54,6 +55,7 @@ embedded-graphics-core = "0.4"
 # what we share with the bare-metal sibling crate.
 weftos-leaf-types = { path = "../weftos-leaf-types" }
 weftos-leaf-display = { path = "../weftos-leaf-display" }
+weftos-leaf-scene = { path = "../weftos-leaf-scene" }
 
 # ── Crypto for Actor identity ────────────────────────────────────────
 # Same as clawft-edge-pad — keeps the ed25519 / blake3 path identical

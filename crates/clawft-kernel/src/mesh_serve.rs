@@ -15,12 +15,14 @@ use crate::mesh_admit::{
 };
 use crate::mesh_assess::{AssessmentEnvelope, AssessmentTransport};
 use crate::mesh_delivery::PeerCtx;
-use crate::mesh_ipc::MeshIpcEnvelope;
+use crate::mesh_ipc::{MeshIpcEnvelope, Scope};
 use crate::mesh_limits::{IpSlot, Limits, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS, ROUTE_CHECK};
 use crate::mesh_noise::{
     noise_static_public, EncryptedChannel, NoiseChannel, NoiseConfig, PassthroughChannel,
 };
 use crate::mesh_runtime::{MeshRuntime, RouteTally};
+use crate::mesh_leaf::{Prepare, MAX_LEAF_FRAME};
+use weftos_leaf_types::link::{parse_parent_scope, SignedPublish, FRAME_MAGIC, ACK_MAGIC};
 
 /// Build the transport for a `kernel.mesh.transport` name.
 ///
@@ -104,6 +106,24 @@ pub async fn serve_listener_with(
     // the set) also stops every connection it spawned, and a semaphore caps
     // concurrent connections.
     let mut conns = tokio::task::JoinSet::new();
+    if let Some(ingress) = runtime.leaf_ingress().cloned()
+        && let Ok(mesh_addr) = bind.parse::<std::net::SocketAddr>()
+        && let Some(port) = mesh_addr.port().checked_add(2) {
+            let leaf_addr = std::net::SocketAddr::new(mesh_addr.ip(), port);
+            match crate::mesh_tcp::TcpTransport.listen(&leaf_addr.to_string()).await {
+                Ok(leaf_listener) => {
+                    let leaf_rt = Arc::clone(&runtime);
+                    conns.spawn(async move { serve_signed_leaf_listener(leaf_rt, leaf_listener, limits).await });
+                    conns.spawn(async move {
+                        if let Err(e) = ingress.serve_discovery(mesh_addr, leaf_addr).await {
+                            tracing::error!(error = %e, "leaf discovery stopped");
+                        }
+                    });
+                    tracing::info!(addr = %leaf_addr, "dedicated certified leaf listener started");
+                }
+                Err(e) => tracing::error!(addr = %leaf_addr, error = %e, "certified leaf listener unavailable; no leaf discovery started"),
+            }
+    }
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let per_ip = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     loop {
@@ -126,7 +146,7 @@ pub async fn serve_listener_with(
                 let nc = noise.clone();
                 let gate = Arc::clone(&gate);
                 conns.spawn(async move {
-                    serve_connection(rt, stream, peer_addr, nc, gate, limits).await;
+                    serve_connection(rt, stream, peer_addr, nc, gate, limits, false).await;
                     drop(permit);
                     drop(ip_slot);
                 });
@@ -134,6 +154,31 @@ pub async fn serve_listener_with(
             Err(e) => {
                 tracing::warn!(error = %e, "mesh accept error");
             }
+        }
+    }
+}
+
+/// Separate bounded TCP ingress for WLF1 only. The ordinary mesh listener
+/// keeps its configured Noise requirement; no plaintext fallback is added
+/// to the node-to-node port.
+async fn serve_signed_leaf_listener(runtime: Arc<MeshRuntime>, mut listener: Box<dyn TransportListener>, limits: Limits) {
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let per_ip = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut conns = tokio::task::JoinSet::new();
+    loop {
+        while conns.try_join_next().is_some() {}
+        match listener.accept().await {
+            Ok((stream, peer)) => {
+                let Ok(permit) = Arc::clone(&slots).try_acquire_owned() else { continue };
+                let Some(ip_slot) = IpSlot::acquire(&per_ip, peer.ip(), limits.per_ip) else { continue };
+                let rt = Arc::clone(&runtime);
+                conns.spawn(async move {
+                    serve_connection(rt, stream, peer, None, Arc::new(crate::mesh_admit::AllowAll), limits, true).await;
+                    drop(permit);
+                    drop(ip_slot);
+                });
+            }
+            Err(e) => tracing::warn!(error = %e, "certified leaf accept error"),
         }
     }
 }
@@ -149,6 +194,9 @@ pub(crate) struct Active {
     pub(crate) admitted: bool,
     pub(crate) class: PeerClass,
     pub(crate) remote_static: Option<Vec<u8>>,
+    /// This connection must present a signed WLF1 frame for every input.
+    pub(crate) signed_leaf: bool,
+    pub(crate) leaf_cert: Option<weftos_leaf_types::link::LeafCertificate>,
 }
 
 impl Active {
@@ -209,6 +257,8 @@ async fn admit_first_frame(
                 bound,
                 class: g.class,
                 remote_static: channel.remote_static_key().map(<[u8]>::to_vec),
+                signed_leaf: false,
+                leaf_cert: None,
             },
             rest,
         )),
@@ -237,6 +287,20 @@ pub(crate) fn claimed_source(data: &[u8]) -> Option<String> {
 pub(crate) fn screen_frame(data: Vec<u8>, act: &Active) -> Option<Vec<u8>> {
     match MeshIpcEnvelope::from_bytes(&data) {
         Ok(mut env) => {
+            // The old ESP32 plaintext `ipc.publish` path must not remain a
+            // leaf-write bypass while rollout runs in observe mode.
+            if !act.admitted {
+                let protected = match (&env.message.target, &env.message.payload) {
+                    (MessageTarget::Topic(t), _) if t.starts_with("substrate/") || t.starts_with("mesh.leaf.") => true,
+                    (MessageTarget::Topic(t), crate::ipc::MessagePayload::Json(v)) if t == "ipc.publish" || t == "mesh.subscribe" =>
+                        v.get("topic").and_then(|t| t.as_str()).is_some_and(|t| t.starts_with("mesh.leaf.") || t.starts_with("substrate/")),
+                    _ => false,
+                };
+                if protected {
+                    tracing::warn!("dropping unsigned legacy leaf frame");
+                    return None;
+                }
+            }
             if let Some(id) = &act.bound
                 && &env.source_node != id
             {
@@ -245,10 +309,14 @@ pub(crate) fn screen_frame(data: Vec<u8>, act: &Active) -> Option<Vec<u8>> {
                 return None;
             }
             if act.limits == PeerLimits::Leaf {
+                // The established, Noise-authenticated CAP_LEAF grant may
+                // publish only to its own substrate prefix. WLF1 is required
+                // for the newer certified input/announce path and has its
+                // own per-publish replay check in the pump.
                 let id = act.bound.as_deref().unwrap_or_default();
-                let ok = matches!(&env.message.target, MessageTarget::Topic(t)
+                let allowed = matches!(&env.message.target, MessageTarget::Topic(t)
                     if t == "mesh.subscribe" || t.starts_with(&format!("substrate/{id}/")));
-                if !ok {
+                if !allowed {
                     tracing::warn!(node = id, "dropping leaf envelope outside substrate/<id>/");
                     return None;
                 }
@@ -279,6 +347,39 @@ pub(crate) fn screen_frame(data: Vec<u8>, act: &Active) -> Option<Vec<u8>> {
     }
 }
 
+/// Decode only the leaf's own publish/subscription shape. The outer signed
+/// target must agree with the inner routed topic; a signature over one topic
+/// cannot authorize another topic hidden inside JSON.
+fn leaf_routed_envelope(frame: &SignedPublish) -> Option<Vec<u8>> {
+    let id = frame.cert.leaf_id();
+    let mut env = MeshIpcEnvelope::from_bytes(&frame.payload).ok()?;
+    if env.source_node != id { return None; }
+    // A certificate binds the parent scope, but the envelope's tenant
+    // claims are caller-controlled and cannot be inferred from that string.
+    // Never pass those claims to the delivery authorizer.
+    env.src_scope = None;
+    let (user_id, project_id) = parse_parent_scope(&frame.cert.parent_scope).ok()?;
+    env.dest_scope = Some(Scope { user_id: user_id.to_owned(), project_id: project_id.map(str::to_owned) });
+    let crate::ipc::MessagePayload::Json(v) = &env.message.payload else { return None };
+    let inner_topic = v.get("topic")?.as_str()?;
+    match (&env.message.target, frame.target.as_str()) {
+        (MessageTarget::Topic(t), "mesh.subscribe") if t == "mesh.subscribe"
+            && inner_topic == weftos_leaf_types::push_topic(&id) => env.to_bytes().ok(),
+        (MessageTarget::Topic(t), target) if t == "ipc.publish" && inner_topic == target
+            && (target == format!("mesh.leaf.{id}.input") || target == format!("mesh.leaf.{id}.announce")) => {
+            let message = v.get("message")?.as_str()?;
+            let payload = match serde_json::from_str::<serde_json::Value>(message) {
+                Ok(json) => crate::ipc::MessagePayload::Json(json),
+                Err(_) => crate::ipc::MessagePayload::Text(message.to_owned()),
+            };
+            env.message.target = MessageTarget::Topic(target.to_owned());
+            env.message.payload = payload;
+            env.to_bytes().ok()
+        }
+        _ => None,
+    }
+}
+
 /// One accepted connection: optional Noise responder handshake, admission
 /// on the first frame, then the bidirectional pump until either side
 /// closes.
@@ -289,6 +390,7 @@ async fn serve_connection(
     nc: Option<Arc<NoiseConfig>>,
     gate: Arc<dyn AdmissionGate>,
     limits: Limits,
+    leaf_only: bool,
 ) {
     tracing::info!(
         peer = %peer_addr,
@@ -318,7 +420,7 @@ async fn serve_connection(
     };
     let kind = if nc.is_some() { ChannelKind::Noise } else { ChannelKind::Passthrough };
     let (out_tx, out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
-    pump(&rt, channel, kind, &peer_addr.to_string(), &*gate, limits, out_tx, out_rx, None, RouteTally::default(), false).await;
+    pump(&rt, channel, kind, &peer_addr.to_string(), &*gate, limits, out_tx, out_rx, None, RouteTally::default(), false, leaf_only).await;
 }
 
 /// The bidirectional pump shared by accepted and dialled connections.
@@ -330,7 +432,8 @@ async fn serve_connection(
 /// the first frame has been through admission; a dialled connection starts
 /// with `active` set (we chose the peer, so there is no admission step; it is
 /// not *admitted* in the membership sense) and its route already counted in
-/// `tally`.
+/// `tally`. Nested seed dials instead install `active` only after reciprocal
+/// cryptographic admission, and retain the real gate for live revocation.
 #[allow(clippy::too_many_arguments)]
 async fn pump(
     rt: &Arc<MeshRuntime>,
@@ -344,6 +447,7 @@ async fn pump(
     mut active: Option<Active>,
     tally: RouteTally,
     dialled: bool,
+    leaf_only: bool,
 ) {
     // Removes this connection's routes however the pump ends, including
     // when the task is aborted mid-await.
@@ -411,10 +515,79 @@ async fn pump(
                     tracing::warn!(peer = %peer_addr, node = id, "mesh peer revoked, closing");
                     break;
                 }
+                if let Some(cert) = active.as_ref().and_then(|a| a.leaf_cert.as_ref())
+                    && !rt.leaf_ingress().is_some_and(|ingress| ingress.still_enrolled(cert, unix_now())) {
+                    tracing::warn!(peer = %peer_addr, node = %cert.leaf_id(), "certified leaf enrollment expired or revoked; closing route");
+                    break;
+                }
             }
             inbound = channel.recv_encrypted() => match inbound {
                 Ok(data) => {
                     last_activity = tokio::time::Instant::now();
+                    if leaf_only && !data.starts_with(FRAME_MAGIC) {
+                        tracing::warn!(peer = %peer_addr, "non-certified frame on leaf-only listener");
+                        break;
+                    }
+                    if data.starts_with(FRAME_MAGIC) {
+                        if data.len() > MAX_LEAF_FRAME { break; }
+                        let Some(ingress) = rt.leaf_ingress() else {
+                            tracing::warn!(peer = %peer_addr, "signed leaf frame but no registry installed");
+                            break;
+                        };
+                        let Ok(frame) = weftos_leaf_types::decode::<SignedPublish>(&data[FRAME_MAGIC.len()..]) else { break };
+                        let id = frame.cert.leaf_id();
+                        if active.as_ref().is_some_and(|a| !a.signed_leaf || a.bound.as_deref() != Some(&id)
+                            || a.leaf_cert.as_ref() != Some(&frame.cert)) { break; }
+                        let _guard = ingress.lock.lock().await;
+                        let prepared = match ingress.prepare(&frame, unix_now()) {
+                            Ok(p) => p,
+                            Err(e) => { tracing::warn!(peer = %peer_addr, node = %id, error = %e, "leaf frame refused"); break; }
+                        };
+                        let Some(routed_frame) = leaf_routed_envelope(&frame) else {
+                            tracing::warn!(peer = %peer_addr, node = %id, "leaf payload does not match signed target");
+                            break;
+                        };
+                        if active.is_none() {
+                            if !rt.register_authenticated_as(id.clone(), out_tx.clone(), true, PeerClass::Leaf, &tally) {
+                                tracing::warn!(peer = %peer_addr, node = %id, "leaf route refused");
+                                break;
+                            }
+                            active = Some(Active {
+                                bound: Some(id.clone()), limits: PeerLimits::Leaf, trust_scope: false,
+                                admitted: true, class: PeerClass::Leaf, remote_static: None, signed_leaf: true,
+                                leaf_cert: Some(frame.cert.clone()),
+                            });
+                            routed = true;
+                        }
+                        // A duplicate subscribe after reconnect is a safe
+                        // control-plane refresh: route subscriptions are
+                        // connection-local, unlike the durable publish floor.
+                        if prepared == Prepare::New || frame.target == "mesh.subscribe" {
+                            let ctx = active.as_ref().expect("set above").peer_ctx();
+                            if let Err(e) = rt.handle_incoming_tallied(&routed_frame, out_tx.clone(), Some(&ctx), Some(&tally)).await {
+                                tracing::warn!(peer = %peer_addr, node = %id, error = %e, "leaf delivery failed");
+                                break;
+                            }
+                            if prepared == Prepare::New
+                                && let Err(e) = ingress.commit(&frame) {
+                                tracing::error!(node = %id, error = %e, "leaf replay floor commit failed; no ACK");
+                                break;
+                            }
+                        }
+                        let ack = ingress.ack(&frame);
+                        let Ok(mut ack_bytes) = weftos_leaf_types::encode(&ack) else { break };
+                        let mut wire = Vec::with_capacity(ACK_MAGIC.len() + ack_bytes.len());
+                        wire.extend_from_slice(ACK_MAGIC);
+                        wire.append(&mut ack_bytes);
+                        if channel.send_encrypted(&wire).await.is_err() { break; }
+                        continue;
+                    }
+                    if active.as_ref().is_some_and(|a| a.signed_leaf) {
+                        tracing::warn!(peer = %peer_addr, "signed leaf sent an unsigned frame");
+                        break;
+                    }
+                    let reciprocal = active.is_none() && serde_json::from_slice::<serde_json::Value>(&data)
+                        .ok().is_some_and(|v| v.get("reciprocal").and_then(|v| v.as_bool()) == Some(true));
                     let frame = match active {
                         Some(_) => Some(data),
                         None => match admit_first_frame(&*channel, kind, gate, data).await {
@@ -434,6 +607,13 @@ async fn pump(
                                     tracing::warn!(peer = %peer_addr, node = id,
                                         "route refused for admitted peer, closing");
                                     break;
+                                }
+                                if reciprocal {
+                                    let Some(auth) = rt.authentication() else { break };
+                                    let Some(hash) = channel.handshake_hash() else { break };
+                                    if !act.admitted { break; }
+                                    let reply = auth.identity.hello(hash, &auth.noise_static, unix_now());
+                                    if channel.send_encrypted(&reply.to_bytes()).await.is_err() { break; }
                                 }
                                 active = Some(act);
                                 rest
@@ -505,6 +685,11 @@ async fn pump(
             },
             outbound = out_rx.recv() => match outbound {
                 Some(data) => {
+                    if let Some(cert) = active.as_ref().and_then(|a| a.leaf_cert.as_ref())
+                        && !rt.leaf_ingress().is_some_and(|ingress| ingress.still_enrolled(cert, unix_now())) {
+                        tracing::warn!(peer = %peer_addr, node = %cert.leaf_id(), "certified leaf revoked before outbound push; closing route");
+                        break;
+                    }
                     if !dialled {
                         last_activity = tokio::time::Instant::now();
                     }
@@ -702,6 +887,14 @@ async fn dial_seed_once(
     identity: Option<Arc<DialIdentity>>,
     idle: std::time::Duration,
 ) {
+    let auth = rt.authentication();
+    let strict_seed = crate::mesh_admit_gate::nested_peer_ceiling_active()
+        || auth.is_some_and(|a| a.require_authenticated_seeds);
+    if strict_seed && (expected.is_none() || nc.is_none() || identity.is_none()
+        || !auth.is_some_and(|a| a.gate.strict())) {
+        tracing::warn!(peer = %addr, "nested seed refused: missing pin, Noise, identity or enforcing gate");
+        return;
+    }
     let transport = transport_for(transport_name, Some(addr));
     let stream = match transport.connect(addr).await {
         Ok(s) => s,
@@ -739,13 +932,47 @@ async fn dial_seed_once(
         match noise_static_public(&cfg.local_private_key) {
             Some(stat) => {
                 let hello = id.hello(&hash, &stat, unix_now());
-                if channel.send_encrypted(&hello.to_bytes()).await.is_err() {
+                let hello_bytes = if strict_seed {
+                    // This flag only asks for a response; the response itself is
+                    // signed over this Noise session and goes through admission.
+                    let mut wire = serde_json::to_value(&hello).expect("hello serializes");
+                    wire["reciprocal"] = serde_json::Value::Bool(true);
+                    serde_json::to_vec(&wire).expect("hello serializes")
+                } else { hello.to_bytes() };
+                if channel.send_encrypted(&hello_bytes).await.is_err() {
                     tracing::warn!(peer = %addr, "failed to send admission hello");
                     return;
                 }
             }
             None => tracing::warn!(peer = %addr, "cannot derive noise static key"),
         }
+    }
+
+    if strict_seed {
+        let gate = &*auth.expect("checked above").gate;
+        let admission = async {
+            let frame = channel.recv_encrypted().await.map_err(|e| e.to_string())?;
+            let (active, rest) = admit_first_frame(&*channel, kind, gate, frame).await
+                .map_err(|e| e.detail)?;
+            if !active.admitted || active.bound.as_deref() != expected || rest.is_some() {
+                return Err("seed did not prove the granted identity under admission".to_owned());
+            }
+            Ok(active)
+        };
+        let active = match tokio::time::timeout(HANDSHAKE_TIMEOUT, admission).await {
+            Ok(Ok(active)) => active,
+            _ => { tracing::warn!(peer = %addr, "reciprocal seed admission failed"); return; }
+        };
+        let (out_tx, out_rx) = tokio::sync::mpsc::channel(256);
+        let tally = RouteTally::default();
+        let id = active.bound.as_ref().expect("verified above");
+        if !rt.register_authenticated_as(id.clone(), out_tx.clone(), true, active.class, &tally) { return; }
+        // This address alias is installed only AFTER key/session verification and
+        // admission, so even the first queued outbound payload cannot leak.
+        rt.add_peer_tallied(addr.to_owned(), out_tx.clone(), &tally);
+        pump(rt, channel, kind, addr, gate, Limits { idle, ..Limits::default() },
+            out_tx, out_rx, Some(active), tally, true, false).await;
+        return;
     }
 
     let (out_tx, out_rx) = tokio::sync::mpsc::channel(256);
@@ -771,9 +998,11 @@ async fn dial_seed_once(
         admitted: false,
         class: PeerClass::Legacy,
         remote_static: channel.remote_static_key().map(<[u8]>::to_vec),
+        signed_leaf: false,
+        leaf_cert: None,
     };
     let limits = Limits { idle, ..Limits::default() };
-    pump(rt, channel, kind, addr, &crate::mesh_admit::AllowAll, limits, out_tx, out_rx, Some(active), tally, true).await;
+    pump(rt, channel, kind, addr, &crate::mesh_admit::AllowAll, limits, out_tx, out_rx, Some(active), tally, true, false).await;
 }
 
 #[cfg(test)]
@@ -851,3 +1080,7 @@ mod tests {
 #[cfg(test)]
 #[path = "mesh_serve_tests.rs"]
 mod serve_tests;
+
+#[cfg(test)]
+#[path = "mesh_nested_dial_tests.rs"]
+mod nested_dial_tests;

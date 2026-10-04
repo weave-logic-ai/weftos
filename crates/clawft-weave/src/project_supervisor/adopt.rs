@@ -70,6 +70,10 @@ pub enum Found {
         /// Child pid.
         pid: u32,
     },
+    /// Inspected engine identity and answering guest kernel.
+    AdoptedContainer { id: String, container_id: String, host_pid: u32, guest_pid: u32 },
+    /// A persisted container cannot be verified. It must block a duplicate.
+    UnverifiableContainer { id: String, container_id: String, reason: String },
     /// Not adopted, and never signalled.
     Unverifiable {
         /// Project id (the run dir name).

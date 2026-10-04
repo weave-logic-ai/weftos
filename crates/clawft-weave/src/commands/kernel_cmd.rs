@@ -248,13 +248,18 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                     super::load_config_layered(&platform, args.config.as_deref()).await
                 };
                 // A config error is not fixed by retrying: exit 78.
-                let loaded = loaded.unwrap_or_else(|e| {
+                let mut loaded = loaded.unwrap_or_else(|e| {
                     eprintln!("Error: {e:#}");
                     if let Some(s) = &refused_sentinel {
                         crate::boot_refusal::write_refused(s, &format!("{e:#}"));
                     }
                     std::process::exit(crate::boot_refusal::EX_CONFIG)
                 });
+                #[cfg(all(unix, feature = "exochain"))]
+                crate::nested_boot::enter(&mut loaded.config, args.config.as_deref(), user_profile)?;
+                #[cfg(not(all(unix, feature = "exochain")))]
+                anyhow::ensure!(loaded.config.weave.nested.is_none() && std::env::var_os("WEFTOS_NESTED_BOOT").is_none(),
+                    "nested users require Unix and exochain");
                 let kernel_config = loaded.config.kernel.clone();
                 clawft_kernel::chain_storage::request_new_chain(new_chain);
                 clawft_kernel::chain_storage::request_adopt_legacy_chain(adopt_legacy_chain);

@@ -1036,6 +1036,8 @@ pub async fn run(
         config.kernel.profile = Some(clawft_types::config::KernelProfile::Project);
         kernel_config.profile = Some(clawft_types::config::KernelProfile::Project);
     }
+    #[cfg(all(unix, feature = "exochain"))]
+    let nested_master = config.weave.master;
     let mut pre_boot = crate::project_hooks::pre_boot(&mut config, &kernel_config).await?;
     crate::project_hooks::adjust_services(&mut config, &mut kernel_config);
     let paths = protocol::runtime_paths();
@@ -1162,6 +1164,8 @@ pub async fn run(
     clawft_kernel::chain_storage::request_adopt_legacy_chain(false);
     crate::project_hooks::post_boot(&kernel, &pre_boot)?;
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
+    #[cfg(all(unix, feature = "exochain"))]
+    crate::nested_rpc::init(nested_master, &kernel).await?;
     // Record this process as the live daemon only now that boot (which takes
     // the chain lock) has succeeded, so a refused boot leaves no stale pid.
     let _ = crate::instance_lock::write_pid_file(&protocol::pid_path(), std::process::id());
@@ -2835,6 +2839,17 @@ pub async fn run(
         }
         listener
     };
+    #[cfg(unix)]
+    let child_listener = if crate::user_daemon::is_active() {
+        let child_socket = crate::user_daemon::child_socket_path(paths.root());
+        // The daemon instance lock is held, so reclaiming a stale endpoint
+        // cannot replace another live daemon's listener.
+        let bound = crate::user_daemon::bind_child_socket(paths.root())?;
+        info!(path = %child_socket.display(), "child-only RPC endpoint listening");
+        Some((child_socket, bound))
+    } else {
+        None
+    };
     #[cfg(windows)]
     let mut pipe_server = {
         let pipe = clawft_rpc::pipe_name_for_path(&socket_path);
@@ -3378,6 +3393,27 @@ pub async fn run(
             }
         })
     };
+    #[cfg(unix)]
+    let child_socket_cleanup = child_listener.as_ref().map(|(path, _)| path.clone());
+    #[cfg(unix)]
+    let mut child_accept_handle = child_listener.map(|(_, listener)| {
+        let kernel = Arc::clone(&kernel);
+        let tx = shutdown_tx.clone();
+        let mut rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    result = listener.accept() => match result {
+                        Ok((stream, _)) => {
+                            tokio::spawn(handle_connection_child(stream, Arc::clone(&kernel), tx.clone()));
+                        }
+                        Err(e) => error!("child endpoint accept error: {e}"),
+                    },
+                    _ = rx.changed() => { if *rx.borrow() { break } },
+                }
+            }
+        })
+    });
     // Windows named-pipe accept loop (WEFT-559). Peers are not classified
     // here: `handle_connection` defaults them to Owner (ADR-103 A14). After each client
     // connects, re-create the next pipe instance so concurrent clients
@@ -3618,6 +3654,11 @@ pub async fn run(
     if restart_requested || !accept_handle.is_finished() {
         let _ = accept_handle.await;
     }
+    #[cfg(unix)]
+    if let Some(handle) = child_accept_handle.take() {
+        let _ = shutdown_tx.send(true);
+        let _ = handle.await;
+    }
 
     // Stop stream-window anchors so they flush their final windows
     // before the chain manager shuts down.
@@ -3640,6 +3681,8 @@ pub async fn run(
     }
 
     // Project kernel: final anchor and unregister, before the chain is saved.
+    #[cfg(all(unix, feature = "exochain"))]
+    crate::nested_rpc::quiesce().await?;
     crate::project_hooks::pre_shutdown().await;
 
     // Gracefully shut down running agents before kernel shutdown
@@ -3669,6 +3712,10 @@ pub async fn run(
     #[cfg(unix)]
     if socket_path.exists() {
         let _ = std::fs::remove_file(&socket_path);
+    }
+    #[cfg(unix)]
+    if let Some(path) = child_socket_cleanup {
+        let _ = std::fs::remove_file(path);
     }
     let pid_path = protocol::pid_path();
     if pid_path.exists() {
@@ -3746,10 +3793,37 @@ pub async fn handle_connection_peer<S>(
 /// ([`crate::child_peer::PeerClass`]): the accept loop uses it so a
 /// supervised child's literal scopes are ignored (ADR-103 A14).
 pub async fn handle_connection_classed<S>(
+    stream: S,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+    peer: crate::child_peer::PeerClass,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    handle_connection_at(stream, kernel, shutdown_tx, peer, crate::rpc_ext::RpcEndpoint::Owner).await;
+}
+
+/// Accept a project-kernel connection on the separate child-only socket.
+/// Its endpoint identity is supplied by the listener, never by the peer.
+pub async fn handle_connection_child<S>(
+    stream: S,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    handle_connection_at(
+        stream, kernel, shutdown_tx, crate::child_peer::PeerClass::Child,
+        crate::rpc_ext::RpcEndpoint::Child,
+    ).await;
+}
+
+async fn handle_connection_at<S>(
     mut stream: S,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
     peer: crate::child_peer::PeerClass,
+    endpoint: crate::rpc_ext::RpcEndpoint,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -3761,11 +3835,12 @@ pub async fn handle_connection_classed<S>(
 
     #[cfg(feature = "rvf-rpc")]
     if &header == b"RVFS" {
+        if endpoint == crate::rpc_ext::RpcEndpoint::Child { return }
         return handle_rvf_connection(stream, kernel, shutdown_tx, peer).await;
     }
 
     // JSON mode: the 4 header bytes are the start of the first JSON line.
-    handle_json_connection(header, stream, kernel, shutdown_tx, peer).await;
+    handle_json_connection(header, stream, kernel, shutdown_tx, peer, endpoint).await;
 }
 
 /// Outcome of dispatching a single JSON-line request.
@@ -3879,6 +3954,20 @@ async fn authorize_caller(
     params: &serde_json::Value,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
 ) -> Result<crate::capability::CallerCapabilities, Response> {
+    if caller.endpoint == crate::rpc_ext::RpcEndpoint::Child {
+        if !crate::project_token_scope::child_endpoint_allows(method) {
+            return Err(Response::error_with_kind(
+                "child_endpoint_method_denied", format!("the child endpoint may not call {method}"),
+            ));
+        }
+        if crate::project_token_scope::child_endpoint_requires_project_token(method)
+            && !project_token_scope(caller, kernel).await
+        {
+            return Err(Response::error_with_kind(
+                "project_token_required", format!("{method} needs a project token on the child endpoint"),
+            ));
+        }
+    }
     // Phase 3 consideration (D3 peer credentials): a daemon under another
     // uid than the CLI user denies the CLI's implicit "admin". Say so
     // instead of a bare permission error.
@@ -3956,6 +4045,7 @@ async fn dispatch_json_line<W>(
     shutdown_tx: &watch::Sender<bool>,
     writer: &mut W,
     peer: crate::child_peer::PeerClass,
+    endpoint: crate::rpc_ext::RpcEndpoint,
 ) -> DispatchOutcome
 where
     W: AsyncWriteExt + Unpin,
@@ -3982,7 +4072,7 @@ where
             // extension gates) for every entry path, before any streaming
             // intercept or dispatch.
             let mut caller =
-                crate::rpc_ext::CallerCtx::from_request(&req).with_peer(peer);
+                crate::rpc_ext::CallerCtx::from_request(&req).with_peer(peer).with_endpoint(endpoint);
             // ADR-103 D14: refuse an unsupported `proto` / malformed
             // `project` before anything else looks at the request.
             let (caps, denial) = if let Some(refusal) =
@@ -4085,6 +4175,7 @@ async fn handle_json_connection<S>(
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
     peer: crate::child_peer::PeerClass,
+    endpoint: crate::rpc_ext::RpcEndpoint,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -4097,7 +4188,7 @@ async fn handle_json_connection<S>(
         return;
     }
     let first_line = format!("{}{}", String::from_utf8_lossy(&prefix), rest_of_first);
-    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer).await {
+    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer, endpoint).await {
         DispatchOutcome::Continue => {}
         DispatchOutcome::Stop => return,
         DispatchOutcome::StreamSubscribe {
@@ -4118,7 +4209,7 @@ async fn handle_json_connection<S>(
             Ok(_) => {}
             Err(_) => break,
         }
-        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer).await {
+        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer, endpoint).await {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Stop => break,
             DispatchOutcome::StreamSubscribe {

@@ -5,8 +5,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use std::collections::BTreeMap;
 
-use clawft_mesh_local::proto::{Frame, Message};
+use clawft_mesh_local::proto::{Frame, Message, ProjectBinding, project_binding_payload};
+use ed25519_dalek::Signer;
 use clawft_mesh_local::UserCert;
 use clawft_mesh_local::{ClientError, MeshLocalClient};
 use tokio::sync::{mpsc, watch};
@@ -57,9 +59,28 @@ pub(super) async fn session(
     let mut dropped_deliveries = 0u64;
     let first_cert = c.cert().clone();
     let mut anchor_tick = tokio::time::interval(deps.timings.anchor_every);
+    let mut project_tick = tokio::time::interval(Duration::from_secs(1));
+    let mut published_projects = BTreeMap::new();
+    let (claim_sync_tx, mut claim_sync_rx) = mpsc::unbounded_channel();
+    let claim_sync_lease = deps.project_env.as_ref().map(|_| crate::project_cert_rpc::install_claim_sync(claim_sync_tx));
     let mut renew_at = tokio::time::Instant::now() + renew_after(&first_cert);
     let end = loop {
         tokio::select! {
+            Some(reply) = claim_sync_rx.recv(), if deps.project_env.is_some() => {
+                let result = sync_projects(&c, deps, &mut published_projects).await;
+                let _ = reply.send(result.clone());
+                if let Err(why) = result { break SessionEnd::Lost(format!("project claim sync: {why}")); }
+            },
+            _ = project_tick.tick(), if deps.project_env.is_some() => {
+                if let Err(why) = sync_projects(&c, deps, &mut published_projects).await {
+                    break SessionEnd::Lost(format!("project claim sync: {why}"));
+                }
+            },
+            _ = crate::project_cert_rpc::project_claims_changed().notified(), if deps.project_env.is_some() => {
+                if let Err(why) = sync_projects(&c, deps, &mut published_projects).await {
+                    break SessionEnd::Lost(format!("project claim sync: {why}"));
+                }
+            },
             _ = shutdown.changed() => break SessionEnd::Shutdown,
             Some(why) = lost_rx.recv() => break SessionEnd::Lost(why),
             ev = events.recv() => match ev {
@@ -158,12 +179,53 @@ pub(super) async fn session(
     };
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
+    drop(claim_sync_lease);
     if let Ok(c) = Arc::try_unwrap(c)
         && matches!(end, SessionEnd::Shutdown)
     {
         c.close().await;
     }
     end
+}
+
+/// Publish only the current, verified keys from the durable project identity
+/// view. A read or service error ends the session and removes all its claims.
+async fn sync_projects(
+    c: &MeshLocalClient,
+    deps: &LinkDeps,
+    published: &mut BTreeMap<String, ProjectBinding>,
+) -> Result<(), String> {
+    let Some(env) = deps.project_env.clone() else { return Ok(()); };
+    let desired = tokio::task::spawn_blocking(move || {
+        let view = crate::project_cert_rpc::current_view(&env).map_err(|e| e.to_string())?;
+        let user_pubkey = env.user_key.verifying_key().to_bytes();
+        let mut claims = BTreeMap::new();
+        for id in view.all_project_ids() {
+            let Some(cert) = view.current_cert(&id) else { continue };
+            if cert.verify(&user_pubkey, chrono::Utc::now()).is_err() { continue; }
+            let project_pubkey = clawft_types::project::canon::hex_decode::<32>(&cert.project_pubkey)
+                .ok_or_else(|| format!("invalid current project key for {id}"))?;
+            let cert_sig = env.user_key.sign(&project_binding_payload(&id, &project_pubkey)).to_bytes();
+            claims.insert(id.clone(), ProjectBinding { project_id: id, project_pubkey, cert_sig });
+        }
+        Ok::<_, String>(claims)
+    }).await.map_err(|e| e.to_string())??;
+    for (id, old) in published.clone() {
+        if desired.get(&id).is_none_or(|new| new.project_pubkey != old.project_pubkey) {
+            match c.request(Message::AddressRemove(old)).await.map_err(|e| e.to_string())? {
+                Message::Ack {} => { published.remove(&id); },
+                other => return Err(format!("address.remove {id}: {other:?}")),
+            }
+        }
+    }
+    for (id, claim) in desired {
+        if published.get(&id).is_some_and(|old| old.project_pubkey == claim.project_pubkey) { continue; }
+        match c.request(Message::AddressAdd(claim.clone())).await.map_err(|e| e.to_string())? {
+            Message::Ack {} => { published.insert(id, claim); },
+            other => return Err(format!("address.add {id}: {other:?}")),
+        }
+    }
+    Ok(())
 }
 
 /// Ask for a fresh certificate and verify it against the machine key and our

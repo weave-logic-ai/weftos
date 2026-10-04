@@ -150,6 +150,16 @@ pub struct ProjectBinding {
     pub cert_sig: [u8; 64],
 }
 
+/// User-key signature over one current project address claim. The machine
+/// service verifies this before it can authorize a project-scoped leaf.
+pub fn project_binding_payload(project_id: &str, project_pubkey: &[u8; 32]) -> Vec<u8> {
+    let mut bytes = b"weftos/mesh-local-project-claim/v1\0".to_vec();
+    bytes.extend_from_slice(&(project_id.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(project_id.as_bytes());
+    bytes.extend_from_slice(project_pubkey);
+    bytes
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Addresses {
     pub user_id: String,

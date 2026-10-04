@@ -52,12 +52,16 @@ pub async fn prepare(kernel_config: &KernelConfig, runtime_dir: &Path) -> anyhow
         return Ok(MeshBoot { identity: local()?, link: None });
     }
     let home = crate::user_daemon::require_home()?;
-    let endpoint = build_endpoint_async(&cfg, &home, BUILD_SHA).await;
+    // D10 isolated/collapsed grants never inspect or contact the machine service.
+    let endpoint = if clawft_kernel::mesh_mode::wants_probe(&cfg) {
+        build_endpoint_async(&cfg, &home, BUILD_SHA).await
+    } else { Ok(None) };
     let resolved = mesh_local_glue::resolve(&cfg, endpoint)
         .await
         .map_err(|why| anyhow::anyhow!("mesh: {why}"))?;
     match resolved {
         Resolved::Service(link) => {
+            crate::project_cert_rpc::require_claim_sync();
             // Roles and mesh mode in the handshake are right from here on.
             link.publish_state(mesh_state::global());
             let identity = link.identity().map_err(|e| anyhow::anyhow!("mesh service identity: {e}"))?;
@@ -139,12 +143,20 @@ pub async fn start_link(
     };
     #[cfg(not(feature = "exochain"))]
     let chain = ChainQueue::new(NoChain);
+    let project_env = k.chain_manager().and_then(|cm| {
+        Some(Arc::new(crate::project_cert_rpc::CertEnv {
+            chain: cm.clone(),
+            user_key: cm.signing_key_clone()?,
+            manifests_dir: crate::project_rpc::configured_dir()?,
+        }))
+    });
     let handle = mesh_local_glue::spawn(
         link,
         LinkDeps {
             delivery,
             gate: k.governance_gate().cloned(),
             chain: Arc::new(chain),
+            project_env,
             state: mesh_state::global().clone(),
             timings: Timings::default(),
         },

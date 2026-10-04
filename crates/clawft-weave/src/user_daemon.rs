@@ -118,6 +118,45 @@ pub fn manifests_dir(home: &Path) -> PathBuf {
     clawft_rpc::resolve::manifests_dir(home)
 }
 
+/// Parent-owned endpoint directory contains only the child RPC socket so it
+/// can be mounted read-only as one stable directory inside a container.
+pub fn child_socket_dir(run_root: &Path) -> PathBuf {
+    run_root.join("child-ipc")
+}
+
+pub fn child_socket_path(run_root: &Path) -> PathBuf {
+    child_socket_dir(run_root).join("child.sock")
+}
+
+/// Bind the production child-only endpoint under the daemon's held instance
+/// lock. The caller retains the listener for the separate child accept loop.
+/// Tests use this same binder with an isolated runtime root.
+#[cfg(unix)]
+pub fn bind_child_socket(run_root: &Path) -> anyhow::Result<tokio::net::UnixListener> {
+    use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
+
+    let dir = child_socket_dir(run_root);
+    match std::fs::symlink_metadata(&dir) {
+        Ok(meta) if !meta.file_type().is_dir() || meta.file_type().is_symlink() => {
+            anyhow::bail!("child socket directory is not a plain directory: {}", dir.display());
+        }
+        Ok(_) => {},
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&dir)?,
+        Err(e) => return Err(e.into()),
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    let socket = child_socket_path(run_root);
+    match std::fs::symlink_metadata(&socket) {
+        Ok(meta) if meta.file_type().is_socket() || meta.file_type().is_symlink() => {
+            std::fs::remove_file(&socket)?;
+        }
+        Ok(_) => anyhow::bail!("child socket path is not a socket: {}", socket.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+        Err(e) => return Err(e.into()),
+    }
+    Ok(tokio::net::UnixListener::bind(socket)?)
+}
+
 /// The local uid as a string (Unix), reported unverified in the handshake.
 pub fn local_uid() -> Option<String> {
     #[cfg(unix)]

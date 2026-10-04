@@ -108,6 +108,25 @@ pub fn bind_signed_bytes(
     format!("{BIND_DOMAIN}{project_id}\n{nonce}\n{client_nonce}\n{socket}\n{pid}").into_bytes()
 }
 
+/// Version 2 binds the guest's report to the inspected immutable container
+/// and the parent-selected host socket. Native peers keep the v1 layout.
+pub fn bind_container_bytes(
+    project_id: &str, nonce: &str, client_nonce: &str,
+    guest_socket: &str, guest_pid: u32, c: &ContainerRegistration,
+) -> Vec<u8> {
+    format!("weftos-mesh-local-bind-v2\n{project_id}\n{nonce}\n{client_nonce}\n{guest_socket}\n{guest_pid}\n{}\n{}\n{}",
+        c.engine, c.container_id, c.host_socket).into_bytes()
+}
+
+/// Container identity claimed by the guest and checked against the engine
+/// and the outstanding supervisor nonce before a session is opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerRegistration {
+    pub engine: String,
+    pub container_id: String,
+    pub host_socket: String,
+}
+
 /// Domain tag of a session-bound request signature.
 pub const SESSION_DOMAIN: &str = "weftos-mesh-local-session-v1\n";
 
@@ -187,6 +206,8 @@ pub struct RegisterRequest {
     pub pid: u32,
     /// The child's own socket path.
     pub socket: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<ContainerRegistration>,
     /// Capabilities the child offers (`anchor`, `subscribe`).
     #[serde(default)]
     pub features: Vec<String>,
@@ -328,6 +349,7 @@ mod tests {
             build_sha: "deadbeef".into(),
             pid: 4242,
             socket: "/Users/x/.weftos/run/01JB8Z3Q0V6X9KQ4M2N7T5R1WD/kernel.sock".into(),
+            container: None,
             features: vec!["anchor".into(), "subscribe".into()],
             client_nonce: "dd".repeat(16),
             bind_sig: "ab".repeat(64),
@@ -412,6 +434,20 @@ mod tests {
         ] {
             assert_ne!(b, other);
         }
+    }
+
+    #[test]
+    fn container_binding_changes_with_id_host_socket_and_nonce() {
+        let c = ContainerRegistration {
+            engine: "docker".into(), container_id: "a".repeat(64), host_socket: "/run/child.sock".into(),
+        };
+        let signed = bind_container_bytes("p", "nonce", "client", "/guest.sock", 7, &c);
+        let mut forged = c.clone(); forged.container_id = "b".repeat(64);
+        assert_ne!(signed, bind_container_bytes("p", "nonce", "client", "/guest.sock", 7, &forged));
+        forged = c.clone(); forged.host_socket = "/other.sock".into();
+        assert_ne!(signed, bind_container_bytes("p", "nonce", "client", "/guest.sock", 7, &forged));
+        assert_ne!(signed, bind_container_bytes("p", "other", "client", "/guest.sock", 7, &c));
+        assert_ne!(signed, bind_signed_bytes("p", "nonce", "client", "/guest.sock", 7));
     }
 
     #[test]

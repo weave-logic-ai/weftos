@@ -23,9 +23,11 @@
 pub mod adopt;
 mod boot;
 pub mod child;
+pub mod container;
 pub mod idle;
 pub mod io;
 pub mod restart;
+pub mod sandbox;
 pub mod state;
 mod types;
 
@@ -40,10 +42,10 @@ use clawft_kernel::workload_governance::{
 };
 use clawft_kernel::workload_kind::{ProjectFacts, ProjectPrepareError, prepare_project};
 use clawft_kernel::workload_runtime::{
-    ChildLauncher, ChildProbe, ChildRef, HostContract, InstanceHandle, LogicalRuntime, RunMode, RuntimeError,
-    VerifiedWorkload, WorkloadConfig, WorkloadHost,
+    ChildIdentity, ChildLauncher, ChildProbe, ChildRef, HostContract, InstanceHandle,
+    LogicalRuntime, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadHost,
 };
-use clawft_types::project::{ChildState, ProjectManifest, ServeVia};
+use clawft_types::project::{ChildState, ProjectManifest, ProjectSandbox, ServeVia};
 use clawft_types::runtime_paths::{LOCK_FILE_NAME, SOCKET_NAME};
 use serde_json::{Value, json};
 
@@ -69,6 +71,26 @@ struct SlotState {
     unregistered_since: Option<Instant>,
 }
 
+#[cfg(test)]
+mod container_path_tests {
+    use super::overlapping_parent_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn writable_project_cannot_contain_or_live_inside_parent_runtime() {
+        let protected = vec![PathBuf::from("/home/user/projects/a/.weftos/run")];
+        assert!(overlapping_parent_path(Path::new("/home/user/projects/a"), &protected).is_some());
+        assert!(
+            overlapping_parent_path(
+                Path::new("/home/user/projects/a/.weftos/run/child"),
+                &protected
+            )
+            .is_some()
+        );
+        assert!(overlapping_parent_path(Path::new("/home/user/projects/b"), &protected).is_none());
+    }
+}
+
 #[derive(Default)]
 struct Slot {
     gate: tokio::sync::Mutex<()>,
@@ -92,6 +114,15 @@ pub struct Supervisor {
 }
 
 static GLOBAL: OnceLock<Arc<Supervisor>> = OnceLock::new();
+
+fn overlapping_parent_path(project: &Path, protected_paths: &[PathBuf]) -> Option<PathBuf> {
+    protected_paths.iter().find_map(|protected| {
+        let protected = protected
+            .canonicalize()
+            .unwrap_or_else(|_| protected.clone());
+        (project.starts_with(&protected) || protected.starts_with(project)).then_some(protected)
+    })
+}
 
 /// Install `sup` as the process supervisor. `false` when one is installed
 /// already (the first wins).
@@ -136,7 +167,9 @@ impl Supervisor {
                     .with_chain(Arc::clone(&deps.cert_env.chain)),
             )
         });
-        let runtime = Arc::new(LogicalRuntime::new(Arc::clone(&launcher) as Arc<dyn ChildLauncher>));
+        let runtime = Arc::new(LogicalRuntime::new(
+            Arc::clone(&launcher) as Arc<dyn ChildLauncher>
+        ));
         let host = WorkloadHost::new(runtime, gate, SUPERVISOR_PRINCIPAL, NodeTrustTier::Paired)
             .with_chain(Arc::clone(&deps.cert_env.chain));
         Arc::new(Self {
@@ -167,7 +200,9 @@ impl Supervisor {
     }
 
     fn socket(&self, id: &str) -> PathBuf {
-        self.run_dir(id).join(SOCKET_NAME)
+        state::read(&self.run_dir(id))
+            .and_then(|s| s.container.map(|c| c.host_socket))
+            .unwrap_or_else(|| self.run_dir(id).join(SOCKET_NAME))
     }
 
     fn slot(&self, id: &str) -> Arc<Slot> {
@@ -176,7 +211,22 @@ impl Supervisor {
     }
 
     fn chain(&self, kind: &str, payload: Value) {
-        self.deps.cert_env.chain.append(CHAIN_SOURCE, kind, Some(payload));
+        self.deps
+            .cert_env
+            .chain
+            .append(CHAIN_SOURCE, kind, Some(payload));
+    }
+
+    /// Record a master-approved nested registration in the user chain.
+    pub(crate) fn record_nested_registration(&self, master: &str, child: &str) {
+        self.chain(
+            "project.nested.register",
+            json!({
+                "master_project_id": master,
+                "child_project_id": child,
+                "registration_level": "isolated",
+            }),
+        );
     }
 
     /// The spawn refusals plus the workload the `logical` adapter runs.
@@ -186,22 +236,58 @@ impl Supervisor {
             .map_err(|e| SupError::Identity(e.to_string()))?
             .ok_or_else(|| SupError::NotRegistered(id.to_owned()))?;
         let root = manifest.root.clone();
-        let home = self.cfg.home.canonicalize().unwrap_or_else(|_| self.cfg.home.clone());
-        let canon = root.canonicalize().map_err(|_| SupError::RootMissing(root.clone()))?;
+        let home = self
+            .cfg
+            .home
+            .canonicalize()
+            .unwrap_or_else(|_| self.cfg.home.clone());
+        let canon = root
+            .canonicalize()
+            .map_err(|_| SupError::RootMissing(root.clone()))?;
         if canon == home || canon == Path::new("/") {
             return Err(SupError::RootIsHome(canon));
         }
         if !canon.is_dir() {
             return Err(SupError::RootMissing(root));
         }
-        let found = clawft_types::project::read_project_toml(&canon)
+        let project = clawft_types::project::read_project_toml(&canon)
             .ok()
-            .flatten()
-            .map(|p| p.id);
+            .flatten();
+        let found = project.as_ref().map(|p| p.id.clone());
         if found.as_deref() != Some(id) {
-            return Err(SupError::IdMismatch { manifest: id.to_owned(), found });
+            return Err(SupError::IdMismatch {
+                manifest: id.to_owned(),
+                found,
+            });
         }
-        let sock = self.socket(id);
+        if let Some(parent_id) = project.as_ref().and_then(|p| p.parent.as_deref()) {
+            self.check_nested_parent(id, parent_id, &canon)?;
+        }
+        let sandbox = manifest
+            .serve
+            .as_ref()
+            .map_or(ProjectSandbox::Logical, |s| s.sandbox);
+        if sandbox == ProjectSandbox::LinuxContainer {
+            // A read-only bind is ineffective when the same files are also
+            // reachable through the project's writable bind.
+            let protected_paths = [
+                self.cfg.run_root.clone(),
+                self.cfg.manifests_dir.clone(),
+                self.cfg.home.join(".weftos"),
+            ];
+            if let Some(protected) = overlapping_parent_path(&canon, &protected_paths) {
+                return Err(SupError::Identity(format!(
+                    "container project root overlaps parent-controlled path {}",
+                    protected.display()
+                )));
+            }
+        }
+        let sock = if sandbox == ProjectSandbox::LinuxContainer {
+            self.run_dir(id).join("guest").join(SOCKET_NAME)
+        } else {
+            self.socket(id)
+        };
+
         if sock.as_os_str().len() > MAX_SOCKET_PATH {
             return Err(SupError::SocketPathTooLong(sock));
         }
@@ -218,7 +304,9 @@ impl Supervisor {
         // is missing (a full disk, a hand-removed file), instead of being
         // spawned just to die on `project_revoked` and burn its restart
         // budget.
-        if state::is_marked_revoked(&self.cfg.run_root, id) || (cert.is_none() && view.was_revoked(id)) {
+        if state::is_marked_revoked(&self.cfg.run_root, id)
+            || (cert.is_none() && view.was_revoked(id))
+        {
             return Err(SupError::Revoked(id.to_owned()));
         }
         let upub = self.deps.cert_env.user_key.verifying_key().to_bytes();
@@ -235,6 +323,45 @@ impl Supervisor {
             other => SupError::Identity(other.to_string()),
         })?;
         Ok((w, manifest))
+    }
+
+    /// A nested project may be supervised only under a registered master
+    /// whose canonical root contains it. This prevents a forged `parent`
+    /// field from claiming another project's authority or escaping its tree.
+    fn check_nested_parent(&self, id: &str, parent_id: &str, root: &Path) -> Result<(), SupError> {
+        clawft_types::project::validate_id(parent_id)
+            .map_err(|e| SupError::Nested(e.to_string()))?;
+        if parent_id == id {
+            return Err(SupError::Nested("project cannot parent itself".into()));
+        }
+        let parent = clawft_types::project::find_by_id(&self.cfg.manifests_dir, parent_id)
+            .map_err(|e| SupError::Nested(e.to_string()))?
+            .ok_or_else(|| SupError::Nested(format!("master {parent_id} is not registered")))?;
+        if parent.state != clawft_types::project::ProjectState::Active {
+            return Err(SupError::Nested(format!(
+                "master {parent_id} is not active"
+            )));
+        }
+        let parent_root = parent
+            .root
+            .canonicalize()
+            .map_err(|e| SupError::Nested(format!("master root: {e}")))?;
+        if root == parent_root || !root.starts_with(&parent_root) {
+            return Err(SupError::Nested(format!(
+                "{} is outside master root {}",
+                root.display(),
+                parent_root.display()
+            )));
+        }
+        let parent_toml = clawft_types::project::read_project_toml(&parent_root)
+            .map_err(|e| SupError::Nested(e.to_string()))?
+            .ok_or_else(|| SupError::Nested("master has no project.toml".into()))?;
+        if parent_toml.id != parent_id || !parent_toml.is_weave_master() {
+            return Err(SupError::Nested(format!(
+                "{parent_id} has not enabled weave.master"
+            )));
+        }
+        Ok(())
     }
 
     fn tracker_for(&self, m: &ProjectManifest) -> RestartTracker {
@@ -275,7 +402,7 @@ impl Supervisor {
 
     async fn probe_running(&self, id: &str) -> Option<u32> {
         match self.launcher.probe(id).await {
-            ChildProbe::Running { pid } => Some(pid),
+            ChildProbe::Running { identity } => Some(identity.host_pid()),
             _ => None,
         }
     }
@@ -286,10 +413,21 @@ impl Supervisor {
         clawft_types::project::validate_id(id).map_err(|e| SupError::InvalidId(e.to_string()))?;
         let slot = self.slot(id);
         let _g = slot.gate.lock().await;
+        let observed = match self.launcher.probe(id).await {
+            ChildProbe::Running { identity } => Some(identity.host_pid()),
+            ChildProbe::Unverifiable { reason } => return Err(SupError::LiveLeftover(reason)),
+            _ => None,
+        };
         let current = slot.st().state;
-        if let Some(pid) = self.probe_running(id).await {
+        if let Some(pid) = observed {
             match current {
-                ChildState::Running => return Ok(Running { socket: self.socket(id), pid, started: false }),
+                ChildState::Running => {
+                    return Ok(Running {
+                        socket: self.socket(id),
+                        pid,
+                        started: false,
+                    });
+                }
                 // An automatic restart in flight: its child has a pid but
                 // has not bound its socket yet. Never hand that socket out;
                 // wait (bounded) for the handshake like a fresh start does.
@@ -300,7 +438,11 @@ impl Supervisor {
                             if slot.st().state == ChildState::Starting {
                                 self.set_state(id, &slot, ChildState::Running);
                             }
-                            Ok(Running { socket: self.socket(id), pid, started: false })
+                            Ok(Running {
+                                socket: self.socket(id),
+                                pid,
+                                started: false,
+                            })
                         }
                         Err(why) => Err(SupError::NotReady(why)),
                     };
@@ -318,6 +460,33 @@ impl Supervisor {
         if let Some(why) = failed {
             return Err(SupError::Failed(why));
         }
+        if let Some(found) = self.scan_one_container(id).await {
+            match found {
+                Found::AdoptedContainer {
+                    host_pid,
+                    guest_pid,
+                    ..
+                } => {
+                    return match self
+                        .adopt_one_container(id, host_pid, guest_pid, &slot)
+                        .await
+                    {
+                        Ok(()) => Ok(Running {
+                            socket: self.socket(id),
+                            pid: host_pid,
+                            started: false,
+                        }),
+                        Err(reason) => Err(SupError::LiveLeftover(reason)),
+                    };
+                }
+                Found::UnverifiableContainer { reason, .. }
+                    if reason == "container is not running" => {}
+                Found::UnverifiableContainer { reason, .. } => {
+                    return Err(SupError::LiveLeftover(reason));
+                }
+                _ => {}
+            }
+        }
         // A live verified kernel that nobody supervises (an adoption that
         // was skipped, a restarted daemon) is taken over, never duplicated.
         if let Some(found) =
@@ -326,14 +495,25 @@ impl Supervisor {
             match found {
                 Found::Adopted { pid, .. } => {
                     return match self.adopt_one(id, pid, &slot).await {
-                        Ok(()) => Ok(Running { socket: self.socket(id), pid, started: false }),
+                        Ok(()) => Ok(Running {
+                            socket: self.socket(id),
+                            pid,
+                            started: false,
+                        }),
                         Err(reason) => Err(SupError::LiveLeftover(reason.to_string())),
                     };
                 }
-                Found::Unverifiable { pid: Some(pid), reason: adopt::Skip::HandshakeFailed(m), .. } => {
-                    return Err(SupError::LiveLeftover(format!("pid {pid} holds the lock but {m}")));
+                Found::Unverifiable {
+                    pid: Some(pid),
+                    reason: adopt::Skip::HandshakeFailed(m),
+                    ..
+                } => {
+                    return Err(SupError::LiveLeftover(format!(
+                        "pid {pid} holds the lock but {m}"
+                    )));
                 }
                 Found::Unverifiable { .. } => {}
+                Found::AdoptedContainer { .. } | Found::UnverifiableContainer { .. } => {}
             }
         }
         self.start_locked(id, &slot).await
@@ -344,14 +524,21 @@ impl Supervisor {
         self.ensure_running(id).await
     }
 
-    async fn start_locked(self: &Arc<Self>, id: &str, slot: &Arc<Slot>) -> Result<Running, SupError> {
+    async fn start_locked(
+        self: &Arc<Self>,
+        id: &str,
+        slot: &Arc<Slot>,
+    ) -> Result<Running, SupError> {
         let (w, manifest) = self.prepare(id)?;
         let existing = {
             let mut st = slot.st();
             match st.tracker.as_mut() {
                 Some(t) => {
                     let s = manifest.serve.clone().unwrap_or_default();
-                    t.reconfigure(s.restart_max(), Duration::from_secs(s.restart_window_secs()));
+                    t.reconfigure(
+                        s.restart_max(),
+                        Duration::from_secs(s.restart_window_secs()),
+                    );
                 }
                 None => st.tracker = Some(self.tracker_for(&manifest)),
             }
@@ -380,7 +567,10 @@ impl Supervisor {
             t.on_started(Instant::now());
         }
         let pid = self.launcher.pid_of(id).unwrap_or(0);
-        self.chain("project.kernel.started", json!({"project_id": id, "pid": pid}));
+        self.chain(
+            "project.kernel.started",
+            json!({"project_id": id, "pid": pid}),
+        );
         self.set_state(id, slot, ChildState::Starting);
         self.spawn_monitor(id.to_owned(), Arc::clone(slot), bumped);
         match self.wait_ready(id).await {
@@ -388,7 +578,11 @@ impl Supervisor {
                 self.set_state(id, slot, ChildState::Running);
                 self.note_build(id).await;
                 self.record_kernel_build(id).await;
-                Ok(Running { socket: self.socket(id), pid, started: true })
+                Ok(Running {
+                    socket: self.socket(id),
+                    pid,
+                    started: true,
+                })
             }
             Err(why) => Err(SupError::NotReady(why)),
         }
@@ -417,7 +611,9 @@ impl Supervisor {
     /// doctor compare it with this daemon's build (a child outlives
     /// `weaver update`; adoption never replaces it).
     pub(super) async fn note_build(&self, id: &str) {
-        let Some(h) = self.deps.io.handshake(&self.socket(id)).await else { return };
+        let Some(h) = self.deps.io.handshake(&self.socket(id)).await else {
+            return;
+        };
         if h.project_id.as_deref() != Some(id) {
             return;
         }
@@ -445,12 +641,32 @@ impl Supervisor {
             // socket or a squatter answering for the project is not it.
             if let Some(h) = self.deps.io.handshake(&sock).await
                 && h.project_id.as_deref() == Some(id)
-                && h.pid == pid
             {
-                return Ok(pid);
+                let container = state::read(&self.run_dir(id)).and_then(|s| s.container);
+                if let Some(c) = container {
+                    let binding = clawft_rpc::mesh_local::ContainerRegistration {
+                        engine: c.engine,
+                        container_id: c.id,
+                        host_socket: c.host_socket.to_string_lossy().into_owned(),
+                    };
+                    if self.launcher.verify_container(id, &binding).await == Ok(pid)
+                        && crate::mesh_local_registry::registry()
+                            .facts_at(id)
+                            .is_some_and(|f| f.container.as_ref() == Some(&binding))
+                        && self.prove_child(id, &sock).await.is_ok()
+                    {
+                        return Ok(pid);
+                    }
+                } else if h.pid == pid {
+                    return Ok(pid);
+                }
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(format!("no handshake from {} within {:?}", sock.display(), self.cfg.ready_timeout));
+                return Err(format!(
+                    "no handshake from {} within {:?}",
+                    sock.display(),
+                    self.cfg.ready_timeout
+                ));
             }
             tokio::time::sleep(self.cfg.ready_poll).await;
         }
@@ -511,7 +727,10 @@ impl Supervisor {
                 Some(Err(why)) => {
                     // Chained before the state flips: whoever sees `failed`
                     // can already find the event.
-                    self.chain("project.kernel.failed", json!({"project_id": id, "reason": why}));
+                    self.chain(
+                        "project.kernel.failed",
+                        json!({"project_id": id, "reason": why}),
+                    );
                     self.launcher.revoke_tokens(&id);
                     self.launcher.clean_spawn_file(&id);
                     self.set_state(&id, &slot, ChildState::Failed);
@@ -536,7 +755,11 @@ impl Supervisor {
                         }
                         Err(e) => {
                             tracing::warn!(project = %id, error = %e, "project kernel restart failed");
-                            synthetic = Some(ExitInfo { code: Some(-1), signal: None, clean_hint: false });
+                            synthetic = Some(ExitInfo {
+                                code: Some(-1),
+                                signal: None,
+                                clean_hint: false,
+                            });
                         }
                     }
                 }
@@ -583,8 +806,20 @@ impl Supervisor {
         self.stop_locked(id, &slot, "stop").await
     }
 
-    async fn stop_locked(self: &Arc<Self>, id: &str, slot: &Arc<Slot>, why: &str) -> Result<bool, SupError> {
-        let running = self.probe_running(id).await.is_some();
+    async fn stop_locked(
+        self: &Arc<Self>,
+        id: &str,
+        slot: &Arc<Slot>,
+        why: &str,
+    ) -> Result<bool, SupError> {
+        let running = match self.launcher.probe(id).await {
+            ChildProbe::Running { .. } => true,
+            ChildProbe::Unverifiable { reason } => {
+                self.launcher.revoke_tokens(id);
+                return Err(SupError::LiveLeftover(reason));
+            }
+            _ => false,
+        };
         let handle = {
             let mut st = slot.st();
             st.generation += 1; // retire the monitor of the old child
@@ -606,15 +841,30 @@ impl Supervisor {
             // The gated stop failed or did not finish: fall through to the
             // launcher's graceful-then-signal path. A project we were asked
             // to stop must not keep running because governance said no.
-            if let Some(pid) = self.probe_running(id).await {
-                let child = ChildRef { project_id: id.to_owned(), pid };
-                if let Err(e) = self.launcher.terminate(&child, Duration::ZERO).await {
-                    stop_err.get_or_insert(e.to_string());
+            match self.launcher.probe(id).await {
+                ChildProbe::Running { identity } => {
+                    let child = ChildRef {
+                        project_id: id.to_owned(),
+                        identity,
+                    };
+                    if let Err(e) = self.launcher.terminate(&child, Duration::ZERO).await {
+                        stop_err.get_or_insert(e.to_string());
+                    }
                 }
+                ChildProbe::Unverifiable { reason } => return Err(SupError::LiveLeftover(reason)),
+                _ => {}
             }
-            if self.probe_running(id).await.is_none() {
+            let final_probe = self.launcher.probe(id).await;
+            if let ChildProbe::Unverifiable { reason } = &final_probe {
+                return Err(SupError::LiveLeftover(reason.clone()));
+            }
+            if !matches!(final_probe, ChildProbe::Running { .. }) {
                 self.chain(
-                    if why == "idle" { "project.kernel.idle_stop" } else { "project.kernel.stopped" },
+                    if why == "idle" {
+                        "project.kernel.idle_stop"
+                    } else {
+                        "project.kernel.stopped"
+                    },
                     json!({"project_id": id, "via_fallback": stop_err.is_some()}),
                 );
                 stop_err = None;
@@ -664,7 +914,13 @@ impl Supervisor {
         // socket not yet bound) is a leftover, not a slot: give it the
         // chance to answer now, so the cascade does not skip it.
         self.reconcile_leftovers().await;
-        let ids: Vec<String> = self.slots.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+        let ids: Vec<String> = self
+            .slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
         let mut stopped = Vec::new();
         for id in ids {
             if matches!(self.stop(&id).await, Ok(true)) {
@@ -712,16 +968,27 @@ impl Supervisor {
                 st.restarts,
                 st.last_exit,
                 st.failed.clone(),
-                st.unregistered_since.map(|t| Instant::now().saturating_duration_since(t).as_secs()),
+                st.unregistered_since
+                    .map(|t| Instant::now().saturating_duration_since(t).as_secs()),
             )
         };
         let file = state::read(&self.run_dir(id)).unwrap_or_default();
-        let pid = self.probe_running(id).await;
-        let stale_build = pid.is_some() && file.kernel_sha.as_deref().is_some_and(|sha| sha != self.cfg.build_sha);
+        let probe = self.launcher.probe(id).await;
+        let (pid, state_, failed) = match probe {
+            ChildProbe::Running { identity } => (Some(identity.host_pid()), state_, failed),
+            ChildProbe::Unverifiable { reason } => (None, ChildState::Failed, Some(reason)),
+            _ => (None, state_, failed),
+        };
+        let stale_build = pid.is_some()
+            && file
+                .kernel_sha
+                .as_deref()
+                .is_some_and(|sha| sha != self.cfg.build_sha);
         Status {
             project_id: id.to_owned(),
             state: state_,
             pid,
+            container: file.container,
             socket: self.socket(id),
             restarts,
             last_exit_code: exit.and_then(|e| e.code),
@@ -735,7 +1002,13 @@ impl Supervisor {
 
     /// Status of every project the supervisor knows.
     pub async fn status_all(&self) -> Vec<Status> {
-        let ids: Vec<String> = self.slots.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+        let ids: Vec<String> = self
+            .slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
         let mut v = Vec::new();
         for id in ids {
             v.push(self.status(&id).await);
@@ -750,7 +1023,10 @@ impl Supervisor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .filter(|f| matches!(f, Found::Unverifiable { reason, .. } if *reason != adopt::Skip::Dead))
+            .filter(|f| {
+                matches!(f, Found::Unverifiable { reason, .. } if *reason != adopt::Skip::Dead)
+                    || matches!(f, Found::UnverifiableContainer { .. })
+            })
             .cloned()
             .collect()
     }
@@ -760,14 +1036,20 @@ impl Supervisor {
     /// pid and why. `project.stop` names it instead of saying "was not
     /// running". It is never signalled.
     pub fn unmanaged(&self, id: &str) -> Option<(u32, String)> {
-        self.leftovers.lock().unwrap_or_else(|e| e.into_inner()).iter().find_map(|f| match f {
-            Found::Unverifiable { id: i, pid: Some(pid), reason }
-                if i == id && *reason != adopt::Skip::Dead && child::pid_alive(*pid) =>
-            {
-                Some((*pid, reason.to_string()))
-            }
-            _ => None,
-        })
+        self.leftovers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find_map(|f| match f {
+                Found::Unverifiable {
+                    id: i,
+                    pid: Some(pid),
+                    reason,
+                } if i == id && *reason != adopt::Skip::Dead && child::pid_alive(*pid) => {
+                    Some((*pid, reason.to_string()))
+                }
+                _ => None,
+            })
     }
 
     /// `via = child-kernel` for the project (the owner's opt-in).

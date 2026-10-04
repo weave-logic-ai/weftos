@@ -16,3 +16,5 @@ std = ["serde/std", "ciborium/std"]
 [dependencies]
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 ciborium = { version = "0.2", default-features = false }
+ed25519-dalek = { version = "2", default-features = false }
+sha2 = { version = "0.10", default-features = false }

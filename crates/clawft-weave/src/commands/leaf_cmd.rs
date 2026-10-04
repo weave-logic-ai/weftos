@@ -39,6 +39,7 @@ use clap::{Parser, Subcommand};
 
 use weftos_leaf_scene::{DisplayId, Scene, SceneEnvelope, SceneOp, SceneStore, codec};
 use weftos_leaf_types::{AudioDrop, LeafPush, encode as encode_leaf_push, push_topic};
+use weftos_leaf_types::link::{LeafCertificate, OfflineJournal, ParentAdvertisement, PublishAck, FRAME_MAGIC, ACK_MAGIC};
 
 #[derive(Parser)]
 #[command(about = "Leaf device control — push vector scenes + audio to leaf devices")]
@@ -49,6 +50,56 @@ pub struct LeafArgs {
 
 #[derive(Subcommand)]
 pub enum LeafAction {
+    /// Issue a parent-certified Ed25519 identity for a leaf. No hardware is accessed.
+    Provision {
+        /// Existing raw 32-byte user or project signing key.
+        #[arg(long)]
+        parent_key: PathBuf,
+        /// Raw 32-byte machine mesh public key. Defaults to the parent key for a collapsed host.
+        #[arg(long)]
+        mesh_pubkey: Option<PathBuf>,
+        /// Canonical tenant: `user:<32 lowercase hex>` or `project:<user-id>:<26 uppercase ULID>`.
+        #[arg(long)]
+        parent_scope: String,
+        /// Required for a project scope: user-signed certificate for the
+        /// project key that issues this leaf identity.
+        #[arg(long)]
+        project_cert: Option<PathBuf>,
+        /// Empty destination directory for private seed and public registration.
+        #[arg(long)]
+        out_dir: PathBuf,
+        /// Certificate validity in days.
+        #[arg(long, default_value_t = 365)]
+        days: u64,
+        /// Comma-separated declared leaf capabilities.
+        #[arg(long, default_value = "input.publish,announce.publish,push.subscribe")]
+        capabilities: String,
+    },
+    /// Install a provisioned public certificate in a parent mesh registry.
+    Enroll {
+        #[arg(long)] public: PathBuf,
+        #[arg(long)] registry_dir: PathBuf,
+        #[arg(long)] parent_pubkey: PathBuf,
+        #[arg(long)] mesh_pubkey: PathBuf,
+        #[arg(long)] parent_scope: String,
+    },
+    /// Sign an outbound mesh envelope and append it durably before sending.
+    Enqueue {
+        #[arg(long)] seed: PathBuf,
+        #[arg(long)] public: PathBuf,
+        #[arg(long)] journal: PathBuf,
+        #[arg(long)] target: String,
+        /// JSON MeshIpcEnvelope bytes, including the same routed target.
+        #[arg(long)] payload_file: PathBuf,
+    },
+    /// Discover the certified parent and replay queued frames in order.
+    Replay {
+        #[arg(long)] public: PathBuf,
+        #[arg(long)] journal: PathBuf,
+        /// UDP discovery address, usually the parent LAN broadcast on mesh port + 1.
+        #[arg(long, default_value = "255.255.255.255:9490")]
+        discovery: std::net::SocketAddr,
+    },
     /// Push an audio payload to a leaf device.
     ///
     /// Display payloads now live under `weaver leaf scene`; the old
@@ -163,6 +214,16 @@ pub enum SceneAction {
 
 pub async fn run(args: LeafArgs) -> anyhow::Result<()> {
     match args.action {
+        LeafAction::Provision { parent_key, mesh_pubkey, parent_scope, project_cert, out_dir, days, capabilities } => {
+            provision(&parent_key, mesh_pubkey.as_deref(), &parent_scope, project_cert.as_deref(), &out_dir, days, &capabilities)
+        }
+        LeafAction::Enroll { public, registry_dir, parent_pubkey, mesh_pubkey, parent_scope } => {
+            enroll(&public, &registry_dir, &parent_pubkey, &mesh_pubkey, &parent_scope)
+        }
+        LeafAction::Enqueue { seed, public, journal, target, payload_file } => {
+            enqueue(&seed, &public, &journal, target, &payload_file)
+        }
+        LeafAction::Replay { public, journal, discovery } => replay(&public, &journal, discovery).await,
         LeafAction::Push {
             target,
             op,
@@ -170,6 +231,252 @@ pub async fn run(args: LeafArgs) -> anyhow::Result<()> {
         } => run_push(target, op, dry_run).await,
         LeafAction::Scene { op } => run_scene(op).await,
     }
+}
+
+/// The seed is never written into the public registration artifact. The
+/// latter can be installed on the parent without distributing the leaf key.
+fn provision(parent_key: &std::path::Path, mesh_pubkey_file: Option<&std::path::Path>, scope: &str, project_cert_file: Option<&std::path::Path>, out_dir: &std::path::Path, days: u64, capabilities: &str) -> anyhow::Result<()> {
+    use ed25519_dalek::{Signer, SigningKey};
+    use rand::RngCore;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    anyhow::ensure!(!scope.trim().is_empty(), "parent scope must be nonempty");
+    anyhow::ensure!((1..=3650).contains(&days), "days must be 1..=3650");
+    anyhow::ensure!(!out_dir.exists(), "destination already exists: {}", out_dir.display());
+    let raw = std::fs::read(parent_key)?;
+    let seed: [u8; 32] = raw.as_slice().try_into().map_err(|_| anyhow::anyhow!("parent key must be a raw 32-byte seed"))?;
+    let parent = SigningKey::from_bytes(&seed);
+    let mesh_pubkey = match mesh_pubkey_file {
+        Some(path) => std::fs::read(path)?.as_slice().try_into().map_err(|_| anyhow::anyhow!("mesh pubkey must be raw 32 bytes"))?,
+        None => parent.verifying_key().to_bytes(),
+    };
+    let mut leaf_seed = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut leaf_seed);
+    let leaf = SigningKey::from_bytes(&leaf_seed);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+    let expires = now.checked_add(days.checked_mul(86_400).ok_or_else(|| anyhow::anyhow!("validity overflow"))?)
+        .ok_or_else(|| anyhow::anyhow!("expiry overflow"))?;
+    let mut serial_bytes = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut serial_bytes);
+    let serial = u64::from_be_bytes(serial_bytes).max(1);
+    let caps = capabilities.split(',').map(str::trim).filter(|c| !c.is_empty()).map(str::to_owned).collect();
+    let caps: Vec<String> = caps;
+    anyhow::ensure!(caps.iter().all(|c| matches!(c.as_str(), "input.publish" | "announce.publish" | "push.subscribe")),
+        "unsupported leaf capability; substrate.publish has no parent delivery bridge");
+    let cert = LeafCertificate::issue(&parent, scope.to_owned(), mesh_pubkey, leaf.verifying_key().to_bytes(), serial, now, expires, caps)
+        .map_err(|e| anyhow::anyhow!("certificate: {e:?}"))?;
+    let project_cert: Option<clawft_types::project::cert::ProjectCert> = project_cert_file
+        .map(|path| -> anyhow::Result<_> {
+            let bytes = read_limited(path, 4096)?.ok_or_else(|| anyhow::anyhow!("project certificate missing"))?;
+            Ok(serde_json::from_slice(&bytes)?)
+        }).transpose()?;
+    clawft_kernel::mesh_leaf::verify_scope_chain(&cert, project_cert.as_ref(), now)
+        .map_err(|e| anyhow::anyhow!("leaf scope: {e}"))?;
+    let id = cert.leaf_id();
+    let register_ts = now.saturating_mul(1000);
+    let proof = leaf.sign(&clawft_kernel::node_registry::node_register_payload(&cert.leaf_pubkey, register_ts, "leaf"));
+
+    std::fs::create_dir(out_dir)?;
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(out_dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let seed_path = out_dir.join("leaf.seed");
+    let public_path = out_dir.join("leaf.json");
+    let cert_path = out_dir.join("leaf.cbor");
+    let mut seed_opts = OpenOptions::new(); seed_opts.write(true).create_new(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::OpenOptionsExt;
+        seed_opts.mode(0o600);
+    }
+    let mut seed_file = seed_opts.open(&seed_path)?;
+    seed_file.write_all(&leaf_seed)?;
+    seed_file.sync_all()?;
+    let public = serde_json::json!({
+        "cert": cert.clone(),
+        "node_id": id,
+        "project_cert": project_cert,
+        "registration": {
+            "label": "leaf", "pubkey": hex_encode(&leaf.verifying_key().to_bytes()),
+            "proof": hex_encode(&proof.to_bytes()), "ts": register_ts
+        }
+    });
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&public_path)?;
+    file.write_all(&serde_json::to_vec_pretty(&public)?)?;
+    file.sync_all()?;
+    let mut cert_file = OpenOptions::new().write(true).create_new(true).open(&cert_path)?;
+    cert_file.write_all(&weftos_leaf_types::encode(&cert).map_err(|e| anyhow::anyhow!("certificate CBOR: {e}"))?)?;
+    cert_file.sync_all()?;
+    println!("Provisioned leaf {id}\nprivate: {}\npublic:  {}\nfirmware certificate: {}", seed_path.display(), public_path.display(), cert_path.display());
+    Ok(())
+}
+
+fn load_public(path: &std::path::Path) -> anyhow::Result<LeafCertificate> {
+    let bytes = read_limited(path, 4096)?.ok_or_else(|| anyhow::anyhow!("public artifact missing"))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let cert: LeafCertificate = serde_json::from_value(value.get("cert").cloned().ok_or_else(|| anyhow::anyhow!("public artifact has no cert"))?)?;
+    anyhow::ensure!(value.get("node_id").and_then(|v| v.as_str()).is_some_and(|s| s == cert.leaf_id()), "public artifact node id mismatch");
+    cert.verify(&cert.parent_pubkey, now_secs()).map_err(|e| anyhow::anyhow!("certificate: {e:?}"))?;
+    let project_cert: Option<clawft_types::project::cert::ProjectCert> = value.get("project_cert")
+        .cloned().map(serde_json::from_value).transpose()?.flatten();
+    clawft_kernel::mesh_leaf::verify_scope_chain(&cert, project_cert.as_ref(), now_secs())
+        .map_err(|e| anyhow::anyhow!("leaf scope: {e}"))?;
+    Ok(cert)
+}
+
+fn read_limited(path: &std::path::Path, max: usize) -> anyhow::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let mut opts = std::fs::OpenOptions::new(); opts.read(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = match opts.open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let meta = file.metadata()?;
+    anyhow::ensure!(meta.is_file() && meta.len() <= max as u64, "{} is not a bounded regular file", path.display());
+    let mut bytes = Vec::new();
+    file.take(max as u64 + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() <= max, "{} exceeds {} bytes", path.display(), max);
+    Ok(Some(bytes))
+}
+
+fn enroll(public: &std::path::Path, registry: &std::path::Path, parent_file: &std::path::Path, mesh_file: &std::path::Path, scope: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    let cert = load_public(public)?;
+    anyhow::ensure!(cert.capabilities.iter().all(|c| matches!(c.as_str(), "input.publish" | "announce.publish" | "push.subscribe")),
+        "unsupported leaf capability; substrate.publish has no parent delivery bridge");
+    let parent_bytes = read_limited(parent_file, 32)?.ok_or_else(|| anyhow::anyhow!("parent pubkey missing"))?;
+    let mesh_bytes = read_limited(mesh_file, 32)?.ok_or_else(|| anyhow::anyhow!("machine pubkey missing"))?;
+    let parent: [u8;32] = parent_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("parent pubkey must be raw 32 bytes"))?;
+    let mesh: [u8;32] = mesh_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("machine pubkey must be raw 32 bytes"))?;
+    anyhow::ensure!(cert.parent_pubkey == parent && cert.mesh_pubkey == mesh && cert.parent_scope == scope, "certificate does not match pinned parent, machine or scope");
+    anyhow::ensure!(registry.is_dir() && !std::fs::symlink_metadata(registry)?.file_type().is_symlink(), "registry must be an existing private directory");
+    #[cfg(unix)] {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = std::fs::symlink_metadata(registry)?;
+        anyhow::ensure!(meta.uid() == unsafe { libc::geteuid() } && meta.permissions().mode() & 0o077 == 0, "registry must be owned by this user and mode 0700");
+    }
+    let id = cert.leaf_id();
+    let path = registry.join(format!("{id}.json"));
+    let bytes = read_limited(public, 4096)?.ok_or_else(|| anyhow::anyhow!("public artifact missing"))?;
+    let mut opts = std::fs::OpenOptions::new(); opts.write(true).create_new(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut out = opts.open(&path)?;
+    out.write_all(&bytes)?;
+    out.sync_all()?;
+    std::fs::File::open(registry)?.sync_all()?;
+    println!("Enrolled leaf {id} at {}", path.display());
+    Ok(())
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn load_journal(path: &std::path::Path, cert: &LeafCertificate) -> anyhow::Result<OfflineJournal> {
+    let Some(bytes) = read_limited(path, 512 * 1024)? else { return Ok(OfflineJournal::default()) };
+    let queue: OfflineJournal = weftos_leaf_types::decode(&bytes).map_err(|e| anyhow::anyhow!("journal CBOR: {e}"))?;
+    queue.validate(cert).map_err(|e| anyhow::anyhow!("journal invalid: {e:?}"))?;
+    Ok(queue)
+}
+
+fn save_journal(path: &std::path::Path, queue: &OfflineJournal) -> anyhow::Result<()> {
+    use std::io::Write;
+    let bytes = weftos_leaf_types::encode(queue).map_err(|e| anyhow::anyhow!("journal encode: {e}"))?;
+    anyhow::ensure!(bytes.len() <= 512 * 1024, "offline journal exceeds 512 KiB");
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let meta = std::fs::symlink_metadata(dir)?;
+    anyhow::ensure!(meta.is_dir(), "journal parent must be a directory");
+    #[cfg(unix)] {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        anyhow::ensure!(meta.uid() == unsafe { libc::geteuid() } && meta.permissions().mode() & 0o077 == 0, "journal directory must be private and owned by this user");
+    }
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(&bytes)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+fn enqueue(seed_path: &std::path::Path, public: &std::path::Path, journal: &std::path::Path, target: String, payload_path: &std::path::Path) -> anyhow::Result<()> {
+    use ed25519_dalek::SigningKey;
+    let cert = load_public(public)?;
+    anyhow::ensure!(!target.starts_with("substrate/"), "substrate.publish has no parent delivery bridge");
+    #[cfg(unix)] {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = std::fs::symlink_metadata(seed_path)?;
+        anyhow::ensure!(meta.is_file() && meta.uid() == unsafe { libc::geteuid() } && meta.permissions().mode() & 0o077 == 0,
+            "leaf seed must be a private regular file owned by this user");
+    }
+    let bytes = read_limited(seed_path, 32)?.ok_or_else(|| anyhow::anyhow!("leaf seed missing"))?;
+    let seed: [u8; 32] = bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("leaf seed must be raw 32 bytes"))?;
+    let leaf = SigningKey::from_bytes(&seed);
+    anyhow::ensure!(leaf.verifying_key().to_bytes() == cert.leaf_pubkey, "leaf seed does not match certificate");
+    let payload = read_limited(payload_path, 16 * 1024)?.ok_or_else(|| anyhow::anyhow!("payload missing"))?;
+    let mut queue = load_journal(journal, &cert)?;
+    let seq = queue.enqueue(&cert, &leaf, target, payload).map_err(|e| anyhow::anyhow!("enqueue: {e:?}"))?.seq;
+    save_journal(journal, &queue)?;
+    println!("Journaled leaf {} sequence {seq} ({} pending)", cert.leaf_id(), queue.pending.len());
+    Ok(())
+}
+
+async fn replay(public: &std::path::Path, journal: &std::path::Path, discovery: std::net::SocketAddr) -> anyhow::Result<()> {
+    use rand::RngCore;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let cert = load_public(public)?;
+    let mut queue = load_journal(journal, &cert)?;
+    if queue.pending.is_empty() { println!("Leaf journal empty"); return Ok(()); }
+    let mut nonce = [0u8; 16]; rand::rngs::OsRng.fill_bytes(&mut nonce);
+    let bind = if discovery.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+    let udp = tokio::net::UdpSocket::bind(bind).await?;
+    if matches!(discovery.ip(), std::net::IpAddr::V4(ip) if ip.is_broadcast()) { udp.set_broadcast(true)?; }
+    let mut req = Vec::with_capacity(52);
+    req.extend_from_slice(clawft_kernel::mesh_leaf::DISCOVERY_MAGIC);
+    req.extend_from_slice(cert.leaf_id().as_bytes());
+    req.extend_from_slice(&nonce);
+    udp.send_to(&req, discovery).await?;
+    let mut response = [0u8; 1024];
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let ad = loop {
+        let (n, _) = tokio::time::timeout_at(deadline, udp.recv_from(&mut response)).await
+            .map_err(|_| anyhow::anyhow!("no certified parent answered discovery"))??;
+        let Ok(ad) = weftos_leaf_types::decode::<ParentAdvertisement>(&response[..n]) else { continue };
+        if ad.verify_for(&cert.mesh_pubkey, &cert.parent_scope, now_secs(), &nonce).is_ok() { break ad; }
+    };
+    let endpoint: std::net::SocketAddr = ad.endpoint.parse()?;
+    let mut tcp = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::TcpStream::connect(endpoint)).await??;
+    while let Some(frame) = queue.oldest().cloned() {
+        let mut wire = FRAME_MAGIC.to_vec();
+        wire.extend_from_slice(&weftos_leaf_types::encode(&frame).map_err(|e| anyhow::anyhow!("frame encode: {e}"))?);
+        anyhow::ensure!(wire.len() <= clawft_kernel::mesh_leaf::MAX_LEAF_FRAME, "wire frame too large");
+        tokio::time::timeout(std::time::Duration::from_secs(10), tcp.write_all(&(wire.len() as u32).to_be_bytes())).await??;
+        tokio::time::timeout(std::time::Duration::from_secs(10), tcp.write_all(&wire)).await??;
+        let ack_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let ack = loop {
+            let mut len_bytes = [0u8; 4];
+            tokio::time::timeout_at(ack_deadline, tcp.read_exact(&mut len_bytes)).await??;
+            let len = u32::from_be_bytes(len_bytes) as usize;
+            anyhow::ensure!((1..=8192).contains(&len), "invalid leaf reply frame length");
+            let mut reply = vec![0u8; len];
+            tokio::time::timeout_at(ack_deadline, tcp.read_exact(&mut reply)).await??;
+            if !reply.starts_with(ACK_MAGIC) { continue; }
+            let ack: PublishAck = weftos_leaf_types::decode(&reply[ACK_MAGIC.len()..]).map_err(|e| anyhow::anyhow!("ACK decode: {e}"))?;
+            break ack;
+        };
+        queue.acknowledge(&ack).map_err(|e| anyhow::anyhow!("ACK refused: {e:?}"))?;
+        save_journal(journal, &queue)?;
+        println!("Acknowledged leaf {} sequence {}", cert.leaf_id(), frame.seq);
+    }
+    Ok(())
 }
 
 // ── Audio path (LeafPush envelope) ─────────────────────────────────

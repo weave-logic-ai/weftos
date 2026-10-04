@@ -117,6 +117,41 @@ pub fn adopt_or_init(
     register(manifests_dir, &pt, root)
 }
 
+/// Register an existing child identity under a registered active master.
+/// All manifest validation and the write use the same cross-process store
+/// lock; a different project.toml id cannot be adopted between validation
+/// and registration. This never mints an identity or rewrites project.toml.
+pub fn register_existing_nested(
+    child_root: &Path,
+    manifests_dir: &Path,
+    master_id: &str,
+) -> Result<ProjectManifest, ProjectError> {
+    super::validate_id(master_id)?;
+    let root = canonical_root(child_root)?;
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _flock = lock_manifests(manifests_dir)?;
+    let master = read_manifest(manifests_dir, master_id)?
+        .ok_or_else(|| ProjectError::NestedRefused("master is not registered".into()))?;
+    if master.state != ProjectState::Active {
+        return Err(ProjectError::NestedRefused("master is not active".into()));
+    }
+    let parent_root = canonical_root(&master.root)?;
+    if root == parent_root || !root.starts_with(&parent_root) {
+        return Err(ProjectError::NestedRefused("child root is outside the master".into()));
+    }
+    let parent_toml = read_project_toml(&parent_root)?
+        .ok_or_else(|| ProjectError::NestedRefused("master has no project.toml".into()))?;
+    if parent_toml.id != master_id || !parent_toml.is_weave_master() {
+        return Err(ProjectError::NestedRefused("master identity or weave.master changed".into()));
+    }
+    let child_toml = read_project_toml(&root)?
+        .ok_or_else(|| ProjectError::NestedRefused("child has no project.toml".into()))?;
+    if child_toml.id == master_id || child_toml.parent.as_deref() != Some(master_id) {
+        return Err(ProjectError::NestedRefused("child does not name this master".into()));
+    }
+    register(manifests_dir, &child_toml, root)
+}
+
 /// Make sure a manifest for `pt` exists, is active and points at `root`.
 fn register(
     manifests_dir: &Path,
