@@ -10804,6 +10804,7 @@ version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
+ "weftos-cog-market",
  "weftos-cog-repo",
 ]
 

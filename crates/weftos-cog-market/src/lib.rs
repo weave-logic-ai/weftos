@@ -12,7 +12,10 @@
 //! through [`weftos_cog_repo::verify_artifact`] against the pinned key.
 
 pub mod dex;
+#[cfg(feature = "guides")]
+pub mod guides;
 pub mod hw;
+pub mod net;
 pub mod sensor_types;
 pub mod usb;
 

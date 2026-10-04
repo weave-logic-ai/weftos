@@ -139,7 +139,8 @@ fn spawn_retry(cmd: &mut Command) -> std::io::Result<Child> {
 }
 
 /// One cog's live status, as the API serializes it.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CogStatus {
     pub id: String,
     pub version: String,
@@ -158,6 +159,17 @@ pub struct CogStatus {
     /// The checkout grant that covered the running instance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub licence_grant: Option<String>,
+    /// Size of the cog's output log (`host.log`, its stdout + stderr). Cogs post straight to the
+    /// store, so there is no queue to report; this is the one backlog the host really holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_bytes: Option<u64>,
+    /// Seconds since the cog last wrote output (log mtime): the "last output" age.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_age_s: Option<u64>,
+    /// TCP ports the running cog is listening on (its export / API port). Filled by the HTTP layer
+    /// from `/proc` (see `proc.rs`), not by the supervisor. Empty off Linux or when nothing listens.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub export_ports: Vec<u16>,
 }
 
 pub struct Supervisor {
@@ -400,6 +412,7 @@ impl Supervisor {
             .map(|r| {
                 let run = self.running.get(&r.id);
                 let pid = run.map(|x| x.child.id());
+                let (log_bytes, log_age_s) = crate::proc::log_stats(&r.dir(&self.root).join("host.log"));
                 CogStatus {
                     id: r.id.clone(),
                     version: r.version.clone(),
@@ -414,6 +427,9 @@ impl Supervisor {
                     signed: r.signed,
                     licence_refusal: self.refusals.get(&r.id).map(|c| c.to_string()),
                     licence_grant: run.and_then(|x| x.grant_id.clone()),
+                    log_bytes,
+                    log_age_s,
+                    export_ports: Vec::new(),
                 }
             })
             .collect();

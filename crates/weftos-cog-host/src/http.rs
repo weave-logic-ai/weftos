@@ -80,10 +80,22 @@ fn respond(s: &mut TcpStream, code: &str, payload: String, cors: &str) -> std::i
     s.flush()
 }
 
+/// Reads that describe a node's state (not just its identity) and so need the host token, like
+/// `/hw/*`: the mesh view and a cog's last output line (health and reasons can reveal a person's
+/// state, e.g. an ECG's lead-off or rhythm quality). They get no wildcard CORS either.
+fn token_guarded_read(method: &str, path: &str) -> bool {
+    if method != "GET" {
+        return false;
+    }
+    let p = path.split('?').next().unwrap_or("");
+    let parts: Vec<&str> = p.trim_matches('/').split('/').filter(|x| !x.is_empty()).collect();
+    matches!(parts.as_slice(), ["mesh", ..] | ["cogs", _, "last"])
+}
+
 /// CORS headers for this request. Browsers get them only from an allowlisted origin on `/hw/*`
 /// `/licence*` and for POSTs; the legacy GET routes (and edge heartbeats) keep `*`.
 fn cors_headers(method: &str, path: &str, h: &Headers, policy: &Policy) -> String {
-    let open = !path.starts_with("/hw/") && !path.starts_with("/licence") && (method == "GET" || path == "/fleet/heartbeat");
+    let open = !path.starts_with("/hw/") && !path.starts_with("/licence") && !token_guarded_read(method, path) && (method == "GET" || path == "/fleet/heartbeat");
     if open {
         return "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\n".into();
     }
@@ -178,6 +190,12 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licenc
     {
         return respond(&mut s, code, payload, &cors);
     }
+    if token_guarded_read(method, path)
+        && let Err((code, payload)) = policy.check_token(&headers)
+    {
+        return respond(&mut s, code, payload, &cors);
+    }
+    let authed = policy.check_token(&headers).is_ok();
     let root: PathBuf = sup.lock().unwrap().root.clone();
     let hw = hw_http::Req { method, path, headers: &headers, body };
     let (code, payload) = match hw_http::handle(&hw, &root, policy) {
@@ -188,7 +206,7 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licenc
                 Err((code, payload)) => (code, payload),
             },
             ("POST", "/licence/records") => licence_route(body, licence),
-            _ => route(method, path, body, peer_ip, &sup),
+            _ => route(method, path, body, peer_ip, &sup, authed),
         },
     };
     respond(&mut s, code, payload, &cors)
@@ -204,7 +222,7 @@ fn preflight(h: &Headers, path: &str, policy: &Policy) -> String {
     c
 }
 
-fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
+fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &Arc<Mutex<Supervisor>>, authed: bool) -> (&'static str, String) {
     let parts: Vec<&str> = path.trim_matches('/').split('/').filter(|p| !p.is_empty()).collect();
     match (method, parts.as_slice()) {
         ("GET", ["healthz"]) => ("200 OK", r#"{"ok":true}"#.to_string()),
@@ -212,6 +230,10 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
             let mut snap = weftos_cog_host::network::snapshot();
             snap["fleet"] = sup.lock().unwrap().fleet.roster();
             ("200 OK", snap.to_string())
+        }
+        // Mesh-wide cogs: this host plus every online tailnet peer that answers as a cog-host.
+        ("GET", ["mesh", "cogs"]) => {
+            ("200 OK", weftos_cog_host::mesh::snapshot(status_rows(sup, true)).to_string())
         }
         ("POST", ["fleet", "heartbeat"]) => match serde_json::from_slice::<Heartbeat>(body) {
             Ok(h) => {
@@ -221,15 +243,21 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
             Err(e) => ("400 Bad Request", serde_json::json!({"ok":false,"error":format!("bad heartbeat: {e}")}).to_string()),
         },
         ("GET", ["status"]) | ("GET", ["cogs"]) => {
-            let sup = sup.lock().unwrap();
-            let obj = serde_json::json!({
-                "ok": true,
-                "root": sup.root.display().to_string(),
-                "running": sup.running_count(),
-                "cogs": sup.status(),
-            });
+            let (root, running) = {
+                let s = sup.lock().unwrap();
+                (s.root.display().to_string(), s.running_count())
+            };
+            let obj = serde_json::json!({"ok": true, "root": root, "running": running, "cogs": status_rows(sup, authed)});
             ("200 OK", obj.to_string())
         }
+        ("GET", ["cogs", id, "last"]) => match weftos_cog_host::introspect::last_output(&root_of(sup), id) {
+            Ok(v) => ("200 OK", v.to_string()),
+            Err((code, e)) => (code, serde_json::json!({"ok": false, "error": e}).to_string()),
+        },
+        ("GET", ["cogs", id, "guide"]) => match weftos_cog_host::introspect::installed_guide(&root_of(sup), id) {
+            Ok(body) => ("200 OK", body),
+            Err((code, e)) => (code, serde_json::json!({"ok": false, "error": e}).to_string()),
+        },
         ("POST", ["reload"]) => {
             sup.lock().unwrap().reload();
             ("200 OK", r#"{"ok":true}"#.to_string())
@@ -245,6 +273,33 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
         }
         _ => ("404 Not Found", r#"{"ok":false,"error":"not found"}"#.to_string()),
     }
+}
+
+/// The cog rows for `/status` and the mesh view. Output-log size and age and listening ports are
+/// activity side channels (a presence radar's log grows with what it sees), so an unauthenticated
+/// caller gets the rows without them. The `/proc` reads happen after the supervisor lock is
+/// released.
+fn status_rows(sup: &Arc<Mutex<Supervisor>>, authed: bool) -> Vec<weftos_cog_host::supervise::CogStatus> {
+    let mut rows = sup.lock().unwrap().status();
+    if authed {
+        let tables = weftos_cog_host::proc::cached_tables();
+        for r in &mut rows {
+            if let Some(pid) = r.pid {
+                r.export_ports = weftos_cog_host::proc::listen_ports(&tables, std::path::Path::new("/proc"), pid);
+            }
+        }
+    } else {
+        for r in &mut rows {
+            r.log_bytes = None;
+            r.log_age_s = None;
+            r.export_ports.clear();
+        }
+    }
+    rows
+}
+
+fn root_of(sup: &Arc<Mutex<Supervisor>>) -> PathBuf {
+    sup.lock().unwrap().root.clone()
 }
 
 fn licence_route(body: &[u8], licence: &HostLicence) -> (&'static str, String) {
@@ -446,7 +501,7 @@ mod tests {
             assert!(st.contains("401"), "{path}: {st}");
             assert!(body.contains("host token required"));
         }
-        for path in ["/hw/usb", "/hw/dex"] {
+        for path in ["/hw/usb", "/hw/dex", "/hw/buses"] {
             let (st, _, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
             assert!(st.contains("401"), "GET {path}: {st}");
             let (st, _, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{TOK}\r\n"));
@@ -457,6 +512,51 @@ mod tests {
             let (st, h, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
             assert!(st.contains("200") && h.contains("access-control-allow-origin: *"), "{path}: {st}");
         }
+    }
+
+    #[test]
+    fn mesh_and_last_output_need_the_token_and_get_no_wildcard_cors() {
+        let _g = serial();
+        let (a, root) = start();
+        for path in ["/mesh/cogs", "/cogs/x/last"] {
+            let (st, h, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n\r\n"));
+            assert!(st.contains("401"), "{path}: {st}");
+            assert!(!h.contains("access-control-allow-origin: *"), "{path} must not send wildcard CORS: {h}");
+            assert!(!h.contains("evil.example"), "{path}");
+            let (st, h, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer tok\r\n\r\n"));
+            assert!(!st.contains("401"), "{path} with token: {st}");
+            assert!(!h.contains("access-control-allow-origin: *"), "{path}");
+        }
+        // an unknown cog is a 404 for an authorised caller, never a file read
+        let (st, _, _) = send(a, "GET /cogs/..%2f..%2fetc/last HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer tok\r\n\r\n");
+        assert!(st.contains("404"), "{st}");
+        drop(root);
+    }
+
+    #[test]
+    fn status_hides_activity_fields_from_unauthenticated_callers() {
+        let _g = serial();
+        let (a, root) = start();
+        let dir = root.path().join("c1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("host.log"), b"some output").unwrap();
+        let rec = weftos_cog_host::CogRecord {
+            id: "c1".into(),
+            version: "1".into(),
+            source: weftos_cog_host::Source::Local,
+            enabled: false,
+            binary: "cog-c1-arm".into(),
+            args: vec![],
+            signed: false,
+        };
+        weftos_cog_host::save_record(root.path(), &rec).unwrap();
+        // the supervisor reloads records from disk on its own tick in production; ask for it here
+        let (st, _, _) = send(a, "POST /reload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Weft-Host: 1\r\nAuthorization: Bearer tok\r\nContent-Length: 2\r\n\r\n{}");
+        assert!(st.contains("200"), "{st}");
+        let (_, _, open) = send(a, "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(open.contains("\"c1\"") && !open.contains("log_bytes") && !open.contains("log_age_s"), "{open}");
+        let (_, _, authed) = send(a, "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer tok\r\n\r\n");
+        assert!(authed.contains("log_bytes"), "{authed}");
     }
 
     #[test]

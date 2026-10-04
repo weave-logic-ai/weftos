@@ -6,6 +6,7 @@
 //!   POST /hw/usb/scan       same report, but records sightings in the dex (catches, times_seen)
 //!   POST /hw/usb/baseline   accept the current scan (or body {keys:[..]}) as known
 //!   POST /hw/usb/identify   body {key}; ask the configured agent what the device is
+//!   GET  /hw/buses          (token) arch, UART/I2C/USB-serial devices, kernel console, enabled cogs
 //!   GET  /hw/dex            (token) Hardware Dex: caught, unseen_catches, wild, totals, badges, types
 //!   POST /hw/dex/catch      body {key, catalog_id|"wild", name?, answer?, force?}
 //!   POST /hw/dex/ack        body {refs?}; acknowledge NEW CATCH banners
@@ -57,6 +58,7 @@ pub fn handle(req: &Req, root: &Path, policy: &Policy) -> Option<Resp> {
     Some(match (req.method, parts.as_slice()) {
         ("GET", ["hw", "usb"]) => guarded(req, policy, || usb_get(root)),
         ("GET", ["hw", "dex"]) => guarded(req, policy, || dex_get(root)),
+        ("GET", ["hw", "buses"]) => guarded(req, policy, || resp("200 OK", crate::introspect::bus_facts(Path::new("/"), &network::node_name(), root))),
         ("POST", ["hw", "usb", "scan"]) => guarded(req, policy, || usb_scan(root)),
         ("POST", ["hw", "usb", "baseline"]) => guarded(req, policy, || baseline(req.body, root)),
         ("POST", ["hw", "usb", "identify"]) => guarded(req, policy, || identify(req.body, root)),

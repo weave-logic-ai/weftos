@@ -26,7 +26,25 @@ pub fn node_name() -> String {
 }
 
 /// `tailscale status --json` → the fleet on the tailnet (self + peers).
-fn tailscale() -> Value {
+/// `tailscale status --json`, cached for a few seconds: the CLI is slow and every `/network` and
+/// `/mesh/cogs` request would otherwise spawn it. The cache lock is held while refreshing, so
+/// concurrent callers wait for one refresh instead of each spawning their own.
+pub fn tailscale() -> Value {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static CACHE: Mutex<Option<(Instant, Value)>> = Mutex::new(None);
+    let mut c = CACHE.lock().unwrap();
+    if let Some((at, v)) = c.as_ref()
+        && at.elapsed() < Duration::from_secs(5)
+    {
+        return v.clone();
+    }
+    let v = tailscale_uncached();
+    *c = Some((Instant::now(), v.clone()));
+    v
+}
+
+fn tailscale_uncached() -> Value {
     let Ok(out) = Command::new("tailscale").args(["status", "--json"]).output() else {
         return json!({ "available": false });
     };
