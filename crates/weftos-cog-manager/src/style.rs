@@ -114,9 +114,24 @@ pub fn card(
     header: impl FnOnce(&mut Ui),
     body: impl FnOnce(&mut Ui),
 ) {
-    card_frame(ui).show(ui, |ui| {
+    card_focus(ui, id_salt, false, header, body);
+}
+
+/// [`card`], optionally forced open and scrolled into view (a deep link landed on it).
+pub fn card_focus(
+    ui: &mut Ui,
+    id_salt: impl std::hash::Hash,
+    focus: bool,
+    header: impl FnOnce(&mut Ui),
+    body: impl FnOnce(&mut Ui),
+) {
+    let frame = card_frame(ui).show(ui, |ui| {
         let id = ui.make_persistent_id(id_salt);
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        if focus {
+            state.set_open(true);
+        }
+        state
             .show_header(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 header(ui);
@@ -126,6 +141,9 @@ pub fn card(
                 body(ui);
             });
     });
+    if focus {
+        frame.response.scroll_to_me(Some(egui::Align::TOP));
+    }
     ui.add_space(GAP_XS);
 }
 

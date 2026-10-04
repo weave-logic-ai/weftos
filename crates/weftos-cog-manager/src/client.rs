@@ -68,6 +68,9 @@ pub struct HostCog {
     pub last_exit: Option<String>,
     #[serde(default)]
     pub signed: bool,
+    /// Licence-gate refusal code from the host (`no_grant`, ...), when it refused to run the cog.
+    #[serde(default)]
+    pub licence_refusal: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -367,6 +370,16 @@ pub struct Shared {
     pub last_action: Option<String>,
     /// The guide currently being viewed in the Sensors tab (one at a time).
     pub guide: Option<GuideFetch>,
+    /// Latest `/status` output line of each cog whose detail panel is open, by cog id.
+    pub cog_out: std::collections::BTreeMap<String, CogOutFetch>,
+}
+
+/// One cog's export `/status` fetch (the cog's own endpoint, not a host endpoint).
+#[derive(Clone)]
+pub struct CogOutFetch {
+    pub fired: Instant,
+    pub in_flight: bool,
+    pub result: Option<Result<serde_json::Value, String>>,
 }
 
 pub struct Client {
@@ -786,6 +799,36 @@ impl Client {
         });
     }
 
+    /// Keep a running cog's latest output line fresh while its detail panel is open: fetches the
+    /// cog export's `/status` at most every 3 s per cog. The panel calls this each frame it shows.
+    pub fn ensure_cog_output(&self, id: &str, port: u16, ctx: &eframe::egui::Context) {
+        {
+            let mut sh = self.shared.lock().unwrap();
+            let due = sh.cog_out.get(id).is_none_or(|f| f.fired.elapsed() >= Duration::from_secs(3) && (!f.in_flight || f.fired.elapsed() > STALE));
+            if !due {
+                return;
+            }
+            let prev = sh.cog_out.get(id).and_then(|f| f.result.clone());
+            sh.cog_out.insert(id.to_string(), CogOutFetch { fired: Instant::now(), in_flight: true, result: prev });
+        }
+        let url = format!("{}/status", self.export_base(port));
+        let shared = Arc::clone(&self.shared);
+        let id = id.to_string();
+        let ctx = ctx.clone();
+        ehttp::fetch(ehttp::Request::get(url), move |res| {
+            let parsed: Result<serde_json::Value, String> = match &res {
+                Ok(r) if r.ok => serde_json::from_slice(&r.bytes).map_err(|e| e.to_string()),
+                Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
+                Err(e) => Err(e.clone()),
+            };
+            if let Some(f) = shared.lock().unwrap().cog_out.get_mut(&id) {
+                f.in_flight = false;
+                f.result = Some(parsed);
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Close the open guide.
     pub fn clear_guide(&self) {
         self.shared.lock().unwrap().guide = None;
@@ -854,12 +897,12 @@ fn parse_json<T: for<'de> Deserialize<'de>>(res: &ehttp::Result<ehttp::Response>
 // Native reads an env var; the browser reads a `?<query>=` param; else the default.
 
 #[cfg(not(target_arch = "wasm32"))]
-fn setting(env_key: &str, _query_key: &str, default: &str) -> String {
+pub(crate) fn setting(env_key: &str, _query_key: &str, default: &str) -> String {
     std::env::var(env_key).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
-fn setting(_env_key: &str, query_key: &str, default: &str) -> String {
+pub(crate) fn setting(_env_key: &str, query_key: &str, default: &str) -> String {
     web_sys::window()
         .and_then(|w| w.location().search().ok())
         .and_then(|q| {

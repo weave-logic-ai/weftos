@@ -22,6 +22,16 @@ signup). Rebuild it after editing a file or after a catalog pull.
 | [sdr-radio.md](sdr-radio.md) | 4 + baselines | bladeRF 2.0 xA4 (FPGA cogs), Zynq-7010 SDR, ESPARGOS/ESP-SDR; RTL-SDR/HackRF/LimeSDR/USRP baselines |
 | [ai-edge.md](ai-edge.md) | 6 | Jetson Orin (Nano/NX/AGX), DGX Spark GB10, Coral, Hailo-8/8L, Radxa Rock 5B+/Orion O6 |
 
+## Catalog: hardware -> software link
+
+`crates/weftos-cog-market/catalog/catalog.json` is the typed catalog the console and dashboard read
+(Projects -> Modules -> Chips). A module links to the software that drives it with `cogs: [<cog id>]`,
+and may carry `firmware` facts (`version`, `read_with`, `read_config_key`, `update`, `url`, `notes`;
+empty = unknown) and `docs: [{label, url}]` (`url` is a web link or a repo path). Availability and
+install state are never stored here; the console joins the link with the marketplace and the host.
+See [ADR-107](../adr/adr-107-catalog-hardware-software-link.md). `HwCatalog::validate()` (run by the
+crate tests) checks the link shape.
+
 ## Cross-cutting findings (load-bearing)
 
 - **Arch is per-target, from the userland not the kernel.** cog0's Pi 5 has an aarch64 kernel but an

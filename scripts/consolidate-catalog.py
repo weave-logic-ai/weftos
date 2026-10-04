@@ -44,7 +44,7 @@ CATALOG = REPO / "crates" / "weftos-cog-market" / "catalog" / "catalog.json"
 ALIASES = HERE / "catalog-aliases.json"
 
 # List-valued fields that are unioned (canonical first, de-duplicated, order kept).
-LIST_FIELDS = ["good_for", "not_for", "notes", "seen_in", "pins", "tags", "chips"]
+LIST_FIELDS = ["good_for", "not_for", "notes", "seen_in", "pins", "tags", "chips", "cogs"]
 
 # Scalar fields: the canonical entry keeps its own value; the duplicate's value is
 # adopted only when the canonical's is missing or empty.

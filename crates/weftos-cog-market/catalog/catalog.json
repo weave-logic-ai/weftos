@@ -222,7 +222,25 @@
         "docs/hardware/sensors.md",
         "crates/weftos-cog-market/catalog/catalog.json"
       ],
-      "hash": "wh_b7c902f536bd3052"
+      "hash": "wh_b7c902f536bd3052",
+      "cogs": [
+        "sen0213-ecg",
+        "sound-detect"
+      ],
+      "docs": [
+        {
+          "label": "Sensor inventory",
+          "url": "docs/hardware/sensors.md"
+        },
+        {
+          "label": "Seed I2C bus notes",
+          "url": "cognitum-cogs: .claude/skills/sensor-cog/references/seed-buses.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "ads1299-emg",
@@ -476,7 +494,16 @@
       "seen_in": [
         "docs/research/hardware/hlk-ld6002-andar-board-2026-08-24.md"
       ],
-      "hash": "wh_ab1a10df16ea452c"
+      "hash": "wh_ab1a10df16ea452c",
+      "cogs": [
+        "ld6002-radar"
+      ],
+      "docs": [
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "aquarian-h1a-h2a",
@@ -1168,7 +1195,16 @@
         "weftos-mic-node/src/tof_sensor.h",
         "weftos-bridge.py"
       ],
-      "hash": "wh_9b27ae70c96473d5"
+      "hash": "wh_9b27ae70c96473d5",
+      "cogs": [
+        "sen0628-tof"
+      ],
+      "docs": [
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "ds18b20",
@@ -2133,7 +2169,36 @@
         "docs/hardware/radar-protocols.md",
         "crates/weftos-cog-market/catalog/catalog.json"
       ],
-      "hash": "wh_5949c4b02ae4a809"
+      "hash": "wh_5949c4b02ae4a809",
+      "cogs": [
+        "hlk-as201"
+      ],
+      "docs": [
+        {
+          "label": "Radar UART protocols",
+          "url": "docs/hardware/radar-protocols.md"
+        },
+        {
+          "label": "hlk-as201 cog guide",
+          "url": "cognitum-cogs: src/cogs/hlk-as201/guide/"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ],
+      "firmware": {
+        "version": "Protocol per Hi-Link AS201 datasheet V1.1 (2025-08-01): FA FB framing, cmd 0x00 ten-axis report.",
+        "read_with": "",
+        "read_config_key": "",
+        "update": "Vendor route only (Hi-Link). WeftOS has no updater for this module.",
+        "url": "https://hlktech.net/index.php?id=1380",
+        "notes": "The hlk-as201 cog does not read a firmware version."
+      }
     },
     {
       "id": "hlk-ld1115h",
@@ -2332,7 +2397,36 @@
         "docs/planning/sensing-roadmap-and-sku.md",
         "docs/planning/sku-wall-wart.md"
       ],
-      "hash": "wh_a2305f6c35cedba3"
+      "hash": "wh_a2305f6c35cedba3",
+      "cogs": [
+        "ld2450-radar"
+      ],
+      "docs": [
+        {
+          "label": "Radar UART protocols",
+          "url": "docs/hardware/radar-protocols.md"
+        },
+        {
+          "label": "ld2450-radar cog: API, config keys, wiring guide",
+          "url": "cognitum-cogs: src/cogs/ld2450-radar/guide/"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ],
+      "firmware": {
+        "version": "",
+        "read_with": "The ld2450-radar cog sends enable-config, read-firmware and end-config at start and reports the radar's version in its output (firmware field). Needs the Pi TX to radar RX wire; changes no setting.",
+        "read_config_key": "query_firmware",
+        "update": "Vendor route only: Hi-Link's own tooling. WeftOS has no updater for this module.",
+        "url": "",
+        "notes": "Version is null in the cog output until query_firmware is on. tracking_mode single/multi writes to the radar; keep leaves it untouched."
+      }
     },
     {
       "id": "hlk-ld6002",
@@ -2394,7 +2488,24 @@
         "docs/research/hardware-cost-matrix.md",
         "docs/planning/sensing-roadmap-and-sku.md"
       ],
-      "hash": "wh_89e25fec30db5fe6"
+      "hash": "wh_89e25fec30db5fe6",
+      "cogs": [
+        "ld6002-radar"
+      ],
+      "docs": [
+        {
+          "label": "ld6002-radar cog",
+          "url": "cognitum-cogs: src/cogs/ld6002-radar/"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "hlk-ld6002b",
@@ -2960,7 +3071,24 @@
       "seen_in": [
         "crates/weftos-cog-market/catalog/catalog.json"
       ],
-      "hash": "wh_d258860454cef22a"
+      "hash": "wh_d258860454cef22a",
+      "cogs": [
+        "sound-detect"
+      ],
+      "docs": [
+        {
+          "label": "sound-detect cog guide",
+          "url": "cognitum-cogs: src/cogs/sound-detect/guide/"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "limesdr-usb",
@@ -3488,7 +3616,20 @@
         "docs/BES2700_UART_PROTOCOL.md",
         "docs/mentraos/asg-client-architecture.md"
       ],
-      "hash": "wh_fa2dbe738e37d21d"
+      "hash": "wh_fa2dbe738e37d21d",
+      "cogs": [
+        "mentra-live"
+      ],
+      "docs": [
+        {
+          "label": "mentra-live companion cog",
+          "url": "cognitum-cogs: src/cogs/mentra-live/"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "mentra-live-gyroscope",
@@ -4894,7 +5035,36 @@
         "docs/hardware/radar-protocols.md",
         "crates/weftos-cog-market/catalog/catalog.json"
       ],
-      "hash": "wh_40754cee9fc40fff"
+      "hash": "wh_40754cee9fc40fff",
+      "cogs": [
+        "rd-03e"
+      ],
+      "docs": [
+        {
+          "label": "Radar UART protocols",
+          "url": "docs/hardware/radar-protocols.md"
+        },
+        {
+          "label": "rd-03e cog guide",
+          "url": "cognitum-cogs: src/cogs/rd-03e/guide/"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ],
+      "firmware": {
+        "version": "Default 'ranging' firmware streams the 5-byte AA..55 report; tracking firmware uses a different frame (docs/hardware/radar-protocols.md).",
+        "read_with": "",
+        "read_config_key": "",
+        "update": "Vendor route only (Ai-Thinker). WeftOS has no updater for this module.",
+        "url": "",
+        "notes": "The rd-03e cog cannot read the firmware version; the full config protocol is unconfirmed."
+      }
     },
     {
       "id": "reed-switch-contact",
@@ -5731,7 +5901,32 @@
         "docs/hardware/sensors.md",
         "docs/hardware/README.md"
       ],
-      "hash": "wh_ac29d692c1978c35"
+      "hash": "wh_ac29d692c1978c35",
+      "cogs": [
+        "sen0213-ecg"
+      ],
+      "docs": [
+        {
+          "label": "Sensor inventory",
+          "url": "docs/hardware/sensors.md"
+        },
+        {
+          "label": "sen0213-ecg cog guide (first ADR-104 guide)",
+          "url": "cognitum-cogs: src/cogs/sen0213-ecg/guide/"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "DFRobot wiki: SEN0213",
+          "url": "https://wiki.dfrobot.com/sen0213"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "sen0628-tof",
@@ -5786,7 +5981,32 @@
         "docs/hardware/README.md",
         "docs/weftos/splat-capture-sensor-head.md"
       ],
-      "hash": "wh_3a654a9bd8c73b94"
+      "hash": "wh_3a654a9bd8c73b94",
+      "cogs": [
+        "sen0628-tof"
+      ],
+      "docs": [
+        {
+          "label": "Sensor inventory",
+          "url": "docs/hardware/sensors.md"
+        },
+        {
+          "label": "sen0628-tof cog guide",
+          "url": "cognitum-cogs: src/cogs/sen0628-tof/guide/"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "DFRobot wiki: SEN0628",
+          "url": "https://wiki.dfrobot.com/sen0628"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "sensirion-sgp30-sgp41",

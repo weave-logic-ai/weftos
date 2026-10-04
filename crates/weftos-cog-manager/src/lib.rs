@@ -12,12 +12,17 @@
 pub mod client;
 mod hw_dex;
 mod hw_identify;
+mod sensor_detail;
+mod sensor_link;
 mod style;
 
 use client::{Client, HostCog, HostStatus, Net, Settings};
 use eframe::egui::{self, Color32, RichText};
 use weftos_cog_market::hw::{Chip, HwCatalog, Module, Project};
 use weftos_cog_market::{Catalog, CatalogItem, Source};
+use sensor_detail::{Event, GuideCache, PanelCtx};
+use sensor_link::{default_export_port, fmt_dur};
+use std::cell::RefCell;
 use weftos_sensor_guide::{GuideBundle, GuideView};
 
 const GREEN: Color32 = Color32::from_rgb(0x4c, 0xc2, 0x7a);
@@ -56,6 +61,12 @@ pub struct Manager {
     /// Catalog tab: the "Identify hardware" USB scan modal.
     hw: hw_identify::HwIdentify,
     dex: hw_dex::DexUi,
+    /// Sensor detail panel (ADR-107): per-cog guide cache, the clicks it raised this frame, a
+    /// pending "go to this module" cross-link from another tab, and the module card to open.
+    guides: RefCell<GuideCache>,
+    events: RefCell<Vec<Event>>,
+    pending_hw: RefCell<Option<String>>,
+    focus_module: Option<String>,
 }
 
 impl Manager {
@@ -63,9 +74,13 @@ impl Manager {
         let s = Settings::default();
         let host_draft = s.host.clone();
         let token_draft = s.token.clone();
+        // Deep link: `?module=<id>` (wasm) or `WEFTOS_MODULE=<id>` (native) opens that module's
+        // card in the Catalog.
+        let deep = client::setting("WEFTOS_MODULE", "module", "");
+        let deep = (!deep.trim().is_empty()).then(|| deep.trim().to_string());
         Self {
             client: Client::new(s),
-            section: Section::Cogs,
+            section: if deep.is_some() { Section::Catalog } else { Section::Cogs },
             host_draft,
             token_draft,
             guide_cog: None,
@@ -74,10 +89,14 @@ impl Manager {
             guide_port_draft: String::new(),
             catalog: HwCatalog::bundled(),
             cat_tab: 1,
-            cat_search: String::new(),
+            cat_search: deep.clone().unwrap_or_default(),
             cat_kind: "all".into(),
             hw: hw_identify::HwIdentify::default(),
             dex: hw_dex::DexUi::default(),
+            guides: RefCell::new(GuideCache::new()),
+            events: RefCell::new(Vec::new()),
+            pending_hw: RefCell::new(None),
+            focus_module: deep,
         }
     }
 }
@@ -92,7 +111,7 @@ fn proj_hay(p: &Project) -> String {
     format!("{} {} {} {} {}", p.name, p.category, p.difficulty, p.summary, p.modules.join(" ")).to_lowercase()
 }
 
-fn buy_and_datasheet(ui: &mut egui::Ui, buy: Option<(&str, &str)>, datasheet: &str) {
+pub(crate) fn buy_and_datasheet(ui: &mut egui::Ui, buy: Option<(&str, &str)>, datasheet: &str) {
     if buy.is_none_or(|(_, u)| u.is_empty()) && datasheet.is_empty() {
         return;
     }
@@ -108,47 +127,12 @@ fn buy_and_datasheet(ui: &mut egui::Ui, buy: Option<(&str, &str)>, datasheet: &s
 
 /// A tag strip (chips / modules / sensor tags) rendered as uniform pills so every card's
 /// metadata row reads the same.
-fn tag_row<'a>(ui: &mut egui::Ui, tags: impl Iterator<Item = &'a str>, color: Color32) {
+pub(crate) fn tag_row<'a>(ui: &mut egui::Ui, tags: impl Iterator<Item = &'a str>, color: Color32) {
     ui.horizontal_wrapped(|ui| {
         for t in tags {
             style::pill(ui, t, color);
         }
     });
-}
-
-fn module_card(ui: &mut egui::Ui, m: &Module) {
-    style::card(
-        ui,
-        ("mod", &m.id),
-        |ui| {
-            style::truncated(ui, &m.name, true);
-            if !m.kind.is_empty() {
-                style::pill(ui, &m.kind, WL);
-            }
-            if !m.vendor.is_empty() {
-                style::truncated(ui, &m.vendor, false);
-            }
-        },
-        |ui| {
-            if !m.summary.is_empty() {
-                ui.label(style::body(&m.summary));
-            }
-            if !m.chips.is_empty() {
-                tag_row(ui, m.chips.iter().map(String::as_str), GREY);
-            }
-            buy_and_datasheet(ui, m.buy.first().map(|b| (b.price.as_str(), b.url.as_str())), &m.datasheet);
-            if !m.good_for.is_empty() {
-                ui.label(style::dim(ui, format!("Good for: {}", m.good_for.join(" · "))));
-            }
-            if !m.not_for.is_empty() {
-                ui.label(style::dim(ui, format!("Not for: {}", m.not_for.join(" · "))));
-            }
-            for n in &m.notes {
-                ui.label(RichText::new(format!("⚠ {n}")).color(AMBER).size(12.0));
-            }
-            style::spec_grid(ui, ("ms", &m.id), m.spec.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-        },
-    );
 }
 
 fn chip_card(ui: &mut egui::Ui, c: &Chip) {
@@ -221,21 +205,6 @@ fn render_catalog_list<T>(ui: &mut egui::Ui, noun: &str, items: &[&T], search: &
     });
 }
 
-/// The export port each known sensor cog serves `/guide` on (from each cog.toml `[api].bind_port`).
-/// Unknown cogs fall back to a prompt + editable port. TODO: surface the port in the host `/status`
-/// (CogStatus.export_port) so this map isn't needed for cogs added later.
-fn default_export_port(id: &str) -> u16 {
-    match id {
-        "sen0213-ecg" => 8046,
-        "sen0628-tof" => 8047,
-        "bridge" => 8048,
-        "sound-detect" => 8049,
-        "rd-03e" => 8050,
-        "hlk-as201" => 8051,
-        _ => 0,
-    }
-}
-
 impl Default for Manager {
     fn default() -> Self {
         Self::new()
@@ -280,6 +249,7 @@ impl Manager {
                     s.host = self.host_draft.clone();
                     s.token = self.token_draft.clone();
                     self.client.reconnect(s);
+                    self.guides.borrow_mut().clear();
                 }
                 ui.separator();
                 let sh = self.client.snapshot();
@@ -355,6 +325,19 @@ impl Manager {
         }
     }
 
+    /// Small links from a cog to the hardware it drives; clicking opens that module in the Catalog.
+    fn hw_links(&self, ui: &mut egui::Ui, cog_id: &str) {
+        let mods = self.catalog.modules_for_cog(cog_id);
+        for m in mods.iter().take(2) {
+            if ui.small_button(RichText::new(format!("🔧 {}", sensor_link::short_name(&m.name))).color(WL)).on_hover_text(format!("Needs: {} — open it in the Catalog", m.name)).clicked() {
+                *self.pending_hw.borrow_mut() = Some(m.id.clone());
+            }
+        }
+        if mods.len() > 2 {
+            ui.label(style::dim(ui, format!("+{}", mods.len() - 2)));
+        }
+    }
+
     fn running_table(&self, ui: &mut egui::Ui, ctx: &egui::Context, h: &HostStatus) {
         if h.cogs.is_empty() {
             ui.label(RichText::new("No cogs installed on the host yet. Add one from the marketplace below, or stage with `weft-cog-host add`.").color(GREY));
@@ -372,6 +355,7 @@ impl Manager {
                     }
                     ui.label(RichText::new(&c.id).strong());
                     ui.label(RichText::new(format!("v{}", c.version)).color(GREY).small());
+                    self.hw_links(ui, &c.id);
                 });
                 source_badge_str(ui, &c.source);
                 self.state_cell(ui, c);
@@ -434,6 +418,7 @@ impl Manager {
                 style::truncated(ui, &item.name, true);
                 ui.label(style::dim(ui, format!("v{}", item.version)));
                 source_badge(ui, item.source);
+                self.hw_links(ui, &item.id);
                 if item.also_in_other_source {
                     ui.label(style::dim(ui, "(also upstream)"));
                 }
@@ -535,7 +520,14 @@ impl Manager {
                     .iter()
                     .filter(|m| (kind == "all" || m.kind == kind) && (q.is_empty() || mod_hay(m).contains(&q)))
                     .collect();
-                render_catalog_list(ui, "modules", &items, search, module_card);
+                let (market, host) = {
+                    let sh = self.client.snapshot();
+                    (sh.catalog.clone(), sh.host.clone().and_then(|r| r.ok()))
+                };
+                let pc = PanelCtx { client: &self.client, egui: ctx, market: market.as_ref(), host: host.as_ref(), guides: &self.guides, events: &self.events };
+                let focus = self.focus_module.clone();
+                render_catalog_list(ui, "modules", &items, search, |ui, m| sensor_detail::module_card(ui, m, &pc, focus.as_deref() == Some(m.id.as_str())));
+                self.focus_module = None;
             }
         }
     }
@@ -667,6 +659,7 @@ impl Manager {
                     ui.horizontal(|ui| {
                         style::truncated(ui, &c.id, true);
                         style::pill(ui, &format!("v{}", c.version), GREY);
+                        self.hw_links(ui, &c.id);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             open_guide = ui.button("📖  Open guide").clicked();
                         });
@@ -674,14 +667,7 @@ impl Manager {
                 });
                 ui.add_space(style::GAP_XS);
                 if open_guide {
-                    let port = default_export_port(&c.id);
-                    self.guide_cog = Some(c.id.clone());
-                    self.guide_bundle = None;
-                    self.guide_view = GuideView::at(None);
-                    self.guide_port_draft = if port == 0 { String::new() } else { port.to_string() };
-                    if port != 0 {
-                        self.client.fetch_guide(&c.id, port, ctx);
-                    }
+                    self.open_guide(&c.id, None, ctx);
                 }
             }
         }
@@ -694,6 +680,39 @@ impl Manager {
             )
             .italics(),
         );
+    }
+
+    /// Switch to the Sensors tab with this cog's guide open (optionally at a page).
+    fn open_guide(&mut self, id: &str, page: Option<&'static str>, ctx: &egui::Context) {
+        let port = default_export_port(id);
+        self.section = Section::Sensors;
+        self.guide_cog = Some(id.to_string());
+        self.guide_bundle = None;
+        self.guide_view = GuideView::at(page.map(str::to_string));
+        self.guide_port_draft = if port == 0 { String::new() } else { port.to_string() };
+        if port != 0 {
+            self.client.fetch_guide(id, port, ctx);
+        }
+    }
+
+    /// Apply what the panel and cross-links asked for this frame, with the same client calls the
+    /// Cogs tab uses (install / start / stop) plus tab navigation.
+    fn apply_requests(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.pending_hw.borrow_mut().take() {
+            self.section = Section::Catalog;
+            self.cat_tab = 1;
+            self.cat_kind = "all".into();
+            self.cat_search = id.clone();
+            self.focus_module = Some(id);
+        }
+        let events = std::mem::take(&mut *self.events.borrow_mut());
+        for e in events {
+            match e {
+                Event::Install { id, source, version } => self.client.install(&id, source, version, ctx),
+                Event::Lifecycle { id, action } => self.client.lifecycle(&id, action, ctx),
+                Event::OpenGuide { cog, page } => self.open_guide(&cog, page, ctx),
+            }
+        }
     }
 
     /// Render the open cog's `/guide` bundle (fetched into `Shared.guide`), with a back button and
@@ -804,16 +823,6 @@ impl Manager {
     }
 }
 
-fn fmt_dur(s: u64) -> String {
-    if s < 60 {
-        format!("{s}s")
-    } else if s < 3600 {
-        format!("{}m", s / 60)
-    } else {
-        format!("{}h", s / 3600)
-    }
-}
-
 impl eframe::App for Manager {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 
@@ -833,6 +842,7 @@ impl eframe::App for Manager {
                 Section::System => self.system_view(ui),
             });
         });
+        self.apply_requests(ctx);
         if let Some(j) = self.hw.show(ctx, &self.client, &self.catalog) {
             self.section = Section::Catalog;
             self.cat_tab = j.tab;
