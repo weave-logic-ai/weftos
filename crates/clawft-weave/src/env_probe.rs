@@ -96,7 +96,16 @@ mod tests {
         let clean_env = read_when_started(&clean);
         let _ = leaky.kill();
         let _ = clean.kill();
-        assert_eq!(leaked(&leaky_env, &[SECRET]), [SECRET], "probe must see a passed key");
-        assert!(leaked(&clean_env, &[SECRET, "OPENAI_API_KEY"]).is_empty(), "{clean_env}");
+        let _ = leaky.wait();
+        let _ = clean.wait();
+        assert_eq!(
+            leaked(&leaky_env, &[SECRET]),
+            [SECRET],
+            "probe must see a passed key"
+        );
+        assert!(
+            leaked(&clean_env, &[SECRET, "OPENAI_API_KEY"]).is_empty(),
+            "{clean_env}"
+        );
     }
 }

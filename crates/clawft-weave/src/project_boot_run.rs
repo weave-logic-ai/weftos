@@ -136,8 +136,9 @@ pub(crate) mod test_hooks {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     static FORCE: AtomicBool = AtomicBool::new(false);
-    /// Tests that touch the idle clock hold this for their duration.
-    pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Tests that touch the idle clock hold this for their duration. A tokio
+    /// mutex, so an async test may hold it across awaits.
+    pub(crate) static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     pub(super) fn forced() -> bool {
         FORCE.load(Ordering::SeqCst)
@@ -776,7 +777,7 @@ mod tests {
 
     #[test]
     fn quiet_methods_do_not_move_the_idle_clock() {
-        let _serial = test_hooks::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = test_hooks::SERIAL.blocking_lock();
         test_hooks::track(false);
         // No child running in this process: nothing is recorded at all.
         LAST_ACTIVITY.store(0, Ordering::Relaxed);

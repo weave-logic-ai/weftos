@@ -129,7 +129,9 @@ fn deps(
     LinkDeps { delivery, gate, chain, state, timings: fast() }
 }
 
-fn open_chain() -> (Arc<ChainQueue>, Arc<Mutex<Vec<(String, Value)>>>) {
+type Got = Arc<Mutex<Vec<(String, Value)>>>;
+
+fn open_chain() -> (Arc<ChainQueue>, Got) {
     let got = Arc::new(Mutex::new(Vec::new()));
     let q = ChainQueue::new(GatedSink { open: Arc::new(AtomicBool::new(true)), got: got.clone() });
     (Arc::new(q), got)
@@ -417,12 +419,17 @@ async fn inbound_delivery_reaches_the_router_and_other_users_are_refused() {
     server.push(deliver(&user_id(), "for us"));
     wait_until("delivery", || !rec.got.lock().unwrap().is_empty()).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let got = rec.got.lock().unwrap();
-    assert_eq!(got.len(), 1, "the other user's frame never reaches the router");
-    assert_eq!(got[0].0, node_id_from_pubkey(&[8; 32]));
-    assert_eq!(got[0].1.as_ref().unwrap().user_id, user_id());
-    assert!(matches!(&got[0].2.payload, MessagePayload::Text(t) if t == "for us"));
-    drop(got);
+    {
+        let got = rec.got.lock().unwrap();
+        assert_eq!(
+            got.len(),
+            1,
+            "the other user's frame never reaches the router"
+        );
+        assert_eq!(got[0].0, node_id_from_pubkey(&[8; 32]));
+        assert_eq!(got[0].1.as_ref().unwrap().user_id, user_id());
+        assert!(matches!(&got[0].2.payload, MessagePayload::Text(t) if t == "for us"));
+    }
     h.shutdown().await;
 }
 
