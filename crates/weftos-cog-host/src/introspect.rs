@@ -110,6 +110,25 @@ pub fn installed_guide(root: &Path, id: &str) -> Result<String, (&'static str, S
     bundle_dir(&dir.join("guide")).ok_or(("404 Not Found", "no guide installed with this cog".to_string()))
 }
 
+/// Store a hook-up guide with an installed cog (`<root>/<id>/guide.json`) so the host can serve it
+/// at `GET /cogs/<id>/guide`. `src` is a guide folder (ADR-104) or a bundled `/guide` JSON file.
+pub fn install_guide(root: &Path, id: &str, src: &Path) -> Result<(), String> {
+    let json = if src.is_dir() {
+        bundle_dir(src).ok_or("not a guide folder (needs guide.toml) or too large")?
+    } else {
+        let t = std::fs::read_to_string(src).map_err(|e| format!("read {}: {e}", src.display()))?;
+        let v: Value = serde_json::from_str(&t).map_err(|e| format!("guide JSON: {e}"))?;
+        if !(v["toml"].is_string() && v["pages"].is_object()) {
+            return Err("guide JSON needs \"toml\" and \"pages\"".into());
+        }
+        t
+    };
+    if json.len() as u64 > GUIDE_CAP {
+        return Err("guide too large".into());
+    }
+    std::fs::write(root.join(id).join("guide.json"), json).map_err(|e| e.to_string())
+}
+
 fn bundle_dir(g: &Path) -> Option<String> {
     use base64::Engine as _;
     let toml = std::fs::read_to_string(g.join("guide.toml")).ok()?;
@@ -212,6 +231,24 @@ mod tests {
         std::fs::write(root.path().join("x/guide.json"), r#"{"toml":"","pages":{}}"#).unwrap();
         assert!(installed_guide(root.path(), "x").unwrap().contains("pages"));
         assert_eq!(installed_guide(root.path(), "nope").unwrap_err().0, "404 Not Found");
+    }
+
+    #[test]
+    fn install_guide_stores_a_folder_or_a_json_file_and_it_is_then_served() {
+        let root = tempfile::tempdir().unwrap();
+        add_cog(root.path(), "z", &[], true);
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("guide.toml"), "pages = [\"start\"]\n").unwrap();
+        std::fs::write(src.path().join("start.md"), "# S\n").unwrap();
+        install_guide(root.path(), "z", src.path()).unwrap();
+        assert!(installed_guide(root.path(), "z").unwrap().contains("start"));
+        let f = src.path().join("g.json");
+        std::fs::write(&f, r##"{"toml":"","pages":{"a":"# A"}}"##).unwrap();
+        install_guide(root.path(), "z", &f).unwrap();
+        assert!(installed_guide(root.path(), "z").unwrap().contains("# A"));
+        std::fs::write(&f, r#"{"nope":1}"#).unwrap();
+        assert!(install_guide(root.path(), "z", &f).is_err());
+        assert!(install_guide(root.path(), "z", Path::new("/nonexistent")).is_err());
     }
 
     #[test]

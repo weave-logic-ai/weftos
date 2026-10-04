@@ -3,6 +3,7 @@
 //!   weft-cog-host serve [--port 9480] [--root <dir>]      # supervise + lifecycle HTTP API
 //!   weft-cog-host add --id <id> --binary <path> [--source weavelogic|cognitum|local]
 //!                     [--version v] [--arg --interval --arg 1] [--enable] [--signed]
+//!                     [--guide <guide dir | bundled guide.json>]   (served at GET /cogs/<id>/guide)
 //!   weft-cog-host list [--root <dir>]
 //!   weft-cog-host start|stop <id> [--root <dir>]           # flip enabled on disk (a running daemon picks it up)
 //!   weft-cog-host licence status|import <records.json> [--root <dir>] [--licence-dir <dir>]
@@ -44,7 +45,7 @@ fn usage() -> ! {
         "weft-cog-host (COG-009)\n\n\
          serve [--port 9480] [--root <dir>]        supervise cogs + serve the lifecycle API\n\
          add --id <id> --binary <path> [--source weavelogic|cognitum|local] [--version v]\n\
-         \t[--arg <a> ...] [--enable] [--signed]   install a cog into the root\n\
+         \t[--arg <a> ...] [--enable] [--signed] [--guide <dir|guide.json>]   install a cog into the root\n\
          list [--root <dir>]                       show installed cogs\n\
          start|stop <id> [--root <dir>]            set enabled on disk (a running daemon applies it)\n\
          licence status [--licence-dir <dir>]      show the ADR-106 licence state the start check uses\n\
@@ -138,6 +139,9 @@ fn cmd_add(a: &[String]) -> Result<(), String> {
         signed: has(a, "--signed"),
     };
     save_record(&root, &rec).map_err(|e| e.to_string())?;
+    if let Some(g) = opt(a, "--guide") {
+        weftos_cog_host::introspect::install_guide(&root, id, std::path::Path::new(g)).map_err(|e| format!("--guide: {e}"))?;
+    }
     eprintln!("added {id} ({} bytes){}", bytes.len(), if rec.enabled { ", enabled" } else { "" });
     Ok(())
 }
