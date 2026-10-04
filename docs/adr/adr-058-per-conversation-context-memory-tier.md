@@ -466,3 +466,11 @@ missing retrieval-attribution loop this ADR does not specify.
 - Canonical note + Plane tickets: `docs/research/rmm-reflective-memory-management.md`,
   **WEFT-732** (retrospective) then **WEFT-733** (prospective). Do not
   silently promote reranker weights (ADR-096).
+
+**Updated 2026-10-04:** the L1 retrospective path is built (WEFT-732), opt-in via
+`agents.memory_recall.enabled` (default off, so the full-file dump is still the
+default and the fail-open path). When on, `ContextBuilder::build_messages_with_query`
+injects at most `top_m` of `top_k` retrieved `MEMORY.md` snippets tagged `[m1]`…, and
+`AgentLoop` feeds `+1` cited / `-1` ignored to the reranker (SONA under
+`hybrid-rerank`, identity otherwise); the retriever is never updated. Topic units
+(prospective, WEFT-733) are still open. Code: `crates/clawft-core/src/agent/memory_recall.rs`.

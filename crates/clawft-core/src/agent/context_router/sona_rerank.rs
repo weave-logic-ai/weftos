@@ -137,6 +137,38 @@ impl SonaSkillReranker {
     }
 }
 
+/// Memory rerank (WEFT-732): the same engine scores retrieved memory snippets by their text, and
+/// learns from per-candidate citation rewards. Day-0 fail-open applies (untrained = retriever
+/// order). The retriever is never touched from here.
+#[cfg(feature = "vector-memory")]
+impl crate::agent::memory_recall::MemoryReranker for SonaSkillReranker {
+    fn rerank(
+        &self,
+        query: &str,
+        candidates: Vec<crate::agent::memory_recall::MemorySnippet>,
+    ) -> Vec<crate::agent::memory_recall::MemorySnippet> {
+        // Reciprocal-rank priors from the retriever order, scored by snippet text.
+        let primary: Vec<RerankCandidate> = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, s)| RerankCandidate::new(s.text.clone(), 1.0 / (i as f32 + 1.0)))
+            .collect();
+        let order = SkillReranker::rerank(self, query, &primary);
+        let mut pool = candidates;
+        order
+            .into_iter()
+            .filter_map(|c| pool.iter().position(|s| s.text == c.id).map(|i| pool.remove(i)))
+            .collect()
+    }
+
+    /// `+1` (cited) is quality 1.0, `-1` (retrieved, not cited) is 0.0 — one trajectory each.
+    fn observe(&self, query: &str, rewards: &[(crate::agent::memory_recall::MemorySnippet, i8)]) {
+        for (snip, r) in rewards {
+            SonaSkillReranker::observe(self, query, &snip.text, if *r > 0 { 1.0 } else { 0.0 });
+        }
+    }
+}
+
 impl Default for SonaSkillReranker {
     fn default() -> Self {
         Self::new()
@@ -408,4 +440,22 @@ mod tests {
         expected.sort();
         assert_eq!(ids, expected);
     }
+
+    #[cfg(feature = "vector-memory")]
+    #[test]
+    fn untrained_memory_rerank_keeps_retriever_order_and_observe_accepts_rewards() {
+        use crate::agent::memory_recall::{split_snippets, MemoryReranker};
+        let r = SonaSkillReranker::new();
+        let snips = split_snippets("alpha fact\n\nbeta fact\n\ngamma fact");
+        let out = MemoryReranker::rerank(&r, "beta", snips.clone());
+        assert_eq!(out, snips, "day-0 fail-open: retriever order preserved");
+        MemoryReranker::observe(&r, "beta", &[(snips[1].clone(), 1), (snips[0].clone(), -1)]);
+        // Reranking after observing still returns every candidate exactly once.
+        let after = MemoryReranker::rerank(&r, "beta", snips.clone());
+        assert_eq!(after.len(), 3);
+        for s in &snips {
+            assert_eq!(after.iter().filter(|x| *x == s).count(), 1);
+        }
+    }
+
 }

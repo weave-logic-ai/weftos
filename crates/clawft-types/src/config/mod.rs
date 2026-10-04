@@ -341,6 +341,44 @@ pub struct AgentsConfig {
     /// TOML/JSON: `agents.binding_thread_mode` / `agents.bindingThreadMode`.
     #[serde(default, alias = "bindingThreadMode")]
     pub binding_thread_mode: BindingThreadMode,
+
+    /// Retrieved long-term memory with citation feedback (WEFT-732, RMM
+    /// retrospective). Off by default: the full `MEMORY.md` is injected as
+    /// before. When enabled and a retriever is built in, the context gets
+    /// at most `top_m` retrieved snippets tagged `[m1]`…, the model cites
+    /// the ids it used, and cited / ignored ids reward the reranker (never
+    /// the retriever). See `docs/research/rmm-reflective-memory-management.md`.
+    ///
+    /// TOML/JSON: `agents.memory_recall` / `agents.memoryRecall`.
+    #[serde(default, alias = "memoryRecall")]
+    pub memory_recall: MemoryRecallConfig,
+}
+
+/// Retrieved-memory settings (WEFT-732). See [`AgentsConfig::memory_recall`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryRecallConfig {
+    /// Turn retrieved memory on. Default `false` (full `MEMORY.md` dump).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Candidates the frozen retriever returns (paper default 20).
+    #[serde(default = "default_recall_top_k", alias = "topK")]
+    pub top_k: usize,
+    /// Snippets injected after rerank (paper default 5).
+    #[serde(default = "default_recall_top_m", alias = "topM")]
+    pub top_m: usize,
+}
+
+fn default_recall_top_k() -> usize {
+    20
+}
+fn default_recall_top_m() -> usize {
+    5
+}
+
+impl Default for MemoryRecallConfig {
+    fn default() -> Self {
+        Self { enabled: false, top_k: default_recall_top_k(), top_m: default_recall_top_m() }
+    }
 }
 
 /// Policy for binding-thread integrity checks (WEFT-342).

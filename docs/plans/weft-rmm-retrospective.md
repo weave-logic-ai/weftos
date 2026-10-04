@@ -1,3 +1,5 @@
+> **Status 2026-10-04:** Phase 1 implemented (opt-in `agents.memory_recall`); see `docs/research/rmm-reflective-memory-management.md` §5 "Phase 1 as built".
+
 ## Source
 
 - paper: Tan et al., ACL 2025, arXiv:2503.08026 — Reflective Memory Management (retrospective loop)

@@ -1442,7 +1442,12 @@ impl<P: Platform> AgentLoop<P> {
 
         // 2. Build context messages from memory, skills, and history BEFORE
         //    adding the user message to session (to avoid duplicate).
-        let context_messages = self.context.build_messages(&session, &[]).await;
+        //    The user's message is the memory-retrieval query (WEFT-732); without a
+        //    memory recall attached this is plain `build_messages`.
+        let context_messages = self
+            .context
+            .build_messages_with_query(&session, &[], &msg.content)
+            .await;
 
         // 3. Add user message to session (after building context). The
         //    in-memory session is a per-turn assembly buffer only (§D1);
@@ -1880,10 +1885,17 @@ impl<P: Platform> AgentLoop<P> {
                 warn!(error = %e, "failed to serialize agent loop result meta; result fields will default");
             }
         }
+        // 13b. Memory citations (WEFT-732): reward the memory reranker for the retrieved
+        //      snippets the reply cited (+1) or ignored (-1), and drop the [mN] markers from
+        //      the user-facing text (the sink keeps the reply as the model wrote it).
+        let reply_text = match self.context.memory_recall() {
+            Some(recall) => recall.attribute(&session.key, &tool_result.text),
+            None => tool_result.text,
+        };
         let outbound = OutboundMessage {
             channel: msg.channel.clone(),
             chat_id: msg.chat_id.clone(),
-            content: tool_result.text,
+            content: reply_text,
             reply_to: None,
             media: vec![],
             metadata,
