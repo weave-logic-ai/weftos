@@ -109,9 +109,10 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licenc
             content_len = content_length(&buf[..p]);
             let head = String::from_utf8_lossy(&buf[..p]);
             let path = head.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("/");
-            if path.starts_with("/licence") {
+            let method = head.lines().next().unwrap_or("").split_whitespace().next().unwrap_or("");
+            if path.starts_with("/licence") && method != "OPTIONS" {
                 // Authenticate before reading any body: the state is private and imports are big.
-                let method = head.lines().next().unwrap_or("").split_whitespace().next().unwrap_or("");
+                // (A CORS preflight carries no token and no body; it is answered below.)
                 let h = parse_headers(&head);
                 let auth = if method == "POST" { policy.check_post(&h).and_then(|_| policy.check_token(&h)) } else { policy.check_token(&h) };
                 if let Err((code, payload)) = auth {
@@ -474,6 +475,11 @@ mod tests {
         assert!(st.contains("401") && !body.contains("unconfigured") && !h.contains("access-control-allow-origin"), "{st} {h} {body}");
         let (st, h, body) = send(a, &format!("GET /licence HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n{TOK}\r\n"));
         assert!(st.contains("200") && body.contains("unconfigured") && !h.contains("access-control-allow-origin"), "{st} {h} {body}");
+        // A browser preflight carries no token: it is answered (204 for an allowed origin), not 401'd.
+        let (st, h, _) = send(a, "OPTIONS /licence/records HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:8080\r\nAccess-Control-Request-Method: POST\r\n\r\n");
+        assert!(st.contains("204") && h.contains("access-control-allow-origin: http://localhost:8080"), "{st} {h}");
+        let (st, h, _) = send(a, "OPTIONS /licence HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\nAccess-Control-Request-Method: GET\r\n\r\n");
+        assert!(st.contains("403") && !h.contains("access-control-allow-origin"), "{st} {h}");
         // An oversized import is refused for the missing token before its size is considered.
         let raw = format!("POST /licence/records HTTP/1.1\r\nHost: 127.0.0.1\r\n{JSON}Content-Length: {}\r\n\r\n", MAX_IMPORT_BYTES + 1);
         assert!(send(a, &raw).0.contains("401"));

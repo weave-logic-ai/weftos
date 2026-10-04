@@ -55,7 +55,9 @@ fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// A sealed in-memory file holding `bytes`, and the `/proc/self/fd` path that executes it. Not for
-/// `#!` scripts (the interpreter would open a closed descriptor). `None` if the kernel lacks it.
+/// `#!` scripts (the interpreter would open a closed descriptor). `None` if the kernel lacks it or
+/// sealing fails. A cog run this way sees `current_exe()` as `/memfd:weft-cog-<id> (deleted)`, and
+/// each licensed instance holds its binary in RAM (it is released when the cog exits).
 #[cfg(target_os = "linux")]
 fn memfd_exec(id: &str, bytes: &[u8]) -> Option<(PathBuf, std::fs::File)> {
     use std::io::Write;
@@ -64,8 +66,15 @@ fn memfd_exec(id: &str, bytes: &[u8]) -> Option<(PathBuf, std::fs::File)> {
         return None;
     }
     let name = std::ffi::CString::new(format!("weft-cog-{}", id.chars().filter(|c| c.is_ascii_graphic()).take(200).collect::<String>())).ok()?;
-    // SAFETY: plain syscall; the fd is owned by the File built from it.
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
+    // MFD_EXEC (kernel 6.3+) asks for an executable memfd explicitly, which `vm.memfd_noexec=1`
+    // would otherwise make non-executable; older kernels answer EINVAL, so retry without it.
+    const MFD_EXEC: libc::c_uint = 0x0010;
+    let base = libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING;
+    // SAFETY: plain syscalls; the fd is owned by the File built from it.
+    let mut fd = unsafe { libc::memfd_create(name.as_ptr(), base | MFD_EXEC) };
+    if fd < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
+        fd = unsafe { libc::memfd_create(name.as_ptr(), base) };
+    }
     if fd < 0 {
         return None;
     }
@@ -73,8 +82,11 @@ fn memfd_exec(id: &str, bytes: &[u8]) -> Option<(PathBuf, std::fs::File)> {
     let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
     f.write_all(bytes).ok()?;
     let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    // Never exec an unsealed memfd: if sealing fails, the caller falls back to the file copy.
     // SAFETY: plain fcntl on our own fd.
-    unsafe { libc::fcntl(f.as_raw_fd(), libc::F_ADD_SEALS, seals) };
+    if unsafe { libc::fcntl(f.as_raw_fd(), libc::F_ADD_SEALS, seals) } != 0 {
+        return None;
+    }
     Some((PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd())), f))
 }
 
@@ -160,7 +172,9 @@ pub struct Supervisor {
     gate: Option<Arc<dyn CognitumRunGate>>,
     refusals: HashMap<String, &'static str>,
     /// (len, mtime) -> (sha256, blake3) of each cog binary last hashed, so a refused cog is not
-    /// re-read at every backoff.
+    /// re-read at every backoff. A same-length swap inside the mtime granularity yields at worst a
+    /// stale refusal (the gate is asked again with the old hashes), never a permit: a permit always
+    /// follows a fresh read and hash of the bytes that then run.
     hash_cache: HashMap<PathBuf, (u64, SystemTime, String, String)>,
 }
 
@@ -438,6 +452,60 @@ mod tests {
     use crate::{save_record, Source};
     use std::io::Write;
     use std::path::Path;
+
+    #[test]
+    fn content_copy_is_0700_and_reused() {
+        let root = tempfile::tempdir().unwrap();
+        let bytes = b"\x7fELF-not-really";
+        let b3 = hashes(bytes).1;
+        let p = content_copy(root.path(), &b3, bytes).unwrap();
+        assert_eq!(p, root.path().join(RUN_DIR).join(&b3));
+        assert_eq!(std::fs::read(&p).unwrap(), bytes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(std::fs::metadata(root.path().join(RUN_DIR)).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        let ino = |p: &Path| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                std::fs::metadata(p).unwrap().ino()
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = p;
+                0u64
+            }
+        };
+        let before = ino(&p);
+        assert_eq!(content_copy(root.path(), &b3, bytes).unwrap(), p);
+        assert_eq!(ino(&p), before, "an intact copy is reused, not rewritten");
+        // A copy that no longer hashes right is replaced.
+        std::fs::write(&p, b"tampered").unwrap();
+        content_copy(root.path(), &b3, bytes).unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), bytes);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn memfd_exec_is_sealed_and_runs_the_bytes() {
+        use std::os::fd::AsRawFd;
+        let Ok(elf) = std::fs::read("/bin/true") else { return };
+        assert!(!elf.starts_with(b"#!"));
+        let (path, f) = memfd_exec("seal-test", &elf).expect("memfd_exec");
+        // SAFETY: plain fcntl on a descriptor this test owns.
+        let seals = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GET_SEALS) };
+        let full = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+        assert_eq!(seals & full, full, "all four seals");
+        // The sealed file cannot be written any more.
+        assert!(std::io::Write::write_all(&mut &f, b"x").is_err());
+        let st = Command::new(&path).status().expect("exec through /proc/self/fd");
+        assert!(st.success());
+        // Scripts are not memfd-run (the interpreter would open a closed fd).
+        assert!(memfd_exec("script", b"#!/bin/sh\n").is_none());
+    }
 
     fn dummy_cog(root: &Path, id: &str, body: &str) {
         let dir = root.join(id);
