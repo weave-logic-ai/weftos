@@ -1164,14 +1164,14 @@ cmd_clippy() {
     header "Running clippy (warnings as errors) ${scope[*]}${FEATURES:+ --features $FEATURES}"
     timer_start
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   cargo clippy %s%s -- -D warnings\n" \
+        printf "  ${YELLOW}DRY${NC}   cargo clippy --all-targets %s%s -- -D warnings\n" \
             "${scope[*]}" "${FEATURES:+ --features $FEATURES}"
     else
         # Always show full output — tail -5 hides warnings
         if [ -n "$FEATURES" ]; then
-            cargo clippy --keep-going "${scope[@]}" --features "$FEATURES" -- -D warnings 2>&1
+            cargo clippy --keep-going --all-targets "${scope[@]}" --features "$FEATURES" -- -D warnings 2>&1
         else
-            cargo clippy --keep-going "${scope[@]}" -- -D warnings 2>&1
+            cargo clippy --keep-going --all-targets "${scope[@]}" -- -D warnings 2>&1
         fi
     fi
     timer_end
@@ -2237,9 +2237,11 @@ cmd_gate() {
         cmd_check_daemon_no_mesh_testing
 
     # 22. Workspace clippy, warnings as errors (same invocation as `clippy`).
-    #     Debt cleared in cards 8dfd7ed5 / 0f92a3ca; this keeps it from returning.
-    run_gate_check 22 "workspace clippy (warnings as errors)" \
-        cargo clippy --keep-going --workspace -- -D warnings
+    #     --all-targets lints tests, examples and benches too, so test code
+    #     stays clean. Debt cleared in cards 8dfd7ed5 / 0f92a3ca and the
+    #     all-targets sweep; this keeps it from returning.
+    run_gate_check 22 "workspace clippy, all targets (warnings as errors)" \
+        cargo clippy --keep-going --all-targets --workspace -- -D warnings
 
     # 23. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
