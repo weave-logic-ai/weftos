@@ -2111,7 +2111,9 @@ cmd_gate() {
     local gate_num=4
     if check_target_installed wasm32-unknown-unknown; then
         for crate in "${browser_crates[@]}"; do
-            run_gate_check_soft "$gate_num" "Browser WASM: $crate" \
+            # Hard check: all six compile for the browser now, so a break must fail the gate
+            # rather than show as "not yet available".
+            run_gate_check "$gate_num" "Browser WASM: $crate" \
                 cargo check --target wasm32-unknown-unknown -p "$crate" --no-default-features --features browser
             gate_num=$((gate_num + 1))
         done
