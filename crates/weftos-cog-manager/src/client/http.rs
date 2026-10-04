@@ -30,11 +30,6 @@ pub(super) fn set_in(shared: &Arc<Mutex<Shared>>, epoch: u64, ctx: &eframe::egui
     }
 }
 
-pub(super) fn set(shared: &Arc<Mutex<Shared>>, ctx: &eframe::egui::Context, msg: String) {
-    shared.lock().unwrap().last_action = Some(msg);
-    ctx.request_repaint();
-}
-
 /// The directory a `registry.json` URL lives in, used as the base for relative artifact paths.
 pub(super) fn registry_base(url: &str) -> String {
     let u = url.trim().trim_end_matches('/');
