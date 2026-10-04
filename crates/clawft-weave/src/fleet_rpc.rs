@@ -8,13 +8,18 @@
 //!
 //! | section | source | provenance |
 //! |---|---|---|
-//! | `cluster` | cluster membership (`cluster.nodes`, with `last_seen`) | `daemon_observed` |
+//! | `name` | the peer's own announced name | `peer_claimed` |
+//! | `cluster` | state, first/last seen (a peer's `last_seen` moves only on verified paths) | `daemon_observed` |
+//! | `announced` | platform and address the peer announced (an unverified peer chooses them) | `peer_claimed` |
 //! | `facts` | signed node facts cache (`cluster.facts`) | `signed_fact` |
 //! | `mesh` | live connection detail (class, verified, heartbeat) | `daemon_observed` |
 //! | `revoked` | host revocation list (`mesh.revoked`) | `daemon_observed` |
-//! | `instances` | placement controller's own records and lifecycle | `daemon_observed` |
+//! | `instances` | placement controller's own records and lifecycle (no error text) | `daemon_observed` |
 //! | `location` | operator labels (`fleet.location.set`) | `operator_claimed` |
-//! | `infer`, `licence`, `placement`, `revocations` | `infer.status`, `workload.node.binding`, controller targets, revocation list | `daemon_observed` / `signed_fact` |
+//! | `infer`, `licence`, `placement`, `revocations` | `infer.status`, binding summary (state, mesh id, seq, fingerprint; the signed record itself is withheld), controller targets, revocation list | `daemon_observed`; the licence `binding` is `signed_fact`; `targets` are `operator_claimed` (the tier is the operator's) |
+//!
+//! Read is machine-wide. A caller whose token is scoped to a project sees only
+//! that project's instances; any other caller sees all of them.
 //!
 //! `self_reported` is the fifth label: heartbeat fields an edge node says
 //! about itself (the cog-host roster). The daemon holds none today.
@@ -47,18 +52,23 @@ pub mod provenance {
     pub const SIGNED_FACT: &str = "signed_fact";
     /// Observed or held by this daemon.
     pub const DAEMON_OBSERVED: &str = "daemon_observed";
-    /// Set by an operator (location labels).
+    /// Announced by the peer itself over the mesh, not authenticated.
+    pub const PEER_CLAIMED: &str = "peer_claimed";
+    /// Set by an operator (location labels, target tiers).
     pub const OPERATOR_CLAIMED: &str = "operator_claimed";
     /// Said by an unauthenticated edge node about itself; display only.
     pub const SELF_REPORTED: &str = "self_reported";
 }
-use provenance::{DAEMON_OBSERVED, OPERATOR_CLAIMED, SIGNED_FACT};
+use provenance::{DAEMON_OBSERVED, OPERATOR_CLAIMED, PEER_CLAIMED, SIGNED_FACT};
 
 /// Route handler for both methods.
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
         match call.method.as_str() {
-            "fleet.snapshot" => Response::success(snapshot(&call.ctx.kernel).await),
+            "fleet.snapshot" => {
+                let project = call.ctx.verified_project.as_ref().map(|p| p.as_str().to_owned());
+                Response::success(snapshot(&call.ctx.kernel, project.as_deref()).await)
+            }
             "fleet.location.set" => location_set(call.params, &call.ctx.kernel).await,
             other => Response::error(format!("unknown method {other}")),
         }
@@ -182,14 +192,16 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
     touch(&mut nodes, &raw.local_id).insert("local".into(), json!(true));
     for p in &raw.peers {
         let n = touch(&mut nodes, &p.id);
-        n.insert("name".into(), json!(p.name));
+        n.insert("name".into(), field(json!(p.name), PEER_CLAIMED));
+        n.insert(
+            "announced".into(),
+            field(json!({ "platform": p.platform.to_string(), "address": p.address }), PEER_CLAIMED),
+        );
         n.insert(
             "cluster".into(),
             field(
                 json!({
-                    "platform": p.platform.to_string(),
                     "state": p.state.to_string(),
-                    "address": p.address,
                     "first_seen": rfc3339(p.first_seen),
                     "last_seen": rfc3339(p.last_heartbeat),
                     "last_seen_unix": p.last_heartbeat.timestamp(),
@@ -249,7 +261,14 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
     match &extra.labels {
         Some(Ok(labels)) => {
             for (node, loc) in labels {
-                touch(&mut nodes, node).insert(
+                // A label for an id nothing else here knows (an edge node that
+                // only checks in to a cog host, or a typo) is flagged.
+                let unknown = !nodes.contains_key(node);
+                let n = touch(&mut nodes, node);
+                if unknown {
+                    n.insert("unknown_node".into(), json!(true));
+                }
+                n.insert(
                     "location".into(),
                     field(serde_json::to_value(loc).unwrap_or(Value::Null), OPERATOR_CLAIMED),
                 );
@@ -261,7 +280,12 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
 
     let controller = section(
         extra.controller.as_ref().map(|c| {
-            json!({ "controller": c["controller"], "targets": c["targets"], "unsettled": c["unsettled"] })
+            json!({
+                "controller": c["controller"],
+                "unsettled": c["unsettled"],
+                // The tier of each target is the operator's decision; `reachable` is observed.
+                "targets": field(c["targets"].clone(), OPERATOR_CLAIMED),
+            })
         }),
         "placement control plane not started",
         DAEMON_OBSERVED,
@@ -269,7 +293,7 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
         "placement",
     );
     let infer = section(extra.infer, &extra.infer_why, DAEMON_OBSERVED, &mut degraded, "infer");
-    let licence = section(extra.licence, "licence runtime not started", SIGNED_FACT, &mut degraded, "licence");
+    let licence = section(extra.licence, "licence runtime not started", DAEMON_OBSERVED, &mut degraded, "licence");
     let revocations = field(
         json!(raw.revoked.iter().map(|r| json!({
             "host_id": r.host_id, "revoked_at": r.revoked_at, "reason": r.reason
@@ -280,7 +304,7 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
     let mut list: Vec<Value> = nodes.into_values().map(Value::Object).collect();
     list.sort_by_key(|n| {
         let local = n["node_id"] != json!(raw.local_id);
-        let name = n["name"].as_str().unwrap_or_else(|| n["node_id"].as_str().unwrap_or("")).to_owned();
+        let name = n["name"]["value"].as_str().unwrap_or_else(|| n["node_id"].as_str().unwrap_or("")).to_owned();
         (local, name)
     });
     json!({
@@ -299,20 +323,42 @@ pub(crate) fn assemble(raw: Raw, extra: Extra, now: u64) -> Value {
 }
 
 /// The `fleet.snapshot` document. Read-only; contacts no peer.
-pub async fn snapshot(kernel: &KernelRef) -> Value {
+///
+/// `project` is the caller's verified project, if its token is scoped to one:
+/// such a caller sees only that project's placed instances.
+pub async fn snapshot(kernel: &KernelRef, project: Option<&str>) -> Value {
     let raw = {
         let k = kernel.read().await;
         collect(&k)
     };
     let (infer, infer_why) = infer_status().await;
-    let extra = Extra {
-        controller: controller_view(),
-        infer,
-        infer_why,
-        licence: licence_status(),
-        labels: fleet_labels::dir().map(fleet_labels::load),
+    let labels = match fleet_labels::dir() {
+        Some(d) => {
+            let d = d.to_path_buf();
+            Some(
+                tokio::task::spawn_blocking(move || fleet_labels::load(&d))
+                    .await
+                    .unwrap_or_else(|_| Err("label read failed".into())),
+            )
+        }
+        None => None,
     };
+    let mut controller = controller_view();
+    if let Some(c) = controller.as_mut() {
+        filter_to_project(c, project);
+    }
+    let extra = Extra { controller, infer, infer_why, licence: licence_status(), labels };
     assemble(raw, extra, now_secs())
+}
+
+/// For a project-scoped caller keep only that project's instances (an
+/// instance with no project belongs to the machine, so it is dropped too).
+/// `None` (a machine-level caller) keeps everything.
+pub(crate) fn filter_to_project(controller: &mut Value, project: Option<&str>) {
+    let Some(project) = project else { return };
+    if let Some(rows) = controller["instances"].as_array_mut() {
+        rows.retain(|r| r["placement"]["project_id"].as_str() == Some(project));
+    }
 }
 
 #[cfg(all(feature = "placement", unix))]
@@ -326,7 +372,27 @@ fn controller_view() -> Option<Value> {
 
 #[cfg(all(feature = "placement", unix))]
 fn licence_status() -> Option<Value> {
-    crate::licence_boot::runtime().map(|rt| crate::licence_boot::status(&rt))
+    crate::licence_boot::runtime().map(|rt| licence_summary(&crate::licence_boot::status(&rt)))
+}
+
+/// The binding facts a fleet view needs, from `workload.node.binding`: no
+/// device id, no grant key, no steward detail, and not the signed record.
+/// The `binding` comes from an operator-signed record, so it is a `signed_fact`.
+pub(crate) fn licence_summary(status: &Value) -> Value {
+    let binding = match status["binding"].as_object() {
+        Some(b) => field(
+            json!({
+                "state": b.get("state"),
+                "mesh_id": b.get("mesh_id"),
+                "seq": b.get("seq"),
+                "grant_fingerprint": b.get("grant_fingerprint"),
+                "orphaned": b.get("orphaned"),
+            }),
+            SIGNED_FACT,
+        ),
+        None => field(Value::Null, SIGNED_FACT),
+    };
+    json!({ "mesh_id": status["mesh_id"], "genesis_pinned": status["genesis_pinned"], "binding": binding })
 }
 #[cfg(not(all(feature = "placement", unix)))]
 fn licence_status() -> Option<Value> {
@@ -376,21 +442,43 @@ pub(crate) async fn set_location(dir: &std::path::Path, params: Value, kernel: &
         let Some(chain) = chain else {
             return Response::error("a location label is recorded on the chain, and this kernel has none");
         };
-        let (previous, loc) = match fleet_labels::set(dir, &p.node, &p.site, &p.room, now_secs()) {
-            Ok(r) => r,
-            Err(e) => return Response::error(e),
+        let (node, site, room) = (p.node.clone(), p.site.trim().to_owned(), p.room.trim().to_owned());
+        let d = dir.to_path_buf();
+        // Read first (a corrupt file refuses before anything is recorded).
+        let previous = match tokio::task::spawn_blocking({
+            let (d, node) = (d.clone(), node.clone());
+            move || fleet_labels::load(&d).map(|m| m.get(&node).cloned())
+        })
+        .await
+        {
+            Ok(Ok(prev)) => prev,
+            Ok(Err(e)) => return Response::error(e),
+            Err(_) => return Response::error("label read failed"),
         };
+        // Chain first: a label that was set is always on the chain. If saving
+        // then fails the event stands and the caller is told to retry.
         let ev = chain.append(
             fleet_labels::CHAIN_SOURCE,
             fleet_labels::CHAIN_KIND,
-            Some(json!({ "node": p.node, "site": loc.site, "room": loc.room, "previous": previous })),
+            Some(json!({ "node": node, "site": site, "room": room, "previous": previous })),
         );
         let hash: String = ev.hash.iter().map(|b| format!("{b:02x}")).collect();
-        Response::success(json!({
-            "node": p.node, "site": loc.site, "room": loc.room, "set_at": loc.set_at,
-            "previous": previous,
-            "chain": { "sequence": ev.sequence, "hash": hash },
-        }))
+        let chain_ref = json!({ "sequence": ev.sequence, "hash": hash });
+        let saved = {
+            let (node, site, room) = (node.clone(), site.clone(), room.clone());
+            tokio::task::spawn_blocking(move || fleet_labels::set(&d, &node, &site, &room, now_secs())).await
+        };
+        match saved {
+            Ok(Ok((_, loc))) => Response::success(json!({
+                "node": node, "site": loc.site, "room": loc.room, "set_at": loc.set_at,
+                "previous": previous, "chain": chain_ref,
+            })),
+            Ok(Err(e)) => Response::error(format!(
+                "recorded on the chain (event {}) but not saved: {e}; run the command again",
+                ev.sequence
+            )),
+            Err(_) => Response::error("recorded on the chain but the save task failed; run the command again"),
+        }
     }
     #[cfg(not(feature = "exochain"))]
     {

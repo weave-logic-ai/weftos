@@ -1204,8 +1204,8 @@ pub async fn run(
     // in service mode the box key belongs to the mesh service, so placement and
     // the licence steward sign with a daemon-local control key instead
     // (ADR-106 phase 3, `placement_boot`).
-    #[cfg(all(feature = "placement", unix))]
     crate::fleet_labels::init(&runtime_dir);
+    #[cfg(all(feature = "placement", unix))]
     crate::placement_boot::start(&kernel, &daemon_identity, &runtime_dir).await;
     // mesh-placement-03: probe, sign and cache this node's facts. In service
     // mode the service signs and advertises the machine's facts.

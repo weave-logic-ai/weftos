@@ -77,8 +77,8 @@ fn controller() -> Value {
         "targets": [{ "node_id": "zeta", "tier": "paired", "reachable": true }],
         "unsettled": 0,
         "instances": [
-            { "placement": { "instance_id": "i1", "node_id": "zeta", "workload": "cog-a", "decision_id": "d1" },
-              "lifecycle": { "state": "running", "restarts": 2, "reschedules": 0, "last_error": null } },
+            { "placement": { "instance_id": "i1", "node_id": "zeta", "workload": "cog-a", "decision_id": "d1", "project_id": "P1" },
+              "lifecycle": { "state": "running", "restarts": 2, "reschedules": 0, "has_error": false } },
             { "placement": { "instance_id": "i2", "node_id": "local-node", "workload": "cog-b", "decision_id": "d2" },
               "lifecycle": null },
         ],
@@ -122,7 +122,7 @@ fn snapshot_merges_every_source_and_labels_each_field() {
     assert_eq!(z["instances"]["value"][0]["lifecycle"]["restarts"], 2);
     assert_eq!(z["instances"]["provenance"], "daemon_observed");
 
-    let alpha = snap["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "alpha-box").unwrap();
+    let alpha = snap["nodes"].as_array().unwrap().iter().find(|n| n["name"]["value"] == "alpha-box").unwrap();
     assert_eq!(alpha["facts"]["provenance"], "signed_fact");
     assert_eq!(alpha["facts"]["value"]["trust_tier"], "paired");
     assert!(alpha["facts"]["value"]["signed"].is_object(), "the envelope travels so a client can re-verify");
@@ -130,9 +130,10 @@ fn snapshot_merges_every_source_and_labels_each_field() {
     let bad = node(&snap, "bad-node");
     assert_eq!(bad["revoked"]["value"]["reason"], "leaked key");
     assert_eq!(snap["revocations"]["value"][0]["host_id"], "bad-node");
-    assert_eq!(snap["licence"]["provenance"], "signed_fact");
+    assert_eq!(snap["licence"]["provenance"], "daemon_observed");
     assert_eq!(snap["infer"]["provenance"], "daemon_observed");
     assert_eq!(snap["placement"]["value"]["controller"], "local-node");
+    assert!(z["location"]["value"].get("unknown_node").is_none());
     // Every node-level section is a {value, provenance} pair.
     for n in snap["nodes"].as_array().unwrap() {
         for key in ["cluster", "facts", "mesh", "revoked", "instances", "location"] {
@@ -141,6 +142,72 @@ fn snapshot_merges_every_source_and_labels_each_field() {
             }
         }
     }
+}
+
+#[test]
+fn every_field_is_labelled_with_who_vouches_for_it() {
+    let extra = Extra {
+        controller: Some(controller()),
+        licence: Some(licence_summary(&json!({
+            "mesh_id": "m1", "genesis_pinned": true,
+            "binding": { "state": "bound", "mesh_id": "m1", "seq": 3, "grant_fingerprint": "ab12",
+                         "orphaned": false, "device_id": "dev", "grant_pubkey": "k", "record": { "sig": "s" } },
+        }))),
+        ..Extra::default()
+    };
+    let snap = assemble(raw(), extra, 1);
+    let z = node(&snap, "zeta");
+    // Peer-supplied: the name and the announced platform/address.
+    assert_eq!(z["name"]["provenance"], "peer_claimed");
+    assert_eq!(z["announced"]["provenance"], "peer_claimed");
+    assert_eq!(z["announced"]["value"]["address"], "192.168.1.9:9000");
+    assert!(z["cluster"]["value"].get("address").is_none(), "no announced field under the observed section");
+    assert!(z["cluster"]["value"].get("platform").is_none());
+    assert_eq!(z["cluster"]["provenance"], "daemon_observed");
+    // Operator-decided: target tiers.
+    assert_eq!(snap["placement"]["value"]["targets"]["provenance"], "operator_claimed");
+    // Licence: observed section, signed binding.
+    assert_eq!(snap["licence"]["provenance"], "daemon_observed");
+    assert_eq!(snap["licence"]["value"]["binding"]["provenance"], "signed_fact");
+    assert_eq!(snap["licence"]["value"]["binding"]["value"]["grant_fingerprint"], "ab12");
+}
+
+#[test]
+fn the_licence_summary_withholds_the_signed_record_and_keys() {
+    let l = licence_summary(&json!({
+        "mesh_id": "m1",
+        "binding": { "state": "bound", "mesh_id": "m1", "seq": 3, "grant_fingerprint": "ab12", "orphaned": false,
+                     "device_id": "dev-secret", "grant_pubkey": "pk-secret", "steward_node_id": "st", "record": { "sig": "sig-secret" } },
+        "steward": { "pubkey": "steward-secret" },
+    }));
+    let text = l.to_string();
+    for secret in ["dev-secret", "pk-secret", "sig-secret", "steward-secret", "\"st\""] {
+        assert!(!text.contains(secret), "{secret} leaked: {text}");
+    }
+    assert_eq!(licence_summary(&json!({ "mesh_id": "m1", "binding": null }))["binding"]["value"], Value::Null);
+}
+
+#[test]
+fn a_project_scoped_caller_sees_only_its_own_instances() {
+    let mut c = controller();
+    filter_to_project(&mut c, None);
+    assert_eq!(c["instances"].as_array().unwrap().len(), 2, "machine-level caller sees all");
+    filter_to_project(&mut c, Some("P2"));
+    assert!(c["instances"].as_array().unwrap().is_empty());
+    let mut c = controller();
+    filter_to_project(&mut c, Some("P1"));
+    let rows = c["instances"].as_array().unwrap();
+    assert_eq!((rows.len(), rows[0]["placement"]["instance_id"].as_str()), (1, Some("i1")));
+}
+
+#[test]
+fn a_label_for_an_unknown_id_is_flagged() {
+    let mut labels = BTreeMap::new();
+    labels.insert("c6-01".to_string(), Location { site: "Lab".into(), room: "R".into(), set_at: 1 });
+    labels.insert("zeta".to_string(), Location { site: "Lab".into(), room: "R".into(), set_at: 1 });
+    let snap = assemble(raw(), Extra { labels: Some(Ok(labels)), ..Extra::default() }, 1);
+    assert_eq!(node(&snap, "c6-01")["unknown_node"], true);
+    assert!(node(&snap, "zeta").get("unknown_node").is_none());
 }
 
 #[test]

@@ -25,9 +25,17 @@ const DROP_TTL: u64 = 3600; // forget after 1 h unseen
 pub const MAX_NODES: usize = 256;
 const ID_CAP: usize = 64;
 const FIELD_CAP: usize = 128;
-const MAC_CAP: usize = 32;
 /// Request body cap for `/fleet/heartbeat`.
 pub const HEARTBEAT_BODY_CAP: usize = 4 * 1024;
+
+/// `aa:bb:cc:dd:ee:ff` (colons or dashes in, lowercase colons out); anything else is dropped.
+fn normalize_mac(s: &str) -> Option<String> {
+    let parts: Vec<&str> = s.trim().split([':', '-']).collect();
+    if parts.len() != 6 || !parts.iter().all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit())) {
+        return None;
+    }
+    Some(parts.join(":").to_ascii_lowercase())
+}
 
 fn clean(s: &str, cap: usize) -> String {
     s.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(cap).collect()
@@ -131,31 +139,16 @@ impl Fleet {
         if let Some(b) = h.battery.filter(|b| b.is_finite() && (0.0..=100.0).contains(b)) {
             n.battery = Some(b);
         }
-        // v2: same rule as above, a bad value leaves the previous one in place
-        if let Some(u) = h.uptime_s.filter(|u| *u <= MAX_UPTIME_S) {
-            n.uptime_s = Some(u);
-        }
-        if let Some(l) = h.load.filter(|l| l.is_finite() && (0.0..=MAX_LOAD).contains(l)) {
-            n.load = Some(l);
-        }
-        if let Some(m) = h.free_heap.filter(|m| *m <= MAX_HEAP) {
-            n.free_heap = Some(m);
-        }
-        if let Some(c) = h.channel.filter(|c| (1..=MAX_CHANNEL).contains(c)) {
-            n.channel = Some(c);
-        }
-        if let Some(r) = h.sample_hz.filter(|r| r.is_finite() && (0.0..=MAX_SAMPLE_HZ).contains(r)) {
-            n.sample_hz = Some(r);
-        }
-        if let Some(r) = &h.reset_reason {
-            n.reset_reason = clean(r, FIELD_CAP);
-        }
-        if let Some(c) = &h.chip {
-            n.chip = clean(c, FIELD_CAP);
-        }
-        if let Some(m) = &h.mac {
-            n.mac = clean(m, MAC_CAP);
-        }
+        // v2: a heartbeat is a full report, so a field it omits or sends out of
+        // range is cleared rather than left stale from an earlier one.
+        n.uptime_s = h.uptime_s.filter(|u| *u <= MAX_UPTIME_S);
+        n.load = h.load.filter(|l| l.is_finite() && (0.0..=MAX_LOAD).contains(l));
+        n.free_heap = h.free_heap.filter(|m| *m <= MAX_HEAP);
+        n.channel = h.channel.filter(|c| (1..=MAX_CHANNEL).contains(c));
+        n.sample_hz = h.sample_hz.filter(|r| r.is_finite() && (0.0..=MAX_SAMPLE_HZ).contains(r));
+        n.reset_reason = h.reset_reason.as_deref().map(|r| clean(r, FIELD_CAP)).unwrap_or_default();
+        n.chip = h.chip.as_deref().map(|c| clean(c, FIELD_CAP)).unwrap_or_default();
+        n.mac = h.mac.as_deref().and_then(normalize_mac).unwrap_or_default();
         if let Some(ip) = h.ip.as_deref().map(|s| clean(s, FIELD_CAP)).filter(|s| !s.is_empty()).or(peer_ip) {
             n.ip = ip;
         }
@@ -345,11 +338,13 @@ mod tests {
         for k in ["uptime_s", "load", "free_heap", "channel", "sample_hz"] {
             assert!(n[k].is_null(), "{k} should be dropped");
         }
-        assert!(n["mac"].as_str().unwrap().chars().count() <= MAC_CAP);
+        assert_eq!(n["mac"], "", "a malformed mac is dropped");
         assert!(n["reset_reason"].as_str().unwrap().chars().count() <= FIELD_CAP);
-        // a later bad value does not erase an earlier good one
-        f.heartbeat(&Heartbeat { channel: Some(11), ..hb("esp-02") }, None);
-        f.heartbeat(&Heartbeat { channel: Some(9999), ..hb("esp-02") }, None);
-        assert_eq!(f.roster()[0]["channel"], 11);
+        // each heartbeat replaces the v2 report: an omitted or bad field is cleared
+        f.heartbeat(&Heartbeat { channel: Some(11), mac: Some("20-6E-F1-0B-05-44".into()), ..hb("esp-02") }, None);
+        assert_eq!((f.roster()[0]["channel"].as_u64(), f.roster()[0]["mac"].as_str()), (Some(11), Some("20:6e:f1:0b:05:44")));
+        f.heartbeat(&hb("esp-02"), None);
+        assert!(f.roster()[0]["channel"].is_null());
+        assert_eq!(f.roster()[0]["mac"], "");
     }
 }

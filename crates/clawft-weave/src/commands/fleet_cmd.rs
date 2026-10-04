@@ -131,7 +131,7 @@ pub fn render(snap: &Value, now: u64) -> String {
     ]);
     for n in snap["nodes"].as_array().into_iter().flatten() {
         let id = n["node_id"].as_str().unwrap_or("?");
-        let name = n["name"].as_str().map_or_else(|| short(id), str::to_owned);
+        let name = n["name"]["value"].as_str().map_or_else(|| short(id), str::to_owned);
         let local = if n["local"] == true { " (this node)" } else { "" };
         let facts = val(n, "facts");
         let trust = facts["trust_tier"].as_str().map_or_else(
@@ -165,7 +165,7 @@ pub fn render(snap: &Value, now: u64) -> String {
             format!("{name}{local}{revoked}"),
             cell(&val(n, "cluster")["state"]),
             trust,
-            cell(&val(n, "cluster")["address"]),
+            cell(&val(n, "announced")["address"]),
             seen,
             mesh,
             cogs.to_string(),
@@ -180,7 +180,9 @@ pub fn render(snap: &Value, now: u64) -> String {
     if revoked > 0 {
         out.push_str(&format!("revoked hosts: {revoked}\n"));
     }
-    out.push_str("location is operator-set; trust and last seen are observed by this daemon.\n");
+    out.push_str(
+        "name and address are announced by the peer; location is operator-set; trust and last seen are observed by this daemon.\n",
+    );
     for d in snap["degraded"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         out.push_str(&format!("not available: {d}\n"));
     }
@@ -195,13 +197,14 @@ mod tests {
     fn snap() -> Value {
         json!({
             "nodes": [
-                { "node_id": "aaaaaaaaaaaaaaaaaaaa", "local": true, "name": "mac",
-                  "cluster": { "value": { "state": "active", "address": "10.0.0.2:9", "last_seen_unix": 990 } },
+                { "node_id": "aaaaaaaaaaaaaaaaaaaa", "local": true, "name": { "value": "mac" },
+                  "announced": { "value": { "address": "10.0.0.2:9" } },
+                  "cluster": { "value": { "state": "active", "last_seen_unix": 990 } },
                   "facts": { "value": { "trust_tier": "pinned", "tier_source": "operator" } },
                   "instances": { "value": [{}, {}] },
                   "location": { "value": { "site": "Lab", "room": "R1" } } },
                 { "node_id": "bbbbbbbbbbbbbbbbbbbb",
-                  "cluster": { "value": { "state": "suspect", "address": null, "last_seen_unix": 100 } },
+                  "cluster": { "value": { "state": "suspect", "last_seen_unix": 100 } },
                   "mesh": { "value": { "class": "leaf", "verified": false, "heartbeat": "suspect" } },
                   "revoked": { "value": { "reason": "x" } } },
             ],
@@ -217,7 +220,7 @@ mod tests {
         assert!(out.contains("mac (this node)"), "{out}");
         assert!(out.contains("pinned (operator)"), "{out}");
         assert!(out.contains("10s ago") && out.contains("15m ago"), "{out}");
-        assert!(out.contains("Lab / R1"), "{out}");
+        assert!(out.contains("Lab / R1") && out.contains("10.0.0.2:9"), "{out}");
         assert!(out.contains("bbbbbbbb... REVOKED"), "{out}");
         assert!(out.contains("leaf unverified suspect"), "{out}");
         assert!(out.contains("mesh id: mesh-1") && out.contains("revoked hosts: 1"), "{out}");

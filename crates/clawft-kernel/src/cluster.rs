@@ -1025,8 +1025,15 @@ impl ClusterMembership {
                 entry.state = to;
                 changed = true;
             }
-            entry.last_heartbeat = Utc::now();
-            if let Some(addr) = address
+            // An unverified announce must not refresh a verified peer's
+            // last-seen time or move its address (it could be spoofed); it
+            // may only touch an entry that is itself unverified.
+            let may_refresh = verified || entry.state == NodeState::Unverified;
+            if may_refresh {
+                entry.last_heartbeat = Utc::now();
+            }
+            if may_refresh
+                && let Some(addr) = address
                 && entry.address.as_deref() != Some(addr)
             {
                 entry.address = Some(addr.to_owned());
@@ -2304,6 +2311,28 @@ mod tests {
             // Its route stays: it is listed, with its address.
             assert_eq!(cluster.get_peer("claimed").unwrap().address.as_deref(), Some("10.0.0.6:9489"));
             assert_eq!(cluster.count_by_state(&NodeState::Unverified), 1);
+        }
+
+        #[test]
+        fn an_unverified_announce_cannot_refresh_last_seen_or_move_a_verified_peers_address() {
+            let cluster = make_cluster(ClusterConfig::default());
+            cluster.apply_mesh_peer_event(&joined("real", true)).unwrap();
+            let old = chrono::DateTime::from_timestamp(1_000_000, 0).unwrap();
+            cluster.peers.get_mut("real").unwrap().last_heartbeat = old;
+            let spoof = MeshPeerEvent::Joined {
+                node_id: "real".into(),
+                address: Some("6.6.6.6:1".into()),
+                platform: None,
+                verified: false,
+            };
+            cluster.apply_mesh_peer_event(&spoof).unwrap();
+            let p = cluster.get_peer("real").unwrap();
+            assert_eq!(p.state, NodeState::Active);
+            assert_eq!(p.last_heartbeat, old);
+            assert_eq!(p.address.as_deref(), Some("10.0.0.6:9489"));
+            // A verified announce does refresh it.
+            cluster.apply_mesh_peer_event(&joined("real", true)).unwrap();
+            assert!(cluster.get_peer("real").unwrap().last_heartbeat > old);
         }
 
         #[test]

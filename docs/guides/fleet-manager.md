@@ -31,7 +31,8 @@ verb because it does). Every node section is `{"value": ..., "provenance": ...}`
 |---|---|
 | `signed_fact` | Signed by the node it describes and verified by this daemon (`cluster.facts`: capabilities, trust tier, signed envelope). The licence binding is operator-signed. |
 | `daemon_observed` | Held or observed by this daemon: cluster state, last seen, mesh connection class and heartbeat, revocations, the placement controller's instances and lifecycle, `infer.status`. |
-| `operator_claimed` | A location label set by an operator. |
+| `operator_claimed` | Set by an operator: location labels, and the tier of each placement target. |
+| `peer_claimed` | Announced by the peer itself over the mesh and not authenticated: the node `name`, and `announced.platform` / `announced.address`. An unverified peer chooses these. |
 | `self_reported` | Said by an unauthenticated edge node about itself (the cog-host roster). Display only. |
 
 Top level: `schema`, `source` (`daemon`), `fetched_at`, `ttl_secs`,
@@ -39,6 +40,24 @@ Top level: `schema`, `source` (`daemon`), `fetched_at`, `ttl_secs`,
 reason), `nodes[]`, and daemon-wide `placement`, `infer`, `licence` and
 `revocations`. A node carries `node_id`, `name`, `local`, and any of `cluster`,
 `facts`, `mesh`, `revoked`, `instances`, `location`.
+
+`cluster` holds the fields this daemon observes (state, first and last seen). A
+peer's last-seen time moves only on verified paths, so an unverified announce
+cannot make a node look fresh. `licence` is an observed section; only its
+`binding` (state, mesh id, sequence, grant fingerprint) comes from an
+operator-signed record, and the record itself is not returned. Placement
+instances carry the controller's lifecycle (`state`, `restarts`, `reschedules`,
+`has_error`) but no error text.
+
+Read is machine-wide: a caller with a machine-level token sees every placed
+instance, while a token scoped to a project sees only that project's. A label
+for an id nothing else knows (an edge node that only checks in to a cog host)
+is flagged `unknown_node: true`.
+
+Labels are free text typed by an operator. The daemon refuses control
+characters and invisible Unicode formatting characters (bidi overrides,
+zero-width characters), but a console must still escape labels, names and every
+other string it shows from a snapshot.
 
 `mesh.rtt_ms` is `null` with a note: nothing in this build measures round-trip
 time, and a zero would read as a perfect link. `cluster.last_seen` is the

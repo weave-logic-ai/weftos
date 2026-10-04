@@ -83,6 +83,16 @@ pub fn valid_node(node: &str) -> bool {
         && node.chars().all(|c| c.is_ascii_alphanumeric() || "._:-@".contains(c))
 }
 
+/// Unicode format characters (category Cf: bidi overrides, zero-width, joiners)
+/// plus the line and paragraph separators. They make a label read as something
+/// other than what it is, so they are refused.
+fn is_invisible_format(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
 fn clean_label(what: &str, v: &str) -> Result<String, String> {
     let t = v.trim();
     if t.is_empty() {
@@ -91,8 +101,8 @@ fn clean_label(what: &str, v: &str) -> Result<String, String> {
     if t.chars().count() > MAX_LABEL_LEN {
         return Err(format!("{what} is longer than {MAX_LABEL_LEN} characters"));
     }
-    if t.chars().any(char::is_control) {
-        return Err(format!("{what} must not contain control characters"));
+    if t.chars().any(|c| c.is_control() || is_invisible_format(c)) {
+        return Err(format!("{what} must not contain control or invisible formatting characters"));
     }
     Ok(t.to_owned())
 }
@@ -132,17 +142,37 @@ pub fn set(
 
 fn write_atomic(dir: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!("{FILE}.tmp"));
+    // A unique temp name; `create_new` makes a stale or planted file an error
+    // rather than something we write through.
+    let tmp = dir.join(format!(
+        "{FILE}.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&tmp);
     let mut opts = std::fs::OpenOptions::new();
-    opts.create(true).write(true).truncate(true);
+    opts.create_new(true).write(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-    let mut f = opts.open(&tmp)?;
-    f.write_all(text.as_bytes())?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, dir.join(FILE))
+    let res = (|| {
+        let mut f = opts.open(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, dir.join(FILE))?;
+        // Make the rename itself durable.
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
 }
 
 #[cfg(test)]
@@ -160,7 +190,12 @@ mod tests {
         let all = load(d.path()).unwrap();
         assert_eq!(all["node-1"].room, "Rack 3");
         assert_eq!(all["node-1"].set_at, 20);
-        assert!(!d.path().join(format!("{FILE}.tmp")).exists());
+        let leftovers = std::fs::read_dir(d.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
     }
 
     #[test]
@@ -182,6 +217,10 @@ mod tests {
         assert!(validate("n", "s", "   ").is_err());
         assert!(validate("n", "s\n", "r").is_ok(), "trailing newline is trimmed");
         assert!(validate("n", "a\u{7}b", "r").is_err());
+        for bad in ["a\u{202E}b", "a\u{200B}b", "a\u{FEFF}", "a\u{2028}b", "x\u{2066}"] {
+            assert!(validate("n", bad, "r").is_err(), "{bad:?}");
+        }
+        assert!(validate("n", "Zürich \u{4e2d}\u{6587}", "r").is_ok());
         assert!(validate("n", &"s".repeat(MAX_LABEL_LEN + 1), "r").is_err());
         assert!(validate("5e1c-a9f0:node@host.local_1", "s", "r").is_ok());
     }
