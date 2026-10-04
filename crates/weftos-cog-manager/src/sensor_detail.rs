@@ -101,9 +101,9 @@ pub fn module_card(ui: &mut Ui, m: &Module, pc: &PanelCtx, focus: bool) {
                 ui.label(style::body(&m.summary));
             }
             if !m.chips.is_empty() {
-                crate::tag_row(ui, m.chips.iter().map(String::as_str), GREY);
+                crate::views::catalog::tag_row(ui, m.chips.iter().map(String::as_str), GREY);
             }
-            crate::buy_and_datasheet(ui, m.buy.first().map(|b| (b.price.as_str(), b.url.as_str())), &m.datasheet);
+            crate::views::catalog::buy_and_datasheet(ui, m.buy.first().map(|b| (b.price.as_str(), b.url.as_str())), &m.datasheet);
             // Software first: how to get, install and run the cog is what the card is for.
             ui.add_space(style::GAP_XS);
             crate::sensor_software::software(ui, m, &cogs, pc);
