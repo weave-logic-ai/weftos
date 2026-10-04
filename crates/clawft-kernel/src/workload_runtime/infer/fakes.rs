@@ -25,13 +25,30 @@ use crate::workload_runtime::types::{
     InstanceHandle, RunMode, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
 };
 
-/// A port nothing listens on right now.
+/// A port nothing listens on, that no parallel test will be handed.
+///
+/// Asking the OS for port 0 and dropping the listener races: the OS may
+/// give the same ephemeral port to another test (each test is its own
+/// process under nextest) before this one binds it. Ports here come from
+/// below the OS ephemeral range, in a slice owned by this process
+/// (`pid % 1000`, 16 ports each) and are checked to be bindable, so two
+/// processes only share a port if their pids collide mod 1000, and then
+/// the bind check skips what the other already holds.
 pub fn free_port() -> u16 {
-    TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let base = 10_000 + (std::process::id() % 1000) as u16 * 16;
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let port = base + n % 16;
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+        if n > 4096 {
+            // This slice is exhausted or held: fall back to the OS.
+            return TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        }
+    }
 }
 
 /// A fake server bound to a chosen free port (so the adapter's "port is

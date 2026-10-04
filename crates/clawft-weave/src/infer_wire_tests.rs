@@ -29,7 +29,19 @@ pub(crate) async fn fake() -> Fake {
     fake_on(0).await
 }
 
+/// A port nothing listens on and no parallel test is handed (see the
+/// kernel's `infer::fakes::free_port`): below the OS ephemeral range, in a
+/// per-process slice, bind-checked.
 pub(crate) fn free_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let base = 10_000 + (std::process::id() % 1000) as u16 * 16;
+    for _ in 0..4096 {
+        let port = base + NEXT.fetch_add(1, Ordering::Relaxed) % 16;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
