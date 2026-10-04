@@ -6,7 +6,7 @@
 //! (backoff, retried) carrying the gate's code. Every tick, a running cog whose binary hash is
 //! revoked is stopped.
 //!
-//! The bytes that were hashed are the bytes that run: with a gate set, a permitted start writes
+//! The bytes that were hashed are the bytes that run: a start the gate permitted as a licensed one writes
 //! exactly the hashed bytes to a private `0700` copy under `<root>/.run/` and executes that copy,
 //! so swapping the cog's binary between the hash and the exec changes nothing. The copy is
 //! removed when the instance ends; the directory is cleared when the supervisor starts.
@@ -199,10 +199,12 @@ impl Supervisor {
                     if let Some(l) = &lic {
                         eprintln!("[cog-host] licence permit {id} {}: grant {} approval {}", rec.version, l.permit.grant_id, l.permit.approval_id);
                     }
+                    if lic.is_some() {
+                        // Run exactly the bytes that were checked, not whatever the path holds now.
+                        exec_copy = Some(private_copy(&self.root, id, &bytes)?);
+                    }
                     grant_id = lic.map(|l| l.permit.grant_id);
                     blake3 = Some(hashes(&bytes).1);
-                    // Run exactly the bytes that were checked, not whatever the path holds now.
-                    exec_copy = Some(private_copy(&self.root, id, &bytes)?);
                 }
                 Err(r) => {
                     eprintln!("[cog-host] {id}: {r}");
