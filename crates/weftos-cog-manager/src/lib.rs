@@ -52,7 +52,7 @@ pub struct Manager {
     catalog: HwCatalog,
     cat_tab: u8, // 0 projects, 1 modules, 2 chips
     cat_search: String,
-    cat_kind: String, // module kind filter: all|board|sensor|display|actuator
+    cat_kind: String, // module kind filter: all|board|sensor|display|actuator|tool
     /// Catalog tab: the "Identify hardware" USB scan modal.
     hw: hw_identify::HwIdentify,
     dex: hw_dex::DexUi,
@@ -503,7 +503,7 @@ impl Manager {
                 ui.add_space(style::GAP_XS);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(style::dim(ui, "kind"));
-                    for k in ["all", "board", "sensor", "display", "actuator"] {
+                    for k in ["all", "board", "sensor", "display", "actuator", "tool"] {
                         ui.selectable_value(&mut self.cat_kind, k.to_string(), k);
                     }
                 });
