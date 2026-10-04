@@ -9,17 +9,11 @@
 //! - `weftos-release.json.sig`: the hex Ed25519 signature over
 //!   `"weftos-release-v1\n"` followed by the exact bytes of that file.
 //!
-//! Domain separation is one-way. COG-008 signs raw cog bytes with the same
-//! key, so a cog signature verifies here only if the cog's bytes begin with
-//! the prefix. The cog signer refuses such payloads (and anything that is not
-//! an ELF, Mach-O or wasm file), which closes that direction. The other
-//! direction is open: a release signature does verify, under the COG-008
-//! verifier, as the signature of a "cog" whose bytes are the prefixed JSON
-//! document. That payload is not executable, but only a dedicated release key
-//! removes the overlap entirely.
+//! The signing key is a dedicated release key, separate from the COG-008 cog
+//! signing key, so a cog signature can never pass as a release signature or
+//! the reverse. The `"weftos-release-v1\n"` prefix stays as a second layer.
 //!
-//! The verifying key is compiled in: the COG-008 pinned key
-//! ([`weftos_cog_repo::WEAVELOGIC_PUBKEY_HEX`]). There is no file, variable or
+//! The verifying key is compiled in: [`WEFTOS_RELEASE_PUBKEY_HEX`]. There is no file, variable or
 //! flag that swaps it; tests hand a throwaway key to [`Trust::Pinned`] through
 //! the update context. The operator's signer-key revocation list (the one cog
 //! installs honour) can revoke it, which makes `weaver update` refuse
@@ -36,6 +30,21 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use clawft_types::runtime_paths::{self as rp, RUNTIME_DIR_ENV};
 use weftos_cog_repo::{RevokedKeys, SUBJECTS_FILE_NAME};
+
+/// The pinned WeaveLogic release public key (Ed25519, hex). Generated
+/// 2026-10-03 as a dedicated release key; its seed is the
+/// `WEAVELOGIC_RELEASE_KEY` secret of the `weftos-cogs` environment.
+/// `scripts/release/sign-release.sh` refuses any other signing key.
+pub const WEFTOS_RELEASE_PUBKEY_HEX: &str = "8ac2a3019b257f86f42f46a81d8578b2df339abdfa16140a00b0d4b3bfeef919";
+
+/// [`WEFTOS_RELEASE_PUBKEY_HEX`] as a verifying key.
+pub fn release_key() -> VerifyingKey {
+    let raw: [u8; 32] = hex::decode(WEFTOS_RELEASE_PUBKEY_HEX)
+        .expect("pinned release pubkey hex")
+        .try_into()
+        .expect("32 bytes");
+    VerifyingKey::from_bytes(&raw).expect("pinned release pubkey is a valid Ed25519 key")
+}
 
 /// The signed hash list's asset name.
 pub const SIGNED_DOC: &str = "weftos-release.json";
@@ -61,7 +70,7 @@ pub enum Trust {
 }
 
 impl Trust {
-    /// The compiled-in WeaveLogic release key (the COG-008 key), checked
+    /// The compiled-in WeaveLogic release key ([`WEFTOS_RELEASE_PUBKEY_HEX`]), checked
     /// against the operator's signer-key revocations (see
     /// [`load_revocations`]). Returns warnings to print alongside.
     pub fn pinned() -> anyhow::Result<(Self, Vec<String>)> {
@@ -73,7 +82,7 @@ impl Trust {
 
     /// [`Trust::pinned`] with an explicit revocation list.
     pub fn pinned_with(revoked: RevokedKeys) -> Self {
-        Trust::Pinned { key: weftos_cog_repo::weavelogic_key(), revoked }
+        Trust::Pinned { key: release_key(), revoked }
     }
 }
 
@@ -265,9 +274,11 @@ mod tests {
     }
 
     #[test]
-    fn production_trust_is_the_pinned_cog008_key() {
+    fn production_trust_is_the_dedicated_release_key() {
         let Trust::Pinned { key, .. } = Trust::pinned_with(RevokedKeys::none()) else { panic!() };
-        assert_eq!(hex::encode(key.to_bytes()), weftos_cog_repo::WEAVELOGIC_PUBKEY_HEX);
+        assert_eq!(hex::encode(key.to_bytes()), WEFTOS_RELEASE_PUBKEY_HEX);
+        // Never the COG-008 cog-signing key: the two must not overlap.
+        assert_ne!(WEFTOS_RELEASE_PUBKEY_HEX, weftos_cog_repo::WEAVELOGIC_PUBKEY_HEX);
     }
 
     #[test]

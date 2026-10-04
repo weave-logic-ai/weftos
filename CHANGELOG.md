@@ -17,7 +17,8 @@ Staging area for changes after the 0.8.1 cut.
   from the `WEAVELOGIC_RELEASE_KEY` secret). With no key, the job fails and
   nothing is published.
 - `weaver update` checks that signature against the compiled-in WeaveLogic
-  release key (the COG-008 key, `6aae63e0…`) before reading anything else from
+  release key (a dedicated key, `8ac2a301…`, separate from the COG-008 cog key)
+  before reading anything else from
   the release. The signed tag must match the manifest, the manifest must match
   its signed hash, and every archive must match its signed hash. Unsigned or
   badly signed releases are refused, and so is a tampered archive with

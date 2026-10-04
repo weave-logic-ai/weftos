@@ -193,9 +193,11 @@ release assets:
 | `weftos-release.json.sig` | Hex Ed25519 signature over `weftos-release-v1\n` followed by the bytes of `weftos-release.json` |
 
 The key is the `WEAVELOGIC_RELEASE_KEY` secret: the raw 32-byte Ed25519 seed
-as hex, the same key that signs cogs (COG-008). Before signing, the script
+as hex, stored in the `weftos-cogs` environment. It is a dedicated release
+key, separate from the COG-008 cog-signing key. Before signing, the script
 checks that the key's public half equals the pinned
-`WEAVELOGIC_PUBKEY_HEX` in `crates/weftos-cog-repo/src/lib.rs` (`6aae63e0…`).
+`WEFTOS_RELEASE_PUBKEY_HEX` in
+`crates/clawft-weave/src/commands/update_signature.rs` (`8ac2a301…`).
 It then verifies the signature it made. If the secret is missing or wrong,
 the job fails and nothing is published, because `weaver update` refuses an
 unsigned release anyway. To check a release by hand with OpenSSL 3, put the
@@ -235,14 +237,13 @@ gh api -X POST repos/weave-logic-ai/weftos/environments/weftos-cogs/deployment-b
 gh secret set WEAVELOGIC_RELEASE_KEY --env weftos-cogs -R weave-logic-ai/weftos
 ```
 
-**Shared key.** The release signature uses the same key as COG-008 cog
-signing. A domain prefix separates the two, but only one way: the cog signer
-refuses payloads that start with `weftos-release-` or are not ELF, Mach-O or
-wasm binaries, so no cog signature can pass as a release signature. A
-release signature, however, verifies as the signature of a "cog" whose bytes
-are the prefixed JSON document. That is not executable, but a dedicated
-release key, pinned separately in `weaver`, would remove the overlap and
-limit the damage if either key leaked. It is recommended and not yet done.
+**Dedicated key.** Releases are signed with their own key (generated
+2026-10-03), not the COG-008 cog-signing key, so a cog signature can never pass
+as a release signature or the reverse, and a leak of one key does not expose
+the other. The `weftos-release-v1` prefix stays as a second layer. The seed is
+kept in the operator's macOS Keychain (service `weftos-release-key`) with a
+0600 copy at `~/.config/weftos/weftos-release.key`, and as the environment
+secret; the public half is `~/.config/weftos/weftos-release.pub`.
 
 Local GUI build (not just release CI):
 
