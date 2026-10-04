@@ -206,11 +206,11 @@ fn by_type(ui: &mut egui::Ui, cat: &HwCatalog, rep: &HwDexReport) {
         egui::CollapsingHeader::new(
             RichText::new(format!(
                 "{} {}  ·  caught {} / available {}{}",
-                if t.caught { "●" } else { "○" },
+                if t.caught { "✔" } else { "–" },
                 t.name,
                 best(&t.best_caught_grade),
                 best(&t.best_available_grade),
-                if t.upgrade_available { "  ⬆ upgrade available" } else { "" }
+                if t.upgrade_available { "  · upgrade available" } else { "" }
             ))
             .color(if t.caught { GREEN } else { GREY }),
         )

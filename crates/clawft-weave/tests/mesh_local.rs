@@ -839,7 +839,12 @@ async fn bind_signature_and_project_scoped_addresses_are_enforced() {
     let p = project(&w).await;
     expect(&p, 'a');
     let key = SigningKey::from_bytes(&[7u8; 32]);
-    let tampers: Vec<(&str, Box<dyn FnOnce(&mut RegisterRequest)>, &str)> = vec![
+    type Tamper = (
+        &'static str,
+        Box<dyn FnOnce(&mut RegisterRequest)>,
+        &'static str,
+    );
+    let tampers: Vec<Tamper> = vec![
         (
             "no bind_sig",
             Box::new(|r| r.bind_sig.clear()),

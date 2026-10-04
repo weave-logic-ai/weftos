@@ -372,7 +372,11 @@ async fn a_poisoned_store_is_a_flag_not_an_error_string_and_a_bad_nonce_with_a_b
     assert!(call(&rt, posture(), "workload.node.bind", bind_params(&record(&mesh_of(NONCE_A), 1, BindState::Bound))).await.ok);
     let bad = boot(dir.path(), &chain, &mesh_cfg(Some("zz")));
     assert!(chain_kinds(&chain).contains(&"licence.mesh_config_error".to_owned()));
-    assert_eq!(licence_boot::status(&bad)["config_error"].as_str().is_some(), true);
+    assert!(
+        licence_boot::status(&bad)["config_error"]
+            .as_str()
+            .is_some()
+    );
 
     let dir2 = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir2.path().join("licence")).unwrap();

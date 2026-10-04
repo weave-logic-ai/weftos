@@ -8,7 +8,6 @@ use clawft_types::config::{Config, MeshAdmissionMode, MeshServicePolicy};
 use clawft_types::project::canon::{canonical_json, hex_decode, hex_encode};
 use clawft_types::project::cert::key_id;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use nix::libc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};

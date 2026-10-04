@@ -76,6 +76,8 @@ A token is owner-equivalent, including lifecycle verbs; it cannot issue/revoke/l
 
 Because a token is full-power, TTL is the main limit: default 15 minutes, maximum 24 hours.
 
+**Amendment (2026-10-04): read-only tokens.** A client that only reads, such as the fleet console, must not hold an owner-equivalent token. `weft token issue --read-only` (daemon param `scope: "read"`) mints a token with scope `read`: the daemon grants it the `read` capability only (never Write or Admin), it cannot carry a project, and it cannot mint, revoke or list tokens. The scope is recorded in the `auth.token.issued` chain event (so it survives a restart) and returned by `auth.token.validate`. The gateway's `auth_middleware` enforces it: a read token may `GET` only the routes in `READ_TOKEN_PATHS` (`/api/fleet/snapshot`, `/api/health`, `/api/processes`, `/api/services`, `/api/chain/status`, `/api/chain/events`, `/api/vectors/status`) and `POST /api/auth/revoke` for itself. Every other route answers 403 (`/mcp` and the other REST routes through the same middleware; `/ws` through `ws_auth_middleware`). Owner tokens are unchanged, and the default of `weft token issue` is still owner.
+
 ### D5. One token path
 
 - `POST /api/auth/token` and its `PUBLIC_PATHS` entry are removed. `/api/auth/revoke` stays and forwards to `auth.token.revoke`.

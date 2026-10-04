@@ -323,6 +323,17 @@ pub enum PeerClass {
     Legacy,
 }
 
+impl PeerClass {
+    /// Stable lowercase name (status output, `fleet.snapshot`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::Leaf => "leaf",
+            Self::Legacy => "legacy",
+        }
+    }
+}
+
 /// Transport protection of the connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelKind {

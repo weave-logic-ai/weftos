@@ -6,7 +6,7 @@
 //! fallback. The secret is printed once and never stored.
 //!
 //! ```text
-//! weft token issue [--ttl 15m] [--label playground] [--project <ulid>]
+//! weft token issue [--ttl 15m] [--label playground] [--project <ulid>] [--read-only]
 //! weft token revoke <id>
 //! weft token list
 //! ```
@@ -43,6 +43,12 @@ pub enum TokenAction {
         /// limit: the token still carries owner scope.
         #[arg(long)]
         project: Option<String>,
+
+        /// Mint a read-only token: it opens only the gateway's GET read routes
+        /// (`/api/fleet/snapshot`, `/api/health`, ...) and every other route
+        /// answers 403. Use it for a console. Cannot be combined with `--project`.
+        #[arg(long, conflicts_with = "project")]
+        read_only: bool,
 
         /// Config file override (used to find the gateway address).
         #[arg(long)]
@@ -113,7 +119,15 @@ pub async fn issue_dashboard_link(host: &str, api_port: u16) -> anyhow::Result<(
 
 /// Request params for `auth.token.issue`.
 pub fn issue_params(ttl_secs: u64, label: &str, project: Option<&str>) -> Value {
+    issue_params_scoped(ttl_secs, label, project, false)
+}
+
+/// [`issue_params`] with the read-only scope when `read_only`.
+pub fn issue_params_scoped(ttl_secs: u64, label: &str, project: Option<&str>, read_only: bool) -> Value {
     let mut p = json!({ "ttl_secs": ttl_secs, "label": label });
+    if read_only {
+        p["scope"] = json!("read");
+    }
     if let Some(project) = project {
         p["project"] = json!(project);
     }
@@ -143,19 +157,25 @@ pub async fn run<P: clawft_platform::Platform>(
             ttl,
             label,
             project,
+            read_only,
             config,
         } => {
             let v = daemon_call(
                 "auth.token.issue",
-                issue_params(ttl, &label, project.as_deref()),
+                issue_params_scoped(ttl, &label, project.as_deref(), read_only),
             )
             .await?;
             let secret = v["secret"].as_str().context("daemon returned no secret")?;
             println!("token:   {secret}");
             println!("id:      {}", v["id"].as_str().unwrap_or("?"));
             println!("expires: {}", v["expires_at"].as_str().unwrap_or("?"));
+            if read_only {
+                println!("scope:   read-only (GET read routes only)");
+            }
             println!("This is the only time the token is shown.");
-            if let Ok(cfg) = super::load_config(platform, config.as_deref()).await {
+            if read_only {
+                // The dashboard link opens the full UI; a read-only token is for API clients.
+            } else if let Ok(cfg) = super::load_config(platform, config.as_deref()).await {
                 println!(
                     "link:    {}",
                     dashboard_link(&cfg.gateway.host, cfg.gateway.api_port, secret)
@@ -178,11 +198,12 @@ pub async fn run<P: clawft_platform::Platform>(
             }
             for t in tokens {
                 println!(
-                    "{}  {:<16}  expires {}  project {}",
+                    "{}  {:<16}  expires {}  project {}  scope {}",
                     t["id"].as_str().unwrap_or("?"),
                     t["label"].as_str().unwrap_or(""),
                     t["expires_at"].as_str().unwrap_or("?"),
                     t["project"].as_str().unwrap_or("-"),
+                    t["scope"].as_str().unwrap_or("owner"),
                 );
             }
         }
@@ -199,6 +220,17 @@ mod tests {
     struct Wrap {
         #[command(flatten)]
         args: TokenArgs,
+    }
+
+    #[test]
+    fn read_only_flag_sets_the_read_scope_and_refuses_a_project() {
+        assert_eq!(issue_params_scoped(60, "console", None, true)["scope"], "read");
+        assert!(issue_params(60, "x", None).get("scope").is_none(), "owner is the unmarked default");
+        let w = Wrap::try_parse_from(["t", "issue", "--read-only", "--label", "console"]).unwrap();
+        assert!(matches!(w.args.action, TokenAction::Issue { read_only: true, .. }));
+        assert!(
+            Wrap::try_parse_from(["t", "issue", "--read-only", "--project", "01ARZ3NDEKTSV4RRFFQ69G5FAV"]).is_err()
+        );
     }
 
     #[test]

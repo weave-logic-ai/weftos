@@ -237,7 +237,7 @@ fn property_merge_only_tightens() {
     let (mut ok, mut rejected) = (0u32, 0u32);
     for case in 0..4000 {
         let pl = |r: &mut Rng| {
-            let mut pick = |r: &mut Rng, v: u64| r.some().then_some(v);
+            let pick = |r: &mut Rng, v: u64| r.some().then_some(v);
             Limits {
                 risk_threshold: pick(r, 101).map(|_| r.below(101) as f64 / 100.0),
                 max_processes: pick(r, 100).map(|_| r.below(100)),

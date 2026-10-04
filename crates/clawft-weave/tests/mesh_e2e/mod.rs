@@ -258,13 +258,16 @@ pub async fn link_with(cfg: &MeshConfig, ep: ServiceEndpoint, timings: Timings) 
     link_via(cfg, ep, timings, None).await
 }
 
+/// Wraps the stub inbox in a delivery layer.
+pub type DeliveryWrap = Box<dyn FnOnce(Arc<Inbox>) -> Arc<dyn LocalDelivery>>;
+
 /// [`link_with`] with a delivery wrapper in front of the stub inbox (the
 /// daemon puts the cog mesh router there). `wrap` receives the inbox.
 pub async fn link_via(
     cfg: &MeshConfig,
     ep: ServiceEndpoint,
     timings: Timings,
-    wrap: Option<Box<dyn FnOnce(Arc<Inbox>) -> Arc<dyn LocalDelivery>>>,
+    wrap: Option<DeliveryWrap>,
 ) -> Daemon {
     let user_id = node_id_from_pubkey(&ep.user_key.verifying_key().to_bytes());
     let link = match resolve(cfg, Ok(Some(ep))).await.expect("resolves") {

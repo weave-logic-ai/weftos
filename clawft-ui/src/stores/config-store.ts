@@ -27,10 +27,14 @@ function setNestedValue(
 ): Record<string, unknown> {
   const clone = deepClone(obj);
   const parts = path.split(".");
+  // Refuse prototype keys so a crafted path cannot pollute Object.prototype.
+  if (parts.some((p) => p === "__proto__" || p === "prototype" || p === "constructor")) {
+    return clone;
+  }
   let current: Record<string, unknown> = clone;
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
-    if (!(part in current) || typeof current[part] !== "object") {
+    if (!Object.prototype.hasOwnProperty.call(current, part) || typeof current[part] !== "object" || current[part] === null) {
       current[part] = {};
     }
     current = current[part] as Record<string, unknown>;

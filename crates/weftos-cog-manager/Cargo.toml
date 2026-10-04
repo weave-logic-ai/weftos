@@ -24,7 +24,7 @@ serde_json = { workspace = true }
 base64 = "0.22"
 web-time = "1.1"
 # Catalog types + merge; both wasm-safe (cog-repo lib has no cli feature here).
-weftos-cog-market = { path = "../weftos-cog-market" }
+weftos-cog-market = { path = "../weftos-cog-market", features = ["guides"] }
 weftos-cog-repo = { path = "../weftos-cog-repo", default-features = false }
 # ADR-104 guide renderer (GuideBundle::from_json + GuideView), reused for the Sensors tab. wasm-safe.
 weftos-sensor-guide = { path = "../weftos-sensor-guide" }
@@ -38,3 +38,5 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 console_error_panic_hook = "0.1"
+# uuid (via clawft-types and accesskit) needs a randomness source on wasm32-unknown-unknown.
+uuid = { workspace = true, features = ["js"] }

@@ -285,7 +285,7 @@ mod tests {
         }
         let cur = est.current_ms();
         assert!(
-            cur < 1_500 && cur >= 500,
+            (500..1_500).contains(&cur),
             "expected pull down from 1500 toward ~1150, got {cur}"
         );
         assert!(

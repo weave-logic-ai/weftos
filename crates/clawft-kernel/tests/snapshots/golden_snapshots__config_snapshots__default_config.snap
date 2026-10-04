@@ -28,6 +28,16 @@ expression: json
       "temperature": 0.7,
       "workspace": "~/.nanobot/workspace"
     },
+    "memory_consolidation": {
+      "enabled": false,
+      "every_k_turns": 10,
+      "topic_merge": true
+    },
+    "memory_recall": {
+      "enabled": false,
+      "top_k": 20,
+      "top_m": 5
+    },
     "workspace_root": null
   },
   "channels": {

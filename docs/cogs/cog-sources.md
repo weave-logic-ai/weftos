@@ -174,7 +174,8 @@ There are four different keys. Do not mix them up.
 
 | Key | Signs | Held by | Pinned where |
 |---|---|---|---|
-| WeaveLogic release key | binaries in the WeftOS registry (COG-008), and WeftOS releases (`weftos-release.json`, checked by `weaver update`) | CI secret `WEAVELOGIC_RELEASE_KEY` (the `release` environment) | compiled in: `WEAVELOGIC_PUBKEY_HEX` |
+| WeaveLogic cog key | binaries in the WeftOS registry (COG-008) | CI secret `WEAVELOGIC_RELEASE_KEY` in the cogs repo | compiled in: `WEAVELOGIC_PUBKEY_HEX` |
+| WeftOS release key | WeftOS releases (`weftos-release.json`, checked by `weaver update`) | `WEAVELOGIC_RELEASE_KEY` in the weftos repo's `weftos-cogs` environment | compiled in: `WEFTOS_RELEASE_PUBKEY_HEX` |
 | WeftOS package signer | `cogpkg.json` manifests (governed placement) | a secret store (see below) | compiled in: `WEFTOS_PINNED_SIGNERS` |
 | Your private-repo key | binaries in your private registry | you | each project's `pinned_keys` |
 | Operator package key | `cogpkg.json` manifests you pack | you | the node's `workload-trust.json` |

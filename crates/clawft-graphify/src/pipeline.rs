@@ -495,8 +495,10 @@ mod tests {
         let f2 = entity("beta", "mod.rs");
         let f3 = entity("gamma", "mod.rs");
         let ext = extraction(vec![f1, f2, f3], vec![]);
-        let mut config = PipelineConfig::default();
-        config.discover_hyperedges = false;
+        let config = PipelineConfig {
+            discover_hyperedges: false,
+            ..PipelineConfig::default()
+        };
         let pipeline = Pipeline::new(config);
         let result = pipeline
             .run_from_extractions(vec![ext], DetectionResult::default())

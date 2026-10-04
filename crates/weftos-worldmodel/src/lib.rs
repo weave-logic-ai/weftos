@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn hash_paths_are_deterministic_through_facade() {
-        let enc = HashEncoder::default();
+        let enc = HashEncoder;
         let a = enc.encode(b"frame-a").expect("a");
         let b = enc.encode(b"frame-a").expect("a2");
         let c = enc.encode(b"frame-b").expect("b");
@@ -362,9 +362,7 @@ mod tests {
         assert_ne!(a, c);
         assert_ne!(a, zero_latent());
 
-        let act = HashActionEncoder::default()
-            .encode_bytes(b"steer")
-            .expect("act");
+        let act = HashActionEncoder.encode_bytes(b"steer").expect("act");
         assert_ne!(act, Action::null());
     }
 

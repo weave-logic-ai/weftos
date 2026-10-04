@@ -297,17 +297,19 @@ mod tests {
 
     fn project_cfg() -> (Config, KernelConfig) {
         let mut config = Config::default();
-        let mut kc = KernelConfig::default();
-        kc.profile = Some(KernelProfile::Project);
-        kc.mesh = Some(MeshConfig {
-            enabled: true,
-            ..MeshConfig::default()
-        });
-        kc.agent = Some(AgentAnchorConfig {
-            talk_loop: true,
-            voice_loop: true,
-            ..AgentAnchorConfig::default()
-        });
+        let kc = KernelConfig {
+            profile: Some(KernelProfile::Project),
+            mesh: Some(MeshConfig {
+                enabled: true,
+                ..MeshConfig::default()
+            }),
+            agent: Some(AgentAnchorConfig {
+                talk_loop: true,
+                voice_loop: true,
+                ..AgentAnchorConfig::default()
+            }),
+            ..KernelConfig::default()
+        };
         config.kernel = kc.clone();
         config.voice.enabled = true;
         config.voice.consumer.enabled = true;
@@ -337,11 +339,13 @@ mod tests {
     #[test]
     fn other_profiles_are_untouched() {
         let mut config = Config::default();
-        let mut kc = KernelConfig::default();
-        kc.mesh = Some(MeshConfig {
-            enabled: true,
-            ..MeshConfig::default()
-        });
+        let mut kc = KernelConfig {
+            mesh: Some(MeshConfig {
+                enabled: true,
+                ..MeshConfig::default()
+            }),
+            ..KernelConfig::default()
+        };
         config.voice.consumer.enabled = true;
         let before = serde_json::to_value(&config).unwrap();
         assert!(!apply_to_config(&mut config, &mut kc));

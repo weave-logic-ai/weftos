@@ -51,6 +51,8 @@ const READ_METHODS: &[&str] = &[
     "ecc.status",
     "ecc.search",
     "ecc.calibrate",
+    // Fleet manager: read-only composite of what the daemon knows.
+    "fleet.snapshot",
 ];
 
 /// Mutating methods, disabled until gateway auth distinguishes principals.
@@ -306,9 +308,9 @@ mod tests {
     }
 
     /// Fake daemon that records `(method, auth)` for every request.
-    fn recording_daemon(
-        path: &std::path::Path,
-    ) -> std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>> {
+    type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+    fn recording_daemon(path: &std::path::Path) -> Seen {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let listener = UnixListener::bind(path).unwrap();
         let log = seen.clone();
@@ -433,6 +435,23 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 4);
         assert!(seen.iter().all(|(_, a)| a.as_deref() == Some("read")));
+    }
+
+    #[tokio::test]
+    async fn fleet_snapshot_is_forwarded_with_read_scope_and_the_label_verb_is_not_a_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("kernel.sock");
+        let seen = recording_daemon(&sock);
+        let facade = DaemonKernelFacade::with_socket(&sock);
+
+        let ok = facade.call_rpc("fleet.snapshot", serde_json::json!({})).await;
+        assert_eq!(ok.status, 200);
+        // `fleet.location.set` is Admin on the daemon and never forwarded here.
+        let no = facade.call_rpc("fleet.location.set", serde_json::json!({})).await;
+        assert_eq!(no.status, 501);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "only the snapshot reached the daemon");
+        assert_eq!(seen[0], ("fleet.snapshot".to_string(), Some("read".to_string())));
     }
 
     #[tokio::test]

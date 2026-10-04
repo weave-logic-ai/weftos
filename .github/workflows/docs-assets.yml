@@ -39,22 +39,32 @@ jobs:
   publish-assets:
     name: Publish WASM + KB to CDN release
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # Only act on a successful push run from this repository's own branch:
+    # never on runs triggered from forks (CodeQL actions/artifact-poisoning).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     steps:
       # Prefer the commit that produced the browser-WASM artifact so the
       # snapshot SHA matches the binary that was built (workflow_run).
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
 
       # ── Resolve publish SHA ─────────────────────────────────────
       - name: Resolve CDN snapshot SHA
         id: sha
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          OWN_SHA: ${{ github.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            FULL="${{ github.event.workflow_run.head_sha }}"
-          else
-            FULL="${{ github.sha }}"
+          if [ "$EVENT" = "workflow_run" ]; then FULL="$RUN_SHA"; else FULL="$OWN_SHA"; fi
+          if ! printf '%s' "$FULL" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::unexpected commit sha '$FULL'"; exit 1
           fi
           SHORT="${FULL:0:12}"
           echo "full=$FULL" >> "$GITHUB_OUTPUT"
@@ -67,9 +77,24 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: browser-wasm-pkg
-          path: browser-pkg
+          # Outside the checkout, so the artifact cannot overwrite scripts the
+          # job runs; only the expected files are copied in below.
+          path: ${{ runner.temp }}/browser-pkg-untrusted
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Take only the expected WASM files from the artifact
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          SRC: ${{ runner.temp }}/browser-pkg-untrusted
+        run: |
+          mkdir -p browser-pkg
+          for f in clawft_wasm_bg.wasm clawft_wasm.js; do
+            if [ ! -f "$SRC/$f" ] || [ -L "$SRC/$f" ]; then
+              echo "::error::artifact is missing a regular $f"; exit 1
+            fi
+            cp "$SRC/$f" "browser-pkg/$f"
+          done
 
       - name: Download WASM from release (manual trigger)
         if: github.event_name == 'workflow_dispatch' && !inputs.skip_wasm

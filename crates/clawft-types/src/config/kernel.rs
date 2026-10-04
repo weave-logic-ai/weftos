@@ -1825,8 +1825,10 @@ mod tests {
 
     #[test]
     fn brand_accessor_is_configurable() {
-        let mut cfg = KernelConfig::default();
-        cfg.brand = "Valtech Agentic Mesh".into();
+        let mut cfg = KernelConfig {
+            brand: "Valtech Agentic Mesh".into(),
+            ..KernelConfig::default()
+        };
         assert_eq!(cfg.brand(), "Valtech Agentic Mesh");
         cfg.brand = "   ".into();
         assert_eq!(cfg.brand(), DEFAULT_BRAND, "whitespace falls back");

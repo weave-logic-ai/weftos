@@ -954,7 +954,7 @@ mod tests {
         // Count ** in first chunk — should be even (open+close) after balance,
         // or end with **.
         assert!(
-            chunks[0].ends_with("**") || chunks[0].matches("**").count() % 2 == 0,
+            chunks[0].ends_with("**") || chunks[0].matches("**").count().is_multiple_of(2),
             "first chunk should rebalance bold: {:?}",
             chunks[0]
         );

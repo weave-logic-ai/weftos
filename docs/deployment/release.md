@@ -87,7 +87,7 @@ Before pushing the release tag:
       cargo-dist host-triple packaging locally before the tag push
       (WEFT-460). See [Local release dry-run](#local-release-dry-run)
       below.
-- [ ] Confirm the `release` environment exists and holds the
+- [ ] Confirm the `weftos-cogs` environment exists and holds the
       `WEAVELOGIC_RELEASE_KEY` secret. The `host` job signs the release
       with it and fails without it, and a required reviewer must approve
       that job (see [Release signature](#release-signature)).
@@ -193,9 +193,11 @@ release assets:
 | `weftos-release.json.sig` | Hex Ed25519 signature over `weftos-release-v1\n` followed by the bytes of `weftos-release.json` |
 
 The key is the `WEAVELOGIC_RELEASE_KEY` secret: the raw 32-byte Ed25519 seed
-as hex, the same key that signs cogs (COG-008). Before signing, the script
+as hex, stored in the `weftos-cogs` environment. It is a dedicated release
+key, separate from the COG-008 cog-signing key. Before signing, the script
 checks that the key's public half equals the pinned
-`WEAVELOGIC_PUBKEY_HEX` in `crates/weftos-cog-repo/src/lib.rs` (`6aae63e0…`).
+`WEFTOS_RELEASE_PUBKEY_HEX` in
+`crates/clawft-weave/src/commands/update_signature.rs` (`8ac2a301…`).
 It then verifies the signature it made. If the secret is missing or wrong,
 the job fails and nothing is published, because `weaver update` refuses an
 unsigned release anyway. To check a release by hand with OpenSSL 3, put the
@@ -208,12 +210,12 @@ xxd -r -p weftos-release.json.sig > sig
 openssl pkeyutl -verify -pubin -inkey pub.pem -rawin -in msg -sigfile sig
 ```
 
-**Protecting the key: the `release` environment.** The `host` job declares
-`environment: release`, so GitHub only hands it secrets stored in that
+**Protecting the key: the `weftos-cogs` environment.** The `host` job declares
+`environment: weftos-cogs`, so GitHub only hands it secrets stored in that
 environment. A repository administrator must set this up once, in the
 repository's Settings, Environments:
 
-1. Create an environment named `release`.
+1. Create an environment named `weftos-cogs`.
 2. Under deployment branches and tags, allow only tags matching `v*`.
 3. Add at least one required reviewer. Every release then waits for a
    person to approve the `host` job before the key is exposed.
@@ -221,14 +223,27 @@ repository's Settings, Environments:
    delete any repository-level copy, so no other workflow or branch can
    read it.
 
-**Shared key.** The release signature uses the same key as COG-008 cog
-signing. A domain prefix separates the two, but only one way: the cog signer
-refuses payloads that start with `weftos-release-` or are not ELF, Mach-O or
-wasm binaries, so no cog signature can pass as a release signature. A
-release signature, however, verifies as the signature of a "cog" whose bytes
-are the prefixed JSON document. That is not executable, but a dedicated
-release key, pinned separately in `weaver`, would remove the overlap and
-limit the damage if either key leaked. It is recommended and not yet done.
+The same setup with `gh` (steps 1–3 were done this way on 2026-10-03; the
+reviewer is the account `aepod`, id 124563):
+
+```bash
+gh api -X PUT repos/weave-logic-ai/weftos/environments/weftos-cogs --input - <<'EOF'
+{"reviewers":[{"type":"User","id":124563}],
+ "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+EOF
+gh api -X POST repos/weave-logic-ai/weftos/environments/weftos-cogs/deployment-branch-policies \
+  -f name='v*' -f type=tag
+# Step 4: prompts for the 64-hex seed; never pass it on the command line.
+gh secret set WEAVELOGIC_RELEASE_KEY --env weftos-cogs -R weave-logic-ai/weftos
+```
+
+**Dedicated key.** Releases are signed with their own key (generated
+2026-10-03), not the COG-008 cog-signing key, so a cog signature can never pass
+as a release signature or the reverse, and a leak of one key does not expose
+the other. The `weftos-release-v1` prefix stays as a second layer. The seed is
+kept in the operator's macOS Keychain (service `weftos-release-key`) with a
+0600 copy at `~/.config/weftos/weftos-release.key`, and as the environment
+secret; the public half is `~/.config/weftos/weftos-release.pub`.
 
 Local GUI build (not just release CI):
 
@@ -624,11 +639,11 @@ it, change the dep, run it again, and diff.
 
 ## Troubleshooting a Failed Release
 
-**`host` is waiting.** The `release` environment needs a reviewer to
+**`host` is waiting.** The `weftos-cogs` environment needs a reviewer to
 approve the job before it can read the signing key.
 
 **`host` failed at "Sign release".** `WEAVELOGIC_RELEASE_KEY` is missing
-from the `release` environment, is not 64 hex characters, or does not match
+from the `weftos-cogs` environment, is not 64 hex characters, or does not match
 the pinned public key. Fix the
 secret and re-run the workflow. Do not publish an unsigned release by
 hand: `weaver update` refuses it.

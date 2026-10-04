@@ -150,15 +150,35 @@ fn effective_keys_follow_the_kind() {
     let k = pub_hex(&key(3));
     let extra = pub_hex(&key(4));
     let w = source("w", SourceKind::Weftos, &PathBuf::from("/x"), &[], 0);
-    assert_eq!(w.effective_keys(&[extra.clone()]), vec![WEAVELOGIC_PUBKEY_HEX.to_string(), extra.clone()]);
+    assert_eq!(
+        w.effective_keys(std::slice::from_ref(&extra)),
+        vec![WEAVELOGIC_PUBKEY_HEX.to_string(), extra.clone()]
+    );
     // nothing from a config file can enter the weftos key set: the only inputs are the
     // WeaveLogic key and the compiled-in signers the caller passes.
     let mut tampered = w.clone();
     tampered.pinned_keys = vec![k.clone()];
     assert!(!tampered.effective_keys(&[]).contains(&k));
-    assert!(SourcesFile { cog_source: vec![tampered], ..Default::default() }.validate().is_err());
-    let p = source("p", SourceKind::Private, &PathBuf::from("/x"), &[k.clone()], 0);
-    assert_eq!(p.effective_keys(&[pub_hex(&key(4))]), vec![k], "a private source never trusts the WeaveLogic key implicitly");
+    assert!(
+        SourcesFile {
+            cog_source: vec![tampered],
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
+    let p = source(
+        "p",
+        SourceKind::Private,
+        &PathBuf::from("/x"),
+        std::slice::from_ref(&k),
+        0,
+    );
+    assert_eq!(
+        p.effective_keys(&[pub_hex(&key(4))]),
+        vec![k],
+        "a private source never trusts the WeaveLogic key implicitly"
+    );
     let c = source("c", SourceKind::Cognitum, &PathBuf::from("/x"), &[], 0);
     assert!(c.effective_keys(&[]).is_empty());
 }

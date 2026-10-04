@@ -62,6 +62,7 @@ fn make_request(content: &str) -> ChatRequest {
         temperature: None,
         auth_context: None,
         complexity_boost: 0.0,
+        tool_choice: None,
     }
 }
 

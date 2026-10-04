@@ -32,9 +32,47 @@ pub const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(3);
 /// oldest are dropped past this.
 const CACHE_MAX_ENTRIES: usize = 1024;
 
+/// What a gateway bearer may do (ADR-102 D4, read-only amendment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenScope {
+    /// Every REST route and the MCP surface.
+    #[default]
+    Owner,
+    /// Only the GET routes in [`READ_TOKEN_PATHS`] (plus its own revoke).
+    Read,
+}
+
+/// Routes a [`TokenScope::Read`] token may GET, nest-relative (the `/api`
+/// prefix is stripped before matching). Kernel facade reads and health only:
+/// no config, memory, sessions, tools, MCP, WebSocket or SSE.
+pub const READ_TOKEN_PATHS: &[&str] = &[
+    "/fleet/snapshot",
+    "/health",
+    "/processes",
+    "/services",
+    "/chain/status",
+    "/chain/events",
+    "/vectors/status",
+];
+
+/// Whether a read-scoped token may make this request. A read token may also
+/// revoke itself (`POST /auth/revoke` acts only on the calling token).
+pub fn read_scope_allows(method: &axum::http::Method, path: &str) -> bool {
+    let rel = path.strip_prefix("/api").unwrap_or(path);
+    let rel = rel.trim_end_matches('/');
+    match *method {
+        axum::http::Method::GET | axum::http::Method::HEAD => READ_TOKEN_PATHS.contains(&rel),
+        axum::http::Method::POST => rel == "/auth/revoke",
+        _ => false,
+    }
+}
+
 /// Public metadata of a validated token (never the secret).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenMeta {
+    /// What the token may do.
+    pub scope: TokenScope,
     /// Token id (first 16 hex of the secret's hash).
     pub id: String,
     /// Operator-chosen label.
@@ -48,7 +86,7 @@ pub struct TokenMeta {
 /// Outcome of checking a bearer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenCheck {
-    /// Known, unexpired, not revoked, owner scope.
+    /// Known, unexpired, not revoked, owner or read scope.
     Valid(TokenMeta),
     /// Unknown, expired, revoked, or not an owner token.
     Invalid,
@@ -297,18 +335,21 @@ fn is_expired(meta: &TokenMeta) -> bool {
         .unwrap_or(true)
 }
 
-/// Parse the `token` object of an `auth.token.validate` reply. Only owner
-/// tokens pass: a project token (ADR-103) is a child kernel's credential for
-/// the user daemon, not a gateway operator credential.
+/// Parse the `token` object of an `auth.token.validate` reply. Owner and
+/// read-only tokens pass: a project token (ADR-103) is a child kernel's
+/// credential for the user daemon, not a gateway operator credential.
 fn parse_meta(info: &serde_json::Value) -> Option<TokenMeta> {
-    if info.get("scope").and_then(|v| v.as_str()) != Some("owner") {
-        return None;
-    }
+    let scope = match info.get("scope").and_then(|v| v.as_str()) {
+        Some("owner") => TokenScope::Owner,
+        Some("read") => TokenScope::Read,
+        _ => return None,
+    };
     if info.get("project").is_some_and(|v| !v.is_null()) {
         return None;
     }
     let field = |k: &str| info.get(k).and_then(|v| v.as_str()).map(str::to_owned);
     Some(TokenMeta {
+        scope,
         id: field("id")?,
         label: field("label")?,
         issued_at: field("issued_at")?,
@@ -401,6 +442,7 @@ pub struct MemoryTokenValidator {
 }
 
 struct MemoryEntry {
+    scope: TokenScope,
     id: String,
     created_at: Instant,
     ttl_secs: u64,
@@ -415,8 +457,14 @@ impl MemoryTokenValidator {
 
     /// Mint a token valid for `ttl_secs`. `None` if the lock is poisoned.
     pub fn generate_token(&self, ttl_secs: u64) -> Option<String> {
+        self.generate_token_scoped(ttl_secs, TokenScope::Owner)
+    }
+
+    /// [`generate_token`](Self::generate_token) with an explicit scope.
+    pub fn generate_token_scoped(&self, ttl_secs: u64, scope: TokenScope) -> Option<String> {
         let token = uuid::Uuid::new_v4().to_string();
         let entry = MemoryEntry {
+            scope,
             id: token.chars().take(16).collect(),
             created_at: Instant::now(),
             ttl_secs,
@@ -451,6 +499,7 @@ impl TokenValidator for MemoryTokenValidator {
             Some(e) if !e.revoked && e.created_at.elapsed().as_secs() < e.ttl_secs => {
                 let issued = Utc::now() - chrono::Duration::seconds(e.created_at.elapsed().as_secs() as i64);
                 TokenCheck::Valid(TokenMeta {
+                    scope: e.scope,
                     id: e.id.clone(),
                     label: "memory".into(),
                     issued_at: issued.to_rfc3339(),
@@ -545,6 +594,9 @@ pub async fn auth_middleware(
     let public = is_public_path(request.uri().path());
     match check_request(&state, credentials(&request, false)).await {
         TokenCheck::Valid(meta) => {
+            if meta.scope == TokenScope::Read && !read_scope_allows(request.method(), request.uri().path()) {
+                return Err(forbidden_response());
+            }
             request.extensions_mut().insert(meta);
             Ok(next.run(request).await)
         }
@@ -568,6 +620,10 @@ pub async fn ws_auth_middleware(
 ) -> Result<axum::response::Response, axum::response::Response> {
     match check_request(&state, credentials(&request, true)).await {
         TokenCheck::Valid(meta) => {
+            // The WebSocket streams everything; a read-only token never opens it.
+            if meta.scope == TokenScope::Read {
+                return Err(forbidden_response());
+            }
             request.extensions_mut().insert(meta);
             Ok(next.run(request).await)
         }
@@ -642,6 +698,16 @@ fn unauthorized_response() -> axum::response::Response {
         axum::http::HeaderValue::from_static("Bearer"),
     );
     response
+}
+
+/// Build a 403: the token is valid but its scope does not cover this request.
+fn forbidden_response() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (
+        axum::http::StatusCode::FORBIDDEN,
+        axum::Json(serde_json::json!({ "error": "this token is read-only and cannot use this route" })),
+    )
+        .into_response()
 }
 
 /// Build a 429: too many token checks are reaching the daemon right now.
@@ -729,6 +795,7 @@ mod tests {
 
     fn meta(id: &str) -> TokenMeta {
         TokenMeta {
+            scope: TokenScope::Owner,
             id: id.into(),
             label: "l".into(),
             issued_at: "2026-01-01T00:00:00+00:00".into(),
@@ -820,6 +887,38 @@ mod tests {
         assert!(!is_public_path("/api/auth/token"));
         assert!(!is_public_path("/auth/token"));
         assert!(!is_public_path("/api/status"));
+    }
+
+    #[test]
+    fn read_scope_covers_only_the_listed_get_routes_and_its_own_revoke() {
+        use axum::http::Method;
+        for p in ["/api/fleet/snapshot", "/fleet/snapshot", "/api/health", "/api/chain/status", "/api/fleet/snapshot/"] {
+            assert!(read_scope_allows(&Method::GET, p), "{p}");
+        }
+        assert!(read_scope_allows(&Method::POST, "/api/auth/revoke"));
+        for p in ["/api/config", "/api/memory", "/api/sessions", "/api/tools", "/mcp", "/ws", "/events", "/api/fleet/location", "/api/fleet"] {
+            assert!(!read_scope_allows(&Method::GET, p), "{p}");
+        }
+        for (m, p) in [
+            (Method::POST, "/api/fleet/snapshot"),
+            (Method::DELETE, "/api/fleet/snapshot"),
+            (Method::POST, "/api/agents/spawn"),
+            (Method::POST, "/mcp"),
+            (Method::PUT, "/api/config"),
+        ] {
+            assert!(!read_scope_allows(&m, p), "{m} {p}");
+        }
+    }
+
+    #[test]
+    fn parse_meta_accepts_owner_and_read_not_project() {
+        let mut read = serde_json::json!({
+            "id": "a", "label": "l", "issued_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z", "scope": "read", "project": null,
+        });
+        assert_eq!(parse_meta(&read).unwrap().scope, TokenScope::Read);
+        read["project"] = "01HZXAAAAAAAAAAAAAAAAAAAAA".into();
+        assert!(parse_meta(&read).is_none());
     }
 
     #[test]

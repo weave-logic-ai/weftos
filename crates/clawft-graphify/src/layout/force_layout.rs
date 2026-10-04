@@ -622,10 +622,12 @@ mod tests {
         edges.push((0, n / 2));
         edges.push((n / 4, 3 * n / 4));
 
-        let mut cfg = ForceConfig::default();
-        cfg.exact_threshold = 8;
-        cfg.iterations = 80;
-        cfg.theta = 0.8;
+        let cfg = ForceConfig {
+            exact_threshold: 8,
+            iterations: 80,
+            theta: 0.8,
+            ..ForceConfig::default()
+        };
 
         let positions = layout(&ids, &edges, 1000.0, 800.0, &cfg);
         assert_eq!(positions.len(), n);
@@ -642,11 +644,13 @@ mod tests {
         let ids = many_ids(n);
         let edges: Vec<(usize, usize)> = (0..n - 1).map(|i| (i, i + 1)).collect();
 
-        let mut exact_cfg = ForceConfig::default();
-        exact_cfg.exact_threshold = 10_000; // always exact
-        exact_cfg.iterations = 40;
-        exact_cfg.min_distance = 0.0; // disable collision for clean comparison
-        exact_cfg.collision_threshold = 0;
+        let exact_cfg = ForceConfig {
+            exact_threshold: 10_000, // always exact
+            iterations: 40,
+            min_distance: 0.0, // disable collision for clean comparison
+            collision_threshold: 0,
+            ..ForceConfig::default()
+        };
 
         let mut bh_cfg = exact_cfg.clone();
         bh_cfg.exact_threshold = 0; // always BH
@@ -674,10 +678,12 @@ mod tests {
         let ids = many_ids(n);
         let edges: Vec<(usize, usize)> = vec![];
 
-        let mut cfg = ForceConfig::default();
-        cfg.exact_threshold = 4;
-        cfg.iterations = 100;
-        cfg.min_distance = 0.0;
+        let cfg = ForceConfig {
+            exact_threshold: 4,
+            iterations: 100,
+            min_distance: 0.0,
+            ..ForceConfig::default()
+        };
 
         let positions = layout(&ids, &edges, 1200.0, 900.0, &cfg);
 

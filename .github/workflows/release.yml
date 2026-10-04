@@ -325,9 +325,9 @@ jobs:
     # WEFT-476: also require build-wasi so the GitHub Release always ships the
     # wasm32-wasip2 artefact without a post-hoc poll/upload race.
     if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.build-global-artifacts.result == 'success' && needs.build-local-artifacts.result == 'success' && needs.build-wasi.result == 'success' }}
-    # The release signing key lives in the protected `release` environment
+    # The release signing key lives in the protected `weftos-cogs` environment
     # (v* tags only, required reviewer); see docs/deployment/release.md.
-    environment: release
+    environment: weftos-cogs
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"

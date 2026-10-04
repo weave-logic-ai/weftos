@@ -1583,8 +1583,10 @@ mod tests {
     #[test]
     fn dispatcher_log_rate_limited() {
         let permissions = PluginPermissions::default();
-        let mut resources = PluginResourceConfig::default();
-        resources.max_log_messages_per_minute = 2;
+        let resources = PluginResourceConfig {
+            max_log_messages_per_minute: 2,
+            ..PluginResourceConfig::default()
+        };
         let sandbox = Arc::new(PluginSandbox::from_manifest(
             "test-plugin".into(),
             permissions,

@@ -41,6 +41,9 @@ concurrency:
   group: pr-gates-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # -------------------------------------------------------------------
   # Lint: clippy with warnings-as-errors
@@ -68,7 +71,7 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
 
       - name: Run clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   # -------------------------------------------------------------------
   # Test: workspace suite on Linux + lightweight cross-OS matrix

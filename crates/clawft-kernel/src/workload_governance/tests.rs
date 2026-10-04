@@ -496,7 +496,12 @@ fn check_teardown_refuses_any_action_that_is_not_a_teardown() {
     });
     match r {
         Ok(d) => assert!(d.is_deny()),
-        Err(_) => assert!(cfg!(debug_assertions)),
+        // Only a debug build may panic here (a debug_assert in the check path).
+        Err(_) => {
+            if !cfg!(debug_assertions) {
+                panic!("a release build must deny, not panic");
+            }
+        }
     }
 }
 

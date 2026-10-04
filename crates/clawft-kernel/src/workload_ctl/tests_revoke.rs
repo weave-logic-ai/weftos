@@ -144,7 +144,7 @@ async fn a_revoked_package_signer_or_artifact_is_stopped_and_unloaded() {
             );
         }
         // The controller's record goes too, durably; a second sweep is a no-op.
-        assert_eq!(r.plane.forget_instances(&[iid.clone()]), 1);
+        assert_eq!(r.plane.forget_instances(std::slice::from_ref(&iid)), 1);
         assert!(r.plane.placements().is_empty());
         assert!(r.pi.svc.enforce_revocations(&r.list).await.is_empty());
     }

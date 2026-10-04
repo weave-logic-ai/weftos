@@ -22,6 +22,7 @@ use clawft_types::error::ClawftError;
 use clawft_types::provider::{ContentBlock, LlmResponse, StopReason, Usage};
 
 use super::traits::LlmTransport;
+#[cfg(any(feature = "browser", all(feature = "native", not(feature = "browser"))))]
 use super::traits::StreamCallback;
 use super::traits::TransportRequest;
 

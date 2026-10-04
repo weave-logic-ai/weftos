@@ -862,10 +862,14 @@ mod tests {
             platform.fs.seed(clawft.join("IDENTITY.md"), id);
         }
 
-        let mut cfg_alpha = clawft_types::config::AgentsConfig::default();
-        cfg_alpha.workspace_root = Some(alpha.clone());
-        let mut cfg_beta = clawft_types::config::AgentsConfig::default();
-        cfg_beta.workspace_root = Some(beta.clone());
+        let cfg_alpha = clawft_types::config::AgentsConfig {
+            workspace_root: Some(alpha.clone()),
+            ..clawft_types::config::AgentsConfig::default()
+        };
+        let cfg_beta = clawft_types::config::AgentsConfig {
+            workspace_root: Some(beta.clone()),
+            ..clawft_types::config::AgentsConfig::default()
+        };
 
         let loader_a =
             IdentityLoader::from_agents_config(&cfg_alpha, Arc::clone(&platform)).unwrap();

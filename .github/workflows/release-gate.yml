@@ -14,32 +14,36 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'failure'
     steps:
-      - name: Extract tag from failed run
-        id: tag
-        run: |
-          TAG="${{ github.event.workflow_run.head_branch }}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Failed workflow: ${{ github.event.workflow_run.name }} on ${TAG}"
-
+      # Values from the triggering run (branch/tag name, workflow name, URL) are
+      # attacker-influenced text: pass them through env, never interpolate them
+      # into the script (CodeQL actions/code-injection).
       - name: Mark release as failed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          WORKFLOW="${{ github.event.workflow_run.name }}"
-          RUN_URL="${{ github.event.workflow_run.html_url }}"
+          echo "Failed workflow: ${WORKFLOW} on ${TAG}"
+          # Only release tags are acted on.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+_-]*$'; then
+            echo "Not a release tag (${TAG}), skipping"
+            exit 0
+          fi
 
           # Check if a release exists for this tag
-          if ! gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+          if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             echo "No release found for ${TAG}, skipping"
             exit 0
           fi
 
           # Mark as prerelease so it's visually flagged
+          BODY=$(gh release view "$TAG" --repo "$REPO" --json body --jq .body)
           gh release edit "$TAG" \
-            --repo "${{ github.repository }}" \
+            --repo "$REPO" \
             --prerelease \
-            --notes "$(gh release view "$TAG" --repo "${{ github.repository }}" --json body --jq .body)
+            --notes "${BODY}
 
           ---
           > **Release incomplete**: \`${WORKFLOW}\` failed. [View run](${RUN_URL})

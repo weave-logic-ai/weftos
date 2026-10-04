@@ -22,6 +22,23 @@ def artifact(kind, name, exe, test=True, pkg="path+file://%s#0.8.1" % KERNEL):
                        "profile": {"test": test}, "executable": exe})
 
 
+REV = {"commit": "c" * 40, "tree": "e" * 40, "dirty": False}
+
+
+class SourceRev(unittest.TestCase):
+    def test_reads_commit_tree_and_dirty_from_git(self):
+        rev = plan.source_rev(os.path.dirname(os.path.abspath(__file__)))
+        self.assertRegex(rev["commit"], r"^[0-9a-f]{40}$")
+        self.assertRegex(rev["tree"], r"^[0-9a-f]{40}$")
+        self.assertIsInstance(rev["dirty"], bool)
+
+    def test_outside_a_repository_every_field_is_none(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": os.path.dirname(d)}):
+            self.assertEqual(plan.source_rev(d), {"commit": None, "tree": None, "dirty": None})
+
+
 class Validation(unittest.TestCase):
     def test_host(self):
         for ok in ["pi5", "user@pi5", "user@10.0.0.2", "pi.local"]:
@@ -309,6 +326,7 @@ class LaneBehaviour(unittest.TestCase):
                 mock.patch.object(pi_lane, "Runner", lambda dry: runner), \
                 mock.patch.object(pi_lane, "local_chain_mtime", return_value=7), \
                 mock.patch.object(pi_lane.subprocess, "run") as git, \
+                mock.patch.object(plan, "source_rev", return_value=REV), \
                 redirect_stdout(out):
             git.return_value.stdout = b"Cargo.toml\0"
             if "WEFTOS_PI_HOST" not in env:
@@ -407,7 +425,7 @@ class LaneBehaviour(unittest.TestCase):
             if " env -i " in line:
                 os.kill(os.getpid(), signal.SIGTERM)
             return None
-        saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+        saved = {s: signal.getsignal(s) for s in pi_lane.LANE_SIGNALS}
         try:
             rc, out = self.run_main(["clawft-kernel"], FakeRunner(hook=hook))
         finally:
@@ -442,6 +460,33 @@ class LaneBehaviour(unittest.TestCase):
         self.assertIn("signal %d during cleanup" % signal.SIGTERM, out)
         self.assertFalse(rep["ok"])
         self.assertTrue(rep["guard"]["ok"])
+
+    def test_sigint_during_cleanup_still_guards_and_reports_with_the_source(self):
+        import signal
+        import tempfile
+
+        def hook(line):
+            if "rm -rf" in line and "mkdir" not in line:      # the cleanup call
+                os.kill(os.getpid(), signal.SIGINT)
+            return None
+        runner = FakeRunner(hook=hook)
+        saved = {s: signal.getsignal(s) for s in pi_lane.LANE_SIGNALS}
+        with tempfile.TemporaryDirectory() as d:
+            report = os.path.join(d, "r.json")
+            try:
+                rc, out = self.run_main(["clawft-kernel", "--report", report], runner)
+            finally:
+                for s, h in saved.items():
+                    signal.signal(s, h)
+            with open(report) as f:
+                rep = json.load(f)
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.probes(runner), 2)
+        self.assertIn("INFO  operator data:", out)
+        self.assertIn("signal %d during cleanup" % signal.SIGINT, out)
+        self.assertFalse(rep["ok"])
+        self.assertTrue(rep["guard"]["ok"])
+        self.assertEqual(rep["source"], REV)
 
     def test_staging_first_removes_a_stale_scratch_dir(self):
         runner = FakeRunner()

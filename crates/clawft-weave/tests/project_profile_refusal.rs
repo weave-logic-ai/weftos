@@ -31,8 +31,10 @@ async fn project_profile_without_spawn_json_refuses_to_boot() {
     }
     // 1. The config path: profile = Project in the config.
     let mut config = Config::default();
-    let mut kc = KernelConfig::default();
-    kc.profile = Some(KernelProfile::Project);
+    let kc = KernelConfig {
+        profile: Some(KernelProfile::Project),
+        ..KernelConfig::default()
+    };
     config.kernel = kc.clone();
     let e = clawft_weave::project_hooks::pre_boot(&mut config, &kc)
         .await

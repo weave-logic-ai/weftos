@@ -72,6 +72,9 @@ pub fn build_learner_parts(
     }
 }
 
+#[cfg(feature = "native")]
+pub use llm_adapter::{persist_shared_retry_model, resolve_retry_model_path, shared_retry_model};
+
 #[cfg(test)]
 mod factory_tests {
     use super::*;
@@ -222,6 +225,3 @@ mod factory_tests {
         let _learner = build_learner(&config);
     }
 }
-
-#[cfg(feature = "native")]
-pub use llm_adapter::{persist_shared_retry_model, resolve_retry_model_path, shared_retry_model};

@@ -394,14 +394,15 @@ pub fn resolve_reload_path(explicit: Option<&str>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
+    use tokio::sync::Mutex as AsyncMutex;
 
     /// Process-global registry is shared across tests; serialize mutations.
-    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
+    /// A tokio mutex, so a test may hold it across awaits.
+    static TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 
     #[tokio::test]
     async fn mcp_add_list_remove_roundtrip() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TEST_LOCK.lock().await;
         let name = format!("weft494-test-{}", uuid::Uuid::new_v4());
         let add = handle_mcp_add(serde_json::json!({
             "name": name,
@@ -460,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_add_requires_transport() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TEST_LOCK.lock().await;
         let resp = handle_mcp_add(serde_json::json!({ "name": "no-transport" })).await;
         assert!(!resp.ok);
         assert!(
@@ -474,7 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_remove_missing_errors() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TEST_LOCK.lock().await;
         let resp = handle_mcp_remove(serde_json::json!({
             "name": "definitely-not-registered-xyz",
             "drain": false,
@@ -485,7 +486,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_reload_from_temp_config() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = TEST_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         let unique = format!("reload-probe-{}", uuid::Uuid::new_v4());

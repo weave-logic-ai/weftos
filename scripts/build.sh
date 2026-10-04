@@ -1164,14 +1164,14 @@ cmd_clippy() {
     header "Running clippy (warnings as errors) ${scope[*]}${FEATURES:+ --features $FEATURES}"
     timer_start
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   cargo clippy %s%s -- -D warnings\n" \
+        printf "  ${YELLOW}DRY${NC}   cargo clippy --all-targets %s%s -- -D warnings\n" \
             "${scope[*]}" "${FEATURES:+ --features $FEATURES}"
     else
         # Always show full output — tail -5 hides warnings
         if [ -n "$FEATURES" ]; then
-            cargo clippy --keep-going "${scope[@]}" --features "$FEATURES" -- -D warnings 2>&1
+            cargo clippy --keep-going --all-targets "${scope[@]}" --features "$FEATURES" -- -D warnings 2>&1
         else
-            cargo clippy --keep-going "${scope[@]}" -- -D warnings 2>&1
+            cargo clippy --keep-going --all-targets "${scope[@]}" -- -D warnings 2>&1
         fi
     fi
     timer_end
@@ -1647,14 +1647,16 @@ cmd_cogs_launcher() {
 # host registry is never written), nothing is downloaded. Skips with a message when docker or the
 # image is missing. Output: target/licence-cross/<triple>/release/weft-licence
 # (stripped copy beside it as weft-licence.stripped) and a size report.
-cmd_licence_cross() {
-    header "weft-licence cross-build (Seed: armv7 + aarch64)"
+# Shared by licence-cross and cog-host-cross: cross-build one workspace binary for the Seed
+# targets. Args: <package> <bin> <extra cargo args or ""> <output dir>.
+cross_build_bin() {
+    local pkg="$1" bin="$2" extra="$3" out="$4"
+    header "$bin cross-build (Seed: armv7 + aarch64)"
     local image="${LICENCE_CROSS_IMAGE:-weavelogic-cogs-cross:1.97.1}"
-    local out="$ROOT/target/licence-cross"
     local targets=("${LICENCE_TARGETS[@]+"${LICENCE_TARGETS[@]}"}")
     [ ${#targets[@]} -gt 0 ] || targets=(armv7-unknown-linux-gnueabihf aarch64-unknown-linux-gnu)
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   docker run %s cargo build --locked --offline --release -p weft-licence --features net --target %s\n" "$image" "${targets[*]}"
+        printf "  ${YELLOW}DRY${NC}   docker run %s cargo build --locked --offline --release -p %s %s --target %s\n" "$image" "$pkg" "$extra" "${targets[*]}"
         return 0
     fi
     if ! command -v docker >/dev/null 2>&1 || ! docker image inspect "$image" >/dev/null 2>&1; then
@@ -1678,7 +1680,7 @@ cmd_licence_cross() {
             aarch64-unknown-linux-gnu)     strip_bin=aarch64-linux-gnu-strip ;;
             *) fail "unknown target $t"; return 1 ;;
         esac
-        info "building weft-licence for $t"
+        info "building $bin for $t"
         docker run --rm --user "$(id -u):$(id -g)" \
             -v "$ROOT":/src:ro -v "$out":/target \
             -v "$HOME/.cargo/registry/cache":/cargo-home/registry/cache:ro \
@@ -1689,15 +1691,25 @@ cmd_licence_cross() {
             -e CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
             -e CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
             "$image" bash -euo pipefail -c '
-                cargo build --locked --offline --release -p weft-licence --features net --target '"$t"'
-                cp /target/'"$t"'/release/weft-licence /target/'"$t"'/release/weft-licence.stripped
-                '"$strip_bin"' /target/'"$t"'/release/weft-licence.stripped
+                cargo build --locked --offline --release -p '"$pkg"' '"$extra"' --target '"$t"'
+                cp /target/'"$t"'/release/'"$bin"' /target/'"$t"'/release/'"$bin"'.stripped
+                '"$strip_bin"' /target/'"$t"'/release/'"$bin"'.stripped
             ' || { fail "cross-build failed for $t"; rc=1; continue; }
-        local raw="$out/$t/release/weft-licence" st="$out/$t/release/weft-licence.stripped"
+        local raw="$out/$t/release/$bin" st="$out/$t/release/$bin.stripped"
         pass "$t: $(wc -c < "$raw" | tr -d ' ') bytes, stripped $(wc -c < "$st" | tr -d ' ') bytes ($st)"
     done
     timer_end
     return $rc
+}
+
+cmd_licence_cross() {
+    cross_build_bin weft-licence weft-licence "--features net" "$ROOT/target/licence-cross"
+}
+
+# Cross-builds weft-cog-host (the appliance supervisor) for the Seed. Output:
+# target/cog-host-cross/<triple>/release/weft-cog-host(.stripped).
+cmd_cog_host_cross() {
+    cross_build_bin weftos-cog-host weft-cog-host "" "$ROOT/target/cog-host-cross"
 }
 
 # weft-licence uid isolation check (ADR-106 phase 2 acceptance): on Linux, a
@@ -2099,7 +2111,9 @@ cmd_gate() {
     local gate_num=4
     if check_target_installed wasm32-unknown-unknown; then
         for crate in "${browser_crates[@]}"; do
-            run_gate_check_soft "$gate_num" "Browser WASM: $crate" \
+            # Hard check: all six compile for the browser now, so a break must fail the gate
+            # rather than show as "not yet available".
+            run_gate_check "$gate_num" "Browser WASM: $crate" \
                 cargo check --target wasm32-unknown-unknown -p "$crate" --no-default-features --features browser
             gate_num=$((gate_num + 1))
         done
@@ -2225,9 +2239,11 @@ cmd_gate() {
         cmd_check_daemon_no_mesh_testing
 
     # 22. Workspace clippy, warnings as errors (same invocation as `clippy`).
-    #     Debt cleared in cards 8dfd7ed5 / 0f92a3ca; this keeps it from returning.
-    run_gate_check 22 "workspace clippy (warnings as errors)" \
-        cargo clippy --keep-going --workspace -- -D warnings
+    #     --all-targets lints tests, examples and benches too, so test code
+    #     stays clean. Debt cleared in cards 8dfd7ed5 / 0f92a3ca and the
+    #     all-targets sweep; this keeps it from returning.
+    run_gate_check 22 "workspace clippy, all targets (warnings as errors)" \
+        cargo clippy --keep-going --all-targets --workspace -- -D warnings
 
     # 23. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
@@ -2385,6 +2401,9 @@ ${BOLD}Commands:${NC}
                   that cogs-conformance --launcher uses to run cogs through
                   the WorkloadRuntime adapters; --linux-arm64 builds it in an
                   arm64 Rust container (COG_LAUNCHER_BUILDER, default rust:1-bookworm).
+  cog-host-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
+                  Cross-build weft-cog-host for the Seed in the cogs cross image (same
+                  offline mechanism as licence-cross). Output under target/cog-host-cross/.
   licence-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
                   Cross-build weft-licence (ADR-106 phase 2, the Seed licence
                   proxy) with the https registry reader in the cogs cross image
@@ -2492,7 +2511,7 @@ parse_args() {
         return 0
     fi
 
-    if [ "$COMMAND" = "licence-cross" ]; then
+    if [ "$COMMAND" = "licence-cross" ] || [ "$COMMAND" = "cog-host-cross" ]; then
         while [ $# -gt 0 ]; do
             case "$1" in
                 armv7|armv7-unknown-linux-gnueabihf) LICENCE_TARGETS+=(armv7-unknown-linux-gnueabihf) ;;
@@ -2681,6 +2700,7 @@ main() {
         cogs-conformance)   cmd_cogs_conformance ;;
         cogs-launcher)      cmd_cogs_launcher ;;
         licence-cross)      cmd_licence_cross ;;
+        cog-host-cross)     cmd_cog_host_cross ;;
         licence-uid-check)  cmd_licence_uid_check ;;
         test-pi)            cmd_test_pi ;;
         n6-leaf)            cmd_n6_leaf ;;

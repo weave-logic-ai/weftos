@@ -673,10 +673,8 @@ mod tests {
 
         // Goal: move latent dim-0 family toward +1 via action channel 0.
         let mut goal = weftos_worldmodel::zero_latent();
-        for i in 0..192 {
-            if i % 32 == 0 {
-                goal[i] = 1.0;
-            }
+        for g in goal.iter_mut().step_by(32) {
+            *g = 1.0;
         }
         let mut planner = CemPlanner::with_seed(99).with_goal(goal);
         planner.population = 64;

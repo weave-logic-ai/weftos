@@ -46,14 +46,19 @@ pub const COG_SYNC_TOPIC: &str = "mesh.cog.sync";
 /// `infer_proxy::hub`.
 pub const INFER_TOPIC: &str = "mesh.infer";
 
+/// Control topic carrying liveness ping/pong between verified peers
+/// (see [`crate::mesh_liveness`]). Handled like [`FACTS_TOPIC`].
+pub const PING_TOPIC: &str = "mesh.ping";
+
 /// Control topics the runtime consumes instead of routing locally.
-const CONTROL_TOPICS: [&str; 6] = [
+const CONTROL_TOPICS: [&str; 7] = [
     FACTS_TOPIC,
     REVOKE_TOPIC,
     COG_BINDING_TOPIC,
     COG_GRANT_TOPIC,
     COG_SYNC_TOPIC,
     INFER_TOPIC,
+    PING_TOPIC,
 ];
 
 /// Receiver of a runtime control topic (one of `CONTROL_TOPICS`).
@@ -95,6 +100,32 @@ pub struct PeerConnection {
     /// added without one). Dropping the route, by removal or replacement,
     /// decrements it.
     _tally: Option<RouteGuard>,
+}
+
+/// What [`MeshRuntime::peer_details`] reports for one connected peer.
+#[derive(Debug, Clone)]
+pub struct PeerDetail {
+    /// Remote node identifier.
+    pub node_id: String,
+    /// Admitted class of the connection.
+    pub class: crate::mesh_admit::PeerClass,
+    /// Admission verified the node id.
+    pub verified: bool,
+    /// Verified and class `node` (see [`MeshRuntime::peer_licensed`]).
+    pub licensed: bool,
+    /// When the connection was established.
+    pub connected_at: chrono::DateTime<chrono::Utc>,
+    /// Heartbeat tracker's view, when discovery is attached and tracks it.
+    pub heartbeat: Option<crate::mesh_heartbeat::HeartbeatState>,
+    /// Last counted liveness pong from this peer (real liveness), when the
+    /// liveness service runs and the peer has answered.
+    pub last_seen: Option<std::time::SystemTime>,
+    /// Smoothed ping round-trip time in milliseconds, same condition.
+    pub rtt_ms: Option<f64>,
+    /// Pings that timed out since the last counted pong.
+    pub missed_pongs: Option<u32>,
+    /// Load the peer attached to its last pong (peer-claimed, unsigned).
+    pub load: Option<crate::mesh_load::LoadSample>,
 }
 
 /// Count of live routes registered by one serving connection. Lets the
@@ -198,6 +229,8 @@ pub struct MeshRuntime {
     /// before. Set by the owner of the admission mode and updated when the
     /// mode changes.
     enforcing: std::sync::atomic::AtomicBool,
+    /// Liveness ping/pong service, once started ([`MeshRuntime::start_liveness`]).
+    liveness: std::sync::OnceLock<Arc<crate::mesh_liveness::Liveness>>,
 }
 
 impl MeshRuntime {
@@ -215,6 +248,19 @@ impl MeshRuntime {
 
     pub fn authentication(&self) -> Option<&MeshAuthentication> {
         self.authentication.get()
+    }
+
+    /// Start the liveness ping/pong between verified peers (idempotent).
+    pub fn start_liveness(self: &Arc<Self>, cfg: crate::mesh_liveness::LivenessConfig) {
+        let lv = crate::mesh_liveness::Liveness::new(self, cfg);
+        if self.liveness.set(lv.clone()).is_ok() {
+            lv.start();
+        }
+    }
+
+    /// The liveness service, when started.
+    pub fn liveness(&self) -> Option<&Arc<crate::mesh_liveness::Liveness>> {
+        self.liveness.get()
     }
 
     /// Say whether admission is `enforce` (see the field). Takes effect for
@@ -253,6 +299,7 @@ impl MeshRuntime {
             conn_ids: Mutex::new(Vec::new()),
             conn_seq: std::sync::atomic::AtomicU64::new(0),
             enforcing: std::sync::atomic::AtomicBool::new(false),
+            liveness: std::sync::OnceLock::new(),
         }
     }
 
@@ -282,6 +329,7 @@ impl MeshRuntime {
             conn_ids: Mutex::new(Vec::new()),
             conn_seq: std::sync::atomic::AtomicU64::new(0),
             enforcing: std::sync::atomic::AtomicBool::new(false),
+            liveness: std::sync::OnceLock::new(),
         }
     }
 
@@ -977,6 +1025,48 @@ impl MeshRuntime {
     /// List the node IDs of all connected peers.
     pub fn peer_ids(&self) -> Vec<String> {
         self.peers.iter().map(|entry| entry.key().clone()).collect()
+    }
+
+    /// Per-peer connection detail, sorted by node id (observability only).
+    ///
+    /// Round-trip time is deliberately absent: nothing in the runtime measures
+    /// it (`PeerMetrics` is never fed), and a made-up zero would read as a
+    /// perfect link.
+    pub fn peer_details(&self) -> Vec<PeerDetail> {
+        let mut out: Vec<PeerDetail> = self
+            .peers
+            .iter()
+            .map(|e| {
+                let p = e.value();
+                PeerDetail {
+                    node_id: e.key().clone(),
+                    class: p.class,
+                    verified: p.verified,
+                    licensed: p.verified && p.class == crate::mesh_admit::PeerClass::Node,
+                    connected_at: p.connected_at,
+                    heartbeat: self
+                        .discovery
+                        .as_ref()
+                        .and_then(|d| d.heartbeat.lock().ok()?.peer_state(e.key())),
+                    last_seen: None,
+                    rtt_ms: None,
+                    missed_pongs: None,
+                    load: None,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        if let Some(lv) = self.liveness.get() {
+            for d in &mut out {
+                if let Some(l) = lv.peer(&d.node_id) {
+                    d.last_seen = Some(l.last_seen);
+                    d.rtt_ms = Some(l.rtt_ms);
+                    d.missed_pongs = Some(l.missed);
+                    d.load = l.load;
+                }
+            }
+        }
+        out
     }
 
     /// Disconnect a peer, dropping its send channel.
@@ -1778,6 +1868,23 @@ mod tests {
         assert_eq!(peers[0], ("peer-1".into(), "10.0.0.1:9489".into()));
         assert_eq!(peers[1], ("peer-2".into(), "10.0.0.2:9489".into()));
         assert_eq!(peers[2], ("peer-3".into(), "10.0.0.3:9489".into()));
+    }
+
+    #[test]
+    fn peer_details_report_class_verified_licensed_and_heartbeat() {
+        let rt = MeshRuntime::with_discovery("local".into(), [0u8; 32]);
+        let tally = RouteTally::default();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let (tx2, _rx2) = tokio::sync::mpsc::channel(1);
+        rt.register_authenticated_as("b-leaf".into(), tx, true, crate::mesh_admit::PeerClass::Leaf, &tally);
+        rt.register_authenticated_as("a-node".into(), tx2, true, crate::mesh_admit::PeerClass::Node, &tally);
+        rt.record_heartbeat("a-node");
+        let d = rt.peer_details();
+        assert_eq!(d.iter().map(|p| p.node_id.as_str()).collect::<Vec<_>>(), ["a-node", "b-leaf"]);
+        assert!(d[0].licensed && d[0].verified);
+        assert_eq!(d[0].heartbeat, Some(crate::mesh_heartbeat::HeartbeatState::Alive));
+        assert!(!d[1].licensed && d[1].verified && d[1].class.as_str() == "leaf");
+        assert_eq!(d[1].heartbeat, None);
     }
 
     // ── Test 15: heartbeat tracking detects suspect peer ─────────

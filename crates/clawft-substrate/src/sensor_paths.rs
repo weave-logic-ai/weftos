@@ -581,7 +581,7 @@ mod tests {
         // Pin so a silent edit of the removal target shows up in review.
         assert_eq!(LEGACY_FLAT_REMOVAL_VERSION, "0.9.0");
         assert_eq!(LEGACY_FLAT_REMOVAL_DATE, "2026-10-01");
-        assert!(DEFAULT_DUAL_EMIT_LEGACY);
+        const { assert!(DEFAULT_DUAL_EMIT_LEGACY) };
         assert_eq!(MIC_PCM_WINDOW_MAX_LEN, 8);
     }
 }

@@ -13,7 +13,6 @@ use clawft_types::config::{
 use clawft_types::project::canon::hex_encode;
 use clawft_types::project::cert::key_id;
 use ed25519_dalek::SigningKey;
-use nix::libc;
 use rand::{RngCore, rngs::OsRng};
 use serde_json::json;
 use std::collections::BTreeMap;

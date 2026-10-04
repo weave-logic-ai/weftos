@@ -4,6 +4,7 @@
 //! never hold raw secrets. Instead, agents request scoped, time-limited tokens
 //! via IPC. All credential access is audited.
 
+#[cfg(feature = "exochain")]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -297,6 +298,7 @@ impl AuthService {
         }
 
         let encrypted = self.xor_encrypt(value);
+        #[cfg(feature = "exochain")]
         let cred_type_for_chain = credential_type.to_string();
         self.credentials.insert(
             name.to_string(),

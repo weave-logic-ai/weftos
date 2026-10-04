@@ -415,6 +415,10 @@ pub mod mesh_framing;
 #[cfg(feature = "mesh")]
 pub mod mesh_heartbeat;
 #[cfg(feature = "mesh")]
+pub mod mesh_liveness;
+#[cfg(feature = "mesh")]
+pub mod mesh_load;
+#[cfg(feature = "mesh")]
 pub mod mesh_ipc;
 #[cfg(feature = "mesh")]
 pub mod mesh_kad;

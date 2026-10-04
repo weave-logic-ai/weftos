@@ -1172,6 +1172,7 @@ impl GovernanceEngine {
     /// Take over the runtime configuration of the engine this one replaces
     /// (evaluation rate limit and, under `ecc`, the learned scorer). Rules and
     /// thresholds are not touched.
+    #[cfg(feature = "exochain")]
     pub(crate) fn inherit_config(&mut self, old: &GovernanceEngine) {
         self.set_eval_rate_limit(old.eval_rate_limit());
         #[cfg(feature = "ecc")]

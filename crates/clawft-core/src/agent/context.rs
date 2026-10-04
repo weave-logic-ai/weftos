@@ -9,10 +9,10 @@
 //! 1. **System prompt** (role=`"system"`) -- identity and instructions
 //! 2. **Active skill prompts** (role=`"system"`) -- prefixed with `# Skill: {name}`
 //! 3. **Memory context** (role=`"system"`) -- prefixed with `# Relevant Memory:`
-//!    Today this is the entire `MEMORY.md` (nanobot dump). RMM
-//!    (arXiv:2503.08026) says retrieve Top-K topic nodes and inject Top-M
-//!    after citation-aware rerank; dump is fail-open only. See
-//!    `docs/research/rmm-reflective-memory-management.md` (ws06-memory).
+//!    By default the entire `MEMORY.md`. With `agents.memory_recall` on (WEFT-732, RMM
+//!    arXiv:2503.08026) and a query, at most `top_m` retrieved snippets tagged `[m1]`…
+//!    with a citation instruction ([`super::memory_recall`]); the dump stays the fail-open
+//!    path. See `docs/research/rmm-reflective-memory-management.md` (ws06-memory).
 //! 4. **Conversation history** -- recent messages from the session
 //!
 //! The current user message is **not** added here; the caller appends it.
@@ -82,6 +82,8 @@ pub struct ContextBuilder<P: Platform> {
     platform: Arc<P>,
     bootstrap_cache: BootstrapCache,
     compression_config: Option<CompressionConfig>,
+    /// Retrieved memory with citations (WEFT-732); `None` = full `MEMORY.md` dump.
+    memory_recall: Option<Arc<super::memory_recall::MemoryRecall>>,
 }
 
 impl<P: Platform> ContextBuilder<P> {
@@ -115,7 +117,43 @@ impl<P: Platform> ContextBuilder<P> {
                 }
             },
             compression_config: None,
+            memory_recall: None,
         }
+        .with_recall_from_config()
+    }
+
+    /// Build the memory recall from `agents.memory_recall` (off by default: `None`).
+    fn with_recall_from_config(self) -> Self {
+        let recall = super::memory_recall::from_config(&self.config.memory_recall);
+        self.with_memory_recall(recall)
+    }
+
+    /// Attach retrieved memory (WEFT-732). With it, [`build_messages_with_query`](Self::build_messages_with_query)
+    /// injects at most `top_m` cited-id snippets instead of the whole `MEMORY.md`.
+    pub fn with_memory_recall(mut self, recall: Option<Arc<super::memory_recall::MemoryRecall>>) -> Self {
+        self.memory_recall = recall;
+        self
+    }
+
+    /// The memory consolidator from `agents.memory_consolidation` over this builder's memory
+    /// files (WEFT-347 / WEFT-733), or `None` when it is off.
+    pub fn consolidator_from_config(&self) -> Option<crate::agent::learning::MemoryConsolidator<P>> {
+        let c = &self.config.memory_consolidation;
+        if !c.enabled {
+            return None;
+        }
+        let store = MemoryStore::with_paths(
+            self.memory.memory_path().clone(),
+            self.memory.history_path().clone(),
+            self.platform.clone(),
+        );
+        let cfg = crate::agent::learning::ConsolidationConfig::every_k_turns(c.every_k_turns).with_topic_merge(c.topic_merge);
+        Some(crate::agent::learning::MemoryConsolidator::new(store, cfg))
+    }
+
+    /// The attached memory recall, for the agent loop's post-turn attribution.
+    pub fn memory_recall(&self) -> Option<&Arc<super::memory_recall::MemoryRecall>> {
+        self.memory_recall.as_ref()
     }
 
     /// Load a bootstrap file, using the mtime cache to skip disk reads
@@ -301,7 +339,20 @@ impl<P: Platform> ContextBuilder<P> {
         active_skills: &[String],
     ) -> Vec<LlmMessage> {
         let system_prompt = self.build_system_prompt().await;
-        self.build_messages_inner(session, system_prompt, active_skills, None)
+        self.build_messages_inner(session, system_prompt, active_skills, None, None)
+            .await
+    }
+
+    /// Like [`build_messages`](Self::build_messages), with the user's message as the memory
+    /// retrieval query (WEFT-732). Without an attached recall this is `build_messages`.
+    pub async fn build_messages_with_query(
+        &self,
+        session: &Session,
+        active_skills: &[String],
+        query: &str,
+    ) -> Vec<LlmMessage> {
+        let system_prompt = self.build_system_prompt().await;
+        self.build_messages_inner(session, system_prompt, active_skills, None, Some(query))
             .await
     }
 
@@ -444,6 +495,7 @@ impl<P: Platform> ContextBuilder<P> {
             system_prompt,
             &agent.skills,
             extra_skill_instructions,
+            None,
         )
         .await
     }
@@ -460,6 +512,7 @@ impl<P: Platform> ContextBuilder<P> {
         system_prompt: String,
         active_skills: &[String],
         extra_instructions: Option<&str>,
+        query: Option<&str>,
     ) -> Vec<LlmMessage> {
         let mut messages = Vec::new();
 
@@ -519,14 +572,23 @@ impl<P: Platform> ContextBuilder<P> {
         }
 
         // 4. Memory context.
-        // Dumps the entire MEMORY.md (labeled "Relevant"). ws06-memory RMM
-        // follow-on: retrieve Top-K / inject Top-M with m_i ids; keep this
-        // dump as fail-open. docs/research/rmm-reflective-memory-management.md
+        // With a memory recall and a query (WEFT-732): at most top_m retrieved snippets,
+        // tagged [m1]..., with a citation instruction. Otherwise (fail-open) the whole
+        // MEMORY.md as before. docs/research/rmm-reflective-memory-management.md
         match self.memory.read_long_term().await {
             Ok(memory) if !memory.trim().is_empty() => {
+                let picked = match (self.memory_recall.as_ref(), query) {
+                    (Some(recall), Some(q)) => recall.select(&session.key, q, &memory),
+                    _ => Vec::new(),
+                };
+                let content = if picked.is_empty() {
+                    format!("# Relevant Memory:\n\n{memory}")
+                } else {
+                    super::memory_recall::MemoryRecall::render(&picked)
+                };
                 messages.push(LlmMessage {
                     role: "system".into(),
-                    content: format!("# Relevant Memory:\n\n{memory}"),
+                    content,
                     tool_call_id: None,
                     tool_calls: None,
                 });
@@ -815,6 +877,36 @@ mod tests {
             .find(|m| m.content.contains("Relevant Memory"));
         assert!(memory_msg.is_some());
         assert!(memory_msg.unwrap().content.contains("Rust is fast"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[cfg(feature = "vector-memory")]
+    #[tokio::test]
+    async fn memory_recall_with_a_query_injects_cited_snippets_not_the_whole_file() {
+        let (ctx, dir, memory, _) = setup("recall").await;
+        memory
+            .write_long_term("The user has a dog named Rex.\n\nThe user prefers tea over coffee.\n\n[[graft debris]]")
+            .await
+            .unwrap();
+        let recall = crate::agent::memory_recall::from_config(&clawft_types::config::MemoryRecallConfig {
+            enabled: true,
+            top_k: 20,
+            top_m: 1,
+        });
+        assert!(recall.is_some());
+        let ctx = ctx.with_memory_recall(recall);
+        let session = Session::new("test:recall");
+
+        let with_query = ctx.build_messages_with_query(&session, &[], "tea or coffee preference").await;
+        let mem = with_query.iter().find(|m| m.content.contains("Relevant Memory")).unwrap();
+        assert!(mem.content.contains("[m1] The user prefers tea over coffee."), "{}", mem.content);
+        assert!(!mem.content.contains("Rex") && !mem.content.contains("graft debris"), "top_m = 1, no dump");
+
+        // No query (or no recall): the full-file dump stays the fail-open path.
+        let plain = ctx.build_messages(&session, &[]).await;
+        let dump = plain.iter().find(|m| m.content.contains("Relevant Memory")).unwrap();
+        assert!(dump.content.starts_with("# Relevant Memory:") && dump.content.contains("Rex"));
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }

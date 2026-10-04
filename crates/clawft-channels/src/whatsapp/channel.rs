@@ -250,6 +250,11 @@ impl ChannelAdapter for WhatsAppChannelAdapter {
                 "whatsapp: access_token not configured".into(),
             ));
         }
+        if !api_url_is_safe(&self.config.api_url) {
+            return Err(PluginError::ExecutionFailed(
+                "whatsapp: api_url must use https (plain http is allowed only for a loopback host)".into(),
+            ));
+        }
 
         let url = format!(
             "{}/{}/{}/messages",
@@ -402,9 +407,39 @@ async fn handle_inbound(
     (StatusCode::OK, "EVENT_RECEIVED").into_response()
 }
 
+/// The access token is sent as a bearer header, so the API URL must be `https://`, except a
+/// loopback `http://` URL (a local mock or proxy).
+fn api_url_is_safe(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = lower.strip_prefix("http://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = if let Some(stripped) = host.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or("")
+    } else {
+        host.rsplit_once(':').map_or(host, |(h, _)| h)
+    };
+    host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_url_must_be_https_or_loopback() {
+        assert!(api_url_is_safe("https://graph.facebook.com"));
+        assert!(api_url_is_safe("http://127.0.0.1:1234"));
+        assert!(api_url_is_safe("http://localhost:8080/x"));
+        assert!(api_url_is_safe("http://[::1]:9"));
+        assert!(!api_url_is_safe("http://graph.facebook.com"));
+        assert!(!api_url_is_safe("http://127.0.0.1.evil.example"));
+        assert!(!api_url_is_safe("http://user@evil.example"));
+        assert!(!api_url_is_safe("ftp://127.0.0.1"));
+    }
     use clawft_types::secret::SecretString;
     use std::collections::HashMap;
     use tokio::sync::Mutex;

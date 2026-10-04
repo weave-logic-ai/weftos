@@ -21,7 +21,9 @@ use serde_json::Value;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::task::JoinHandle;
 
-use clawft_app::{AdapterOpenResult, Gate, Permission, infer_capture_permission};
+use clawft_app::{Gate, Permission};
+#[cfg(not(target_arch = "wasm32"))]
+use clawft_app::{AdapterOpenResult, infer_capture_permission};
 
 use crate::acl::{AclDenied, AclTable, CallerIdentity, plan_publish_public};
 #[cfg(not(target_arch = "wasm32"))]

@@ -63,6 +63,10 @@ pub enum TokenScope {
     /// [`TokenInfo::project`]. It cannot mint, revoke or list tokens and
     /// reaches no Admin-gated method.
     Project,
+    /// A read-only operator credential (ADR-102 D4 amendment): `Read` only,
+    /// never Write or Admin, and no project. The gateway opens only its GET
+    /// read routes to it, so a console need not hold an owner-equivalent token.
+    Read,
 }
 
 impl TokenScope {
@@ -72,13 +76,18 @@ impl TokenScope {
         match self {
             TokenScope::Owner => &["admin"],
             TokenScope::Project => &["write"],
+            TokenScope::Read => &["read"],
         }
     }
 
-    fn parse(s: Option<&str>) -> Self {
+    /// An absent scope is an old owner token; an unknown one is `None`, so
+    /// the token is dropped (fail closed) rather than promoted to owner.
+    fn parse(s: Option<&str>) -> Option<Self> {
         match s {
-            Some("project") => TokenScope::Project,
-            _ => TokenScope::Owner,
+            None | Some("owner") => Some(TokenScope::Owner),
+            Some("project") => Some(TokenScope::Project),
+            Some("read") => Some(TokenScope::Read),
+            Some(_) => None,
         }
     }
 
@@ -86,6 +95,7 @@ impl TokenScope {
         match self {
             TokenScope::Owner => "owner",
             TokenScope::Project => "project",
+            TokenScope::Read => "read",
         }
     }
 }
@@ -213,7 +223,7 @@ fn parse_issued(p: &Value) -> Option<Entry> {
                 .to_owned(),
             issued_at,
             expires_at,
-            scope: TokenScope::parse(p.get("scope").and_then(Value::as_str)),
+            scope: TokenScope::parse(p.get("scope").and_then(Value::as_str))?,
             project: p.get("project").and_then(Value::as_str).map(str::to_owned),
         },
     })

@@ -12,6 +12,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+  # The regression check comments on the pull request.
+  pull-requests: write
+
 jobs:
   benchmark:
     name: Run benchmarks & regression check

@@ -532,7 +532,10 @@ attrs = { submit_verb = "rpc.form.submit" }
         assert_eq!(form.kind, IdentityIri::Stack);
         assert_eq!(form.path, "/root/form");
         assert_eq!(form.attrs.get("gap"), Some(&AttrValue::Int(8)));
-        assert!(form.attrs.get("submit_verb").is_none(), "submit_verb consumed");
+        assert!(
+            !form.attrs.contains_key("submit_verb"),
+            "submit_verb consumed"
+        );
         assert_eq!(form.children.len(), 2);
         assert_eq!(form.children[0].kind, IdentityIri::Field);
         let submit = &form.children[1];

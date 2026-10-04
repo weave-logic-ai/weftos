@@ -121,6 +121,7 @@ Registry entry (see `reconstruction.yaml`) drives install, license, domain, hard
 | Model | Use |
 |-------|-----|
 | TRELLIS.2, HY-World gen modes, Lyra-class | Illustrative missing props — **never** metric world model |
+| World Labs Marble + Hunyuan3D via [image-blaster](../research/spatial-intelligence-2026/image-blaster.md) | One-photo mockup worlds and object meshes — same rule, `generative_cosmetic` |
 
 ### 3.5 Semantic / structure models (world model, not splat train)
 

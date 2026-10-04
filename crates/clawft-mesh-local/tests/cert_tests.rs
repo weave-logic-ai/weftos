@@ -54,7 +54,8 @@ fn expiry_and_leeway_edges() {
 fn tamper_every_field() {
     let (c, m) = issued();
     let other = SigningKey::from_bytes(&[8u8; 32]).verifying_key().to_bytes();
-    let cases: Vec<(&str, UserCert, fn(&CertError) -> bool)> = vec![
+    type Case = (&'static str, UserCert, fn(&CertError) -> bool);
+    let cases: Vec<Case> = vec![
         ("v", UserCert { v: 2, ..c.clone() }, |e| matches!(e, CertError::BadVersion(2))),
         ("node_id", UserCert { node_id: "0".repeat(32), ..c.clone() }, |e| *e == CertError::NodeIdMismatch),
         ("machine_pubkey", UserCert { machine_pubkey: other, ..c.clone() }, |e| *e == CertError::NodeIdMismatch),

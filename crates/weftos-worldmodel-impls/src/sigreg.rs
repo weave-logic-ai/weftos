@@ -321,10 +321,14 @@ mod tests {
         // Deterministic pseudo-samples with mean~0 and var~1.
         for t in 0..40u64 {
             let mut z = zero_latent();
-            for i in 0..LATENT_DIM {
+            for (i, zi) in z.iter_mut().enumerate() {
                 // Alternating ±1 pattern across time and dim → var ≈ 1, mean ≈ 0.
-                let sign = if (t as usize + i) % 2 == 0 { 1.0 } else { -1.0 };
-                z[i] = sign;
+                let sign = if (t as usize + i).is_multiple_of(2) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                *zi = sign;
             }
             let h = mon.update_at(&z, t * 1000).unwrap();
             if t >= mon.min_samples {
@@ -380,8 +384,12 @@ mod tests {
         // Feed good ±1 samples for a while.
         for t in 10..50u64 {
             let mut z = zero_latent();
-            for i in 0..LATENT_DIM {
-                z[i] = if (t as usize + i) % 2 == 0 { 1.0 } else { -1.0 };
+            for (i, zi) in z.iter_mut().enumerate() {
+                *zi = if (t as usize + i).is_multiple_of(2) {
+                    1.0
+                } else {
+                    -1.0
+                };
             }
             let h = mon.update_at(&z, t * 1000).unwrap();
             if h.is_healthy() {

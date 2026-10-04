@@ -45,10 +45,10 @@ impl ParentTransport for StubParent {
             return Err(AnchorSubmitError::Unreachable("connection refused".into()));
         }
         let mut last = self.last.lock().unwrap();
-        if let Some((l, ack)) = last.as_ref() {
-            if l == stmt {
-                return Ok(ack.clone());
-            }
+        if let Some((l, ack)) = last.as_ref()
+            && l == stmt
+        {
+            return Ok(ack.clone());
         }
         let want = last.as_ref().map_or(1, |(l, _)| l.seq + 1);
         let prev = last.as_ref().map(|(l, _)| l.hash());

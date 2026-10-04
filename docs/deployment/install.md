@@ -99,7 +99,8 @@ binary is also run once with `--version` to confirm it matches the release.
 lists the sha256 of every file in the release (`dist-manifest.json`
 included), and `weftos-release.json.sig`, an Ed25519 signature over it by
 the WeaveLogic release key. Release CI makes both. `weaver` has the public key
-compiled in. It is the same key that signs cogs (COG-008), and no file,
+compiled in. It is a dedicated release key, separate from the key that signs cogs
+(COG-008), and no file,
 variable or setting replaces it. Before downloading any archive, `weaver
 update` requires:
 

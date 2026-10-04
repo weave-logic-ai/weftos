@@ -63,9 +63,12 @@ impl LicenceProvider for StubLicence {
 }
 
 /// A stub registry: (cog, arch) to bytes, one version per cog.
+/// `(cog id, version)` to its package bytes.
+pub type CogStore = BTreeMap<(String, String), Vec<u8>>;
+
 #[derive(Clone, Default)]
 pub struct StubFetcher {
-    pub cogs: Arc<Mutex<BTreeMap<(String, String), Vec<u8>>>>,
+    pub cogs: Arc<Mutex<CogStore>>,
     pub version: Arc<Mutex<String>>,
     pub fetches: Arc<AtomicU64>,
     /// When set, `fetch` waits for this channel before returning.
@@ -174,10 +177,22 @@ impl Harness {
         tweak(&mut cfg);
         let init = keys::init(&cfg.state_dir).unwrap();
         let ops = OperatorKeys::load(&cfg.state_dir, &cfg.operator_pubkeys).unwrap();
-        bind::apply(&cfg.state_dir, &cfg.device_id, &ops, &binding(1, BindState::Bound, &init.grant_pubkey, &mesh()), None)
-            .unwrap();
-        let h = Self::open_dir(dir, cfg, StubLicence::all(None), StubFetcher::with(cogs), T0);
-        h
+        bind::apply(
+            &cfg.state_dir,
+            &cfg.device_id,
+            &ops,
+            &binding(1, BindState::Bound, &init.grant_pubkey, &mesh()),
+            None,
+        )
+        .unwrap();
+
+        Self::open_dir(
+            dir,
+            cfg,
+            StubLicence::all(None),
+            StubFetcher::with(cogs),
+            T0,
+        )
     }
 
     pub fn open_dir(dir: TempDir, cfg: Config, licence: StubLicence, fetcher: StubFetcher, now: u64) -> Self {

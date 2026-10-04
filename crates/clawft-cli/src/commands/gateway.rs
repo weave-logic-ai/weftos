@@ -863,10 +863,9 @@ fn build_api_state(
         broadcaster,
         // ADR-102 D6: facade routes forward to the kernel daemon; 503 when it is down.
         kernel_facade: facade,
-        // WEFT-40: empty ring unless wired to PipelineRegistry::decision_history.
-        routing_history: Arc::new(
-            clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
-        ),
+        // WEFT-40/305: the agent pipeline's own ring, so the admin routing
+        // history and /monitoring show live traffic, tokens and latency.
+        routing_history: ctx.decision_history(),
         // WEFT-48/49: rate limiter from routing config. Not yet the same Arc as
         // TieredRouter (build_router_from_config keeps it internal); admin
         // metrics/flush still work for ops and tests. Shared wiring is a

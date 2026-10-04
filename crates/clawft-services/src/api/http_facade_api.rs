@@ -152,6 +152,7 @@ pub fn kernel_facade_api_routes() -> Router<ApiState> {
         .route("/ecc/calibration", get(rpc_get))
         .route("/ecc/coherence", get(rpc_get))
         .route("/custody/attest", get(rpc_get))
+        .route("/fleet/snapshot", get(rpc_get))
         .route("/agents/spawn", post(rpc_post))
     // NOTE: DELETE /agents/{pid} is registered on the existing
     // `/agents/{name}` route in `handlers.rs` (axum forbids two

@@ -51,6 +51,83 @@
         "pi-zero-2w"
       ],
       "hash": "wh_0e536ec6b40b44b9"
+    },
+    {
+      "id": "ld2450-radar",
+      "name": "Tracking Radar (LD2450)",
+      "category": "presence",
+      "difficulty": "moderate",
+      "summary": "24 GHz FMCW radar tracking up to three moving people over UART (256000 8N1): x/y in metres in the radar's own frame, speed and gate size per target, 10 frames/s. Positions only, no identity.",
+      "export_port": 8052,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "hlk-ld2450",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_bf60545d7171c67b"
+    },
+    {
+      "id": "ld6002-radar",
+      "name": "LD6002 Vitals Radar",
+      "category": "health",
+      "difficulty": "moderate",
+      "summary": "HLK-LD6002 60 GHz FMCW vitals radar over USB-serial UART. Reports heart-rate, breathing-rate, distance, target count and presence per window. Contactless vitals; not a medical device.",
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "hlk-ld6002",
+        "hlk-ld6002b",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_e3d30c03b8b84f3f"
+    },
+    {
+      "id": "sen0213-ecg",
+      "name": "SEN0213 ECG",
+      "category": "health",
+      "difficulty": "moderate",
+      "summary": "DFRobot SEN0213 (AD8232) single-lead ECG read through an ADS1115 I2C ADC. Exports raw + filtered waveform, detects R-peaks (Pan-Tompkins) and reports heart rate, RR, SDNN, RMSSD and a signal-quality score. Flags leads-off; not a medical device.",
+      "export_port": 8046,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "sen0213-ecg",
+        "ads1115-board",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_ecf0ff5cae40d457"
+    },
+    {
+      "id": "sen0628-tof",
+      "name": "SEN0628 Matrix ToF",
+      "category": "presence",
+      "difficulty": "moderate",
+      "summary": "DFRobot SEN0628 8x8 matrix time-of-flight sensor (VL53L7CX + RP2040) over I2C. Reports nearest object and zone, valid-zone share, motion, presence against a learned background, and exports raw depth frames (20-3500 mm, 60 deg FOV).",
+      "export_port": 8047,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "sen0628-tof",
+        "pi-zero-2w"
+      ],
+      "hash": "wh_857a2fe75743652a"
+    },
+    {
+      "id": "mentra-live",
+      "name": "Mentra Live Glasses (companion bridge)",
+      "category": "wearable",
+      "difficulty": "moderate",
+      "summary": "Companion-side bridge that lets a pair of Mentra Live smart glasses join the mesh as a node. The glasses run Android (MentraOS ASG client) and can't run a cog themselves, so this cog runs on a companion and reports their presence, battery and link.",
+      "export_port": 8061,
+      "simulate": true,
+      "guide": "/guide",
+      "modules": [
+        "mentra-live-glasses",
+        "mentra-live-display",
+        "mentra-live-microphone"
+      ],
+      "hash": "wh_aad1d82072fc533c"
     }
   ],
   "modules": [
@@ -222,7 +299,21 @@
         "docs/hardware/sensors.md",
         "crates/weftos-cog-market/catalog/catalog.json"
       ],
-      "hash": "wh_b7c902f536bd3052"
+      "hash": "wh_b7c902f536bd3052",
+      "cogs": [
+        "sen0213-ecg",
+        "sound-detect"
+      ],
+      "docs": [
+        {
+          "label": "Sensor inventory",
+          "url": "docs/hardware/sensors.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "ads1299-emg",
@@ -476,7 +567,16 @@
       "seen_in": [
         "docs/research/hardware/hlk-ld6002-andar-board-2026-08-24.md"
       ],
-      "hash": "wh_ab1a10df16ea452c"
+      "hash": "wh_ab1a10df16ea452c",
+      "cogs": [
+        "ld6002-radar"
+      ],
+      "docs": [
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "aquarian-h1a-h2a",
@@ -1168,7 +1268,16 @@
         "weftos-mic-node/src/tof_sensor.h",
         "weftos-bridge.py"
       ],
-      "hash": "wh_9b27ae70c96473d5"
+      "hash": "wh_9b27ae70c96473d5",
+      "cogs": [
+        "sen0628-tof"
+      ],
+      "docs": [
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "ds18b20",
@@ -2133,7 +2242,32 @@
         "docs/hardware/radar-protocols.md",
         "crates/weftos-cog-market/catalog/catalog.json"
       ],
-      "hash": "wh_5949c4b02ae4a809"
+      "hash": "wh_5949c4b02ae4a809",
+      "cogs": [
+        "hlk-as201"
+      ],
+      "docs": [
+        {
+          "label": "Radar UART protocols",
+          "url": "docs/hardware/radar-protocols.md"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ],
+      "firmware": {
+        "version": "Protocol per Hi-Link AS201 datasheet V1.1 (2025-08-01): FA FB framing, cmd 0x00 ten-axis report.",
+        "read_with": "",
+        "read_config_key": "",
+        "update": "Vendor route only (Hi-Link). WeftOS has no updater for this module.",
+        "url": "https://hlktech.net/index.php?id=1380",
+        "notes": "The hlk-as201 cog does not read a firmware version."
+      }
     },
     {
       "id": "hlk-ld1115h",
@@ -2295,27 +2429,34 @@
         "3D / Z axis",
         "identity / re-ID"
       ],
-      "notes": [],
+      "notes": [
+        "Bluetooth is on from the factory and Hi-Link's app can reconfigure the radar; command 0x00A4 turns it off.",
+        "On a Pi Zero 2 W the header UART is the mini UART by default; at 256000 baud prefer the PL011 (dtoverlay=disable-bt or miniuart-bt + core_freq=250)."
+      ],
       "spec": {
-        "freq": "24 GHz",
-        "interface": "UART",
-        "power": "5V",
-        "output": "up to 3 targets (x,y)",
-        "source": "docs/MODULES.md \u00a72",
+        "freq": "24-24.25 GHz, FMCW, 250 MHz sweep",
         "band": "24 GHz",
-        "targets": "3 (2D)"
+        "antenna": "1 TX, 2 RX microstrip (manual); not checked against the board",
+        "interface": "UART 256000 8N1, 3.3 V IO",
+        "power": "5V, supply > 200 mA, 120 mA average",
+        "output": "up to 3 targets: x, y (mm), speed (cm/s), gate size (mm); sign-magnitude int16",
+        "targets": "3 (2D)",
+        "range": "6 m",
+        "fov": "azimuth +-60 deg, pitch +-35 deg",
+        "rate": "10 Hz",
+        "mounting": "wall, 1.5-2 m",
+        "size": "15 x 44 mm",
+        "source": "Hi-Link HLK-LD2450 Serial Communication Protocol V1.03 (2023-10-17) and Instruction manual V1.00 (2023-05-10); vendor figures, not measured. Frame format and example decode are what the ld2450-radar cog implements (cogs ADR-161); nothing measured on hardware yet"
       },
       "pins": [
-        "UART RX/TX",
         "5V",
-        "GND",
-        "UART TX",
-        "UART RX",
-        "VCC"
+        "G (GND)",
+        "UR (radar UART RX)",
+        "UT (radar UART TX)"
       ],
       "chips": [],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://d.hlktech.net/download/HLK-LD2450/1/HLK-LD2450%20operation%20manual.doc..pdf",
       "mouser_query": "HLK-LD2450",
       "buy": [
         {
@@ -2332,7 +2473,32 @@
         "docs/planning/sensing-roadmap-and-sku.md",
         "docs/planning/sku-wall-wart.md"
       ],
-      "hash": "wh_a2305f6c35cedba3"
+      "hash": "wh_a2305f6c35cedba3",
+      "cogs": [
+        "ld2450-radar"
+      ],
+      "docs": [
+        {
+          "label": "Radar UART protocols",
+          "url": "docs/hardware/radar-protocols.md"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ],
+      "firmware": {
+        "version": "",
+        "read_with": "The ld2450-radar cog sends enable-config, read-firmware and end-config at start and reports the radar's version in its output (firmware field). Needs the Pi TX to radar RX wire; changes no setting.",
+        "read_config_key": "query_firmware",
+        "update": "Vendor route only: Hi-Link's own tooling. WeftOS has no updater for this module.",
+        "url": "",
+        "notes": "Version is null in the cog output until query_firmware is on. tracking_mode single/multi writes to the radar; keep leaves it untouched."
+      }
     },
     {
       "id": "hlk-ld6002",
@@ -2394,7 +2560,20 @@
         "docs/research/hardware-cost-matrix.md",
         "docs/planning/sensing-roadmap-and-sku.md"
       ],
-      "hash": "wh_89e25fec30db5fe6"
+      "hash": "wh_89e25fec30db5fe6",
+      "cogs": [
+        "ld6002-radar"
+      ],
+      "docs": [
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "hlk-ld6002b",
@@ -2960,7 +3139,20 @@
       "seen_in": [
         "crates/weftos-cog-market/catalog/catalog.json"
       ],
-      "hash": "wh_d258860454cef22a"
+      "hash": "wh_d258860454cef22a",
+      "cogs": [
+        "sound-detect"
+      ],
+      "docs": [
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "limesdr-usb",
@@ -3488,7 +3680,16 @@
         "docs/BES2700_UART_PROTOCOL.md",
         "docs/mentraos/asg-client-architecture.md"
       ],
-      "hash": "wh_fa2dbe738e37d21d"
+      "hash": "wh_fa2dbe738e37d21d",
+      "cogs": [
+        "mentra-live"
+      ],
+      "docs": [
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "mentra-live-gyroscope",
@@ -4894,7 +5095,32 @@
         "docs/hardware/radar-protocols.md",
         "crates/weftos-cog-market/catalog/catalog.json"
       ],
-      "hash": "wh_40754cee9fc40fff"
+      "hash": "wh_40754cee9fc40fff",
+      "cogs": [
+        "rd-03e"
+      ],
+      "docs": [
+        {
+          "label": "Radar UART protocols",
+          "url": "docs/hardware/radar-protocols.md"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ],
+      "firmware": {
+        "version": "Default 'ranging' firmware streams the 5-byte AA..55 report; tracking firmware uses a different frame (docs/hardware/radar-protocols.md).",
+        "read_with": "",
+        "read_config_key": "",
+        "update": "Vendor route only (Ai-Thinker). WeftOS has no updater for this module.",
+        "url": "",
+        "notes": "The rd-03e cog cannot read the firmware version; the full config protocol is unconfirmed."
+      }
     },
     {
       "id": "reed-switch-contact",
@@ -5731,7 +5957,28 @@
         "docs/hardware/sensors.md",
         "docs/hardware/README.md"
       ],
-      "hash": "wh_ac29d692c1978c35"
+      "hash": "wh_ac29d692c1978c35",
+      "cogs": [
+        "sen0213-ecg"
+      ],
+      "docs": [
+        {
+          "label": "Sensor inventory",
+          "url": "docs/hardware/sensors.md"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "DFRobot wiki: SEN0213",
+          "url": "https://wiki.dfrobot.com/sen0213"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "sen0628-tof",
@@ -5786,7 +6033,28 @@
         "docs/hardware/README.md",
         "docs/weftos/splat-capture-sensor-head.md"
       ],
-      "hash": "wh_3a654a9bd8c73b94"
+      "hash": "wh_3a654a9bd8c73b94",
+      "cogs": [
+        "sen0628-tof"
+      ],
+      "docs": [
+        {
+          "label": "Sensor inventory",
+          "url": "docs/hardware/sensors.md"
+        },
+        {
+          "label": "ADR-104: sensor guides ship with sensor cogs",
+          "url": "docs/adr/adr-104-sensor-guides-ship-with-sensor-cogs.md"
+        },
+        {
+          "label": "DFRobot wiki: SEN0628",
+          "url": "https://wiki.dfrobot.com/sen0628"
+        },
+        {
+          "label": "ADR-107: hardware catalog links to cogs",
+          "url": "docs/adr/adr-107-catalog-hardware-software-link.md"
+        }
+      ]
     },
     {
       "id": "sensirion-sgp30-sgp41",

@@ -836,9 +836,11 @@ mod tests {
 
     #[test]
     fn window_caps_are_tick_safe_constants() {
-        assert!(TICK_WINDOW_CAP <= 64);
-        assert!(TICK_HAYSTACK_CAP <= 256);
-        assert!(TICK_WINDOW_CAP * TICK_WINDOW_CAP < 10_000);
+        const {
+            assert!(TICK_WINDOW_CAP <= 64);
+            assert!(TICK_HAYSTACK_CAP <= 256);
+            assert!(TICK_WINDOW_CAP * TICK_WINDOW_CAP < 10_000);
+        }
     }
 
     #[test]

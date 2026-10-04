@@ -117,6 +117,9 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "auth.token.validate",
     "project.list",
     "project.show",
+    // Fleet manager: the gateway forwards this read-only snapshot on a
+    // user-level daemon, so it must work outside a project.
+    "fleet.snapshot",
 ];
 
 /// User-level operations: callable outside a project, but only by a caller
@@ -134,6 +137,8 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "auth.token.issue",
     "auth.token.revoke",
     "auth.token.list",
+    // Location labels belong to the machine's fleet view, not one project.
+    "fleet.location.set",
     "project.register",
     "project.cert.show",
     "project.cert.challenge",

@@ -225,10 +225,12 @@ mod tests {
 
     #[test]
     fn inference_gate_is_off_in_0_8() {
-        assert!(
-            !CHATTERBOX_INFERENCE_IMPLEMENTED,
-            "do not flip readiness without a real ONNX/Candle path"
-        );
+        const {
+            assert!(
+                !CHATTERBOX_INFERENCE_IMPLEMENTED,
+                "do not flip readiness without a real ONNX/Candle path"
+            );
+        }
     }
 
     #[test]

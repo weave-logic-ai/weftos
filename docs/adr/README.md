@@ -96,6 +96,7 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-101](adr-101-inference-workload-kind.md) | Inference workload kind; migrate local model hosting onto placement | Accepted | Architecture / Integration | ~/llm serving; ADR-060 / ADR-099 |
 | [ADR-105](adr-105-cog-sources.md) | Cog sources: per-project multi-repo cog catalog (WeftOS, Cognitum with licence, private signed repo), namespaced resolution, package trust fixes | Accepted | Architecture / Integration | `docs/cogs/cog-sources.md`; ADR-099 / ADR-100 / COG-008 |
 | [ADR-106](adr-106-seed-licence-proxy.md) | Cognitum Seed as licence proxy for its WeftOS mesh: per-mesh checkout grants, operator hash approval, mesh-scoped redistribution | Proposed (review complete) | Architecture / Integration | ADR-099 / ADR-100 / ADR-103 / ADR-105; Phase 1a awaiting go |
+| [ADR-107](adr-107-catalog-hardware-software-link.md) | Hardware catalog links modules to cogs (`Module::cogs`, firmware, docs); sensor detail panel in the console | Accepted | Platform / Console | ADR-104 / ADR-105 / COG-009 |
 
 
 ## Categories

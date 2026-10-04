@@ -32,7 +32,11 @@
 //!
 //! # Distillation
 //!
-//! Offline extractive heuristic (no LLM dependency). Preference / fact
+//! Offline extractive heuristic (no LLM dependency). With
+//! [`ConsolidationConfig::topic_merge`] the facts go into a topic bank with merge-or-insert
+//! (WEFT-733, [`super::topics`]) instead of an appended block.
+//!
+//! Base distillation: offline extractive heuristic (no LLM dependency). Preference / fact
 //! cues and short declarative user lines become bullet facts; tool turns
 //! are ignored. A future ticket may swap in an LLM summarizer behind the
 //! same pure-shape contract.
@@ -74,6 +78,10 @@ pub struct ConsolidationConfig {
     /// and [`MemoryConsolidator::tick`] are no-ops; explicit
     /// [`MemoryConsolidator::consolidate`] still works for tests/tools.
     pub enabled: bool,
+    /// Organize facts as topic nodes with merge-or-insert (WEFT-733, RMM prospective) instead
+    /// of appending a block per consolidation. Default `false` (append, as before). See
+    /// [`super::topics`].
+    pub topic_merge: bool,
 }
 
 impl Default for ConsolidationConfig {
@@ -83,6 +91,7 @@ impl Default for ConsolidationConfig {
             every_k_turns: Some(DEFAULT_EVERY_K_TURNS),
             every_t_minutes: Some(DEFAULT_EVERY_T_MINUTES),
             enabled: true,
+            topic_merge: false,
         }
     }
 }
@@ -104,6 +113,12 @@ impl ConsolidationConfig {
             every_t_minutes: Some(t.max(1)),
             ..Self::default()
         }
+    }
+
+    /// Builder: turn on topic merge-or-insert (WEFT-733).
+    pub fn with_topic_merge(mut self, on: bool) -> Self {
+        self.topic_merge = on;
+        self
     }
 
     /// Both cadences (OR). Zero / empty values are treated as disabled.
@@ -404,6 +419,39 @@ impl<P: Platform> MemoryConsolidator<P> {
                 outcome: ConsolidationOutcome::NoFacts,
                 fingerprint: Some(fingerprint),
                 facts_written: 0,
+                turns_read: turn_count,
+            });
+        }
+
+        // Topic bank (WEFT-733): merge-or-insert each fact by topic key; idempotent because a
+        // node whose text is unchanged is not rewritten.
+        if self.config.topic_merge {
+            let existing = self.store.read_long_term().await.unwrap_or_default();
+            let (updated, stats) = super::topics::merge_into_memory(&existing, &distilled.facts, conv_id);
+            self.record_state(conv_id, turn_count, now_ms, Some(fingerprint.clone()));
+            if !stats.changed() {
+                return Ok(ConsolidationReport {
+                    conv_id: conv_id.to_string(),
+                    outcome: ConsolidationOutcome::AlreadyPresent,
+                    fingerprint: Some(fingerprint),
+                    facts_written: 0,
+                    turns_read: turn_count,
+                });
+            }
+            self.store.write_long_term(&updated).await?;
+            self.store.append_history(&distilled.history_entry).await?;
+            info!(
+                conv_id,
+                merged = stats.merged,
+                inserted = stats.inserted,
+                unchanged = stats.unchanged,
+                "consolidator: merged facts into the topic bank"
+            );
+            return Ok(ConsolidationReport {
+                conv_id: conv_id.to_string(),
+                outcome: ConsolidationOutcome::Written,
+                fingerprint: Some(fingerprint),
+                facts_written: stats.merged + stats.inserted,
                 turns_read: turn_count,
             });
         }
@@ -1033,4 +1081,34 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
+
+    // ── topic bank (WEFT-733) ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn topic_merge_replaces_a_corrected_fact_and_is_idempotent() {
+        let dir = temp_dir("topics");
+        let consolidator =
+            MemoryConsolidator::new(test_store(&dir), ConsolidationConfig::default().with_topic_merge(true));
+        let c1 = vec![turn("a1", "user", "I am allergic to penicillin and I live in Denver.", 1)];
+        let c2 = vec![turn("b1", "user", "Correction: I am not allergic to penicillin.", 2)];
+
+        let r1 = consolidator.consolidate_turns("conv-1", &c1, 10).await.unwrap();
+        assert_eq!(r1.outcome, ConsolidationOutcome::Written);
+        let r2 = consolidator.consolidate_turns("conv-2", &c2, 20).await.unwrap();
+        assert_eq!(r2.outcome, ConsolidationOutcome::Written);
+
+        let md = consolidator.store().read_long_term().await.unwrap();
+        let (_, nodes) = super::super::topics::parse_bank(&md);
+        let allergy: Vec<_> = nodes.iter().filter(|n| n.text.contains("penicillin")).collect();
+        assert_eq!(allergy.len(), 1, "one allergy node, not two: {md}");
+        assert!(allergy[0].text.contains("not allergic"), "{md}");
+        assert!(!md.contains("consolidator:fp="), "topic mode does not append fingerprint blocks");
+
+        // Same transcript again: nothing changes.
+        let again = consolidator.consolidate_turns("conv-2", &c2, 30).await.unwrap();
+        assert_eq!(again.outcome, ConsolidationOutcome::AlreadyPresent);
+        assert_eq!(consolidator.store().read_long_term().await.unwrap(), md);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

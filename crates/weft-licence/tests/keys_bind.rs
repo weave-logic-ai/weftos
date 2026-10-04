@@ -59,8 +59,10 @@ fn a_key_or_dir_another_user_could_read_is_refused() {
 
 #[test]
 fn listen_addresses_must_be_named() {
-    let mut c = Config::default();
-    c.listen = vec!["0.0.0.0:8700".parse().unwrap()];
+    let mut c = Config {
+        listen: vec!["0.0.0.0:8700".parse().unwrap()],
+        ..Config::default()
+    };
     assert!(c.validate().is_err());
     c.listen = vec!["[::]:8700".parse().unwrap()];
     assert!(c.validate().is_err());
@@ -259,8 +261,10 @@ fn listen_must_be_a_link_local_tailnet_or_loopback_address_unless_opted_in() {
 
 #[test]
 fn device_id_and_limits_are_validated() {
-    let mut c = Config::default();
-    c.device_id = "bad id with spaces".into();
+    let mut c = Config {
+        device_id: "bad id with spaces".into(),
+        ..Config::default()
+    };
     assert!(c.validate().is_err());
     c.device_id = "seed-1".into();
     assert!(c.validate().is_ok());

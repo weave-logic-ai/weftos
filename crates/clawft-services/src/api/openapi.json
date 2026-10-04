@@ -1541,6 +1541,29 @@
           }
         }
       }
+    },
+    "/api/fleet/snapshot": {
+      "get": {
+        "summary": "Fleet manager: fleet.snapshot (read-only; a read-only token may call it)",
+        "operationId": "get_api_fleet_snapshot",
+        "tags": [
+          "http_facade"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Token scope does not cover this route"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {

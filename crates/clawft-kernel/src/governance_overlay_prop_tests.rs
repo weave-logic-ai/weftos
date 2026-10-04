@@ -75,7 +75,8 @@ fn random_parent(r: &mut Rng) -> ParentPolicy {
     p.rules = (0..r.below(7))
         .map(|_| {
             let sel = r.coin().then(|| *r.pick(GLOBS));
-            rule(*r.pick(RULE_IDS), r.pick(&sev).clone(), sel, r.coin(), r.below(4) != 0)
+            let id = *r.pick(RULE_IDS);
+            rule(id, r.pick(&sev).clone(), sel, r.coin(), r.below(4) != 0)
         })
         .collect();
     p.limits = random_limits(r, false);

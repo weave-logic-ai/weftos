@@ -10792,6 +10792,7 @@ dependencies = [
  "ehttp",
  "serde",
  "serde_json",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -10807,6 +10808,7 @@ version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
+ "weftos-cog-market",
  "weftos-cog-repo",
 ]
 

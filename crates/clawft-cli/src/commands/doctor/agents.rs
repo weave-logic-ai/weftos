@@ -250,8 +250,10 @@ mod tests {
 
     #[test]
     fn auto_delegation_disabled_claude() {
-        let mut d = DelegationConfig::default();
-        d.claude_enabled = false;
+        let d = DelegationConfig {
+            claude_enabled: false,
+            ..DelegationConfig::default()
+        };
         let f = auto_delegation_finding(&d, true);
         assert_eq!(f.severity, CheckSeverity::Warn);
         assert!(f.message.contains("claude_enabled=false"));

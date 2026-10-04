@@ -85,10 +85,17 @@ pub fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
         .response
 }
 
+/// A painted filled circle. The bundled fonts have no `●`, so a glyph renders as an empty box.
+pub fn dot(ui: &mut Ui, color: Color32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
+    resp
+}
+
 /// A filled status dot + label, aligned on the baseline. Used for connection / peer state.
 pub fn status_dot(ui: &mut Ui, color: Color32, text: impl Into<String>) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("●").color(color).size(SMALL_SIZE));
+        dot(ui, color);
         ui.label(body(text));
     });
 }
@@ -114,9 +121,24 @@ pub fn card(
     header: impl FnOnce(&mut Ui),
     body: impl FnOnce(&mut Ui),
 ) {
-    card_frame(ui).show(ui, |ui| {
+    card_focus(ui, id_salt, false, header, body);
+}
+
+/// [`card`], optionally forced open and scrolled into view (a deep link landed on it).
+pub fn card_focus(
+    ui: &mut Ui,
+    id_salt: impl std::hash::Hash,
+    focus: bool,
+    header: impl FnOnce(&mut Ui),
+    body: impl FnOnce(&mut Ui),
+) {
+    let frame = card_frame(ui).show(ui, |ui| {
         let id = ui.make_persistent_id(id_salt);
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        if focus {
+            state.set_open(true);
+        }
+        state
             .show_header(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 header(ui);
@@ -126,6 +148,9 @@ pub fn card(
                 body(ui);
             });
     });
+    if focus {
+        frame.response.scroll_to_me(Some(egui::Align::TOP));
+    }
     ui.add_space(GAP_XS);
 }
 
@@ -152,7 +177,9 @@ pub fn spec_grid<'a>(
         .show(ui, |ui| {
             for (k, v) in rows {
                 ui.label(dim(ui, k));
-                ui.label(body(v));
+                // long vendor/source strings truncate with the full text on hover, so one row
+                // never widens the whole panel past the window
+                ui.add(egui::Label::new(body(v)).truncate()).on_hover_text(v);
                 ui.end_row();
             }
         });

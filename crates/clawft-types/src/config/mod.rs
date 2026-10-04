@@ -346,6 +346,80 @@ pub struct AgentsConfig {
     /// TOML/JSON: `agents.binding_thread_mode` / `agents.bindingThreadMode`.
     #[serde(default, alias = "bindingThreadMode")]
     pub binding_thread_mode: BindingThreadMode,
+
+    /// Retrieved long-term memory with citation feedback (WEFT-732, RMM
+    /// retrospective). Off by default: the full `MEMORY.md` is injected as
+    /// before. When enabled and a retriever is built in, the context gets
+    /// at most `top_m` retrieved snippets tagged `[m1]`…, the model cites
+    /// the ids it used, and cited / ignored ids reward the reranker (never
+    /// the retriever). See `docs/research/rmm-reflective-memory-management.md`.
+    ///
+    /// TOML/JSON: `agents.memory_recall` / `agents.memoryRecall`.
+    #[serde(default, alias = "memoryRecall")]
+    pub memory_recall: MemoryRecallConfig,
+
+    /// Distil finished conversation turns into long-term memory (WEFT-347) and, with
+    /// `topic_merge`, organize them as topic nodes with merge-or-insert (WEFT-733, RMM
+    /// prospective). Off by default; when on, the agent loop runs it after each turn on the
+    /// conversation sink whenever its cadence is due.
+    ///
+    /// TOML/JSON: `agents.memory_consolidation` / `agents.memoryConsolidation`.
+    #[serde(default, alias = "memoryConsolidation")]
+    pub memory_consolidation: MemoryConsolidationConfig,
+}
+
+/// Memory consolidation settings (WEFT-347 / WEFT-733). See [`AgentsConfig::memory_consolidation`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryConsolidationConfig {
+    /// Run the consolidator from the agent loop. Default `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Consolidate after this many new turns in a conversation.
+    #[serde(default = "default_consolidate_every_k", alias = "everyKTurns")]
+    pub every_k_turns: usize,
+    /// Merge facts into topic nodes instead of appending blocks (WEFT-733). Default `true`.
+    #[serde(default = "default_true_bool", alias = "topicMerge")]
+    pub topic_merge: bool,
+}
+
+fn default_consolidate_every_k() -> usize {
+    10
+}
+fn default_true_bool() -> bool {
+    true
+}
+
+impl Default for MemoryConsolidationConfig {
+    fn default() -> Self {
+        Self { enabled: false, every_k_turns: default_consolidate_every_k(), topic_merge: true }
+    }
+}
+
+/// Retrieved-memory settings (WEFT-732). See [`AgentsConfig::memory_recall`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryRecallConfig {
+    /// Turn retrieved memory on. Default `false` (full `MEMORY.md` dump).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Candidates the frozen retriever returns (paper default 20).
+    #[serde(default = "default_recall_top_k", alias = "topK")]
+    pub top_k: usize,
+    /// Snippets injected after rerank (paper default 5).
+    #[serde(default = "default_recall_top_m", alias = "topM")]
+    pub top_m: usize,
+}
+
+fn default_recall_top_k() -> usize {
+    20
+}
+fn default_recall_top_m() -> usize {
+    5
+}
+
+impl Default for MemoryRecallConfig {
+    fn default() -> Self {
+        Self { enabled: false, top_k: default_recall_top_k(), top_m: default_recall_top_m() }
+    }
 }
 
 /// Policy for binding-thread integrity checks (WEFT-342).
@@ -412,6 +486,7 @@ impl AgentsConfig {
 
 /// Expand `~/` on a configured workspace_root path (native only).
 fn expand_agent_workspace_root(raw: &std::path::Path) -> PathBuf {
+    #[cfg(feature = "native")]
     let s = raw.to_string_lossy();
     #[cfg(feature = "native")]
     if let Some(rest) = s.strip_prefix("~/")
@@ -1303,10 +1378,14 @@ mod tests {
     #[test]
     fn workspace_root_prefers_config_over_fallback() {
         // WEFT-83: two configured workspaces resolve independently of CWD.
-        let mut a = AgentsConfig::default();
-        a.workspace_root = Some(PathBuf::from("/workspaces/alpha"));
-        let mut b = AgentsConfig::default();
-        b.workspace_root = Some(PathBuf::from("/workspaces/beta"));
+        let a = AgentsConfig {
+            workspace_root: Some(PathBuf::from("/workspaces/alpha")),
+            ..AgentsConfig::default()
+        };
+        let b = AgentsConfig {
+            workspace_root: Some(PathBuf::from("/workspaces/beta")),
+            ..AgentsConfig::default()
+        };
 
         let cwd = PathBuf::from("/tmp");
         assert_eq!(

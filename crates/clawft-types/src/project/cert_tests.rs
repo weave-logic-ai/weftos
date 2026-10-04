@@ -116,7 +116,8 @@ fn tampering_each_field_fails() {
         b[0] = if b[0] == b'0' { b'1' } else { b'0' };
         String::from_utf8(b).unwrap()
     };
-    let cases: Vec<(&str, Box<dyn Fn(&mut ProjectCert)>)> = vec![
+    type Mutator = Box<dyn Fn(&mut ProjectCert)>;
+    let cases: Vec<(&str, Mutator)> = vec![
         ("v", Box::new(|c| c.v = 2)),
         ("type", Box::new(|c| c.kind = "other".into())),
         ("project_id", Box::new(|c| c.project_id = "01JB8Z3Q0V6X9KQ4M2N7T5R1WE".into())),
@@ -221,7 +222,8 @@ fn anchor_round_trip_and_tamper() {
     let back: ProjectAnchorStmt = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
     assert_eq!(back, a);
     let pk = proj_key().verifying_key().to_bytes();
-    let cases: Vec<Box<dyn Fn(&mut ProjectAnchorStmt)>> = vec![
+    type Mutator = Box<dyn Fn(&mut ProjectAnchorStmt)>;
+    let cases: Vec<Mutator> = vec![
         Box::new(|a| a.seq = 18),
         Box::new(|a| a.head_seq = 4211),
         Box::new(|a| a.head_hash = "ac".repeat(32)),

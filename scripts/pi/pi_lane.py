@@ -344,7 +344,7 @@ class Lane:
         print("  FAIL  lane aborted: %s" % why)
 
 
-LANE_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+LANE_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 
 def _raise_on_signal(signum, _frame):
@@ -418,6 +418,7 @@ def main(argv=None):
     if not plan.valid_host(host):
         raise SystemExit("test-pi: WEFTOS_PI_HOST must be a plain [user@]host")
     lane = Lane(a, host, Runner(a.dry_run))
+    lane.rev = plan.source_rev(ROOT)
     mac_before = local_chain_mtime()
     pi_before = lane.pi_state()
     if pi_before is None:
@@ -425,8 +426,9 @@ def main(argv=None):
                          "without a before-snapshot")
     print("── test-pi: crates=%s live-native=%s cogs=%s placement=%s filter=%s" % (
         ",".join(a.crates) or "-", a.live_native, a.cogs, a.placement, a.filter or "-"))
-    # SIGTERM/SIGHUP become SystemExit so cleanup and the guard still run
-    # (SIGKILL cannot be caught; the next run removes the stale scratch dir).
+    # SIGTERM/SIGHUP/SIGINT become SystemExit so cleanup and the guard still
+    # run, and from cleanup on they are deferred (SIGKILL cannot be caught; the
+    # next run removes the stale scratch dir).
     deferred = []
     for sig in LANE_SIGNALS:
         signal.signal(sig, _raise_on_signal)
@@ -455,7 +457,7 @@ def main(argv=None):
     if a.report:
         import json
         with open(a.report, "w") as f:
-            json.dump({"facts": lane.facts, "guard": guard, "results": lane.results,
+            json.dump({"source": lane.rev, "facts": lane.facts, "guard": guard, "results": lane.results,
                        "skipped": lane.skipped, "crates": a.crates,
                        "filter": a.filter, "ok": rc == 0}, f, indent=2)
             f.write("\n")

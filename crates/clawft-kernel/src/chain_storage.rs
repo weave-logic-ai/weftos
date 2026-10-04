@@ -811,16 +811,18 @@ mod tests {
         let c = choose_default_chain(&pp, Some(&home), false, false, far_future());
         assert!(c.legacy_in_use && c.refusal.expect("refused").contains("--profile user"));
         // A legacy-rooted kernel would fall back to the legacy chain: refused.
-        for paths in [RuntimePaths::resolve_with(None, Some(&home), Some(&home))] {
-            let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
-            let r = c.refusal.expect("refused");
-            assert!(r.contains("--profile user") && r.contains("--adopt-legacy-chain"), "{r}");
-            // Override is kept, with a loud warning.
-            let c = choose_default_chain(&paths, Some(&home), false, true, far_future());
-            assert_eq!(c.checkpoint, legacy);
-            assert!(c.refusal.is_none());
-            assert!(c.warning.unwrap().contains("diverge"));
-        }
+        let paths = RuntimePaths::resolve_with(None, Some(&home), Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        let r = c.refusal.expect("refused");
+        assert!(
+            r.contains("--profile user") && r.contains("--adopt-legacy-chain"),
+            "{r}"
+        );
+        // Override is kept, with a loud warning.
+        let c = choose_default_chain(&paths, Some(&home), false, true, far_future());
+        assert_eq!(c.checkpoint, legacy);
+        assert!(c.refusal.is_none());
+        assert!(c.warning.unwrap().contains("diverge"));
         // A project that owns its own chain is not affected.
         std::fs::create_dir_all(proj.join(".weftos/runtime")).unwrap();
         std::fs::write(proj.join(".weftos/runtime/chain.json"), "{}").unwrap();
@@ -1036,8 +1038,10 @@ mod tests {
         let ckpt = legacy.join("chain.json");
 
         let mut cfg = KernelConfig::default();
-        let mut chain = ChainConfig::default();
-        chain.checkpoint_path = Some(ckpt.to_string_lossy().into_owned());
+        let chain = ChainConfig {
+            checkpoint_path: Some(ckpt.to_string_lossy().into_owned()),
+            ..ChainConfig::default()
+        };
         cfg.chain = Some(chain);
         let out = pin_chain_storage_noted(&mut cfg);
         let msg = out.refusal.expect("refused");

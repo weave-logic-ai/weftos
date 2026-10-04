@@ -61,6 +61,31 @@ pub struct RoutingDecisionEntry {
     pub channel: Option<String>,
     /// True when the decision used a fallback path.
     pub fallback_used: bool,
+    /// Ring-unique id, so the pipeline can attach the outcome after transport.
+    #[serde(default)]
+    pub id: u64,
+    /// Prompt tokens the provider reported (`None` until the call returns).
+    #[serde(default)]
+    pub input_tokens: Option<u64>,
+    /// Completion tokens the provider reported.
+    #[serde(default)]
+    pub output_tokens: Option<u64>,
+    /// Transport latency of the call, milliseconds.
+    #[serde(default)]
+    pub latency_ms: Option<u64>,
+    /// `Some(true)` when the call returned, `Some(false)` when it failed,
+    /// `None` while in flight.
+    #[serde(default)]
+    pub ok: Option<bool>,
+}
+
+/// What a finished call adds to its history entry.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CallOutcome {
+    pub ok: bool,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub latency_ms: u64,
 }
 
 impl RoutingDecisionEntry {
@@ -81,6 +106,11 @@ impl RoutingDecisionEntry {
             principal: decision.sender_id.clone(),
             channel: channel.map(|s| s.to_string()),
             fallback_used,
+            id: 0,
+            input_tokens: None,
+            output_tokens: None,
+            latency_ms: None,
+            ok: None,
         }
     }
 }
@@ -123,6 +153,7 @@ pub struct RoutingAggregateStats {
 pub struct RoutingDecisionHistory {
     entries: Mutex<VecDeque<RoutingDecisionEntry>>,
     capacity: usize,
+    next_id: std::sync::atomic::AtomicU64,
 }
 
 impl RoutingDecisionHistory {
@@ -137,6 +168,7 @@ impl RoutingDecisionHistory {
         Self {
             entries: Mutex::new(VecDeque::new()),
             capacity,
+            next_id: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -160,12 +192,15 @@ impl RoutingDecisionHistory {
         self.record_with_channel(decision, None);
     }
 
-    /// Append a decision with optional channel from auth context.
-    pub fn record_with_channel(&self, decision: &RoutingDecision, channel: Option<&str>) {
-        let entry = RoutingDecisionEntry::from_decision(decision, channel);
+    /// Append a decision with optional channel from auth context. Returns
+    /// the entry id for [`Self::record_outcome`] (0 when not recorded).
+    pub fn record_with_channel(&self, decision: &RoutingDecision, channel: Option<&str>) -> u64 {
+        let mut entry = RoutingDecisionEntry::from_decision(decision, channel);
+        entry.id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = entry.id;
         let Ok(mut guard) = self.entries.lock() else {
             tracing::warn!("routing decision history mutex poisoned; drop record");
-            return;
+            return 0;
         };
         guard.push_back(entry);
         if self.capacity > 0 {
@@ -178,6 +213,19 @@ impl RoutingDecisionHistory {
             capacity = self.capacity,
             "routing decision history: recorded"
         );
+        id
+    }
+
+    /// Attach a finished call's outcome (tokens, latency, success) to the
+    /// entry `id`. A no-op when the entry has already left the ring.
+    pub fn record_outcome(&self, id: u64, outcome: CallOutcome) {
+        let Ok(mut guard) = self.entries.lock() else { return };
+        if let Some(e) = guard.iter_mut().rev().find(|e| e.id == id && id != 0) {
+            e.ok = Some(outcome.ok);
+            e.input_tokens = outcome.input_tokens;
+            e.output_tokens = outcome.output_tokens;
+            e.latency_ms = Some(outcome.latency_ms);
+        }
     }
 
     /// Recent entries, newest first, up to `limit`.
@@ -275,10 +323,28 @@ mod tests {
             ),
             tier: Some(tier.into()),
             cost_estimate_usd: Some(0.01 * n as f64),
-            escalated: n % 3 == 0,
-            budget_constrained: n % 5 == 0,
+            escalated: n.is_multiple_of(3),
+            budget_constrained: n.is_multiple_of(5),
             sender_id: Some(sender.into()),
         }
+    }
+
+    #[test]
+    fn outcome_attaches_to_its_own_entry_and_ignores_unknown_ids() {
+        let hist = RoutingDecisionHistory::with_capacity(2);
+        let a = hist.record_with_channel(&sample_decision(1, "standard", "a"), None);
+        let b = hist.record_with_channel(&sample_decision(2, "standard", "b"), None);
+        assert!(a != 0 && b != 0 && a != b);
+        hist.record_outcome(a, CallOutcome { ok: false, input_tokens: None, output_tokens: None, latency_ms: 7 });
+        hist.record_outcome(999, CallOutcome { ok: true, ..Default::default() });
+        let e = hist.recent(10);
+        let (eb, ea) = (&e[0], &e[1]);
+        assert_eq!((ea.ok, ea.latency_ms), (Some(false), Some(7)));
+        assert_eq!((eb.ok, eb.latency_ms, eb.input_tokens), (None, None, None));
+        // An entry that has left the ring is silently skipped.
+        hist.record_with_channel(&sample_decision(3, "standard", "c"), None);
+        hist.record_outcome(a, CallOutcome { ok: true, ..Default::default() });
+        assert!(hist.recent(10).iter().all(|e| e.id != a));
     }
 
     #[test]

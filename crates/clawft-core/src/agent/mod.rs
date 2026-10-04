@@ -18,6 +18,7 @@ pub mod learning;
 pub mod local_file_sink;
 pub mod loop_core;
 pub mod memory;
+pub mod memory_recall;
 pub mod runtime;
 pub mod sandbox;
 pub mod sink;

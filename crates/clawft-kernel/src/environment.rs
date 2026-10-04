@@ -14,6 +14,7 @@
 //! requires the `ruvector-apps` feature gate.
 
 use std::collections::HashMap;
+#[cfg(feature = "exochain")]
 use std::sync::Arc;
 
 use dashmap::DashMap;

@@ -10,8 +10,8 @@
 #
 # Key: WEAVELOGIC_RELEASE_KEY = the raw 32-byte Ed25519 seed as hex (the CI
 # secret; the same key COG-008 signs cogs with). The script refuses to sign
-# unless the key's public half equals the pinned WEAVELOGIC_PUBKEY_HEX in
-# crates/weftos-cog-repo/src/lib.rs. SIGN_RELEASE_EXPECT_PUBKEY replaces that
+# unless the key's public half equals the pinned WEFTOS_RELEASE_PUBKEY_HEX in
+# crates/clawft-weave/src/commands/update_signature.rs. SIGN_RELEASE_EXPECT_PUBKEY replaces that
 # expected value; it exists for tests with a throwaway key and changes nothing
 # about what weaver trusts.
 #
@@ -34,8 +34,8 @@ command -v jq >/dev/null || die "jq not found"
 command -v xxd >/dev/null || die "xxd not found"
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
-pinned=$(sed -n 's/^pub const WEAVELOGIC_PUBKEY_HEX: &str = "\([0-9a-f]\{64\}\)";$/\1/p' \
-    "$repo/crates/weftos-cog-repo/src/lib.rs")
+pinned=$(sed -n 's/^pub const WEFTOS_RELEASE_PUBKEY_HEX: &str = "\([0-9a-f]\{64\}\)";$/\1/p' \
+    "$repo/crates/clawft-weave/src/commands/update_signature.rs")
 expect=${SIGN_RELEASE_EXPECT_PUBKEY:-$pinned}
 [[ $expect =~ ^[0-9a-f]{64}$ ]] || die "cannot read the pinned public key"
 
