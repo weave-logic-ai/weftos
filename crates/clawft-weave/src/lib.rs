@@ -191,6 +191,10 @@ mod infer_cfg_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod infer_hardening_tests;
 pub mod node_facts_rpc;
+/// Operator location labels for the fleet manager (site and room per node).
+pub mod fleet_labels;
+/// `fleet.snapshot` and `fleet.location.set` (fleet manager P1).
+pub mod fleet_rpc;
 pub mod protocol;
 pub mod service_units;
 pub mod service_units_system;

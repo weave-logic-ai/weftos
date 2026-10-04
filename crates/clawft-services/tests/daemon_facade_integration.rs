@@ -175,6 +175,7 @@ fn spawn_fake_daemon(path: &std::path::Path) {
                 let result = match req["method"].as_str().unwrap() {
                     "kernel.ps" => serde_json::json!([{"pid": 1, "agent_id": "kernel"}]),
                     "chain.status" => serde_json::json!({"height": 99, "healthy": true}),
+                    "fleet.snapshot" => serde_json::json!({"schema": 1, "seen_auth": req["auth"]}),
                     other => serde_json::json!({ "echo": other }),
                 };
                 let resp = serde_json::json!({"ok": true, "result": result});
@@ -216,6 +217,45 @@ async fn processes_and_chain_status_return_daemon_data() {
     let (status, body) = get(app, &token, "/api/chain/status").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["height"], 99);
+}
+
+/// Fleet manager: the console reads the snapshot through the gateway with a
+/// daemon-issued token, and the gateway asks the daemon with `read` scope.
+#[tokio::test]
+async fn fleet_snapshot_needs_a_gateway_token_and_is_asked_with_read_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("kernel.sock");
+    spawn_fake_daemon(&sock);
+    let (state, auth) = make_state(&sock);
+    let token = auth.generate_token(3600).unwrap();
+    let app = build_router(state, &[], None);
+
+    let anon = app
+        .clone()
+        .oneshot(Request::builder().uri("/api/fleet/snapshot").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+
+    let (status, body) = get(app.clone(), &token, "/api/fleet/snapshot").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["schema"], 1);
+    assert_eq!(body["seen_auth"], "read");
+
+    // No write route exists for the label verb.
+    let post = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/fleet/location")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(post.status() == StatusCode::NOT_FOUND || post.status() == StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]

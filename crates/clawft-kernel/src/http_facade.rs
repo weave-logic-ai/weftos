@@ -346,6 +346,7 @@ pub enum RpcParam {
 /// | POST | `/api/vectors/search` | `ecc.search` |
 /// | GET | `/api/ecc/calibration` | `ecc.calibrate` |
 /// | GET | `/api/custody/attest` | `custody.attest` |
+/// | GET | `/api/fleet/snapshot` | `fleet.snapshot` |
 /// | POST | `/api/agents/spawn` | `agent.spawn` |
 /// | DELETE | `/api/agents/:pid` | `agent.stop` |
 pub fn match_facade_route(method: HttpMethod, path: &str) -> FacadeRoute {
@@ -400,6 +401,12 @@ pub fn match_facade_route(method: HttpMethod, path: &str) -> FacadeRoute {
         },
         (HttpMethod::Get, "/api/custody/attest") => FacadeRoute::Rpc {
             method: "custody.attest",
+            params: None,
+        },
+        // Fleet manager: one read-only snapshot of everything the daemon knows
+        // about the fleet (card fleet-p1).
+        (HttpMethod::Get, "/api/fleet/snapshot") => FacadeRoute::Rpc {
+            method: "fleet.snapshot",
             params: None,
         },
         (HttpMethod::Post, "/api/agents/spawn") => FacadeRoute::Rpc {
@@ -760,6 +767,26 @@ mod tests {
                 method: "kernel.ps",
                 params: None
             }
+        );
+    }
+
+    #[test]
+    fn route_api_fleet_snapshot_is_get_only() {
+        assert_eq!(
+            match_facade_route(HttpMethod::Get, "/api/fleet/snapshot"),
+            FacadeRoute::Rpc {
+                method: "fleet.snapshot",
+                params: None
+            }
+        );
+        // A write verb is never reachable through the facade route table.
+        assert_eq!(
+            match_facade_route(HttpMethod::Post, "/api/fleet/snapshot"),
+            FacadeRoute::NotFound
+        );
+        assert_eq!(
+            match_facade_route(HttpMethod::Post, "/api/fleet/location"),
+            FacadeRoute::NotFound
         );
     }
 

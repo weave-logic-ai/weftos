@@ -71,6 +71,9 @@ enum Commands {
     /// Cluster management (nodes, shards, health).
     Cluster(commands::cluster_cmd::ClusterArgs),
 
+    /// Fleet manager: every known node with trust, last seen, cogs and location.
+    Fleet(commands::fleet_cmd::FleetArgs),
+
     /// Chain management (status, events, checkpoints).
     Chain(commands::chain_cmd::ChainArgs),
 
@@ -176,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Model(args) => commands::model_cmd::run(args)?,
         Commands::Cog(args) => commands::cog_cmd::run(args).await?,
         Commands::Cluster(args) => commands::cluster_cmd::run(args).await?,
+        Commands::Fleet(args) => commands::fleet_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,
         Commands::Resource(args) => commands::resource_cmd::run(args).await?,

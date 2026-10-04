@@ -15,6 +15,7 @@ pub mod cron_cmd;
 pub mod custody_cmd;
 pub mod daemon_restart;
 pub mod doctor_cmd;
+pub mod fleet_cmd;
 pub mod ecc_cmd;
 pub mod graphify_cmd;
 pub mod init_cmd;

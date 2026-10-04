@@ -463,6 +463,21 @@ fn entry(c: CachedNodeFacts, local_id: Option<&str>) -> FactsEntry {
     }
 }
 
+/// The fresh cached facts of every node (or just `only`), as `cluster.facts`
+/// returns them. Read-only: no probe runs.
+pub fn facts_entries(membership: &ClusterMembership, only: Option<&str>) -> Vec<FactsEntry> {
+    let local_id = LOCAL
+        .get()
+        .map(|s| clawft_kernel::node_id_from_pubkey(&s.key.verifying_key().to_bytes()));
+    membership
+        .facts()
+        .list(now_secs())
+        .into_iter()
+        .filter(|c| only.is_none_or(|n| n == c.node_id()))
+        .map(|c| entry(c, local_id.as_deref()))
+        .collect()
+}
+
 /// Handle `cluster.facts`.
 pub async fn handle(
     params: Value,
@@ -504,17 +519,7 @@ pub async fn handle(
             }
         }
     }
-    let local_id = local
-        .as_ref()
-        .map(|s| clawft_kernel::node_id_from_pubkey(&s.key.verifying_key().to_bytes()));
-    let now = now_secs();
-    let entries: Vec<FactsEntry> = membership
-        .facts()
-        .list(now)
-        .into_iter()
-        .filter(|c| p.node_id.as_deref().is_none_or(|n| n == c.node_id()))
-        .map(|c| entry(c, local_id.as_deref()))
-        .collect();
+    let entries = facts_entries(&membership, p.node_id.as_deref());
     let value = match refresh_result {
         None => serde_json::to_value(entries),
         // A refresh was asked for: say whether it ran or the floor skipped it.

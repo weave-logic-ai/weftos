@@ -49,12 +49,19 @@ fn tailscale() -> Value {
 }
 
 fn peer_row(p: &Value, is_self: bool) -> Value {
+    let text = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("");
     json!({
-        "name": p.get("HostName").and_then(|v| v.as_str()).unwrap_or(""),
+        "name": text("HostName"),
         "ip": p.get("TailscaleIPs").and_then(|v| v.get(0)).and_then(|v| v.as_str()).unwrap_or(""),
-        "os": p.get("OS").and_then(|v| v.as_str()).unwrap_or(""),
+        "os": text("OS"),
         "online": p.get("Online").and_then(|v| v.as_bool()).unwrap_or(false),
         "self": is_self,
+        // Extras the console can show (all absent-safe): when tailscale last saw the peer, whether the
+        // path is direct (`cur_addr`) or relayed (`relay`), and its ACL tags.
+        "last_seen": text("LastSeen"),
+        "cur_addr": text("CurAddr"),
+        "relay": text("Relay"),
+        "tags": p.get("Tags").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>()).unwrap_or_default(),
     })
 }
 
@@ -77,4 +84,29 @@ fn http_get(host: &str, path: &str) -> Result<Vec<u8>, String> {
     conn.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     let split = buf.windows(4).position(|w| w == b"\r\n\r\n").ok_or("no header/body split")?;
     Ok(buf[split + 4..].to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_row_carries_last_seen_path_and_tags_and_tolerates_their_absence() {
+        let full = json!({
+            "HostName": "pi5", "TailscaleIPs": ["100.1.2.3"], "OS": "linux", "Online": true,
+            "LastSeen": "2026-10-04T10:00:00Z", "CurAddr": "192.168.1.5:41641", "Relay": "nyc",
+            "Tags": ["tag:cog", "tag:lab"]
+        });
+        let r = peer_row(&full, false);
+        assert_eq!(r["name"], "pi5");
+        assert_eq!(r["last_seen"], "2026-10-04T10:00:00Z");
+        assert_eq!(r["cur_addr"], "192.168.1.5:41641");
+        assert_eq!(r["relay"], "nyc");
+        assert_eq!(r["tags"], json!(["tag:cog", "tag:lab"]));
+
+        let bare = peer_row(&json!({ "HostName": "x" }), true);
+        assert_eq!(bare["self"], true);
+        assert_eq!((bare["last_seen"].as_str(), bare["relay"].as_str()), (Some(""), Some("")));
+        assert_eq!(bare["tags"], json!([]));
+    }
 }

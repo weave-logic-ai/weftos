@@ -97,6 +97,23 @@ pub struct PeerConnection {
     _tally: Option<RouteGuard>,
 }
 
+/// What [`MeshRuntime::peer_details`] reports for one connected peer.
+#[derive(Debug, Clone)]
+pub struct PeerDetail {
+    /// Remote node identifier.
+    pub node_id: String,
+    /// Admitted class of the connection.
+    pub class: crate::mesh_admit::PeerClass,
+    /// Admission verified the node id.
+    pub verified: bool,
+    /// Verified and class `node` (see [`MeshRuntime::peer_licensed`]).
+    pub licensed: bool,
+    /// When the connection was established.
+    pub connected_at: chrono::DateTime<chrono::Utc>,
+    /// Heartbeat tracker's view, when discovery is attached and tracks it.
+    pub heartbeat: Option<crate::mesh_heartbeat::HeartbeatState>,
+}
+
 /// Count of live routes registered by one serving connection. Lets the
 /// connection learn in O(1), instead of scanning the peer map, that its
 /// routes were removed (`disconnect_peer`, revocation) or replaced.
@@ -944,6 +961,34 @@ impl MeshRuntime {
         self.peers.iter().map(|entry| entry.key().clone()).collect()
     }
 
+    /// Per-peer connection detail, sorted by node id (observability only).
+    ///
+    /// Round-trip time is deliberately absent: nothing in the runtime measures
+    /// it (`PeerMetrics` is never fed), and a made-up zero would read as a
+    /// perfect link.
+    pub fn peer_details(&self) -> Vec<PeerDetail> {
+        let mut out: Vec<PeerDetail> = self
+            .peers
+            .iter()
+            .map(|e| {
+                let p = e.value();
+                PeerDetail {
+                    node_id: e.key().clone(),
+                    class: p.class,
+                    verified: p.verified,
+                    licensed: p.verified && p.class == crate::mesh_admit::PeerClass::Node,
+                    connected_at: p.connected_at,
+                    heartbeat: self
+                        .discovery
+                        .as_ref()
+                        .and_then(|d| d.heartbeat.lock().ok()?.peer_state(e.key())),
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+        out
+    }
+
     /// Disconnect a peer, dropping its send channel.
     ///
     /// Also cleans up any topic subscriptions the peer registered so
@@ -1743,6 +1788,23 @@ mod tests {
         assert_eq!(peers[0], ("peer-1".into(), "10.0.0.1:9489".into()));
         assert_eq!(peers[1], ("peer-2".into(), "10.0.0.2:9489".into()));
         assert_eq!(peers[2], ("peer-3".into(), "10.0.0.3:9489".into()));
+    }
+
+    #[test]
+    fn peer_details_report_class_verified_licensed_and_heartbeat() {
+        let rt = MeshRuntime::with_discovery("local".into(), [0u8; 32]);
+        let tally = RouteTally::default();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let (tx2, _rx2) = tokio::sync::mpsc::channel(1);
+        rt.register_authenticated_as("b-leaf".into(), tx, true, crate::mesh_admit::PeerClass::Leaf, &tally);
+        rt.register_authenticated_as("a-node".into(), tx2, true, crate::mesh_admit::PeerClass::Node, &tally);
+        rt.record_heartbeat("a-node");
+        let d = rt.peer_details();
+        assert_eq!(d.iter().map(|p| p.node_id.as_str()).collect::<Vec<_>>(), ["a-node", "b-leaf"]);
+        assert!(d[0].licensed && d[0].verified);
+        assert_eq!(d[0].heartbeat, Some(crate::mesh_heartbeat::HeartbeatState::Alive));
+        assert!(!d[1].licensed && d[1].verified && d[1].class.as_str() == "leaf");
+        assert_eq!(d[1].heartbeat, None);
     }
 
     // ── Test 15: heartbeat tracking detects suspect peer ─────────
