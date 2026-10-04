@@ -124,7 +124,8 @@ pub fn write_forking_script(script: &Path) {
 /// Wait for the script's pid file and return the pid.
 pub async fn script_pid(dir: &Path) -> i32 {
     let f = dir.join("pid.txt");
-    for _ in 0..200 {
+    // Up to 20 s: a loaded test machine can be slow to start a shell.
+    for _ in 0..800 {
         if let Ok(s) = std::fs::read_to_string(&f)
             && let Ok(p) = s.trim().parse()
         {

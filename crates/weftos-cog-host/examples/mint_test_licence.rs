@@ -8,6 +8,7 @@
 //!
 //! Writes `<dir>/licence/{config,trust}.json` and `<dir>/{binding,grant,approval,revoke}.json`
 //! (each a `Records` document for `weft-cog-host licence import`). Never prints the key.
+//! Use throwaway test keys only, never a real operator or release key.
 
 use clawft_kernel::licence::{
     Approval, BindState, BindingRecord, CheckoutGrant, GrantArtifact, LicenceRef, MeshId, sign_approval, sign_binding, sign_grant,
@@ -31,9 +32,22 @@ fn write(path: std::path::PathBuf, v: serde_json::Value) {
 }
 
 fn load_key(path: String) -> SigningKey {
-    let seed_hex = std::fs::read_to_string(path).unwrap();
-    let seed: Vec<u8> = (0..32).map(|i| u8::from_str_radix(&seed_hex.trim()[2 * i..2 * i + 2], 16).unwrap()).collect();
-    SigningKey::from_bytes(&seed.try_into().unwrap())
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| die(&format!("cannot read key file {path}: {e}")));
+    let hex = raw.trim();
+    // Validate before slicing so a malformed file never ends up echoed in a panic message.
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        die(&format!("key file {path} must hold exactly 64 hex characters (a 32-byte seed)"));
+    }
+    let mut seed = [0u8; 32];
+    for (i, byte) in seed.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap_or_else(|_| die("key file is not hex"));
+    }
+    SigningKey::from_bytes(&seed)
+}
+
+fn die(msg: &str) -> ! {
+    eprintln!("mint_test_licence: {msg}");
+    std::process::exit(2)
 }
 
 fn main() {
