@@ -116,7 +116,9 @@ fn tag_row<'a>(ui: &mut egui::Ui, tags: impl Iterator<Item = &'a str>, color: Co
     });
 }
 
-fn module_card(ui: &mut egui::Ui, m: &Module) {
+/// `cogs` are the catalog projects that use this module (reverse link): empty means no built cog
+/// yet, so the card offers a "Create a cog" affordance instead of the ✓ built-as-cog row.
+fn module_card(ui: &mut egui::Ui, m: &Module, cogs: &[&Project]) {
     style::card(
         ui,
         ("mod", &m.id),
@@ -132,6 +134,24 @@ fn module_card(ui: &mut egui::Ui, m: &Module) {
         |ui| {
             if !m.summary.is_empty() {
                 ui.label(style::body(&m.summary));
+            }
+            // Cog awareness (COG-009): does a built cog use this module? Tie the sensor to its cog
+            // here so a part found in the catalog links straight to the cog, not just the other way.
+            if cogs.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(style::dim(ui, "No cog yet"));
+                    ui.hyperlink_to(
+                        RichText::new("+ Create a cog ↗").color(WL).size(12.0),
+                        format!("https://sensor-explorer.wfscifi.workers.dev/part/{}", m.id),
+                    );
+                });
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("✓ built as cog").color(GREEN).size(12.0));
+                    for p in cogs {
+                        style::pill(ui, &p.name, COG);
+                    }
+                });
             }
             if !m.chips.is_empty() {
                 tag_row(ui, m.chips.iter().map(String::as_str), GREY);
@@ -535,7 +555,9 @@ impl Manager {
                     .iter()
                     .filter(|m| (kind == "all" || m.kind == kind) && (q.is_empty() || mod_hay(m).contains(&q)))
                     .collect();
-                render_catalog_list(ui, "modules", &items, search, module_card);
+                render_catalog_list(ui, "modules", &items, search, |ui, m| {
+                    module_card(ui, m, &cat.projects_using_module(&m.id));
+                });
             }
         }
     }
