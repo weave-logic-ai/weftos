@@ -232,6 +232,7 @@ fn default_export_port(id: &str) -> u16 {
         "sound-detect" => 8049,
         "rd-03e" => 8050,
         "hlk-as201" => 8051,
+        "ld2450-radar" => 8052,
         _ => 0,
     }
 }
@@ -881,4 +882,23 @@ pub async fn start_web(canvas_id: &str) -> Result<(), wasm_bindgen::JsValue> {
             Ok(Box::new(Manager::new()))
         }))
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every catalog project that declares an export port must have the same port here, so the
+    /// Sensors tab finds its `/guide` without a prompt.
+    #[test]
+    fn export_ports_match_the_bundled_catalog() {
+        let catalog = HwCatalog::bundled();
+        for p in &catalog.projects {
+            if let Some(port) = p.export_port {
+                assert_eq!(default_export_port(&p.id), port, "{}", p.id);
+            }
+        }
+        assert_eq!(default_export_port("ld2450-radar"), 8052);
+        assert_eq!(default_export_port("not-a-cog"), 0);
+    }
 }
