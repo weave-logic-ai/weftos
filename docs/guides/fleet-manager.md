@@ -69,8 +69,10 @@ The console talks to the gateway, which validates bearer tokens through the
 daemon (ADR-102 D3). There is no new credential type.
 
 1. Start the daemon and the gateway (`weft gateway`, or `weft ui`).
-2. Issue a token on the daemon's machine: `weft token issue --label console`
-   (15 minutes by default, 24 hours at most). The secret is printed once.
+2. Issue a read-only token on the daemon's machine:
+   `weft token issue --label console --read-only` (15 minutes by default, 24
+   hours at most). The secret is printed once. A console should always use a
+   read-only token.
 3. The console sends `Authorization: Bearer <token>` to
    `GET http://<gateway>:18789/api/fleet/snapshot`.
 
@@ -84,10 +86,13 @@ What the token can and cannot do:
   (`DaemonKernelFacade`), so the call can only reach Read-class verbs, and the
   route table maps only `fleet.snapshot`. `fleet.location.set` is Admin on the
   daemon and has no gateway route (a POST to `/api/fleet/location` is 404).
-- The token itself is not read-only. A gateway token is owner-equivalent for
-  the gateway's REST and MCP surface (ADR-102 D4), so treat it like a shell and
-  revoke it when done (`weft token revoke <id>`). Scoped gateway tokens are a
-  separate decision.
+- A read-only token (ADR-102 D4 amendment) is held by the daemon with scope
+  `read`: the daemon grants it Read only, and the gateway lets it `GET` only
+  `/api/fleet/snapshot`, `/api/health`, `/api/processes`, `/api/services`,
+  `/api/chain/status`, `/api/chain/events` and `/api/vectors/status` (plus
+  revoking itself). Every other route, `/mcp` and `/ws` included, answers 403.
+  An ordinary `weft token issue` token is still owner-equivalent, so do not give
+  that to a console.
 - Without a token the route answers 401. With no daemon it answers 503
   (`weaver kernel start`).
 

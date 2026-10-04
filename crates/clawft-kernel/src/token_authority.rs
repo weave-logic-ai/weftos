@@ -63,6 +63,10 @@ pub enum TokenScope {
     /// [`TokenInfo::project`]. It cannot mint, revoke or list tokens and
     /// reaches no Admin-gated method.
     Project,
+    /// A read-only operator credential (ADR-102 D4 amendment): `Read` only,
+    /// never Write or Admin, and no project. The gateway opens only its GET
+    /// read routes to it, so a console need not hold an owner-equivalent token.
+    Read,
 }
 
 impl TokenScope {
@@ -72,12 +76,14 @@ impl TokenScope {
         match self {
             TokenScope::Owner => &["admin"],
             TokenScope::Project => &["write"],
+            TokenScope::Read => &["read"],
         }
     }
 
     fn parse(s: Option<&str>) -> Self {
         match s {
             Some("project") => TokenScope::Project,
+            Some("read") => TokenScope::Read,
             _ => TokenScope::Owner,
         }
     }
@@ -86,6 +92,7 @@ impl TokenScope {
         match self {
             TokenScope::Owner => "owner",
             TokenScope::Project => "project",
+            TokenScope::Read => "read",
         }
     }
 }

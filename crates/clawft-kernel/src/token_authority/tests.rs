@@ -572,3 +572,22 @@ fn a_bad_future_clock_at_boot_does_not_prune_live_revocations() {
     assert!(!kept.contains(&id_of(&old)));
     assert!(kept.contains(&live.id));
 }
+
+#[test]
+fn read_tokens_are_read_only_and_survive_a_rebuild() {
+    let c = chain();
+    let a = auth(&c);
+    let (secret, info) = a
+        .issue_scoped_at(Utc::now(), "console", None, None, TokenScope::Read, &owner())
+        .unwrap();
+    assert_eq!(info.scope, TokenScope::Read);
+    assert_eq!(TokenScope::Read.capability_scopes(), ["read"]);
+    let ev = c
+        .tail_from(0)
+        .into_iter()
+        .find(|e| e.kind == KIND_ISSUED && e.payload.as_ref().unwrap()["label"] == "console")
+        .unwrap();
+    assert_eq!(ev.payload.unwrap()["scope"], "read");
+    let b = auth(&c);
+    assert_eq!(b.validate(&secret).expect("rebuilt from the chain").scope, TokenScope::Read);
+}

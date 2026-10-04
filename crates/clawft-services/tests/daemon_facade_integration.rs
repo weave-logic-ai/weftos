@@ -11,7 +11,8 @@ use clawft_services::api::{
     AgentAccess, AgentInfo, ApiState, BusAccess, ChannelAccess, ChannelStatusInfo, ConfigAccess,
     DaemonKernelFacade, MemoryAccess, MemoryEntryInfo, SessionAccess, SessionDetail, SessionInfo,
     SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess, TtsProviderInfo, VoiceAccess,
-    VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo, auth::MemoryTokenValidator,
+    VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo,
+    auth::{MemoryTokenValidator, TokenScope},
     broadcaster::TopicBroadcaster, build_router,
 };
 use http_body_util::BodyExt;
@@ -256,6 +257,59 @@ async fn fleet_snapshot_needs_a_gateway_token_and_is_asked_with_read_scope() {
         .await
         .unwrap();
     assert!(post.status() == StatusCode::NOT_FOUND || post.status() == StatusCode::METHOD_NOT_ALLOWED);
+}
+
+/// A read-only token opens the GET read routes (fleet snapshot included) and
+/// nothing else: every other route is 403, owner tokens are unaffected.
+#[tokio::test]
+async fn a_read_only_token_reaches_only_the_get_read_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("kernel.sock");
+    spawn_fake_daemon(&sock);
+    let (state, auth) = make_state(&sock);
+    let read = auth.generate_token_scoped(3600, TokenScope::Read).unwrap();
+    let owner = auth.generate_token(3600).unwrap();
+    let app = build_router(state, &[], None);
+
+    for path in ["/api/fleet/snapshot", "/api/processes", "/api/chain/status"] {
+        let (status, _) = get(app.clone(), &read, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+    }
+    for path in ["/api/config", "/api/memory", "/api/sessions", "/api/tools", "/api/custody/attest"] {
+        let (status, _) = get(app.clone(), &read, path).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+        let (status, _) = get(app.clone(), &owner, path).await;
+        assert_ne!(status, StatusCode::FORBIDDEN, "owner {path}");
+    }
+    for (method, path) in [("POST", "/api/agents/spawn"), ("PUT", "/api/config"), ("POST", "/api/fleet/snapshot")] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::AUTHORIZATION, format!("Bearer {read}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{method} {path}");
+    }
+    // A read token may end itself.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/revoke")
+                .header(header::AUTHORIZATION, format!("Bearer {read}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
