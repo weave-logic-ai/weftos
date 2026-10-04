@@ -293,20 +293,21 @@ def run_placement(lane, cog_bin):
             "PASS" if ok else "FAIL", len(r["pi_chain"] or [])))
         if lane.a.placement_evidence and not run.dry_run:
             write_evidence(lane.a.placement_evidence, r, ok, served, pi_node, mac_node,
-                           bool(lane.a.mac_container))
+                           bool(lane.a.mac_container), getattr(lane, "rev", None))
     finally:
         mac.stop()
         mac.remove_containers()
         shutil.rmtree(work, ignore_errors=True)
 
 
-def write_evidence(path, r, ok, served, pi_node, mac_node, mac_container=False):
+def write_evidence(path, r, ok, served, pi_node, mac_node, mac_container=False, rev=None):
     """Committed evidence: decisions, explains, attempts and chain kinds only,
     refused if anything address-like or path-like slipped in."""
     pick = lambda d: {k: (d or {}).get(k) for k in ("explain", "attempts", "placed")}
     ev = {
         "card": "mesh-placement-12",
         "ok": ok,
+        "source": rev,
         "controller": {"runtime": "weaver daemon (isolated) via `weaver workload` CLI",
                        "node": mac_node,
                        "adapters": ["native", "container (docker)"] if mac_container else ["native"]},

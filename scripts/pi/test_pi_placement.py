@@ -130,6 +130,16 @@ class Helpers(unittest.TestCase):
         self.assertIsNone(plan.split_node_output("log only")[1])
         self.assertIsNone(plan.split_node_output("x==CHAIN==not json")[1])
 
+    def test_evidence_records_the_source_commit_and_tree(self):
+        import tempfile
+        rev = {"commit": "c" * 40, "tree": "e" * 40, "dirty": True}
+        with tempfile.TemporaryDirectory() as d, redirect_stdout(io.StringIO()):
+            path = os.path.join(d, "ev.json")
+            pi_placement.write_evidence(path, {}, True, True, "pi-node", "mac-node", rev=rev)
+            with open(path) as f:
+                ev = json.load(f)
+        self.assertEqual(ev["source"], rev)
+
     def test_leak_guard(self):
         self.assertIsNone(plan.LEAK_RE.search('{"csi_bind": "0.0.0.0:15006", "x": "127.0.0.1:80"}'))
         self.assertIsNotNone(plan.LEAK_RE.search('"peer": "10.1.2.3:9471"'))

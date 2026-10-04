@@ -298,6 +298,23 @@ PLACEMENT_FEED_PORT = 15006
 PUBKEY_RE = re.compile(r"^[0-9a-f]{64}$")
 STATUS_MARK = "==STATUS=="
 # Evidence must not carry addresses or local paths (public repo).
+def source_rev(root="."):
+    """The code a run used: HEAD commit, HEAD tree and whether the work tree
+    had uncommitted changes (the tree hash then does not cover them). Fields
+    are None when git cannot answer."""
+    import subprocess
+
+    def git(*args):
+        try:
+            p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return p.stdout.strip() if p.returncode == 0 else None
+    status = git("status", "--porcelain", "--untracked-files=no")
+    return {"commit": git("rev-parse", "HEAD"), "tree": git("rev-parse", "HEAD^{tree}"),
+            "dirty": None if status is None else bool(status)}
+
+
 LEAK_RE = re.compile(r"(?:\b(?!0\.0\.0\.0\b)(?!127\.0\.0\.1\b)\d{1,3}(?:\.\d{1,3}){3}\b|/Users/|/home/)")
 
 
