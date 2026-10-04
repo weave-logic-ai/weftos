@@ -93,7 +93,7 @@ pub use infer::{
     InferConfig, InferFlavor, InferMode, InferRuntime, InferenceSpec, ManagedConfig, RestartPolicy,
 };
 pub use logical::{
-    CAP_PROJECT_LOGICAL, ChildLauncher, ChildProbe, ChildRef, ChildSpec, LOGICAL_ID, LogicalRuntime,
+    CAP_PROJECT_LOGICAL, ChildIdentity, ChildLauncher, ChildProbe, ChildRef, ChildSpec, LOGICAL_ID, LogicalRuntime,
 };
 pub use native::{NativeConfig, NativeRuntime};
 pub use seed::{SeedApiRuntime, SeedConfig, SeedPin};

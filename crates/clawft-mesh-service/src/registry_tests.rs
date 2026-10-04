@@ -77,6 +77,24 @@ fn projects_are_owned_and_validated() {
 }
 
 #[test]
+fn certified_project_key_tracks_rekey_revoke_and_disconnect() {
+    let r = Registry::new();
+    let (a, _rx) = reg(1, 501, "u1", 1);
+    r.register(&a, &[], &[]).unwrap();
+    assert_eq!(r.current_project_key("u1", ULID_A), None);
+    r.add_certified_project("u1", ULID_A, [1; 32]).unwrap();
+    assert_eq!(r.current_project_key("u1", ULID_A), Some([1; 32]));
+    r.add_certified_project("u1", ULID_A, [2; 32]).unwrap();
+    assert_eq!(r.current_project_key("u1", ULID_A), Some([2; 32]));
+    assert_eq!(r.current_project_key("u2", ULID_A), None);
+    assert!(r.remove_project("u1", ULID_A));
+    assert_eq!(r.current_project_key("u1", ULID_A), None);
+    r.add_certified_project("u1", ULID_A, [3; 32]).unwrap();
+    assert!(r.unregister("u1", 1));
+    assert_eq!(r.current_project_key("u1", ULID_A), None);
+}
+
+#[test]
 fn empty_and_whitespace_prefixes_are_refused() {
     let r = Registry::new();
     let (a, _ra) = reg(1, 501, "u1", 1);

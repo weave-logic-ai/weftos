@@ -127,6 +127,13 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
 /// they do not belong to any one project). Denied under `deny_all`. The
 /// routes are registered by other Phase 1 packages; the names are stable.
 pub const USER_LEVEL_ALLOW: &[&str] = &[
+    // Owner control of the user daemon remains Admin-only.
+    "kernel.shutdown",
+    "instance.nested.register",
+    "instance.nested.start",
+    "instance.nested.stop",
+    "instance.nested.grant",
+    "instance.nested.revoke",
     "auth.token.issue",
     "auth.token.revoke",
     "auth.token.list",
@@ -156,6 +163,12 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "project.restart",
     "project.status",
     "project.token.refresh",
+    // Nested projects (ADR-103 Phase 4): a master project kernel calls these with its
+    // project claim (inside a project); outside a project they are user-level Admin. The
+    // handler revalidates master identity, root and parentage.
+    "project.nested.register",
+    "project.nested.start",
+    "project.nested.stop",
     // mesh-local/1 (package H): spawn-nonce and PoP authenticated; a child
     // sends its project claim on every call, so it is inside a project.
     "mesh.challenge",

@@ -400,6 +400,12 @@ impl LocalDelivery for TenantRouter {
             return self.deliver_reserved(from, &msg);
         }
         let Some((reg, scope)) = self.resolve(from, dest_scope, topic_of(&msg)) else {
+            // Certified leaf delivery is ACKed only after this method
+            // succeeds. A missing or revoked parent tenant must remain in
+            // the leaf's replay queue rather than being silently consumed.
+            if from.node_verified && from.class == PeerClass::Leaf {
+                return Err(KernelError::Mesh("certified leaf parent tenant is unavailable".into()));
+            }
             return Ok(());
         };
         self.queue(&reg, &from.peer_id, scope, None, Self::origin_of(from), &msg)
@@ -413,6 +419,9 @@ impl LocalDelivery for TenantRouter {
         dest_scope: Option<&WireScope>,
     ) -> bool {
         if from.node_verified {
+            if from.class == PeerClass::Leaf {
+                return dest_scope.is_some_and(|s| self.registry.lookup_scope(&s.user_id, s.project_id.as_deref()).is_ok());
+            }
             return true;
         }
         match (dest_scope, self.default_tenant()) {

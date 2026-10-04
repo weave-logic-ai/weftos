@@ -452,7 +452,7 @@ fn user_level_ops_need_admin_outside_a_project() {
 
 /// Prefix routes whose verbs are individually listed above (everything
 /// unlisted under them is denied outside a project by default).
-const CLASSIFIED_PREFIXES: &[&str] = &["project.", "auth.token.", "shared.", "rpc_ext.test."];
+const CLASSIFIED_PREFIXES: &[&str] = &["instance.nested.", "project.", "auth.token.", "shared.", "rpc_ext.test."];
 
 /// Every registered ext route must be classified: allow-listed, user-level,
 /// or a prefix whose verbs are classified. Fails when a package adds a route
@@ -536,4 +536,13 @@ fn licence_verbs_are_machine_level_not_user_level() {
     // The read verbs are exactly the status ones.
     let reads: Vec<_> = LICENCE_VERBS.iter().filter(|m| required_capability(m) == Capability::Read).collect();
     assert_eq!(reads, vec![&"workload.node.binding", &"workload.cog.checkout.status", &"workload.cog.checkout.list"]);
+}
+
+#[test]
+fn owner_shutdown_is_admin_only_outside_a_project() {
+    let method = "kernel.shutdown";
+    assert_eq!(required_capability(method), Capability::Admin);
+    assert!(decide(OutsideProjectPolicy::ReadOnly, method, true, || false).is_ok());
+    assert!(decide(OutsideProjectPolicy::ReadOnly, method, false, || false).is_err());
+    assert!(decide(OutsideProjectPolicy::DenyAll, method, true, || false).is_err());
 }

@@ -87,6 +87,34 @@ async fn admitted_peer_with_scope_reaches_that_tenant_and_project() {
 }
 
 #[tokio::test]
+async fn certified_leaf_can_reach_only_its_scoped_parent_and_missing_parent_is_error() {
+    let r = rig();
+    let mut parent = tenant(&r, 501, &[], &[]);
+    let mut other = tenant(&r, 502, &[], &[]);
+    let leaf = PeerCtx { class: PeerClass::Leaf, ..ctx(true) };
+    r.router.deliver(&leaf, Some(&scope(&parent.id, None)), msg("mesh.leaf.input")).await.unwrap();
+    assert!(got(&mut parent).is_some());
+    assert!(got(&mut other).is_none());
+    assert!(r.router.deliver(&leaf, Some(&scope("f".repeat(32).as_str(), None)), msg("mesh.leaf.input")).await.is_err());
+    assert!(got(&mut parent).is_none() && got(&mut other).is_none());
+}
+
+#[tokio::test]
+async fn certified_project_leaf_route_disappears_on_revoke() {
+    let r = rig();
+    let mut parent = tenant(&r, 501, &[], &[]);
+    let leaf = PeerCtx { class: PeerClass::Leaf, ..ctx(true) };
+    let scoped = scope(&parent.id, Some(ULID));
+    assert!(r.router.deliver(&leaf, Some(&scoped), msg("mesh.leaf.input")).await.is_err());
+    r.registry.add_certified_project(&parent.id, ULID, [7; 32]).unwrap();
+    r.router.deliver(&leaf, Some(&scoped), msg("mesh.leaf.input")).await.unwrap();
+    assert!(got(&mut parent).is_some());
+    assert!(r.registry.remove_project(&parent.id, ULID));
+    assert!(r.router.deliver(&leaf, Some(&scoped), msg("mesh.leaf.input")).await.is_err());
+    assert!(got(&mut parent).is_none());
+}
+
+#[tokio::test]
 async fn admitted_peer_with_unknown_scope_is_dropped_and_counted() {
     let r = rig();
     let mut a = tenant(&r, 501, &[], &[]);

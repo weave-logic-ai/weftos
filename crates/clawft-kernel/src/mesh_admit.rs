@@ -476,3 +476,5 @@ mod tests;
 #[cfg(test)]
 #[path = "mesh_admit_dial_tests.rs"]
 mod dial_tests;
+
+pub use crate::mesh_admit_gate::install_nested_peer_ceiling;

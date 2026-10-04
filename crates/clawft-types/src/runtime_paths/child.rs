@@ -94,13 +94,38 @@ impl RuntimePaths {
         id: &str,
         project_root: impl Into<PathBuf>,
     ) -> Option<Self> {
+        let run_dir = absolutize(&run_dir.into());
         safe_component(id).then(|| Self {
-            root: absolutize(&run_dir.into()),
+            root: run_dir.clone(),
             source: RootSource::Child {
                 id: id.to_owned(),
                 project_root: absolutize(&project_root.into()),
+                trust_root: run_dir,
             },
         })
+    }
+
+    /// A container child has a writable runtime and a separate read-only
+    /// parent-owned trust directory.
+    pub fn child_container_at(
+        run_dir: impl Into<PathBuf>,
+        trust_dir: impl Into<PathBuf>,
+        id: &str,
+        project_root: impl Into<PathBuf>,
+    ) -> Option<Self> {
+        let mut paths = Self::child_at(run_dir, id, project_root)?;
+        if let RootSource::Child { trust_root, .. } = &mut paths.source {
+            *trust_root = absolutize(&trust_dir.into());
+        }
+        Some(paths)
+    }
+
+    /// Directory containing files only the parent controls.
+    pub fn trust_root(&self) -> &Path {
+        match &self.source {
+            RootSource::Child { trust_root, .. } => trust_root,
+            _ => &self.root,
+        }
     }
 
     /// A child kernel's paths under `<home>/.weftos/run/<id>/`. `None` when
@@ -131,7 +156,7 @@ impl RuntimePaths {
     }
     /// `<run>/parent-policy.json`.
     pub fn parent_policy(&self) -> PathBuf {
-        self.file(PARENT_POLICY_FILE)
+        self.trust_root().join(PARENT_POLICY_FILE)
     }
     /// `<run>/state.json`.
     pub fn state_json(&self) -> PathBuf {
@@ -139,7 +164,7 @@ impl RuntimePaths {
     }
     /// `<run>/revoked`: for a child, the file [`revoked_marker`] names.
     pub fn revoked_marker(&self) -> PathBuf {
-        self.file(REVOKED_FILE)
+        self.trust_root().join(REVOKED_FILE)
     }
     /// `<root>/.weftos/project.key` (children only).
     pub fn project_key(&self) -> Option<PathBuf> {

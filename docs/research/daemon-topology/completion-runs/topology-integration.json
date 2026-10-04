@@ -1,0 +1,50 @@
+{
+  "source": "/Users/mathewbeane/.codex/worktrees/topology-finish/weftos",
+  "modified": [
+    "crates/clawft-kernel/src/boot.rs",
+    "crates/clawft-kernel/src/mesh_admit.rs",
+    "crates/clawft-kernel/src/mesh_admit_gate.rs",
+    "crates/clawft-kernel/src/overlay_runtime.rs",
+    "crates/clawft-types/src/config/mod.rs",
+    "crates/clawft-types/src/project/adopt.rs",
+    "crates/clawft-types/src/project/error.rs",
+    "crates/clawft-types/src/project/mod.rs",
+    "crates/clawft-types/src/project/schema.rs",
+    "crates/clawft-types/src/project/tests.rs",
+    "crates/clawft-weave/src/child_peer.rs",
+    "crates/clawft-weave/src/commands/kernel_cmd.rs",
+    "crates/clawft-weave/src/daemon.rs",
+    "crates/clawft-weave/src/governance_push.rs",
+    "crates/clawft-weave/src/handshake_rpc.rs",
+    "crates/clawft-weave/src/lib.rs",
+    "crates/clawft-weave/src/main.rs",
+    "crates/clawft-weave/src/mesh_boot.rs",
+    "crates/clawft-weave/src/project_lifecycle_rpc.rs",
+    "crates/clawft-weave/src/project_supervisor/boot.rs",
+    "crates/clawft-weave/src/project_supervisor/child.rs",
+    "crates/clawft-weave/src/project_supervisor/mod.rs",
+    "crates/clawft-weave/src/project_supervisor/types.rs",
+    "crates/clawft-weave/src/project_token_scope.rs",
+    "crates/clawft-weave/src/rpc_ext.rs",
+    "crates/clawft-weave/src/scope_gate.rs",
+    "crates/clawft-weave/src/user_daemon.rs",
+    "crates/clawft-weave/tests/project_supervisor.rs",
+    "crates/clawft-weave/tests/project_supervisor_support/fake_kernel.rs",
+    "crates/clawft-weave/tests/project_supervisor_support/rpc_test.rs"
+  ],
+  "new": [
+    "crates/clawft-types/src/config/nested.rs",
+    "crates/clawft-weave/src/nested_boot.rs",
+    "crates/clawft-weave/src/nested_rpc.rs",
+    "crates/clawft-weave/src/nested_supervisor.rs",
+    "crates/clawft-weave/src/project_supervisor/sandbox.rs",
+    "crates/clawft-weave/tests/nested_instances.rs",
+    "docs/plans/weave-topology-p4-plan.md",
+    "docs/research/daemon-topology/completion-runs/d10-nested-user-source.md"
+  ],
+  "conflicts": [
+    "crates/clawft-types/src/project/schema.rs",
+    "crates/clawft-weave/src/project_lifecycle_rpc.rs",
+    "crates/clawft-weave/src/project_supervisor/mod.rs"
+  ]
+}

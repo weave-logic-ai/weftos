@@ -314,6 +314,9 @@ impl AdmissionGate for CryptoGate {
         }
         let enforce = self.mode == MeshAdmissionMode::Enforce;
         let id = hello.node_id.as_str();
+        if !nested_peer_allowed(NESTED_PEERS.get().map(Vec::as_slice), id) {
+            return Admission::Refuse(Refusal { code: "nested_peer_not_granted", detail: "peer is outside the master grant".into() });
+        }
         let base = Grant::open(ctx.class);
         if hello.genesis_hash != self.genesis {
             return self.finish(Some(id), base, Refusal {
@@ -361,3 +364,30 @@ impl AdmissionGate for CryptoGate {
         self.finish(None, Grant::open(ctx.class), refusal)
     }
 }
+
+/// Additional ceiling for a master-registered inner user; admission still runs
+/// the ordinary Noise/genesis/revocation/governance checks after this filter.
+static NESTED_PEERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+pub fn install_nested_peer_ceiling(peers: Vec<String>) -> Result<(), String> {
+    NESTED_PEERS.set(peers).map_err(|_| "nested peer ceiling already installed".into())
+}
+
+fn nested_peer_allowed(ceiling: Option<&[String]>, id: &str) -> bool {
+    ceiling.is_none_or(|peers| peers.iter().any(|peer| peer == id))
+}
+
+#[cfg(test)]
+mod nested_peer_tests {
+    use super::nested_peer_allowed;
+    #[test]
+    fn granted_peer_ceiling_never_becomes_open_membership() {
+        let peers = vec!["granted".to_owned()];
+        assert!(nested_peer_allowed(None, "ordinary-node"));
+        assert!(nested_peer_allowed(Some(&peers), "granted"));
+        assert!(!nested_peer_allowed(Some(&peers), "unregistered"));
+        assert!(!nested_peer_allowed(Some(&[]), "unregistered"));
+    }
+}
+
+/// Nested instances must never take the legacy unverified outbound-seed path.
+pub fn nested_peer_ceiling_active() -> bool { NESTED_PEERS.get().is_some() }

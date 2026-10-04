@@ -34,7 +34,10 @@ impl Conn {
         match m {
             Message::Renew {} => self.renew(id, &reg).await,
             Message::AddressAdd(b) => {
-                let r = self.st.registry.add_project(&reg.user_id, &b.project_id);
+                if !valid_project_claim(&reg.user_pubkey, &b) {
+                    return self.error_step(id, ErrorKind::Forbidden, "invalid project address claim", "").await;
+                }
+                let r = self.st.registry.add_certified_project(&reg.user_id, &b.project_id, b.project_pubkey);
                 self.ack_or(id, r.map_err(String::from)).await
             }
             Message::AddressRemove(b) => {
@@ -150,6 +153,38 @@ impl Conn {
             }
             None => self.error_step(id, ErrorKind::BadRequest, "the journal is empty", "").await,
         }
+    }
+}
+
+fn valid_project_claim(user_pubkey: &[u8; 32], claim: &clawft_mesh_local::proto::ProjectBinding) -> bool {
+    use ed25519_dalek::Verifier;
+    let payload = clawft_mesh_local::proto::project_binding_payload(&claim.project_id, &claim.project_pubkey);
+    ed25519_dalek::VerifyingKey::from_bytes(user_pubkey)
+        .is_ok_and(|key| key.verify(&payload, &ed25519_dalek::Signature::from_bytes(&claim.cert_sig)).is_ok())
+}
+
+#[cfg(test)]
+mod project_claim_tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use clawft_mesh_local::proto::{ProjectBinding, project_binding_payload};
+
+    #[test]
+    fn project_address_claim_binds_user_project_and_key() {
+        let user = SigningKey::from_bytes(&[41; 32]);
+        let project_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let project_pubkey = SigningKey::from_bytes(&[42; 32]).verifying_key().to_bytes();
+        let mut claim = ProjectBinding {
+            project_id: project_id.into(), project_pubkey,
+            cert_sig: user.sign(&project_binding_payload(project_id, &project_pubkey)).to_bytes(),
+        };
+        assert!(valid_project_claim(&user.verifying_key().to_bytes(), &claim));
+        assert!(!valid_project_claim(&SigningKey::from_bytes(&[43; 32]).verifying_key().to_bytes(), &claim));
+        claim.project_pubkey[0] ^= 1;
+        assert!(!valid_project_claim(&user.verifying_key().to_bytes(), &claim));
+        claim.project_pubkey[0] ^= 1;
+        claim.project_id.push('X');
+        assert!(!valid_project_claim(&user.verifying_key().to_bytes(), &claim));
     }
 }
 

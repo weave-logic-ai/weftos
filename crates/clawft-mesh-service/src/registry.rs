@@ -6,7 +6,7 @@
 //! overlap another user's (one being a prefix of the other), so a broad claim
 //! cannot swallow another tenant's narrower one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -195,6 +195,9 @@ struct Inner {
     by_user: HashMap<String, Arc<Registration>>,
     /// project id -> owning user id
     projects: HashMap<String, String>,
+    /// Current project key claimed by the live user daemon with a verified
+    /// user-key signature. Leaf scope authorization requires this entry.
+    project_keys: HashMap<String, [u8; 32]>,
     /// prefix -> owning user id
     prefixes: HashMap<String, String>,
 }
@@ -319,6 +322,8 @@ impl Registry {
         }
         g.by_user.remove(user_id);
         g.projects.retain(|_, o| o != user_id);
+        let active_projects: HashSet<String> = g.projects.keys().cloned().collect();
+        g.project_keys.retain(|project, _| active_projects.contains(project));
         g.prefixes.retain(|_, o| o != user_id);
         true
     }
@@ -327,10 +332,24 @@ impl Registry {
         self.lock().claim_project(user, project)
     }
 
+    pub fn add_certified_project(&self, user: &str, project: &str, key: [u8; 32]) -> Result<(), &'static str> {
+        let mut g = self.lock();
+        g.claim_project(user, project)?;
+        g.project_keys.insert(project.to_owned(), key);
+        Ok(())
+    }
+
+    pub fn current_project_key(&self, user: &str, project: &str) -> Option<[u8; 32]> {
+        let g = self.lock();
+        (g.projects.get(project).is_some_and(|owner| owner == user))
+            .then(|| g.project_keys.get(project).copied()).flatten()
+    }
+
     pub fn remove_project(&self, user: &str, project: &str) -> bool {
         let mut g = self.lock();
         if g.projects.get(project).is_some_and(|o| o == user) {
             g.projects.remove(project);
+            g.project_keys.remove(project);
             return true;
         }
         false

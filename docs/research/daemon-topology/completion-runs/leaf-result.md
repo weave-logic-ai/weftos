@@ -1,0 +1,3 @@
+I’m blocked before editing. The required claim for ticket `444c7964-0a35-40f2-9462-11c020419cfe` failed because this environment cannot resolve the dashboard host. Automatic browser approval review also rejected access to the board, stating that the user declined permission; I won’t try another route around that rejection.
+
+Please **claim the ticket yourself**, or explicitly waive the “claim first” requirement for this worktree. No implementation files have been changed.

@@ -56,6 +56,22 @@ pub struct SpawnFile {
     /// Project-scoped capability token for `shared.*` calls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_token: Option<String>,
+    /// Host and guest paths for an isolated Linux container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<ContainerTransport>,
+}
+
+/// Parent-controlled transport contract. The immutable ID is filled after
+/// engine `create` and before engine `start` executes the guest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerTransport {
+    pub engine: String,
+    pub container_id: String,
+    pub guest_parent_socket: PathBuf,
+    pub guest_runtime_root: PathBuf,
+    pub guest_trust_root: PathBuf,
+    pub guest_project_root: PathBuf,
+    pub host_child_socket: PathBuf,
 }
 
 impl fmt::Debug for SpawnFile {
@@ -71,6 +87,7 @@ impl fmt::Debug for SpawnFile {
                 "project_token",
                 &self.project_token.as_ref().map(|_| "<redacted>"),
             )
+            .field("container", &self.container)
             .finish()
     }
 }
@@ -115,6 +132,7 @@ impl SpawnFile {
             root,
             expires_unix: now_unix.saturating_add(SPAWN_TTL_SECS),
             project_token,
+            container: None,
         }
     }
 
@@ -138,6 +156,16 @@ impl SpawnFile {
         }
         if !self.root.is_absolute() || !self.parent_socket.is_absolute() {
             return bad("`root` and `parent_socket` must be absolute paths");
+        }
+        if let Some(c) = &self.container {
+            if !matches!(c.engine.as_str(), "docker" | "podman")
+                || c.container_id.len() != 64
+                || !c.container_id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                || ![&c.guest_parent_socket, &c.guest_runtime_root, &c.guest_trust_root,
+                    &c.guest_project_root, &c.host_child_socket].iter().all(|p| p.is_absolute())
+            {
+                return bad("invalid container identity or transport paths");
+            }
         }
         Ok(())
     }
@@ -273,6 +301,27 @@ mod tests {
             SpawnFile::read_and_consume(&p, 1059),
             Err(SpawnError::Unreadable { .. })
         ));
+    }
+
+    #[test]
+    fn container_transport_requires_immutable_id_and_absolute_host_guest_paths() {
+        let mut s = sample(1000);
+        s.container = Some(ContainerTransport {
+            engine: "docker".into(), container_id: "a".repeat(64),
+            guest_parent_socket: "/weftos/parent/kernel.sock".into(),
+            guest_runtime_root: format!("/weftos/run/{ID}").into(),
+            guest_trust_root: "/weftos/trust".into(),
+            guest_project_root: "/weftos/project".into(),
+            host_child_socket: format!("/run/{ID}/guest/kernel.sock").into(),
+        });
+        s.validate().unwrap();
+        let round: SpawnFile = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
+        assert_eq!(round, s);
+        s.container.as_mut().unwrap().container_id = "a".repeat(12);
+        assert!(s.validate().is_err());
+        s.container.as_mut().unwrap().container_id = "b".repeat(64);
+        s.container.as_mut().unwrap().host_child_socket = "relative.sock".into();
+        assert!(s.validate().is_err());
     }
 
     #[test]

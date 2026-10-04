@@ -46,8 +46,20 @@ pub struct ChildSpec {
 pub struct ChildRef {
     /// Project id.
     pub project_id: String,
-    /// OS process id.
-    pub pid: u32,
+    /// Identity selected by the launcher; a PID is never proof of a container.
+    pub identity: ChildIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChildIdentity {
+    Native { host_pid: u32 },
+    Container { engine: String, immutable_container_id: String, host_pid: u32 },
+}
+
+impl ChildIdentity {
+    pub fn host_pid(&self) -> u32 {
+        match self { Self::Native { host_pid } | Self::Container { host_pid, .. } => *host_pid }
+    }
 }
 
 /// What a launcher can say about a child.
@@ -55,8 +67,7 @@ pub struct ChildRef {
 pub enum ChildProbe {
     /// Alive.
     Running {
-        /// OS process id.
-        pid: u32,
+        identity: ChildIdentity,
     },
     /// Gone, with how it ended.
     Exited {
@@ -65,6 +76,9 @@ pub enum ChildProbe {
         /// Signal, when it was killed.
         signal: Option<i32>,
     },
+    /// Engine identity or liveness could not be established. Callers must
+    /// neither report readiness nor start a replacement from this state.
+    Unverifiable { reason: String },
     /// No child was ever started for this project.
     NotStarted,
 }
@@ -180,7 +194,7 @@ impl WorkloadRuntime for LogicalRuntime {
             .ok_or_else(|| RuntimeError::UnknownInstance(h.instance_id.clone()))?;
         if matches!(
             self.launcher.probe(&inst.spec.project_id).await,
-            ChildProbe::Running { .. }
+            ChildProbe::Running { .. } | ChildProbe::Unverifiable { .. }
         ) {
             return Err(RuntimeError::InvalidState("already running".into()));
         }
@@ -210,10 +224,13 @@ impl WorkloadRuntime for LogicalRuntime {
         let child = match inst.child.take() {
             Some(c) => Some(c),
             None => match self.launcher.probe(&inst.spec.project_id).await {
-                ChildProbe::Running { pid } => Some(ChildRef {
+                ChildProbe::Running { identity } => Some(ChildRef {
                     project_id: inst.spec.project_id.clone(),
-                    pid,
+                    identity,
                 }),
+                ChildProbe::Unverifiable { reason } => {
+                    return Err(RuntimeError::InvalidState(format!("child unverifiable: {reason}")));
+                }
                 _ => None,
             },
         };
@@ -231,7 +248,7 @@ impl WorkloadRuntime for LogicalRuntime {
             .ok_or_else(|| RuntimeError::UnknownInstance(h.instance_id.clone()))?;
         if matches!(
             self.launcher.probe(&inst.spec.project_id).await,
-            ChildProbe::Running { .. }
+            ChildProbe::Running { .. } | ChildProbe::Unverifiable { .. }
         ) {
             return Err(RuntimeError::InvalidState("stop the child before unloading".into()));
         }
@@ -245,15 +262,23 @@ impl WorkloadRuntime for LogicalRuntime {
             return InstanceStatus::of(InstanceState::Unknown);
         };
         match self.launcher.probe(&inst.spec.project_id).await {
-            ChildProbe::Running { pid } => InstanceStatus {
+            ChildProbe::Running { identity } => InstanceStatus {
                 state: InstanceState::Running,
                 exit_code: None,
-                detail: Some(format!("pid {pid}")),
+                detail: Some(match identity {
+                    ChildIdentity::Native { host_pid } => format!("pid {host_pid}"),
+                    ChildIdentity::Container { engine, immutable_container_id, .. } => format!("{engine} container {immutable_container_id}"),
+                }),
             },
             ChildProbe::Exited { code, signal } => InstanceStatus {
                 state: InstanceState::Exited,
                 exit_code: code,
                 detail: signal.map(|s| format!("signal {s}")),
+            },
+            ChildProbe::Unverifiable { reason } => InstanceStatus {
+                state: InstanceState::Unknown,
+                exit_code: None,
+                detail: Some(reason),
             },
             ChildProbe::NotStarted => InstanceStatus::of(InstanceState::Loaded),
         }

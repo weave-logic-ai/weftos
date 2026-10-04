@@ -221,6 +221,8 @@ pub struct LinkDeps {
     pub gate: Option<Arc<dyn GateBackend>>,
     /// Chain events (anchors, binding).
     pub chain: Arc<ChainQueue>,
+    /// Certified project identities from the user daemon's authoritative journal.
+    pub project_env: Option<Arc<crate::project_cert_rpc::CertEnv>>,
     /// Handshake state to keep current.
     pub state: Arc<MeshStateCell>,
     /// Tuning.

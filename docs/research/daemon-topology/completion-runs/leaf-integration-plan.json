@@ -1,0 +1,46 @@
+{
+  "base": "e6662b818be7511c283cc68c8e6df46681f342a2",
+  "tracked": [
+    "Cargo.lock",
+    "crates/clawft-edge-pad-idf/Cargo.toml",
+    "crates/clawft-edge-pad-idf/build.rs",
+    "crates/clawft-edge-pad-idf/src/main.rs",
+    "crates/clawft-edge-pad-idf/src/mesh.rs",
+    "crates/clawft-edge-pad/Cargo.toml",
+    "crates/clawft-edge-pad/src/main.rs",
+    "crates/clawft-kernel/Cargo.toml",
+    "crates/clawft-kernel/src/boot.rs",
+    "crates/clawft-kernel/src/lib.rs",
+    "crates/clawft-kernel/src/mesh_admit_tests.rs",
+    "crates/clawft-kernel/src/mesh_runtime.rs",
+    "crates/clawft-kernel/src/mesh_serve.rs",
+    "crates/clawft-kernel/src/mesh_serve_tests.rs",
+    "crates/clawft-mesh-local/src/proto.rs",
+    "crates/clawft-mesh-service/src/handlers.rs",
+    "crates/clawft-mesh-service/src/main_loop.rs",
+    "crates/clawft-mesh-service/src/registry.rs",
+    "crates/clawft-mesh-service/src/registry_tests.rs",
+    "crates/clawft-mesh-service/src/router.rs",
+    "crates/clawft-mesh-service/src/router_tests.rs",
+    "crates/clawft-weave/Cargo.toml",
+    "crates/clawft-weave/src/commands/leaf_cmd.rs",
+    "crates/clawft-weave/src/mesh_boot.rs",
+    "crates/clawft-weave/src/mesh_local_glue.rs",
+    "crates/clawft-weave/src/mesh_local_glue/session.rs",
+    "crates/clawft-weave/src/project_cert_rpc.rs",
+    "crates/clawft-weave/tests/mesh_e2e/mod.rs",
+    "crates/clawft-weave/tests/mesh_p3_e2e.rs",
+    "crates/clawft-weave/tests/mesh_service_client.rs",
+    "crates/weftos-leaf-types/Cargo.toml",
+    "crates/weftos-leaf-types/src/lib.rs"
+  ],
+  "new": [
+    "crates/clawft-kernel/src/mesh_leaf.rs",
+    "crates/weftos-leaf-types/src/link.rs",
+    "docs/plans/adr-103-leaf-implementation.md"
+  ],
+  "overlap": [
+    "crates/clawft-kernel/src/boot.rs",
+    "crates/clawft-weave/src/mesh_boot.rs"
+  ]
+}

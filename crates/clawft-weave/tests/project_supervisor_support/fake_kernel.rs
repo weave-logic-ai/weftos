@@ -33,11 +33,81 @@ pub fn run(args: &[String]) -> ! {
     let mode = std::fs::read_to_string(run.join("behavior"))
         .map(|s| s.trim().to_owned())
         .unwrap_or_else(|_| "serve".into());
+    if mode == "sandbox-probe" {
+        let allowed = std::fs::read_to_string(run.join("probe-allowed-target")).unwrap();
+        let allowed_read = std::fs::read_to_string(allowed.trim()).is_ok_and(|s| s == "project-only");
+        // The target belongs to the test's temporary HOME. Only the probe
+        // result is recorded; never log file content or a real user path.
+        let target = std::fs::read_to_string(run.join("probe-target")).unwrap();
+        let target = PathBuf::from(target.trim());
+        let read = std::fs::read(&target).is_ok();
+        let write = std::fs::write(&target, b"overwritten").is_ok();
+        let mesh = std::fs::read_to_string(run.join("probe-mesh-socket")).unwrap();
+        let mesh = std::os::unix::net::UnixStream::connect(mesh.trim()).is_ok();
+        let owner_path = std::fs::read_to_string(run.join("probe-owner-socket")).unwrap();
+        let owner_path = owner_path.trim();
+        let owner_direct = std::os::unix::net::UnixStream::connect(owner_path).is_ok();
+        let root = PathBuf::from(serde_json::from_slice::<Value>(&std::fs::read(run.join("spawn.json")).unwrap()).unwrap()["root"].as_str().unwrap());
+        let owner_alias = root.join("owner-alias.sock");
+        let _ = std::os::unix::fs::symlink(owner_path, &owner_alias);
+        let owner_alias = std::os::unix::net::UnixStream::connect(owner_alias).is_ok();
+        let sibling = std::fs::read_to_string(run.join("probe-sibling-pid")).unwrap();
+        let sibling: i32 = sibling.trim().parse().unwrap();
+        // Signal 0 is a harmless permission probe against a test-owned
+        // sibling, never a signal to a real daemon.
+        let signal = nix::sys::signal::kill(nix::unistd::Pid::from_raw(sibling), None).is_ok();
+        let pin_write = std::fs::write(run.join("user.pub"), b"forged").is_ok();
+        let replacement = run.join("replacement");
+        std::fs::write(&replacement, b"forged").unwrap();
+        let pin_replace = std::fs::rename(replacement, run.join("user.pub")).is_ok();
+        let moved_run = run.with_file_name("moved-by-sandbox-probe");
+        let run_dir_rename = std::fs::rename(&run, &moved_run).is_ok();
+        if run_dir_rename {
+            let _ = std::fs::rename(&moved_run, &run);
+        }
+        let escape_admin_denied = probe_escaped_admin(&run);
+        std::fs::write(run.join("probe-result"), format!("allowed_read={allowed_read} read={read} write={write} mesh={mesh} owner_direct={owner_direct} owner_alias={owner_alias} signal={signal} pin_write={pin_write} pin_replace={pin_replace} run_dir_rename={run_dir_rename} escape_admin_denied={escape_admin_denied}"))
+            .unwrap();
+    }
     match mode.as_str() {
         "crash" => std::process::exit(1),
         "exit0" => std::process::exit(0),
         _ => serve(&run, &id, &mode),
     }
+}
+
+fn probe_escaped_admin(run: &PathBuf) -> bool {
+    let spawn: Value = serde_json::from_slice(&std::fs::read(run.join("spawn.json")).unwrap()).unwrap();
+    let socket = spawn["parent_socket"].as_str().unwrap().to_owned();
+    let owner_token = std::fs::read_to_string(run.join("probe-owner-token")).unwrap();
+    // The fake kernel is a process-group leader. Fork once so the test-owned
+    // grandchild can enter a new session; never touch any other process.
+    let pid = unsafe { nix::libc::fork() };
+    if pid < 0 { return false }
+    if pid == 0 {
+        let accepted = (|| -> std::io::Result<bool> {
+            if unsafe { nix::libc::setsid() } < 0 { return Ok(false) }
+            let stream = std::os::unix::net::UnixStream::connect(socket)?;
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+            let mut writer = stream.try_clone()?;
+            let mut reader = BufReader::new(stream);
+            for method in ["auth.token.issue", "project.revoke", "kernel.shutdown"] {
+                for auth in ["admin", owner_token.trim()] {
+                    let req = json!({"id":"escape","proto":1,"method":method,"params":{},"auth":auth});
+                    writer.write_all(format!("{req}\n").as_bytes())?;
+                    let mut line = String::new();
+                    reader.read_line(&mut line)?;
+                    let answer: Value = serde_json::from_str(&line).map_err(std::io::Error::other)?;
+                    if answer["error_kind"] != "child_endpoint_method_denied" { return Ok(false) }
+                }
+            }
+            Ok(true)
+        })().unwrap_or(false);
+        unsafe { nix::libc::_exit(if accepted { 0 } else { 1 }) };
+    }
+    let mut status = 0;
+    (unsafe { nix::libc::waitpid(pid, &mut status, 0) }) == pid
+        && nix::libc::WIFEXITED(status) && nix::libc::WEXITSTATUS(status) == 0
 }
 
 fn serve(run: &PathBuf, id: &str, mode: &str) -> ! {

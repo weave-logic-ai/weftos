@@ -16,6 +16,9 @@ pub struct StateFile {
     /// Child pid when one was started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// Inspected immutable identity for a Linux container child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<ContainerState>,
     /// Executable the child was started from (adoption compares its name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exe: Option<String>,
@@ -41,6 +44,13 @@ pub struct StateFile {
     /// Crate version the running kernel reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kernel_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerState {
+    pub engine: String,
+    pub id: String,
+    pub host_socket: std::path::PathBuf,
 }
 
 /// Write `state.json` atomically (0600). Best effort: a failure is logged,

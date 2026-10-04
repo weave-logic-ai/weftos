@@ -1522,6 +1522,7 @@ dependencies = [
  "futures",
  "futures-util",
  "half",
+ "hex",
  "insta",
  "libc",
  "ndarray 0.16.1",
@@ -1558,6 +1559,7 @@ dependencies = [
  "wasmtime-wasi",
  "weft-licence",
  "weft-licence-wire",
+ "weftos-leaf-types",
  "weftos-rvf-crypto",
  "weftos-rvf-wire",
  "wiremock",
@@ -2110,6 +2112,7 @@ dependencies = [
  "exo-resource-tree",
  "flate2",
  "hex",
+ "libc",
  "nix 0.29.0",
  "rand 0.8.7",
  "rvf-types",
@@ -10871,7 +10874,9 @@ name = "weftos-leaf-types"
 version = "0.1.0"
 dependencies = [
  "ciborium",
+ "ed25519-dalek",
  "serde",
+ "sha2",
 ]
 
 [[package]]

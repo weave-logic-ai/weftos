@@ -1,0 +1,42 @@
+[
+  {
+    "file": "crates/clawft-weave/src/nested_supervisor.rs",
+    "imported_sha256": "7c522a78d8c95bb62d18f130f39695768b89ba397fb2d443a58e3d9adf70b357",
+    "review_fix_sha256": "88bb9adfdbe3444f90312dfded479adfb26622f704dfe09bfa96f80299195576"
+  },
+  {
+    "file": "crates/clawft-weave/tests/nested_instances.rs",
+    "imported_sha256": "8416ecb1f94bd5261f7154d30eb1530f905aa1957a6eaf59e6cd8ebbb2842969",
+    "review_fix_sha256": "32547fcee1637bdafbd6fe836bd6b8a2e91151230bb540314fc59aff62e4290a"
+  },
+  {
+    "file": "crates/clawft-kernel/src/mesh_runtime.rs",
+    "imported_sha256": "78f3f25e687dc2c9985ff89aeb833e1c941e2fe888b3d58bab8abed7253f802b",
+    "review_fix_sha256": "bdf09bb33ddc1e4d02330e341e04fd194e101a16c9750d5940f57ec026a0eebc"
+  },
+  {
+    "file": "crates/clawft-kernel/src/mesh_serve.rs",
+    "imported_sha256": "db3e7d688cf42ad923a5fcc6d256c337317e93e8c01b91438ef5b293bdc045c8",
+    "review_fix_sha256": "b8d4c8389864fb136de39f4ce178bc22b856d31e2501a29fddc0f0a9ce46b5ee"
+  },
+  {
+    "file": "crates/clawft-kernel/src/mesh_admit_gate.rs",
+    "imported_sha256": "bb4ad07ab0e42cc5e59a8e74c4d93bc05edad1c2f3aa8fd622b6df2b65e7238a",
+    "review_fix_sha256": "382897176da43576322f2b33376062a25247af7f0cf54a0e4e80d98ded8854a8"
+  },
+  {
+    "file": "crates/clawft-kernel/src/boot.rs",
+    "imported_sha256": "c75441a5db522f5375e6349788b54b449e8fece03a8952a9436bfc7c7faaef3e",
+    "review_fix_sha256": "ce8b5b9f2b632c6816b57eedc2a616849782f5231a2658f62df04cded374cace"
+  },
+  {
+    "file": "crates/clawft-kernel/src/mesh_nested_dial_tests.rs",
+    "imported_sha256": null,
+    "review_fix_sha256": "ab11097c3e8e4ed6da1f583ac02fe505c1b6c6d946d3f71932ca6b2f4f13dd9d"
+  },
+  {
+    "file": "crates/clawft-weave/src/nested_boot.rs",
+    "imported_sha256": "5a0e472cab8ac271ac80f4bb11b8102fc92db3b3a4a8806e32ecd85ad6c0ae23",
+    "review_fix_sha256": "0422580103667683700da9363fd740e70c7f8a4fe57bd91621871c20bf233be2"
+  }
+]

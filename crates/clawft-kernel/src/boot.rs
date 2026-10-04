@@ -344,7 +344,10 @@ impl<P: Platform> Kernel<P> {
             p.apply_limits(&mut kernel_config);
             Some(p)
         } else {
-            None
+            let p = crate::overlay_runtime::prepare_nested()
+                .map_err(|e| KernelError::BootRefused(e.boot_message()))?;
+            if let Some(p) = &p { p.apply_limits(&mut kernel_config); }
+            p
         };
         #[cfg(not(feature = "exochain"))]
         if project_profile {
@@ -605,6 +608,20 @@ impl<P: Platform> Kernel<P> {
                 runtime.set_local_router(Arc::clone(&a2a_router));
 
                 let runtime = Arc::new(runtime);
+                // ADR-103 leaf admission is opt-in until a service-owned
+                // registry exists. An ephemeral node key cannot sign durable
+                // acknowledgments, so only a persisted node key may serve it.
+                if let Some(seed) = node_key_seed {
+                    let leaf_root = runtime_paths.root().join("leaf");
+                    if leaf_root.join("registry").is_dir() {
+                        let ingress = crate::mesh_leaf::LeafIngress::open(
+                            &leaf_root,
+                            ed25519_dalek::SigningKey::from_bytes(&seed),
+                        ).map_err(|e| KernelError::Boot(format!("leaf ingress: {e}")))?;
+                        runtime.set_leaf_ingress(Arc::new(ingress)).map_err(|_|
+                            KernelError::Boot("leaf ingress already installed".into()))?;
+                    }
+                }
 
                 // WEFT-117: register AssessmentTransport so the mesh
                 // accept/event loop demuxes FrameType::AssessmentSync
@@ -782,6 +799,17 @@ impl<P: Platform> Kernel<P> {
                     }
                 };
 
+                let require_authenticated_seeds = crate::mesh_admit_gate::nested_peer_ceiling_active();
+                if let (Some(identity), Some(noise)) = (dial_identity.as_ref(), noise_config.as_ref()) {
+                    let noise_static = crate::mesh_noise::noise_static_public(&noise.local_private_key)
+                        .ok_or_else(|| KernelError::Boot("cannot derive mesh Noise key".into()))?;
+                    runtime.set_authentication(crate::mesh_runtime::MeshAuthentication {
+                        gate: Arc::clone(&admission_gate), identity: Arc::clone(identity),
+                        noise_static, require_authenticated_seeds,
+                    });
+                } else if require_authenticated_seeds {
+                    return Err(KernelError::Boot("nested mesh requires reciprocal authenticated admission".into()));
+                }
                 let rt = Arc::clone(&runtime);
                 let conn_limits = crate::mesh_limits::Limits {
                     first_frame: std::time::Duration::from_secs(

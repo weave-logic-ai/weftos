@@ -51,6 +51,9 @@ type TestFn = fn();
 fn tests() -> Vec<(&'static str, TestFn)> {
     vec![
         ("env_allowlist_spawn_contract", env_allowlist_spawn_contract),
+        ("nested_master_must_own_the_child", nested_master_must_own_the_child),
+        ("seatbelt_denies_test_home", seatbelt_denies_test_home),
+        ("seatbelt_quoted_root_denies_test_home", seatbelt_quoted_root_denies_test_home),
         ("restart_budget_then_failed", restart_budget_then_failed),
         ("backoff_schedule_is_chained", backoff_schedule_is_chained),
         ("clean_exit_is_not_restarted", clean_exit_is_not_restarted),
@@ -81,6 +84,7 @@ fn tests() -> Vec<(&'static str, TestFn)> {
         ("an_adopted_but_refused_leftover_is_reported_as_unmanaged", followup_tests::an_adopted_but_refused_leftover_is_reported_as_unmanaged),
         ("a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly", followup_tests::a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly),
         ("an_empty_pid_file_that_fills_in_is_adopted_not_bad", followup_tests::an_empty_pid_file_that_fills_in_is_adopted_not_bad),
+        ("child_endpoint_allowed_methods_in_memory", rpc_test::child_endpoint_allowed_methods_in_memory),
         // Last: installs the process-wide supervisor.
         ("lifecycle_rpc_end_to_end", rpc_test::lifecycle_rpc_end_to_end),
     ]
@@ -88,6 +92,9 @@ fn tests() -> Vec<(&'static str, TestFn)> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(error) = clawft_weave::project_supervisor::sandbox::run_helper(&args) {
+        panic!("sandbox helper: {error}");
+    }
     if args.first().map(String::as_str) == Some("kernel") {
         fake_kernel::run(&args);
     }
@@ -146,6 +153,153 @@ fn main() {
     }
 }
 
+fn nested_master_must_own_the_child() {
+    use clawft_types::project::{WeaveSection, adopt_or_init, read_project_toml, write_project_toml};
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    let master = adopt_or_init(fx.tmp.path(), &fx.mdir, Some("master")).unwrap();
+    let mut child = read_project_toml(&fx.root).unwrap().unwrap();
+    child.parent = Some(master.id.clone());
+    write_project_toml(&fx.root, &child).unwrap();
+    let mut master_toml = read_project_toml(fx.tmp.path()).unwrap().unwrap();
+    let sup = fx.supervisor();
+    rt().block_on(async {
+        let refused = sup.ensure_running(&fx.id).await.unwrap_err();
+        assert_eq!(refused.kind(), "nested_project_refused");
+        assert_eq!(sup.launcher().spawn_count(), 0);
+        let other_root = fx.tmp.path().join("other-master");
+        std::fs::create_dir_all(&other_root).unwrap();
+        let other = adopt_or_init(&other_root, &fx.mdir, Some("other-master")).unwrap();
+        let mut other_toml = read_project_toml(&other_root).unwrap().unwrap();
+        other_toml.weave = Some(WeaveSection { master: true });
+        write_project_toml(&other_root, &other_toml).unwrap();
+        child.parent = Some(other.id);
+        write_project_toml(&fx.root, &child).unwrap();
+        let refused = sup.ensure_running(&fx.id).await.unwrap_err();
+        assert_eq!(refused.kind(), "nested_project_refused");
+        child.parent = Some(master.id.clone());
+        write_project_toml(&fx.root, &child).unwrap();
+        master_toml.weave = Some(WeaveSection { master: true });
+        write_project_toml(fx.tmp.path(), &master_toml).unwrap();
+        std::fs::write(fx.tmp.path().join(".weftos/overlay.toml"),
+            "schema = 1\n[limits]\nmax_processes = 4\nspawn_budget = 2\n").unwrap();
+        let running = sup.ensure_running(&fx.id).await.unwrap_or_else(|e| {
+            let log = std::fs::read_to_string(fx.run_dir().join("kernel.log")).unwrap_or_default();
+            panic!("nested kernel did not start: {e}; kernel.log: {log}");
+        });
+        assert!(running.started);
+        let env = std::fs::read_to_string(fx.run_dir().join("env.txt")).unwrap();
+        assert!(env.lines().any(|line| line == format!("HOME={}", fx.root.join(".weftos/sandbox-home").display())));
+        assert!(!env.lines().any(|line| line == format!("HOME={}", fx.home.display())));
+        let policy = clawft_kernel::parent_policy::load_parent_policy(&fx.run_dir().join("parent-policy.json")).unwrap();
+        clawft_kernel::parent_policy::verify_parent_policy(&policy, &fx.user_key.verifying_key().to_bytes()).unwrap();
+        assert_eq!(policy.limits.max_processes, Some(4));
+        assert_eq!(policy.limits.spawn_budget, Some(2));
+        sup.stop(&fx.id).await.unwrap();
+    });
+}
+
+fn seatbelt_denies_test_home() {
+    seatbelt_probe(false);
+}
+
+fn seatbelt_quoted_root_denies_test_home() {
+    seatbelt_probe(true);
+}
+
+fn seatbelt_probe(quoted_root: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use clawft_types::project::ProjectSandbox;
+        let mut fx = Fixture::new();
+        if quoted_root {
+            let quoted = fx.tmp.path().join("proj\"(allow default)");
+            std::fs::rename(&fx.root, &quoted).unwrap();
+            let mut manifest = fx.manifest();
+            manifest.root = quoted.canonicalize().unwrap();
+            clawft_types::project::write_manifest(&fx.mdir, &manifest).unwrap();
+            fx.root = manifest.root;
+        }
+        let secret = fx.home.join("private-test-secret");
+        std::fs::create_dir_all(&fx.home).unwrap();
+        std::fs::write(&secret, "test-only").unwrap();
+        let mesh_path = fx.home.join("outer-mesh.sock");
+        let mesh_listener = std::os::unix::net::UnixListener::bind(&mesh_path).unwrap();
+        let owner_socket = fx.run_root.join("kernel.sock");
+        let owner_listener = std::os::unix::net::UnixListener::bind(&owner_socket).unwrap();
+        struct Sibling(std::process::Child);
+        impl Drop for Sibling {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let sibling = Sibling(std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap());
+        fx.behavior("sandbox-probe");
+        let allowed = fx.root.join("allowed-sandbox-file");
+        std::fs::write(&allowed, "project-only").unwrap();
+        std::fs::write(fx.run_dir().join("probe-allowed-target"), allowed.display().to_string()).unwrap();
+        std::fs::write(fx.run_dir().join("probe-target"), secret.display().to_string()).unwrap();
+        std::fs::write(fx.run_dir().join("probe-mesh-socket"), mesh_path.display().to_string()).unwrap();
+        std::fs::write(fx.run_dir().join("probe-owner-socket"), owner_socket.display().to_string()).unwrap();
+        std::fs::write(fx.run_dir().join("probe-sibling-pid"), sibling.0.id().to_string()).unwrap();
+        fx.set_serve(|s| s.sandbox = ProjectSandbox::Seatbelt);
+        rt().block_on(async {
+            let parent_socket = fx.cfg().parent_socket;
+            std::fs::create_dir_all(parent_socket.parent().unwrap()).unwrap();
+            let parent_listener = tokio::net::UnixListener::bind(parent_socket).unwrap();
+            let auth_chain = fx.tmp.path().join("auth-chain");
+            std::fs::create_dir_all(&auth_chain).unwrap();
+            let auth_kernel = clawft_kernel::boot::Kernel::boot(
+                clawft_types::config::Config::default(),
+                clawft_types::config::KernelConfig {
+                    chain: Some(clawft_types::config::ChainConfig::isolated_in(&auth_chain)),
+                    ..Default::default()
+                },
+                std::sync::Arc::new(clawft_platform::NativePlatform::new()),
+            ).await.unwrap();
+            let auth_kernel = std::sync::Arc::new(tokio::sync::RwLock::new(auth_kernel));
+            let authority = clawft_weave::token_rpc::authority_for(&auth_kernel).await.unwrap();
+            let (owner_token, _) = authority.issue(
+                "test-owner", Some(chrono::Duration::hours(1)), None,
+                &clawft_kernel::token_authority::Issuer { uid: None },
+            ).unwrap();
+            std::fs::write(fx.run_dir().join("probe-owner-token"), owner_token).unwrap();
+            let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+            let auth_task = tokio::spawn(async move {
+                let (stream, _) = parent_listener.accept().await.unwrap();
+                clawft_weave::daemon::handle_connection_child(stream, auth_kernel, shutdown_tx).await;
+            });
+            let sup = fx.supervisor();
+            let running = sup.ensure_running(&fx.id).await.unwrap_or_else(|e| {
+                let log = std::fs::read_to_string(fx.run_dir().join("kernel.log")).unwrap_or_default();
+                panic!("sandboxed kernel did not start: {e}; kernel.log: {log}");
+            });
+            assert!(running.started);
+            let result = std::fs::read_to_string(fx.run_dir().join("probe-result")).unwrap();
+            assert_eq!(result, "allowed_read=true read=false write=false mesh=false owner_direct=false owner_alias=false signal=false pin_write=false pin_replace=false run_dir_rename=false escape_admin_denied=true");
+            assert_eq!(std::fs::read_to_string(&secret).unwrap(), "test-only");
+            auth_task.await.unwrap();
+            sup.stop(&fx.id).await.unwrap();
+        });
+        drop(mesh_listener);
+        drop(owner_listener);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = quoted_root;
+        use clawft_types::project::ProjectSandbox;
+        let fx = Fixture::new();
+        fx.set_serve(|s| s.sandbox = ProjectSandbox::Seatbelt);
+        rt().block_on(async {
+            let sup = fx.supervisor();
+            let refused = sup.ensure_running(&fx.id).await.unwrap_err();
+            assert_eq!(refused.kind(), "admission_refused");
+            assert_eq!(sup.launcher().spawn_count(), 0);
+        });
+    }
+}
+
 fn env_allowlist_spawn_contract() {
     let fx = Fixture::new();
     fx.behavior("serve");
@@ -165,7 +319,7 @@ fn env_allowlist_spawn_contract() {
         let seen = std::fs::read_to_string(fx.run_dir().join("env.txt")).unwrap();
         let allowed = [
             "HOME", "PATH", "WEFTOS_RUNTIME_DIR", "WEFTOS_PROJECT_ID", "LANG", "LC_ALL", "LC_CTYPE",
-            "LC_COLLATE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "LC_MONETARY",
+            "LC_COLLATE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "LC_MONETARY", "TMPDIR",
         ];
         for line in seen.lines() {
             let k = line.split('=').next().unwrap();
@@ -196,8 +350,8 @@ fn env_allowlist_spawn_contract() {
         assert!(spawn.expires_unix > now && spawn.expires_unix <= now + 60, "60 s expiry");
         assert_eq!(
             spawn.parent_socket.as_path(),
-            fx.run_root.join("kernel.sock").as_path(),
-            "the default parent socket is the user daemon's socket"
+            fx.run_root.join("child-ipc/child.sock").as_path(),
+            "the default parent socket is the child-only endpoint"
         );
         // The token: project-scoped, Write only, never Admin.
         let info = fx.tokens.validate(spawn.project_token.as_ref().unwrap()).expect("live token");
@@ -398,21 +552,21 @@ fn token_refresh() {
         let sup = fx.supervisor();
         sup.ensure_running(&fx.id).await.unwrap();
         let t1 = fixture::seen_spawn(&fx.run_dir()).project_token.unwrap();
-        let (t2, _) = sup.launcher().refresh_token(&fx.id, &t1).unwrap();
-        let (t3, _) = sup.launcher().refresh_token(&fx.id, &t2).unwrap();
+        let (t2, _) = sup.launcher().refresh_token(&fx.id, &t1).await.unwrap();
+        let (t3, _) = sup.launcher().refresh_token(&fx.id, &t2).await.unwrap();
         assert!(fx.tokens.validate(&t1).is_none(), "the token before the previous one is revoked");
         assert!(fx.tokens.validate(&t2).is_some() && fx.tokens.validate(&t3).is_some());
         // An owner token, an unknown secret and another project's token
         // cannot refresh.
         let (owner, _) = fx.tokens.issue("owner", None, None, &Issuer::default()).unwrap();
-        assert!(sup.launcher().refresh_token(&fx.id, &owner).is_err());
-        assert!(sup.launcher().refresh_token(&fx.id, "wft_nope").is_err());
+        assert!(sup.launcher().refresh_token(&fx.id, &owner).await.is_err());
+        assert!(sup.launcher().refresh_token(&fx.id, "wft_nope").await.is_err());
         let other = clawft_types::project::new_id();
         let (foreign, _) = fx
             .tokens
             .issue_project(&other, chrono::Duration::minutes(5), &Issuer::default())
             .unwrap();
-        assert!(sup.launcher().refresh_token(&fx.id, &foreign).is_err());
+        assert!(sup.launcher().refresh_token(&fx.id, &foreign).await.is_err());
         // Stopping the child revokes its tokens.
         sup.stop(&fx.id).await.unwrap();
         assert!(fx.tokens.validate(&t2).is_none() && fx.tokens.validate(&t3).is_none());

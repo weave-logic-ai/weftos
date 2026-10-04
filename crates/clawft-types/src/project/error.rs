@@ -34,6 +34,9 @@ pub enum ProjectError {
     /// Root directory could not be canonicalised or is not a directory.
     #[error("{0}: project root is not an existing directory")]
     BadRoot(PathBuf),
+    /// Nested registration does not satisfy the master's identity and root contract.
+    #[error("nested project refused: {0}")]
+    NestedRefused(String),
     /// `reinit_fork` was asked to re-identify the registered home of an id.
     #[error(
         "{root} is the registered home of project {id}; fork the copy instead \

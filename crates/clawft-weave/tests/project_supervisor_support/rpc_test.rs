@@ -9,7 +9,7 @@ use clawft_kernel::boot::Kernel;
 use clawft_platform::NativePlatform;
 use clawft_types::config::{ChainConfig, Config, KernelConfig};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, watch};
 
@@ -31,6 +31,68 @@ fn denied(v: &Value) -> bool {
     v["ok"] == false && v["error"].as_str().unwrap_or("").contains("permission denied")
 }
 
+async fn call_memory(stream: &mut BufReader<DuplexStream>, method: &str, auth: &str) -> Value {
+    let req = json!({"id":"memory", "proto":1, "method":method, "params":{}, "auth":auth});
+    stream.get_mut().write_all(format!("{req}\n").as_bytes()).await.unwrap();
+    let mut line = String::new();
+    stream.read_line(&mut line).await.unwrap();
+    serde_json::from_str(line.trim()).unwrap()
+}
+
+/// Real child endpoint dispatch without a host UDS. This makes the method
+/// contract runnable inside execution sandboxes that forbid AF_UNIX bind.
+pub fn child_endpoint_allowed_methods_in_memory() {
+    let fx = Fixture::new();
+    let old_home = std::env::var_os("HOME");
+    let old_run = std::env::var_os("WEFTOS_RUNTIME_DIR");
+    // The custom harness runs one test per process; set these before Tokio
+    // starts so kernel boot cannot resolve the operator's HOME or daemon.
+    unsafe {
+        std::env::set_var("HOME", &fx.home);
+        std::env::set_var("WEFTOS_RUNTIME_DIR", &fx.run_root);
+    }
+    super::rt().block_on(async {
+        clawft_weave::user_daemon::enter_at(&fx.run_root);
+        clawft_weave::project_rpc::init_manifests_dir(fx.mdir.clone());
+        let chain_dir = fx.tmp.path().join("chain");
+        std::fs::create_dir_all(&chain_dir).unwrap();
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig::isolated_in(&chain_dir)),
+            ..KernelConfig::default()
+        };
+        let kernel = Arc::new(RwLock::new(
+            Kernel::boot(Config::default(), kcfg, Arc::new(NativePlatform::new())).await.unwrap(),
+        ));
+        let authority = clawft_weave::token_rpc::authority_for(&kernel).await.unwrap();
+        let (project_token, _) = authority.issue_project(
+            &fx.id, chrono::Duration::hours(1),
+            &clawft_kernel::token_authority::Issuer { uid: None },
+        ).unwrap();
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let (tx, _rx) = watch::channel(false);
+        tokio::spawn(clawft_weave::daemon::handle_connection_child(server, kernel, tx));
+        let mut client = BufReader::new(client);
+        let r = call_memory(&mut client, "mesh.challenge", "admin").await;
+        assert_eq!(r["error_kind"], "invalid_params", "mesh bootstrap reached its handler: {r}");
+        let r = call_memory(&mut client, "project.anchor.submit", "admin").await;
+        assert_eq!(r["error_kind"], "anchor_bad_statement", "signed anchor reached its handler: {r}");
+        let r = call_memory(&mut client, "shared.llm.models", "admin").await;
+        assert_eq!(r["error_kind"], "project_token_required", "shared calls need a project token: {r}");
+        let r = call_memory(&mut client, "shared.llm.models", &project_token).await;
+        assert_ne!(r["error_kind"], "child_endpoint_method_denied", "project shared call reached its handler: {r}");
+        assert_ne!(r["error_kind"], "project_token_required", "project token was accepted: {r}");
+        for method in ["auth.token.issue", "project.revoke", "kernel.shutdown"] {
+            let r = call_memory(&mut client, method, "admin").await;
+            assert_eq!(r["error_kind"], "child_endpoint_method_denied", "{method}: {r}");
+        }
+    });
+    clawft_weave::user_daemon::leave();
+    unsafe {
+        match old_home { Some(value) => std::env::set_var("HOME", value), None => std::env::remove_var("HOME") }
+        match old_run { Some(value) => std::env::set_var("WEFTOS_RUNTIME_DIR", value), None => std::env::remove_var("WEFTOS_RUNTIME_DIR") }
+    }
+}
+
 pub fn lifecycle_rpc_end_to_end() {
     let fx = Fixture::new();
     fx.behavior("serve");
@@ -49,6 +111,16 @@ pub fn lifecycle_rpc_end_to_end() {
         tokio::spawn(async move {
             while let Ok((s, _)) = listener.accept().await {
                 tokio::spawn(clawft_weave::daemon::handle_connection_peer(s, Arc::clone(&k), t.clone(), false));
+            }
+        });
+        let child_sock = clawft_weave::user_daemon::child_socket_path(&fx.run_root);
+        // Exercise the production daemon::run binder, not a test-only socket
+        // setup. This also checks its directory and stale-path handling.
+        let child_listener = clawft_weave::user_daemon::bind_child_socket(&fx.run_root).unwrap();
+        let (k, t) = (Arc::clone(&kernel), tx.clone());
+        tokio::spawn(async move {
+            while let Ok((s, _)) = child_listener.accept().await {
+                tokio::spawn(clawft_weave::daemon::handle_connection_child(s, Arc::clone(&k), t.clone()));
             }
         });
         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -115,6 +187,14 @@ pub fn lifecycle_rpc_end_to_end() {
         let fresh = r["result"]["token"].as_str().unwrap().to_owned();
         assert!(fresh.starts_with("wft_") && fresh != token);
         assert!(r["result"]["expires_at"].as_str().is_some());
+        let r = call(&child_sock, "kernel.handshake", json!({}), Some(&fresh)).await;
+        assert_eq!(r["ok"], true, "child liveness probe: {r}");
+        let r = call(&child_sock, "shared.llm.models", json!({}), Some(&fresh)).await;
+        assert_ne!(r["error_kind"], "child_endpoint_method_denied", "shared model catalog must reach its handler: {r}");
+        let r = call(&child_sock, "shared.llm.models", json!({}), Some("admin")).await;
+        assert_eq!(r["error_kind"], "project_token_required", "shared calls need the project's token: {r}");
+        let r = call(&child_sock, "auth.token.issue", json!({"label":"stolen"}), Some(&fresh)).await;
+        assert_eq!(r["error_kind"], "child_endpoint_method_denied", "{r}");
         // Anonymous, literal scope and another project's id are refused.
         let r = call(&sock, "project.token.refresh", json!({"id": fx.id}), None).await;
         assert_eq!(r["ok"], false, "{r}");
@@ -133,6 +213,31 @@ pub fn lifecycle_rpc_end_to_end() {
         assert_eq!(r["result"]["started"], true, "{r}");
         let r = call(&sock, "project.stop_all", json!({}), Some("admin")).await;
         assert_eq!(r["result"]["stopped"], json!([fx.id]), "{r}");
+
+        // A master token can register and control only a child under its
+        // declared root. The owner shortcut cannot impersonate that token.
+        use clawft_types::project::{WeaveSection, adopt_or_init, read_project_toml, write_project_toml};
+        let master = adopt_or_init(fx.tmp.path(), &fx.mdir, Some("master")).unwrap();
+        let mut master_pt = read_project_toml(fx.tmp.path()).unwrap().unwrap();
+        master_pt.weave = Some(WeaveSection { master: true });
+        write_project_toml(fx.tmp.path(), &master_pt).unwrap();
+        let mut child_pt = read_project_toml(&fx.root).unwrap().unwrap();
+        child_pt.parent = Some(master.id.clone());
+        write_project_toml(&fx.root, &child_pt).unwrap();
+        let (master_token, _) = authority.issue_project(
+            &master.id, chrono::Duration::hours(1),
+            &clawft_kernel::token_authority::Issuer { uid: None },
+        ).unwrap();
+        let params = json!({"root": fx.root});
+        let r = call(&child_sock, "project.nested.register", params.clone(), Some("admin")).await;
+        assert_eq!(r["error_kind"], "project_token_required", "{r}");
+        let r = call(&child_sock, "project.nested.register", params, Some(&master_token)).await;
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["result"]["registration_level"], "isolated");
+        let r = call(&child_sock, "project.nested.start", json!({"id": fx.id}), Some(&master_token)).await;
+        assert_eq!(r["ok"], true, "{r}");
+        let r = call(&child_sock, "project.nested.stop", json!({"id": fx.id}), Some(&master_token)).await;
+        assert_eq!(r["result"]["stopped"], true, "{r}");
 
         identity_changes(&fx, &sock, &chain, &user_key).await;
     });
@@ -158,6 +263,11 @@ async fn identity_changes(
     // the real `~/.weftos/run`.
     clawft_weave::user_daemon::enter_at(&fx.run_root);
     clawft_weave::project_rpc::init_manifests_dir(fx.mdir.clone());
+    let child_sock = clawft_weave::user_daemon::child_socket_path(&fx.run_root);
+    let r = call(&child_sock, "mesh.challenge", json!({}), Some("admin")).await;
+    assert_eq!(r["error_kind"], "invalid_params", "child bootstrap reaches mesh handler: {r}");
+    let r = call(&child_sock, "project.anchor.submit", json!({}), Some("admin")).await;
+    assert_eq!(r["error_kind"], "anchor_bad_statement", "child anchor reaches signed-statement handler: {r}");
     let env = CertEnv { chain: Arc::clone(chain), user_key: user_key.clone(), manifests_dir: fx.mdir.clone() };
     let ukid = key_id(&user_key.verifying_key().to_bytes());
     let k1 = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);

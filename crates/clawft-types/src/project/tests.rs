@@ -90,6 +90,25 @@ fn weave_master_and_governance_parse() {
 }
 
 #[test]
+fn sandbox_driver_round_trips_and_unknown_driver_is_refused() {
+    let mut m: ProjectManifest = toml::from_str(GOLDEN_MANIFEST).unwrap();
+    m.serve.get_or_insert_with(ServeSection::default);
+    for (driver, name) in [
+        (ProjectSandbox::Seatbelt, "seatbelt"),
+        (ProjectSandbox::LinuxContainer, "linux-container"),
+    ] {
+        m.serve.as_mut().unwrap().sandbox = driver;
+        let text = toml::to_string_pretty(&m).unwrap();
+        assert!(text.contains(&format!("sandbox = \"{name}\"")));
+        let restored: ProjectManifest = toml::from_str(&text).unwrap();
+        assert_eq!(restored.serve.unwrap().sandbox, driver);
+        assert!(toml::from_str::<ProjectManifest>(&text.replace(name, "unknown")).is_err());
+        let legacy: ProjectManifest = toml::from_str(&text.replace(name, "native")).unwrap();
+        assert_eq!(legacy.serve.unwrap().sandbox, ProjectSandbox::Logical);
+    }
+}
+
+#[test]
 fn unknown_keys_preserved_on_rewrite() {
     let tmp = tempfile::tempdir().unwrap();
     let text = format!("{GOLDEN_TOML}future_flag = true\n\n[future_table]\nk = \"v\"\n");
@@ -434,4 +453,40 @@ fn find_project_toml_walks_up_and_stops() {
     // stop_at is exclusive: a stop at the project root hides it.
     assert_eq!(find_project_toml(&deep, Some(&root)), None);
     assert_eq!(find_project_toml(&deep, Some(tmp.path())), Some(root));
+}
+
+#[test]
+fn nested_registration_rejects_wrong_identity_before_store_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let manifests = tmp.path().join("manifests");
+    let parent = mkdir(tmp.path(), "master");
+    let child = mkdir(&parent, "inner");
+    let outside = mkdir(tmp.path(), "outside");
+    let master = adopt_or_init(&parent, &manifests, None).unwrap();
+    let mut master_pt = read_project_toml(&parent).unwrap().unwrap();
+    master_pt.weave = Some(WeaveSection { master: true });
+    write_project_toml(&parent, &master_pt).unwrap();
+    let mut inner_pt = master_pt.clone();
+    inner_pt.id = new_id();
+    inner_pt.name = "inner".into();
+    inner_pt.parent = Some(master.id.clone());
+    inner_pt.weave = None;
+    write_project_toml(&child, &inner_pt).unwrap();
+    let mut outside_pt = inner_pt.clone();
+    outside_pt.id = new_id();
+    write_project_toml(&outside, &outside_pt).unwrap();
+    assert!(register_existing_nested(&outside, &manifests, &master.id).is_err());
+    assert!(read_manifest(&manifests, &outside_pt.id).unwrap().is_none());
+    let mut wrong = inner_pt.clone();
+    wrong.parent = Some(new_id());
+    write_project_toml(&child, &wrong).unwrap();
+    assert!(register_existing_nested(&child, &manifests, &master.id).is_err());
+    write_project_toml(&child, &inner_pt).unwrap();
+    assert!(read_manifest(&manifests, &inner_pt.id).unwrap().is_none());
+    assert_eq!(
+        register_existing_nested(&child, &manifests, &master.id)
+            .unwrap()
+            .id,
+        inner_pt.id
+    );
 }

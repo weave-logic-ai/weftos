@@ -85,6 +85,7 @@ dirs = { workspace = true }
 tempfile = { workspace = true }
 blake3 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true }
+libc = "0.2"
 # `weaver update` verifies releases with the COG-008 pinned WeaveLogic release key.
 weftos-cog-repo = { path = "../weftos-cog-repo", default-features = false }
 rand = { workspace = true }

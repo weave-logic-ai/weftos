@@ -288,6 +288,7 @@ pub async fn link_via(
             delivery,
             gate: None,
             chain: Arc::new(ChainQueue::new(chain.clone())),
+            project_env: None,
             state: state.clone(),
             timings,
         },

@@ -113,6 +113,10 @@ mod imp {
     /// `governance.reload` (project kernel).
     pub fn handle_reload(call: ExtCall) -> ExtFuture {
         Box::pin(async move {
+            #[cfg(unix)]
+            if let Err(e) = crate::nested_rpc::quiesce().await {
+                return Response::error_with_kind("nested_stop_failed", e.to_string());
+            }
             let Some(rt) = call.ctx.kernel.read().await.governance_overlay().cloned() else {
                 return Response::error_with_kind(
                     "not_a_project_kernel",
@@ -129,6 +133,10 @@ mod imp {
     /// `governance.parent.update` (project kernel).
     pub fn handle_update(call: ExtCall) -> ExtFuture {
         Box::pin(async move {
+            #[cfg(unix)]
+            if let Err(e) = crate::nested_rpc::quiesce().await {
+                return Response::error_with_kind("nested_stop_failed", e.to_string());
+            }
             let Some(rt) = call.ctx.kernel.read().await.governance_overlay().cloned() else {
                 return Response::error_with_kind(
                     "not_a_project_kernel",

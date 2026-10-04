@@ -100,7 +100,7 @@ pub(crate) fn load_user_pubkey(paths: &RuntimePaths) -> Result<([u8; 32], bool),
         serde_json::from_str(&text).map_err(|e| cert_err(format!("does not parse: {e}")))?;
     let cert_pk: [u8; 32] = hex_decode(&cert.user_pubkey)
         .ok_or_else(|| cert_err("`user_pubkey` is not 64 lowercase hex".into()))?;
-    let pin_path = paths.root().join(USER_PIN_FILE);
+    let pin_path = paths.trust_root().join(USER_PIN_FILE);
     let mut pinned = false;
     let user_pk = match read_capped(&pin_path)? {
         Some(t) => {
@@ -184,4 +184,3 @@ pub(crate) fn check_version(parent: &ParentPolicy, pinned: Option<u64>) -> Resul
         _ => Ok(()),
     }
 }
-

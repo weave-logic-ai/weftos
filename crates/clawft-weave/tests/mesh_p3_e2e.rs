@@ -20,8 +20,9 @@ use clawft_kernel::ipc::{KernelMessage, MessageTarget};
 use clawft_kernel::mesh_admit::AdmitHello;
 use clawft_kernel::mesh_ipc::MeshIpcEnvelope;
 use clawft_mesh_local::client::{ClientError, MeshLocalClient, RegisterParams};
-use clawft_mesh_local::proto::{BindState, ErrorKind, Message};
+use clawft_mesh_local::proto::{BindState, ErrorKind, Message, ProjectBinding, project_binding_payload};
 use clawft_mesh_local::{WeftAddr, hexser};
+use ed25519_dalek::Signer;
 use clawft_types::config::MeshServicePolicy;
 use clawft_weave::mesh_doctor::{MeshProbe, mode_findings};
 use clawft_weave::mesh_local_chain::{KIND_ANCHOR, KIND_BOUND};
@@ -53,6 +54,37 @@ fn server_kind(r: Result<MeshLocalClient, ClientError>) -> ErrorKind {
         Err(other) => panic!("expected a server error, got {other}"),
         Ok(_) => panic!("expected a server error, but it registered"),
     }
+}
+
+#[tokio::test]
+async fn signed_project_address_claim_routes_and_revocation_removes_route() {
+    let svc = Svc::start().await;
+    let signing = key(2);
+    let mut c = raw_register(&svc, 9002, signing.clone(), RegisterParams::default()).await.unwrap();
+    let project_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let project_pubkey = key(3).verifying_key().to_bytes();
+    let good = ProjectBinding {
+        project_id: project_id.into(),
+        project_pubkey,
+        cert_sig: signing.sign(&project_binding_payload(project_id, &project_pubkey)).to_bytes(),
+    };
+    assert!(matches!(c.request(Message::AddressAdd(good.clone())).await.unwrap(), Message::Ack {}));
+    let dest = addr(&format!("weft://local/{}/{project_id}/chat", c.register_ack().user_id));
+    let message = serde_json::to_value(km("project route")).unwrap();
+    c.send(&dest, message.clone()).await.unwrap();
+    let mut events = c.take_events();
+    let delivered = tokio::time::timeout(Duration::from_secs(2), events.recv()).await.unwrap().unwrap();
+    assert!(matches!(delivered.msg, Message::Deliver(d) if d.scope.project_id.as_deref() == Some(project_id)));
+    assert!(matches!(c.request(Message::AddressRemove(good)).await.unwrap(), Message::Ack {}));
+    assert!(c.send(&dest, message).await.is_err());
+    // A forbidden request may close its connection; make it the last action.
+    let mut forged = ProjectBinding {
+        project_id: project_id.into(), project_pubkey,
+        cert_sig: signing.sign(&project_binding_payload(project_id, &project_pubkey)).to_bytes(),
+    };
+    forged.cert_sig[0] ^= 1;
+    assert!(c.request(Message::AddressAdd(forged)).await.is_err());
+    assert_eq!(svc.svc.as_ref().unwrap().state.registry.current_project_key(&c.register_ack().user_id, project_id), None);
 }
 
 #[tokio::test]

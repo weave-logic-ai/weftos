@@ -273,6 +273,25 @@ async fn start_inner(
     };
     rt.set_local_delivery(state.router.clone());
     let rt = Arc::new(rt);
+    let leaf_root = cfg.state_dir.join("leaf");
+    if leaf_root.join("registry").is_dir() {
+        let tenant_registry = Arc::clone(&state.registry);
+        let authority_state = Arc::clone(&state);
+        let ingress = clawft_kernel::mesh_leaf::LeafIngress::open(&leaf_root, key.clone())
+            .map(|ingress| ingress.with_scope_authority(Arc::new(move |user_id, user_key, project_cert| {
+                let Ok(registered) = tenant_registry.lookup_scope(user_id, None) else { return false };
+                if registered.user_pubkey != *user_key || authority_state.force_revoked.contains(&registered.principal)
+                    || authority_state.core.lock().unwrap_or_else(|e| e.into_inner()).bindings.key_of(&registered.principal) != Some(*user_key)
+                { return false; }
+                project_cert.is_none_or(|cert| {
+                    clawft_types::project::canon::hex_decode::<32>(&cert.project_pubkey)
+                        .is_some_and(|key| tenant_registry.current_project_key(user_id, &cert.project_id) == Some(key))
+                })
+            })))
+            .map_err(|e| StartError::Config(ConfigError::Invalid(format!("leaf ingress: {e}"))))?;
+        rt.set_leaf_ingress(Arc::new(ingress))
+            .map_err(|_| StartError::Config(ConfigError::Invalid("leaf ingress already installed".into())))?;
+    }
     rt.set_enforcing(state.policy.admission() == MeshAdmissionMode::Enforce);
     state.router.set_runtime(&rt);
     // ADR-106: licence records from licensed peers go to the owner's daemon.

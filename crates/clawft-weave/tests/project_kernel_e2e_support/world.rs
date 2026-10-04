@@ -1,6 +1,6 @@
 //! The world of `project_kernel_e2e.rs`: an in-process user daemon (a kernel
-//! with an isolated user chain, the real RPC dispatch on its socket at
-//! `$WEFTOS_RUNTIME_DIR/kernel.sock`, and the real `project_hooks::post_boot`
+//! with an isolated user chain, the real RPC dispatch on its owner socket at
+//! `$WEFTOS_RUNTIME_DIR/kernel.sock` and child-only socket, and the real `project_hooks::post_boot`
 //! that installs the supervisor and runs the adoption scan), plus small RPC
 //! and wait helpers. `HOME` and `$WEFTOS_RUNTIME_DIR` are a per-process
 //! tempdir set in `main` before any thread exists; nothing here reads or
@@ -79,13 +79,17 @@ impl World {
         let kernel = Kernel::boot(Config::default(), kcfg, Arc::new(NativePlatform::new()))
             .await
             .expect("boot the user daemon's kernel");
-        // The user daemon's socket, where `spawn.json` points the children.
+        // Keep the owner's CLI endpoint separate from the endpoint named in
+        // child spawn.json. Use the production binder for the latter.
         let sock = clawft_types::runtime_paths::RuntimePaths::resolve().socket();
         assert_eq!(sock, dirs.run_root.join("kernel.sock"), "user root is $WEFTOS_RUNTIME_DIR");
         let listener = UnixListener::bind(&sock).unwrap();
+        let child_sock = clawft_weave::user_daemon::child_socket_path(&dirs.run_root);
+        let child_listener = clawft_weave::user_daemon::bind_child_socket(&dirs.run_root).unwrap();
         // The real post_boot seam: supervisor + adoption scan + idle loop.
         clawft_weave::project_hooks::post_boot(&kernel, &Default::default()).unwrap();
         let sup = project_supervisor::global().expect("post_boot installed the supervisor");
+        assert_eq!(sup.config().parent_socket, child_sock, "children use the child-only endpoint");
         let kernel: KernelRef = Arc::new(RwLock::new(kernel));
         let (tx, mut rx) = watch::channel(false);
         let (k, t) = (Arc::clone(&kernel), tx.clone());
@@ -95,6 +99,20 @@ impl World {
                     accepted = listener.accept() => match accepted {
                         Ok((s, _)) => {
                             tokio::spawn(clawft_weave::daemon::handle_connection(s, Arc::clone(&k), t.clone()));
+                        }
+                        Err(_) => break,
+                    },
+                    _ = rx.changed() => if *rx.borrow() { break; },
+                }
+            }
+        });
+        let (k, t, mut rx) = (Arc::clone(&kernel), tx.clone(), tx.subscribe());
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    accepted = child_listener.accept() => match accepted {
+                        Ok((s, _)) => {
+                            tokio::spawn(clawft_weave::daemon::handle_connection_child(s, Arc::clone(&k), t.clone()));
                         }
                         Err(_) => break,
                     },

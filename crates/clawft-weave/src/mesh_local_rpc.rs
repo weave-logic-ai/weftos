@@ -39,6 +39,7 @@ use clawft_rpc::mesh_local::{
     ChallengeReply, ChallengeRequest, HeartbeatRequest, METHOD_CHALLENGE, METHOD_HEARTBEAT,
     METHOD_REGISTER, METHOD_UNREGISTER, PROTO_MESH_LOCAL, PROTOCOL_TAG, ParentHead, RegisterAck,
     RegisterRequest, UnregisterRequest, ack_signed_bytes, activity_digest, bind_signed_bytes,
+    bind_container_bytes,
 };
 use clawft_types::project::canon::hex_decode;
 use clawft_types::project::cert::key_id;
@@ -88,8 +89,8 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         match method.as_str() {
             METHOD_CHALLENGE => challenge(&ctx, p).await,
             METHOD_REGISTER => register(&ctx, p).await,
-            METHOD_HEARTBEAT => heartbeat(p),
-            METHOD_UNREGISTER => unregister(p),
+            METHOD_HEARTBEAT => heartbeat(p).await,
+            METHOD_UNREGISTER => unregister(p).await,
             other => err("invalid_params", format!("unknown mesh method {other}")),
         }
     })
@@ -143,7 +144,7 @@ enum Auth {
     Reregister,
 }
 
-fn authorise(req: &RegisterRequest, now: u64) -> Result<Auth, RegistryError> {
+async fn authorise(req: &RegisterRequest, now: u64) -> Result<Auth, RegistryError> {
     if let Some(n) = req.spawn_nonce.as_deref() {
         // A live session blocks a new one before anything else runs, so the
         // refused child neither gets a certificate nor burns its nonce.
@@ -151,10 +152,26 @@ fn authorise(req: &RegisterRequest, now: u64) -> Result<Auth, RegistryError> {
         {
             return Err(RegistryError::SecondSession(req.project_id.clone()));
         }
-        return peek_spawn(&req.project_id, Some(n), req.pid, now).map(Auth::Spawn);
+        let e = peek_spawn(&req.project_id, Some(n), req.pid, now)?;
+        if e.container != req.container { return Err(RegistryError::ContainerMismatch); }
+        if let Some(c) = &e.container {
+            let sup = crate::project_supervisor::global().ok_or(RegistryError::ContainerMismatch)?;
+            sup.launcher().verify_container(&req.project_id, c).await
+                .map_err(|_| RegistryError::ContainerMismatch)?;
+        }
+        return Ok(Auth::Spawn(e));
     }
     match registry().state_at(&req.project_id, Instant::now()) {
-        Some((SessionState::Expired, pid)) if pid == req.pid => Ok(Auth::Reregister),
+        Some((SessionState::Expired, pid)) if pid == req.pid => {
+            let facts = registry().facts_at(&req.project_id).ok_or(RegistryError::ContainerMismatch)?;
+            if facts.container != req.container { return Err(RegistryError::ContainerMismatch); }
+            if let Some(c) = &facts.container {
+                let sup = crate::project_supervisor::global().ok_or(RegistryError::ContainerMismatch)?;
+                sup.launcher().verify_container(&req.project_id, c).await
+                    .map_err(|_| RegistryError::ContainerMismatch)?;
+            }
+            Ok(Auth::Reregister)
+        },
         Some((SessionState::Live, _)) => Err(RegistryError::SecondSession(req.project_id.clone())),
         Some((SessionState::Expired, want)) => {
             Err(RegistryError::PidMismatch { got: req.pid, want })
@@ -177,6 +194,9 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
     }
     if validate_id(&req.project_id).is_err() {
         return err("invalid_params", "project id is not a canonical ULID");
+    }
+    if req.pid == 0 {
+        return err("invalid_params", "guest PID must be nonzero");
     }
     let (Some(pubkey), Some(pop_sig)) = (
         ident::parse_pubkey(&req.project_pubkey),
@@ -220,13 +240,12 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
     let bind_ok = hex_decode::<64>(&req.bind_sig).is_some_and(|sig| {
         ed25519_dalek::VerifyingKey::from_bytes(&pubkey).is_ok_and(|vk| {
             vk.verify_strict(
-                &bind_signed_bytes(
-                    &req.project_id,
-                    &req.nonce_reply.nonce,
-                    &req.client_nonce,
-                    &req.socket,
-                    req.pid,
-                ),
+                &match &req.container {
+                    Some(c) => bind_container_bytes(&req.project_id, &req.nonce_reply.nonce,
+                        &req.client_nonce, &req.socket, req.pid, c),
+                    None => bind_signed_bytes(&req.project_id, &req.nonce_reply.nonce,
+                        &req.client_nonce, &req.socket, req.pid),
+                },
                 &ed25519_dalek::Signature::from_bytes(&sig),
             )
             .is_ok()
@@ -240,7 +259,7 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
     }
     // 2. authorisation (no side effects yet)
     let now = now_unix();
-    let auth = match authorise(&req, now) {
+    let auth = match authorise(&req, now).await {
         Ok(a) => a,
         Err(e) => return reg_err(&e),
     };
@@ -293,8 +312,9 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
     let session = match registry().register_at(
         NewSession {
             project_id: req.project_id.clone(),
-            socket: req.socket.clone().into(),
+            socket: req.container.as_ref().map_or_else(|| req.socket.clone().into(), |c| c.host_socket.clone().into()),
             pid: req.pid,
+            container: req.container.clone(),
             addresses: req.addresses.clone(),
             topic_prefixes: req.topic_prefixes.clone(),
             version: req.version.clone(),
@@ -341,7 +361,7 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
     Response::success(serde_json::to_value(ack).unwrap_or(Value::Null))
 }
 
-fn heartbeat(p: Value) -> Response {
+async fn heartbeat(p: Value) -> Response {
     let req: HeartbeatRequest = match params(p) {
         Ok(r) => r,
         Err(r) => return r,
@@ -360,13 +380,17 @@ fn heartbeat(p: Value) -> Response {
     ) {
         return reg_err(&e);
     }
+    if let Some((id, c)) = registry().container_for_session(&req.session) {
+        let Some(sup) = crate::project_supervisor::global() else { return reg_err(&RegistryError::ContainerMismatch) };
+        if sup.launcher().verify_container(&id, &c).await.is_err() { return reg_err(&RegistryError::ContainerMismatch); }
+    }
     match registry().heartbeat_at(&req.session, req.activity, Instant::now()) {
         Ok(()) => Response::success(json!({ "ok": true, "heartbeat_secs": HEARTBEAT_SECS })),
         Err(e) => reg_err(&e),
     }
 }
 
-fn unregister(p: Value) -> Response {
+async fn unregister(p: Value) -> Response {
     let req: UnregisterRequest = match params(p) {
         Ok(r) => r,
         Err(r) => return r,
@@ -384,6 +408,10 @@ fn unregister(p: Value) -> Response {
         Instant::now(),
     ) {
         return reg_err(&e);
+    }
+    if let Some((id, c)) = registry().container_for_session(&req.session) {
+        let Some(sup) = crate::project_supervisor::global() else { return reg_err(&RegistryError::ContainerMismatch) };
+        if sup.launcher().verify_container(&id, &c).await.is_err() { return reg_err(&RegistryError::ContainerMismatch); }
     }
     match registry().unregister(&req.session) {
         Ok(id) => {

@@ -15,6 +15,7 @@ pub mod adaptive_silence;
 pub mod chain_paths;
 pub mod channels;
 pub mod governance;
+pub mod nested;
 pub mod kernel;
 pub mod local_llm;
 pub mod overlay;
@@ -62,6 +63,9 @@ pub(crate) fn default_true() -> bool {
 /// Mirrors the Python `Config(BaseSettings)` class.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
+    /// Nested user-instance authority (ADR-103 D10).
+    #[serde(default, skip_serializing_if = "nested::WeaveConfig::is_default")]
+    pub weave: nested::WeaveConfig,
     /// Agent defaults and per-agent overrides.
     #[serde(default)]
     pub agents: AgentsConfig,
@@ -121,6 +125,7 @@ pub struct Config {
 /// Used by WEFT-20 opt-in `deny_unknown` mode. Nested objects still ignore
 /// unknown keys for forward compatibility.
 pub const CONFIG_TOP_LEVEL_KEYS: &[&str] = &[
+    "weave",
     "agents",
     "channels",
     "providers",

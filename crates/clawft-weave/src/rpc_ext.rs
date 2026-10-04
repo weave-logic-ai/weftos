@@ -100,9 +100,19 @@ pub enum Principal {
     InternalVoice,
 }
 
+/// Which local socket admitted this request. The child endpoint enforces a
+/// method ceiling before bearer-token capability resolution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RpcEndpoint {
+    #[default]
+    Owner,
+    Child,
+}
+
 /// Who is calling, as established by the entry path before dispatch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallerCtx {
+    pub endpoint: RpcEndpoint,
     /// Set by the entry path; see [`Principal`].
     pub principal: Principal,
     /// Bearer / scope token from the request envelope, if any.
@@ -135,6 +145,7 @@ impl CallerCtx {
     /// A caller presenting `auth` (or none).
     pub fn from_auth(auth: Option<String>) -> Self {
         Self {
+            endpoint: RpcEndpoint::Owner,
             principal: Principal::External,
             auth,
             project: None,
@@ -159,9 +170,19 @@ impl CallerCtx {
         self
     }
 
+    pub fn with_endpoint(mut self, endpoint: RpcEndpoint) -> Self {
+        self.endpoint = endpoint;
+        if endpoint == RpcEndpoint::Child {
+            self.peer_untrusted = true;
+            self.peer_child = true;
+        }
+        self
+    }
+
     /// Caller context for a wire request: its `auth` and `project`.
     pub fn from_request(req: &clawft_rpc::Request) -> Self {
         Self {
+            endpoint: RpcEndpoint::Owner,
             principal: Principal::External,
             auth: req.auth.clone(),
             project: req.project.clone().map(ClaimedProject::from),
@@ -280,6 +301,12 @@ pub type GateFn = for<'a> fn(&'a GateRequest<'a>) -> GateFuture<'a>;
 /// handler: crate::project_rpc::handle }`.
 #[cfg(not(test))]
 const ROUTES: &[ExtRoute] = &[
+    #[cfg(all(unix, feature = "exochain"))]
+    ExtRoute {
+        prefix: "instance.nested.",
+        capability: Capability::Admin,
+        handler: crate::nested_rpc::handle,
+    },
     ExtRoute {
         prefix: "kernel.handshake",
         capability: Capability::Read,
@@ -299,6 +326,21 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.register",
         capability: Capability::Admin,
         handler: crate::project_rpc::handle_register,
+    },
+    ExtRoute {
+        prefix: "project.nested.register",
+        capability: Capability::Write,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.nested.start",
+        capability: Capability::Write,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.nested.stop",
+        capability: Capability::Write,
+        handler: crate::project_lifecycle_rpc::handle,
     },
     ExtRoute {
         prefix: "project.cert.show",
@@ -483,6 +525,12 @@ const ROUTES: &[ExtRoute] = &[
 ];
 #[cfg(test)]
 const ROUTES: &[ExtRoute] = &[
+    #[cfg(all(unix, feature = "exochain"))]
+    ExtRoute {
+        prefix: "instance.nested.",
+        capability: Capability::Admin,
+        handler: crate::nested_rpc::handle,
+    },
     ExtRoute {
         prefix: "kernel.handshake",
         capability: Capability::Read,
@@ -502,6 +550,21 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.register",
         capability: Capability::Admin,
         handler: crate::project_rpc::handle_register,
+    },
+    ExtRoute {
+        prefix: "project.nested.register",
+        capability: Capability::Write,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.nested.start",
+        capability: Capability::Write,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.nested.stop",
+        capability: Capability::Write,
+        handler: crate::project_lifecycle_rpc::handle,
     },
     ExtRoute {
         prefix: "project.cert.show",

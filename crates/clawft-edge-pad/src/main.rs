@@ -22,8 +22,11 @@ extern crate alloc;
 
 mod board;
 mod drivers;
+#[cfg(feature = "legacy-unsigned-mesh-bringup")]
 mod mesh;
+#[cfg(feature = "legacy-unsigned-mesh-bringup")]
 mod net;
+#[cfg(feature = "legacy-unsigned-mesh-bringup")]
 mod wifi_secrets;
 
 use embassy_executor::Spawner;
@@ -407,13 +410,22 @@ async fn main(spawner: Spawner) {
     // `SceneEnvelope` arriving from the host (typically a
     // `Replace(Scene)` snapshot from `weaver leaf scene ps`) writes
     // the authoritative state.
+    #[cfg(feature = "legacy-unsigned-mesh-bringup")]
     let scene_store = mesh::shared_store();
 
     // 7. WiFi + embassy-net DHCP stack (task #3). The connection +
     //    net-runner tasks are spawned inside `net::start`; the link
     //    comes up asynchronously.
+    #[cfg(feature = "legacy-unsigned-mesh-bringup")]
     let stack = net::start(&spawner, peripherals.WIFI);
+    #[cfg(feature = "legacy-unsigned-mesh-bringup")]
     println!("[edge-pad] net: WiFi stack started, DHCP pending");
+
+    #[cfg(not(feature = "legacy-unsigned-mesh-bringup"))]
+    {
+        let _ = (surface, i2c, peripherals.WIFI);
+        println!("[edge-pad] network disabled: provisioned IDF firmware is required for mesh publishing");
+    }
 
     // 8. Mesh client task #1 — display ingest (Phase E).
     //
@@ -423,6 +435,7 @@ async fn main(spawner: Spawner) {
     //    surface ownership stays here for the program's lifetime; the
     //    panel keeps showing the last rendered frame across mesh
     //    reconnects.
+    #[cfg(feature = "legacy-unsigned-mesh-bringup")]
     if let Err(e) = spawner.spawn(mesh::mesh_task(stack, scene_store, surface)) {
         println!("[edge-pad] mesh_task spawn failed: {:?}", e);
     }
@@ -445,6 +458,7 @@ async fn main(spawner: Spawner) {
     //    publish is verified in `weftos-leaf-touch-gt911`'s unit
     //    tests; the firmware path lights up the moment the chip
     //    starts emitting frames.
+    #[cfg(feature = "legacy-unsigned-mesh-bringup")]
     if let Err(e) = spawner.spawn(mesh::input_task(stack, scene_store, i2c)) {
         println!("[edge-pad] input_task spawn failed: {:?}", e);
     }

@@ -71,6 +71,9 @@ pub enum RootSource {
         id: String,
         /// The project root that owns the durable files.
         project_root: PathBuf,
+        /// Parent-controlled bootstrap, pin, policy and revocation files.
+        /// Native children use the runtime root itself.
+        trust_root: PathBuf,
     },
 }
 
@@ -660,7 +663,8 @@ mod tests {
     fn bare_weftos_dir_without_any_marker_is_not_a_project() {
         let t = tempfile::tempdir().unwrap();
         mk(t.path(), "proj/.weftos/notes.md");
-        let home = t.path().join("home");
+        // Bound the fixture walk even when TMPDIR is inside a real checkout.
+        let home = t.path().to_path_buf();
         let p = RuntimePaths::resolve_with(None, Some(&t.path().join("proj")), Some(&home));
         assert_eq!(p.source(), &RootSource::LegacyHome);
         // A .git without .weftos is not one either.

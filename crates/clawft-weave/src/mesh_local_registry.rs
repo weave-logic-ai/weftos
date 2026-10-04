@@ -41,8 +41,9 @@ pub struct SpawnExpectation {
     pub project_id: String,
     /// The spawn nonce written to `spawn.json` (32 hex).
     pub nonce: String,
-    /// Child pid; 0 when not yet known (the first register then fixes it).
-    pub pid: u32,
+    /// Native host PID once spawned. Containers use engine identity instead.
+    pub pid: Option<u32>,
+    pub container: Option<clawft_rpc::mesh_local::ContainerRegistration>,
     /// SHA-256 of the child executable, hex (recorded on the user chain).
     pub exe_sha: String,
     /// The canonical project root the supervisor spawned it in.
@@ -86,6 +87,9 @@ pub enum RegistryError {
     /// The project root the child claims is not the one it was spawned in.
     #[error("root does not match the spawned project root")]
     WrongRoot,
+    /// Guest identity or host endpoint differs from engine inspection.
+    #[error("container identity or host endpoint does not match the supervised launch")]
+    ContainerMismatch,
     /// A live session already exists for the project.
     #[error("project {0} already has a live session")]
     SecondSession(String),
@@ -112,6 +116,7 @@ impl RegistryError {
             Self::SpawnExpired => "spawn_expired",
             Self::PidMismatch { .. } => "pid_mismatch",
             Self::WrongRoot => "root_mismatch",
+            Self::ContainerMismatch => "container_mismatch",
             Self::SecondSession(_) => "second_session",
             Self::UnknownSession => "unknown_session",
             Self::LedgerFull => "spawn_ledger_full",
@@ -130,6 +135,7 @@ pub struct NewSession {
     pub socket: PathBuf,
     /// Child pid.
     pub pid: u32,
+    pub container: Option<clawft_rpc::mesh_local::ContainerRegistration>,
     /// Mesh addresses the child answers to.
     pub addresses: Vec<String>,
     /// Chain topic prefixes it serves.
@@ -231,6 +237,16 @@ impl ProjectRegistry {
         self.lock()
             .get(id)
             .map(|s| (self.state_of(s, now), s.facts.pid))
+    }
+
+    /// Facts for readiness and re-registration identity checks.
+    pub fn facts_at(&self, id: &str) -> Option<NewSession> {
+        self.lock().get(id).map(|s| s.facts.clone())
+    }
+
+    pub fn container_for_session(&self, session: &str) -> Option<(String, clawft_rpc::mesh_local::ContainerRegistration)> {
+        self.lock().values().find(|s| s.session == session)
+            .and_then(|s| s.facts.container.clone().map(|c| (s.facts.project_id.clone(), c)))
     }
 
     /// Open a session. Refused while a live one exists. A tombstone (expired
@@ -424,12 +440,12 @@ impl ProjectRegistry {
     }
 
     /// Record the child's pid once the supervisor learns it: on a live
-    /// session, and on the outstanding spawn expectation (filed with pid 0
+    /// session, and on the outstanding spawn expectation (filed without a PID
     /// before the process existed), so the first registration's claimed
     /// pid is checked against the one the supervisor started (review S8c).
     pub fn note_pid(&self, project_id: &str, pid: u32) {
         if let Some(s) = self.lock().get_mut(project_id) {
-            s.facts.pid = pid;
+            if s.facts.container.is_none() { s.facts.pid = pid; }
         }
         note_spawn_pid(project_id, pid);
     }
@@ -486,9 +502,9 @@ fn insert_capped(
 /// filed without one.
 pub fn note_spawn_pid(project_id: &str, pid: u32) {
     if let Some(e) = ledger().lock().unwrap_or_else(|x| x.into_inner()).get_mut(project_id)
-        && e.pid == 0
+        && e.pid.is_none()
     {
-        e.pid = pid;
+        e.pid = Some(pid);
     }
 }
 
@@ -530,10 +546,10 @@ pub fn peek_spawn(
     if !ct_eq(given, &e.nonce) || nonce.is_none() {
         return Err(RegistryError::BadSpawnNonce);
     }
-    if e.pid != 0 && e.pid != pid {
+    if e.container.is_none() && let Some(want) = e.pid && want != pid {
         return Err(RegistryError::PidMismatch {
             got: pid,
-            want: e.pid,
+            want,
         });
     }
     Ok(e.clone())
@@ -568,6 +584,7 @@ mod tests {
             project_id: id.into(),
             socket: format!("/run/{id}/kernel.sock").into(),
             pid,
+            container: None,
             addresses: vec![id.into()],
             topic_prefixes: vec![format!("chain/{id}/")],
             version: "0.8.2".into(),
@@ -639,7 +656,8 @@ mod tests {
         expect_spawn(SpawnExpectation {
             project_id: id.into(),
             nonce: n.clone(),
-            pid: 0,
+            pid: None,
+            container: None,
             exe_sha: String::new(),
             root: "/r".into(),
             expires_unix: 1_000,
@@ -671,7 +689,8 @@ mod tests {
         expect_spawn(SpawnExpectation {
             project_id: id2.into(),
             nonce: n.clone(),
-            pid: 9,
+            pid: Some(9),
+            container: None,
             exe_sha: String::new(),
             root: "/r".into(),
             expires_unix: 1_000,
@@ -689,7 +708,8 @@ mod tests {
         expect_spawn(SpawnExpectation {
             project_id: id3.into(),
             nonce: n.clone(),
-            pid: 0,
+            pid: None,
+            container: None,
             exe_sha: String::new(),
             root: "/r".into(),
             expires_unix: 1_000,
@@ -708,7 +728,8 @@ mod tests {
         let mk = |id: &str, exp: u64| SpawnExpectation {
             project_id: id.into(),
             nonce: "ab".repeat(16),
-            pid: 0,
+            pid: None,
+            container: None,
             exe_sha: String::new(),
             root: "/r".into(),
             expires_unix: exp,
@@ -735,7 +756,8 @@ mod tests {
         let mk = |n: &str| SpawnExpectation {
             project_id: id.into(),
             nonce: n.repeat(16),
-            pid: 0,
+            pid: None,
+            container: None,
             exe_sha: String::new(),
             root: "/r".into(),
             expires_unix: 1_000,
