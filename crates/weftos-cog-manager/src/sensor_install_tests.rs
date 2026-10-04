@@ -137,13 +137,13 @@ fn post_install_distinguishes_no_source_from_a_found_sensor() {
 
 #[test]
 fn peer_url_reuses_the_connected_port_for_tailnet_addresses_only() {
-    assert_eq!(peer_url("http://100.109.125.18:9480", "100.64.0.3").as_deref(), Some("http://100.64.0.3:9480"));
+    assert_eq!(peer_url("http://100.64.0.10:9480", "100.64.0.3").as_deref(), Some("http://100.64.0.3:9480"));
     assert_eq!(peer_url("http://127.0.0.1:9481/", "100.100.1.2").as_deref(), Some("http://100.100.1.2:9481"));
     assert_eq!(peer_url("weird", "100.64.0.9").as_deref(), Some("http://100.64.0.9:9480"));
     assert_eq!(peer_url("http://h:9480", "fd7a:115c:a1e0::7").as_deref(), Some("http://[fd7a:115c:a1e0::7]:9480"));
     // anything that is not a literal tailnet address is refused, so a token cannot be sent there
     for bad in ["10.0.0.2", "192.168.1.1", "8.8.8.8", "evil.example", "100.64.0.3/../x", "100.64.0.3:80", "", "::1", "100.200.0.1"] {
-        assert_eq!(peer_url("http://100.109.125.18:9480", bad), None, "{bad}");
+        assert_eq!(peer_url("http://100.64.0.10:9480", bad), None, "{bad}");
     }
 }
 
@@ -151,7 +151,7 @@ fn peer_url_reuses_the_connected_port_for_tailnet_addresses_only() {
 fn loopback_hosts_are_detected() {
     assert!(is_loopback_host("http://127.0.0.1:9480"));
     assert!(is_loopback_host("localhost:9480"));
-    assert!(!is_loopback_host("http://100.109.125.18:9480"));
+    assert!(!is_loopback_host("http://100.64.0.10:9480"));
     assert_eq!(marketplace_arch("aarch64"), "arm64");
 }
 

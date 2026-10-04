@@ -195,7 +195,7 @@ impl Client {
     }
 
     /// Export base for a cog on this host: the host's address with the cog's export port, e.g.
-    /// host `http://100.109.125.18:9480` + port 8050 -> `http://100.109.125.18:8050`.
+    /// host `http://100.64.0.10:9480` + port 8050 -> `http://100.64.0.10:8050`.
     pub fn export_base(&self, port: u16) -> String {
         let h = base(&self.s.host);
         let rest = h.strip_prefix("http://").or_else(|| h.strip_prefix("https://")).unwrap_or(&h);

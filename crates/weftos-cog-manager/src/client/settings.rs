@@ -3,7 +3,7 @@
 
 #[derive(Clone)]
 pub struct Settings {
-    /// cog-host base, e.g. `http://127.0.0.1:9480` or `http://100.109.125.18:9480`.
+    /// cog-host base, e.g. `http://127.0.0.1:9480` or `http://100.64.0.10:9480`.
     pub host: String,
     /// WeaveLogic signed registry.json URL (optional; empty = skip).
     pub our_registry: String,
