@@ -1,6 +1,6 @@
 # Network tab as Fleet Manager: research and design brief
 
-Date: 2026-10-04. Read-only research; no code was changed. Paths are relative to `/Users/mathewbeane/weftos` unless noted. "not found" means I searched and did not find it. Labels: **[V]** read in source, **[U]** unverified (live system not reachable or card not readable).
+Date: 2026-10-04. Read-only research; no code was changed. Paths are relative to `~/weftos` unless noted. "not found" means I searched and did not find it. Labels: **[V]** read in source, **[U]** unverified (live system not reachable or card not readable).
 
 ## 0. Summary
 
@@ -83,7 +83,7 @@ RPC permission classes come from `crates/clawft-weave/src/capability.rs:62-110,1
 
 ### 2.3 Pi / Seed appliances (cog0 Pi Zero 2 W, Pi 5)
 
-Reachable through CH on the appliance itself (the console target, e.g. cog0 `http://100.109.125.18:9480`, per memory) and through the Seed's own API.
+Reachable through CH on the appliance itself (the console target, e.g. cog0 `http://<cog0-tailnet-ip>:9480`, per memory) and through the Seed's own API.
 
 | Field | Source |
 |---|---|
@@ -103,7 +103,7 @@ Reachable through CH on the appliance itself (the console target, e.g. cog0 `htt
 Two distinct populations:
 
 1. **Heartbeat roster nodes** (COG-010): `POST /fleet/heartbeat {id, kind, sensor, rssi, battery, fw, ip}` to a cog-host. Stored and shown as `{id, kind, sensor, ip, rssi, battery, fw, age_s, online}` `fleet.rs:29-44,99-128`. `rssi` is bounded -127..20, `battery` 0..100 (`fleet.rs:86-91`; the UI formats battery as volts `lib.rs:637`, a unit mismatch to resolve). No CPU, memory, uptime, heap, channel, sample rate, reset reason.
-2. **RuView CSI nodes** (`/Users/mathewbeane/dev/ruview/RuView/firmware/esp32-csi-node`): their own HTTP server on :8032. `GET /ota/status` returns `{version, date, time, running_partition, next_partition, max_size}` (`main/ota_update.c:83-102`). `POST /ota` uploads firmware, PSK bearer auth (ADR-050, `ota_update.c:107-118`). Also `/wasm/upload|list|start|stop` on the same server (`main/wasm_upload.c:372-406`). Re-provisioning is USB-serial only (NVS), per `/Users/mathewbeane/dev/ruview/RuView/docs/handoff.md` ("Dead ends"). A reachable node was seen at 192.168.1.83 on 2026-09-28 per that handoff [U: not rechecked]. The RuView firmware also has thermal, power-management, swarm bridge (`swarm_bridge.c`), `node_log.c` (a log ring; exposure over HTTP not found) and C6 time sync / ESP-NOW (`c6_sync_espnow.c`). None of these feed the WeftOS roster today; `crates/weftos-cog-host/fleet/nodes.json` is the enrolment inventory (chip, mac, flash_mb, role, firmware, status) for owned C6 boards.
+2. **RuView CSI nodes** (`~/dev/ruview/RuView/firmware/esp32-csi-node`): their own HTTP server on :8032. `GET /ota/status` returns `{version, date, time, running_partition, next_partition, max_size}` (`main/ota_update.c:83-102`). `POST /ota` uploads firmware, PSK bearer auth (ADR-050, `ota_update.c:107-118`). Also `/wasm/upload|list|start|stop` on the same server (`main/wasm_upload.c:372-406`). Re-provisioning is USB-serial only (NVS), per `~/dev/ruview/RuView/docs/handoff.md` ("Dead ends"). A reachable node was seen at <esp32-node-ip> on 2026-09-28 per that handoff [U: not rechecked]. The RuView firmware also has thermal, power-management, swarm bridge (`swarm_bridge.c`), `node_log.c` (a log ring; exposure over HTTP not found) and C6 time sync / ESP-NOW (`c6_sync_espnow.c`). None of these feed the WeftOS roster today; `crates/weftos-cog-host/fleet/nodes.json` is the enrolment inventory (chip, mac, flash_mb, role, firmware, status) for owned C6 boards.
 
 Other ESP32-class WeftOS firmware that joins the mesh as a **leaf** (admission class `Leaf` or `Legacy`): `crates/clawft-edge-pad` (no_std), `crates/clawft-edge-pad-idf` (std). The leaf announce is `LeafServices {node_pubkey, hostname, firmware_version, audio_sink, display_sink, compute}` published on `mesh.leaf.<pubkey>.announce` (`crates/weftos-leaf-types/src/lib.rs:212-219`; topics in `docs/leaf-push-protocol.md` section 2). Nothing in the daemon aggregates announces into an RPC [V: not found; `cluster.nodes` only lists `ClusterMembership` peers]. Leaf control today is push-only via `weaver leaf push|scene` (`crates/clawft-weave/src/commands/leaf_cmd.rs`).
 
@@ -182,10 +182,10 @@ Group by class, one row per node, key columns: status dot, name, class, address 
   ● mathews-mac     self   macOS 15 · arm64 · 12c · 32 GB (free 11)   LAN 192.168.1.249  load 1.9   3 cogs  pinned    now
   ● photo-gallery          Ubuntu 24.04 · x86-64 · 8c · 16 GB (free 6) tailnet 100.x       load 0.4   0 cogs  paired    4s
  APPLIANCES (2)
-  ● cog0            Pi Zero 2 W · fw 0.10.11 · 512 MB (free 90)       tailnet 100.109.125.18 temp 58C 5 cogs  claimed*  6s   [host :9480]
+  ● cog0            Pi Zero 2 W · fw 0.10.11 · 512 MB (free 90)       tailnet <cog0-tailnet-ip> temp 58C 5 cogs  claimed*  6s   [host :9480]
   ○ pi5             Pi 5 · aarch64 · 4c · 8 GB                          tailnet 100.x          -     -        paired    3d
  ESP32 SENSING (3)
-  ● c6-01  esp32-c6 · fw v0.4.3.1 · ota_0   192.168.1.83  rssi -61  batt 92%   wifi-csi        self-reported   12s
+  ● c6-01  esp32-c6 · fw v0.4.3.1 · ota_0   <esp32-node-ip>  rssi -61  batt 92%   wifi-csi        self-reported   12s
   ◐ s3-02  esp32-s3 · fw v0.4.3.1           192.168.1.91  rssi -78  -          wifi-csi        self-reported   71s (stale)
   ○ c6-03  reserved slot (never seen)                                                           enrolled 2026-10-02
  MCU LEAVES (1)
@@ -202,7 +202,7 @@ Tabs: Overview, Workloads/Cogs, Health/Stats, Network, Trust/Licence, Firmware, 
  [Overview][Workloads/Cogs][Health/Stats][Network][Trust/Licence][Firmware][Logs][Raw]
  ─ Overview ───────────────────────────────────────────────────────────────
   What      Cognitum Seed (Pi Zero 2 W) running weft-cog-host      Class evidence: /api/v1/identity, board model
-  Where     tailnet 100.109.125.18 · LAN 192.168.1.235 · USB 169.254.42.1     site/room: (not set)  [edit label]
+  Where     tailnet <cog0-tailnet-ip> · LAN <cog0-lan-ip> · USB 169.254.42.1     site/room: (not set)  [edit label]
   Busy      load 0.62 · mem 90/512 MB · 5 cogs running · queue 0 · restarts 2       temp 58C (seed thermal)
   Trust     tier: claimed (Seed binding) · admission: n/a (not a mesh peer) · licence: bound, 1 grant
   Seen      6 s ago · up 3d 4h
