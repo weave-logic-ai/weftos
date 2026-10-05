@@ -29,6 +29,19 @@ pub enum LockError {
         /// Holder PID, or `?` when it could not be read.
         pid: String,
     },
+    /// A restart re-exec could not take back its own lock: the lock file
+    /// names this very pid (exec keeps the pid), so some other process still
+    /// holds the descriptor it inherited. The kernel is not running.
+    #[error(
+        "restart could not re-take the lock on {root}: it is still held under this process's own \
+         pid {pid} by a process that inherited the descriptor; the kernel is NOT running, start it again"
+    )]
+    SelfHeld {
+        /// Runtime root the lock guards.
+        root: String,
+        /// This process's pid.
+        pid: String,
+    },
     /// Filesystem failure creating or opening the lock file.
     #[error("cannot take kernel lock {path}: {source}")]
     Io {
@@ -98,6 +111,30 @@ impl InstanceLock {
                 // ERROR_SHARING_VIOLATION (32) / ERROR_LOCK_VIOLATION (33).
                 Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => Err(held(paths, &path)),
                 Err(e) => Err(io_err(e)),
+            }
+        }
+    }
+
+    /// [`acquire`](Self::acquire) for a process that came up through the
+    /// SIGHUP re-exec (same pid as its predecessor). The predecessor's lock
+    /// is released by the exec, but a child it was spawning at that instant
+    /// can briefly hold an inherited descriptor, so a lock that names this
+    /// very pid is retried for `wait` before giving up with
+    /// [`LockError::SelfHeld`]. A lock held by another pid fails at once.
+    pub fn acquire_after_reexec(
+        paths: &RuntimePaths,
+        wait: std::time::Duration,
+    ) -> Result<Self, LockError> {
+        let start = std::time::Instant::now();
+        loop {
+            match Self::acquire(paths) {
+                Err(LockError::Held { root, pid }) if pid == std::process::id().to_string() => {
+                    if start.elapsed() >= wait {
+                        return Err(LockError::SelfHeld { root, pid });
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                other => return other,
             }
         }
     }
@@ -239,6 +276,29 @@ mod tests {
 
         drop(first);
         InstanceLock::acquire(&paths).expect("lock free after drop");
+    }
+
+    #[test]
+    fn reexec_lock_naming_our_own_pid_is_retried_then_refused_clearly() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::at(dir.path());
+        // The lock file names this pid, as after an exec that keeps it.
+        let holder = InstanceLock::acquire(&paths).unwrap();
+        let t = std::time::Instant::now();
+        let err = InstanceLock::acquire_after_reexec(&paths, std::time::Duration::from_millis(300))
+            .expect_err("still held");
+        assert!(t.elapsed() >= std::time::Duration::from_millis(300), "retried first");
+        assert!(matches!(err, LockError::SelfHeld { .. }), "{err}");
+        assert!(err.to_string().contains("NOT running"), "{err}");
+        assert_eq!(crate::boot_refusal::exit_code(&anyhow::Error::new(err)), 78);
+        // Released while retrying: the re-exec comes up.
+        let p2 = paths.clone();
+        let t = std::thread::spawn(move || {
+            InstanceLock::acquire_after_reexec(&p2, std::time::Duration::from_secs(5)).map(|_| ())
+        });
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        drop(holder);
+        t.join().unwrap().expect("acquired once the descriptor closed");
     }
 
     #[tokio::test]
