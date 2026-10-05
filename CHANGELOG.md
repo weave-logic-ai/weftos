@@ -7,7 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Staging area for changes after the 0.8.2 cut.
+Staging area for changes after the 0.8.3-rc.1 cut.
+
+## [0.8.3-rc.1] - 2026-10-05
+
+Release candidate for the project console batch (`target-0.8.3`). Prerelease:
+`weaver update` follows the latest stable release and does not install it.
+
+### Added
+
+- **Project console from the gateway.** `weft gateway --static-dir <dir>` (or
+  `gateway.staticDir`) serves the cog manager web build under `/console/`, with
+  its own CSP; `gateway.consoleConnectSrc` lists the extra origins it may call.
+- **Project read routes.** `GET /api/projects`, `GET /api/projects/{ulid}`
+  (manifest plus a trimmed status) and `?project=<ulid>` on
+  `GET /api/fleet/snapshot`.
+- **Project-bound read tokens.** `weft token issue --read-only --project <ulid>`
+  issues a read token limited to one project's routes; owner tokens with a
+  project claim are still refused by the gateway.
+- **Tailnet-identity console token.** With `gateway.tailnetIdentity.enabled`,
+  `POST /api/console/token` mints a short-lived (default 15 min) project-bound
+  read token for a caller whose Tailscale login (`tailscale whois`) is on
+  `allowedLogins`. The tailnet is the boundary; tokens are never stored.
+- **Cog manager project context.** `?project=<ULID>` filters Network and Cogs to
+  one project; tokens are read from the URL fragment (`#gwtoken=…`) and removed
+  from the address bar; the console asks the gateway for its token and keeps it
+  in memory only.
+- **Weave Manager mesh key and node tree.** Weave Manager tries this machine,
+  then a user-local address book; the connected node is the root of the Network
+  tree, and a tailnet or local connection enrolls an Ed25519 key with the
+  cog-host.
 
 ### Changed
 
