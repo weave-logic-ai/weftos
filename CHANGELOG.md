@@ -7,11 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Staging area for changes after the 0.8.3-rc.2 cut.
+Staging area for changes after the 0.8.3-rc.3 cut.
 
-## [0.8.3-rc.2] - 2026-10-05
+## [0.8.3-rc.3] - 2026-10-05
 
-Second release candidate for the project console batch (`target-0.8.3`). Prerelease.
+Release candidate for the project console batch (`target-0.8.3`). Prerelease. Contains
+everything listed under 0.8.3-rc.2, which was tagged but never published: its Windows
+build failed on the dashboard reporter's unix-only mesh path.
+
+### Fixed
+
+- The dashboard reporter builds on Windows: `--node` (mesh) is refused there with a clear
+  message, and project child states report as unknown without a project supervisor.
+
+### Added
+
+- `scripts/build.sh windows-check`, also gate check 23: a mingw-w64 compile of every
+  cargo-dist app for Windows, so unix-only code is caught before a tag.
+
+## [0.8.3-rc.2] - 2026-10-05 (not published)
+
+Second release candidate for the project console batch (`target-0.8.3`). Tagged but not
+published (Windows build failure); its changes ship in 0.8.3-rc.3.
 
 ### Added
 
