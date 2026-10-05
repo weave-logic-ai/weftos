@@ -1,6 +1,6 @@
 //! weft-cog-host (COG-009): run cogs on an appliance under WeftOS, with no agent cap.
 //!
-//!   weft-cog-host serve [--port 9480] [--root <dir>]      # supervise + lifecycle HTTP API
+//!   weft-cog-host serve [--bind 127.0.0.1] [--port 9480] [--root <dir>]
 //!   weft-cog-host add --id <id> --binary <path> [--source weavelogic|cognitum|local]
 //!                     [--version v] [--arg --interval --arg 1] [--enable] [--signed]
 //!                     [--guide <guide dir | bundled guide.json>]   (served at GET /cogs/<id>/guide)
@@ -13,7 +13,7 @@
 
 mod http;
 
-use std::net::TcpListener;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -43,7 +43,8 @@ fn licence_dir_of(a: &[String], root: &std::path::Path) -> PathBuf {
 fn usage() -> ! {
     eprintln!(
         "weft-cog-host (COG-009)\n\n\
-         serve [--port 9480] [--root <dir>]        supervise cogs + serve the lifecycle API\n\
+         serve [--bind 127.0.0.1] [--port 9480] [--root <dir>]\n\
+         \tsupervise cogs + serve the lifecycle API (loopback by default)\n\
          add --id <id> --binary <path> [--source weavelogic|cognitum|local] [--version v]\n\
          \t[--arg <a> ...] [--enable] [--signed] [--guide <dir|guide.json>]   install a cog into the root\n\
          list [--root <dir>]                       show installed cogs\n\
@@ -73,16 +74,16 @@ fn main() {
 }
 
 fn cmd_serve(a: &[String]) -> Result<(), String> {
+    let address = serve_address(a)?;
     let root = root_of(a);
     std::fs::create_dir_all(&root).map_err(|e| format!("create root: {e}"))?;
-    let port: u16 = opt(a, "--port").and_then(|p| p.parse().ok()).unwrap_or(9480);
     let licence = Arc::new(HostLicence::open(licence_dir_of(a, &root)));
     let mut supervisor = Supervisor::new(root.clone());
     supervisor.set_licence_gate(licence.clone());
     let sup = Arc::new(Mutex::new(supervisor));
 
-    let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("bind :{port}: {e}"))?;
-    eprintln!("[cog-host] root={} api=http://0.0.0.0:{port} — {} cog(s) known", root.display(), sup.lock().unwrap().ids().len());
+    let listener = TcpListener::bind(address).map_err(|e| format!("bind {address}: {e}"))?;
+    eprintln!("[cog-host] root={} api=http://{address} — {} cog(s) known", root.display(), sup.lock().unwrap().ids().len());
     eprintln!("[cog-host] licence dir {} ({})", licence.dir().display(), licence.status()["state"].as_str().unwrap_or("?"));
 
     // Per-host bearer token for the /hw/* mutating routes ($WEFT_COG_HOST_TOKEN, else <root>/host.token).
@@ -105,6 +106,31 @@ fn cmd_serve(a: &[String]) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_secs(1));
     }
+}
+
+fn serve_address(a: &[String]) -> Result<SocketAddr, String> {
+    fn value<'a>(a: &'a [String], flag: &str) -> Result<Option<&'a str>, String> {
+        let mut values = a.iter().enumerate().filter(|(_, arg)| arg.as_str() == flag);
+        let Some((index, _)) = values.next() else { return Ok(None) };
+        if values.next().is_some() {
+            return Err(format!("serve accepts {flag} only once"));
+        }
+        let value = a.get(index + 1).filter(|s| !s.starts_with("--"));
+        value.map(|s| Some(s.as_str())).ok_or_else(|| format!("serve needs {flag} <value>"))
+    }
+
+    let bind = match value(a, "--bind")? {
+        Some(raw) => raw.parse::<IpAddr>().map_err(|_| format!("invalid --bind IP address: {raw}"))?,
+        None => IpAddr::V4(Ipv4Addr::LOCALHOST),
+    };
+    let port = match value(a, "--port")? {
+        Some(raw) => match raw.parse::<u16>() {
+            Ok(port) if port != 0 => port,
+            _ => return Err(format!("invalid --port: {raw} (expected 1..65535)")),
+        },
+        None => 9480,
+    };
+    Ok(SocketAddr::new(bind, port))
 }
 
 fn cmd_add(a: &[String]) -> Result<(), String> {
@@ -191,5 +217,36 @@ fn cmd_licence(a: &[String]) -> Result<(), String> {
             Ok(())
         }
         _ => Err("licence needs status or import <records.json>".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serve_address;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn serve_defaults_to_loopback() {
+        assert_eq!(serve_address(&[]).unwrap().to_string(), "127.0.0.1:9480");
+    }
+
+    #[test]
+    fn serve_accepts_explicit_v4_and_v6_addresses() {
+        assert_eq!(serve_address(&args(&["--bind", "0.0.0.0", "--port", "9481"])).unwrap().to_string(), "0.0.0.0:9481");
+        assert_eq!(serve_address(&args(&["--bind", "::1"])).unwrap().to_string(), "[::1]:9480");
+    }
+
+    #[test]
+    fn serve_refuses_malformed_bind_and_port() {
+        for values in [
+            vec!["--bind"], vec!["--bind", "--port", "9480"], vec!["--bind", "example.com"],
+            vec!["--port"], vec!["--port", "0"], vec!["--port", "65536"], vec!["--port", "not-a-number"],
+            vec!["--bind", "127.0.0.1", "--bind", "0.0.0.0"],
+        ] {
+            assert!(serve_address(&args(&values)).is_err(), "accepted {values:?}");
+        }
     }
 }

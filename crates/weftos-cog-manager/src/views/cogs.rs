@@ -41,7 +41,7 @@ impl Manager {
             Some(Ok(h)) => self.running_table(ui, ctx, h),
             Some(Err(e)) => {
                 ui.colored_label(RED, format!("Can't reach the cog-host: {e}"));
-                ui.label(style::dim(ui, "Start it on the appliance: weft-cog-host serve --port 9480, then set the host above."));
+                ui.label(style::dim(ui, "Start it on the appliance: weft-cog-host serve --bind 0.0.0.0 --port 9480, then set the host above."));
             }
             None => {
                 ui.label(style::dim(ui, "Connecting to the host…"));

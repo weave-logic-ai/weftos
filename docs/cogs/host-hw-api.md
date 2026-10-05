@@ -1,8 +1,10 @@
 # weft-cog-host: `/hw/*` API, token, origins, agent command
 
-`weft-cog-host serve` (default `:9480`) exposes the hardware routes used by the console's
-**Identify hardware** modal and **Hardware Dex**. The host binds all interfaces, so the API is
-guarded against drive-by browser requests.
+`weft-cog-host serve` (default `127.0.0.1:9480`) exposes the hardware routes used by the
+console's **Identify hardware** modal and **Hardware Dex**. It binds loopback unless you pass
+`--bind <ip>`. An appliance the console reaches over the network (for example cog0) must
+start it with `--bind 0.0.0.0` or its tailnet address; the API stays guarded against
+drive-by browser requests either way.
 
 ## Routes
 

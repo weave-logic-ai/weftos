@@ -8,7 +8,8 @@
 //!   GET  /healthz              -> ok
 //!   /hw/*                      -> USB inventory, identify, Hardware Dex (see `hw_http`)
 //!
-//! Browser safety (the host binds all interfaces): the `Host` header must be an allowed name
+//! Browser safety (the CLI binds loopback by default; operators may opt into wider access):
+//! the `Host` header must be an allowed name
 //! (DNS-rebinding guard, 421 otherwise); every POST except edge heartbeats needs
 //! `Content-Type: application/json` + `X-Weft-Host: 1` (forcing a CORS preflight) **and** the host
 //! bearer token, as does every `GET /hw/*`; CORS is answered only for allowlisted origins on

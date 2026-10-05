@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.2 cut.
 
+### Changed
+
+- **`weft-cog-host serve` binds loopback by default.** Pass `--bind <ip>` to listen
+  wider. Appliances the console reaches over the network must add
+  `--bind 0.0.0.0` (or their tailnet address) to their unit before taking this
+  build, or the console loses them. New: `deploy/photo-gallery/`, a hardened
+  per-project systemd template (`weftos-cog-host@<project>.service`).
+
 ## [0.8.2] - 2026-10-04
 
 ### Highlights (0.8.2)

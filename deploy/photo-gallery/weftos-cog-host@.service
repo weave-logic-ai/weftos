@@ -1,0 +1,31 @@
+[Unit]
+Description=WeftOS Cog Host for project %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Instantiate as weftos-cog-host@weftos.service for the dedicated weftos user.
+# Customer projects use their own Linux user and an instance of this unit.
+User=%i
+Group=%i
+WorkingDirectory=/srv/weftos/projects/%i
+StateDirectory=weftos/projects/%i
+StateDirectoryMode=0700
+LogsDirectory=weftos/projects/%i
+LogsDirectoryMode=0700
+UMask=0077
+# Provision a unique COG_HOST_PORT for every project before enabling this unit.
+# A missing file or invalid port fails startup instead of colliding with another project.
+EnvironmentFile=/etc/weftos/projects/%i/cog-host.env
+ExecStart=/opt/weftos/bin/weft-cog-host serve --bind 127.0.0.1 --port ${COG_HOST_PORT} --root /var/lib/weftos/projects/%i/cogs
+Restart=on-failure
+RestartSec=3s
+KillMode=control-group
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
