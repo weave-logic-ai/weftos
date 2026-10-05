@@ -7,7 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Staging area for changes after the 0.8.1 cut.
+Staging area for changes after the 0.8.2 cut.
+
+## [0.8.2] - 2026-10-04
+
+### Highlights (0.8.2)
+
+- **Seed licence proxy (ADR-106).** A Cognitum Seed holds the mesh's one
+  licence, its token and its cogs; one licence covers the whole mesh and one
+  checkout needs no further permission. New `weft-licence` crate (binding,
+  run gate, steward relay, renewal), holder gating, and a start check in
+  `weft-cog-host` that runs a licensed cog only from a sealed copy.
+- **Appliance console (`weft-cog-manager`).**
+  - Sensor detail with a guide-first install flow (ADR-107): pick a sensor,
+    read its guide, pick a node, pre-check, install, post-check. Guides are
+    bundled with the catalog, so they can be read before anything is
+    installed.
+  - Catalog grows to 556 items with a 71-manufacturer registry, Tools, and
+    sensor-to-cog links. USB hardware identify and the hardware Dex.
+  - The Network tab is now the fleet manager: one list of every machine and
+    device from every source (mesh nodes from the daemon, Cognitum Seeds,
+    tailnet hosts, ESP32 edge nodes), each labelled with where its facts came
+    from.
+  - Node detail: Overview, Workloads, Health (load, signed capacity, RTT and
+    load sparklines), Trust / licence (with copyable admin commands the
+    console never runs), Software / firmware, and Raw. Seed detail: identity,
+    status, firmware slots, thermal.
+  - It reaches the daemon through the gateway with a read-only token
+    (`weft token issue --read-only`).
+- **Fleet in the daemon.**
+  - `fleet.snapshot` (Read) with per-field provenance, served at
+    `GET /api/fleet/snapshot`; `weaver fleet status` and
+    `weaver fleet location set`.
+  - Verified peers ping each other: last pong, smoothed RTT and missed pongs
+    are reported, and each pong carries the responder's load average, cores
+    and memory. The daemon reports its own hostname.
+  - Legacy UUID peer ids are dropped from `cluster_peers.json` on load.
+- **Memory (opt-in).**
+  - `agents.memory_recall`: inject at most 5 of 20 retrieved `MEMORY.md`
+    snippets tagged `[m1]`… instead of the whole file. Cited snippets reward
+    the reranker and ignored ones penalise it; the retriever is never trained
+    (RMM retrospective, WEFT-732).
+  - `agents.memory_consolidation`: distil conversations after each turn into
+    topic nodes with merge-or-insert, so a corrected fact replaces the old
+    one (RMM prospective, WEFT-733).
+  - Both are off by default.
+- **Spatial.** The daemon's `ecc.spatial.*` RPCs are back over the kernel
+  spatial service: insert, get (with a JSON payload for provenance), query,
+  branches, diff, events and a replay check.
+- **Weave topology Phase 4 (ADR-103).**
+  - Nested user instances (D10) with private identity, signed contracts and
+    an owned liveness pipe. Projects stop with their nested instance.
+  - Per-project sandboxes: `logical` (default), macOS `seatbelt`, and
+    `linux_container`.
+  - A dedicated child RPC endpoint with a method ceiling.
+  - Certified leaves: signed publishing, ACK, discovery, offline replay, and
+    an ESP-IDF producer with an NVS backlog.
+- **Public cogs.** The first 11 WeftOS hardware cogs are published in their
+  own repository (`weave-logic-ai/weftos-cogs`) with armv7 and aarch64
+  cross-builds and the shared `cog-sensor-sources` crate.
+- **Monitoring.** `/monitoring` shows real token counts, latency and failures,
+  and the gateway shares the agent pipeline's routing history (WEFT-305).
+
+### Known limits (0.8.2)
+
+- The Linux-container project driver has not passed its real Docker-in-Docker
+  acceptance run; treat `linux_container` as experimental.
+- The Wasmtime project-kernel slice is not in this release.
+- Certified leaf firmware is build-verified only: it has not been flashed to a
+  device and no power-loss test has run.
+- Legacy unsigned bare-metal leaves stay off by default.
+- The owner migrations (`weaver migrate user-chain`, `weaver migrate user-key`,
+  `weaver project migrate-kernel`, `weaver mesh install-service`) are
+  implemented and tested on isolated state, but none has yet been run on a
+  real installation. Follow `docs/guides/kernel.md` and
+  `docs/guides/weftos-deployment-sops.md`, dry run first, and keep the source
+  chain and keys.
 
 ### Security — `weaver update` verifies release signatures (fail closed)
 
@@ -43,8 +118,8 @@ Staging area for changes after the 0.8.1 cut.
   Mach-O or wasm binary, so a cog signature can never pass as a release
   signature.
 - `release.yml` triggers only on `v[0-9]+.[0-9]+.[0-9]+*` tags, and its
-  signing `host` job runs in the `release` GitHub Environment, which needs
-  a one-time setup (v* tags, a required reviewer, the secret moved there).
+  signing `host` job runs in the `weftos-cogs` GitHub Environment (v* tags
+  only, a required reviewer, the signing secret held there).
 
 ### Changed — `weaver update` is sha256-checked, all-binary and install-method aware
 

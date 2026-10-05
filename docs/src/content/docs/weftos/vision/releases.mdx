@@ -10,6 +10,629 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 > overwritten on the next docs build. To change a release entry, edit
 > `CHANGELOG.md` and re-run the script.
 
+## v0.8.2
+
+*2026-10-04*
+
+### Highlights (0.8.2)
+
+- **Seed licence proxy (ADR-106).** A Cognitum Seed holds the mesh's one
+  licence, its token and its cogs; one licence covers the whole mesh and one
+  checkout needs no further permission. New `weft-licence` crate (binding,
+  run gate, steward relay, renewal), holder gating, and a start check in
+  `weft-cog-host` that runs a licensed cog only from a sealed copy.
+- **Appliance console (`weft-cog-manager`).**
+  - Sensor detail with a guide-first install flow (ADR-107): pick a sensor,
+    read its guide, pick a node, pre-check, install, post-check. Guides are
+    bundled with the catalog, so they can be read before anything is
+    installed.
+  - Catalog grows to 556 items with a 71-manufacturer registry, Tools, and
+    sensor-to-cog links. USB hardware identify and the hardware Dex.
+  - The Network tab is now the fleet manager: one list of every machine and
+    device from every source (mesh nodes from the daemon, Cognitum Seeds,
+    tailnet hosts, ESP32 edge nodes), each labelled with where its facts came
+    from.
+  - Node detail: Overview, Workloads, Health (load, signed capacity, RTT and
+    load sparklines), Trust / licence (with copyable admin commands the
+    console never runs), Software / firmware, and Raw. Seed detail: identity,
+    status, firmware slots, thermal.
+  - It reaches the daemon through the gateway with a read-only token
+    (`weft token issue --read-only`).
+- **Fleet in the daemon.**
+  - `fleet.snapshot` (Read) with per-field provenance, served at
+    `GET /api/fleet/snapshot`; `weaver fleet status` and
+    `weaver fleet location set`.
+  - Verified peers ping each other: last pong, smoothed RTT and missed pongs
+    are reported, and each pong carries the responder's load average, cores
+    and memory. The daemon reports its own hostname.
+  - Legacy UUID peer ids are dropped from `cluster_peers.json` on load.
+- **Memory (opt-in).**
+  - `agents.memory_recall`: inject at most 5 of 20 retrieved `MEMORY.md`
+    snippets tagged `[m1]`… instead of the whole file. Cited snippets reward
+    the reranker and ignored ones penalise it; the retriever is never trained
+    (RMM retrospective, WEFT-732).
+  - `agents.memory_consolidation`: distil conversations after each turn into
+    topic nodes with merge-or-insert, so a corrected fact replaces the old
+    one (RMM prospective, WEFT-733).
+  - Both are off by default.
+- **Spatial.** The daemon's `ecc.spatial.*` RPCs are back over the kernel
+  spatial service: insert, get (with a JSON payload for provenance), query,
+  branches, diff, events and a replay check.
+- **Weave topology Phase 4 (ADR-103).**
+  - Nested user instances (D10) with private identity, signed contracts and
+    an owned liveness pipe. Projects stop with their nested instance.
+  - Per-project sandboxes: `logical` (default), macOS `seatbelt`, and
+    `linux_container`.
+  - A dedicated child RPC endpoint with a method ceiling.
+  - Certified leaves: signed publishing, ACK, discovery, offline replay, and
+    an ESP-IDF producer with an NVS backlog.
+- **Public cogs.** The first 11 WeftOS hardware cogs are published in their
+  own repository (`weave-logic-ai/weftos-cogs`) with armv7 and aarch64
+  cross-builds and the shared `cog-sensor-sources` crate.
+- **Monitoring.** `/monitoring` shows real token counts, latency and failures,
+  and the gateway shares the agent pipeline's routing history (WEFT-305).
+
+### Known limits (0.8.2)
+
+- The Linux-container project driver has not passed its real Docker-in-Docker
+  acceptance run; treat `linux_container` as experimental.
+- The Wasmtime project-kernel slice is not in this release.
+- Certified leaf firmware is build-verified only: it has not been flashed to a
+  device and no power-loss test has run.
+- Legacy unsigned bare-metal leaves stay off by default.
+- The owner migrations (`weaver migrate user-chain`, `weaver migrate user-key`,
+  `weaver project migrate-kernel`, `weaver mesh install-service`) are
+  implemented and tested on isolated state, but none has yet been run on a
+  real installation. Follow `docs/guides/kernel.md` and
+  `docs/guides/weftos-deployment-sops.md`, dry run first, and keep the source
+  chain and keys.
+
+### Security — `weaver update` verifies release signatures (fail closed)
+
+- Release CI now signs every release: `scripts/release/sign-release.sh`
+  writes `weftos-release.json` (the sha256 of every uploaded file,
+  `dist-manifest.json` included) and `weftos-release.json.sig` (Ed25519, key
+  from the `WEAVELOGIC_RELEASE_KEY` secret). With no key, the job fails and
+  nothing is published.
+- `weaver update` checks that signature against the compiled-in WeaveLogic
+  release key (a dedicated key, `8ac2a301…`, separate from the COG-008 cog key)
+  before reading anything else from
+  the release. The signed tag must match the manifest, the manifest must match
+  its signed hash, and every archive must match its signed hash. Unsigned or
+  badly signed releases are refused, and so is a tampered archive with
+  rehashed `.sha256` files. `--check` refuses them too.
+- New flag `--insecure-skip-signature` (warns; sha256 checks still run) for
+  emergencies. There is no runtime way to change the trusted key.
+- No rollbacks: `--force` now only reinstalls the same version or confirms an
+  install with no receipt. A release older than the running build, or older
+  than the receipt's new `weftos_highest_version` mark, needs
+  `--allow-downgrade` (warns). A downgrade never lowers the mark.
+- A release key revoked in the operator's signer revocation list
+  (`revoked_subjects.json`, as used for cogs) makes `weaver update` refuse
+  everything and point to an out-of-band reinstall. The user-level lists
+  (`$WEFTOS_RUNTIME_DIR`, else `~/.weftos/run` and `~/.clawft`) are read
+  whatever the working directory, with a project's list added when there is
+  one. A malformed project list warns and is ignored; a malformed user list
+  is an error.
+- The signed list carries a `published` time; a latest release signed over 90
+  days ago gets a warning.
+- The cog signer (`weft-cog-repo sign`, public and private repos) refuses
+  payloads starting with `weftos-release-` and anything that is not an ELF,
+  Mach-O or wasm binary, so a cog signature can never pass as a release
+  signature.
+- `release.yml` triggers only on `v[0-9]+.[0-9]+.[0-9]+*` tags, and its
+  signing `host` job runs in the `weftos-cogs` GitHub Environment (v* tags
+  only, a required reviewer, the signing secret held there).
+
+### Changed — `weaver update` is sha256-checked, all-binary and install-method aware
+
+- `weaver update` checks every archive's sha256 against the published `.sha256`
+  (and `sha256.sum`) and `dist-manifest.json`, failing closed, then replaces
+  `weft`, `weaver` and `weftos` together with per-file atomic renames and full
+  rollback. The sha256 check alone gives integrity, not authenticity; release
+  signatures (above) add authenticity.
+- Archives are unpacked in-process: links, `..` and absolute paths are
+  refused and unpacked size is capped. Downloads ignore `.curlrc` and CA
+  environment overrides, accept https only, and follow at most 5 redirects.
+- Homebrew, `cargo install`, source builds and system package paths are
+  refused with the owning channel's command. An install with no cargo-dist
+  receipt needs a confirmation or `--force`.
+- New flags: `--check`, `--dry-run`, `--restart`, `--no-restart`. The daemon
+  restart goes through launchd or systemd when the daemon runs under them and is
+  never done under `sudo`. The `sudo cp` fallback is gone.
+
+### Changed — gateway auth uses daemon tokens; no HTTP token mint (ADR-102)
+
+- **Breaking:** `POST /api/auth/token` is gone (404). The gateway no longer
+  hands out tokens or keeps a token store. Every `/api/*` route, `/ws`, `/mcp`
+  and `/api/openapi.json` needs a bearer issued by the kernel daemon: run
+  `weft token issue` (the daemon must be running). It prints a sign-in link
+  `http://<host>:<api_port>/#token=<token>`; `weft ui` prints one too. Scripts
+  that called the mint route must switch to `weft token issue`. Without a
+  daemon, authenticated requests get 503, not 401.
+- Project tokens (ADR-103) are refused by the gateway.
+- `GET /api/health` is tiered: anonymous callers get only `{"status":"ok"}`
+  (or 503 `degraded`); a valid token gets the full status document. The
+  `/api/status` route is removed.
+- New: `POST /mcp` (full MCP profile) and `GET /api/openapi.json` on the
+  gateway, both behind the token.
+- The gateway refuses to bind a non-loopback API address over plain HTTP
+  unless `--dangerously-plain-http` or `gateway.dangerously_plain_http` is set
+  (it has no TLS of its own). Loopback now means any loopback IP, including
+  `127.0.0.0/8` and IPv4-mapped `::ffff:127.0.0.1`; this also tightens
+  `weft mcp-server --listen`'s loopback test.
+- `/mcp`, `/events`, `/custody/witness` and tokened `/api/health` are now
+  rate-limited per client, and the gateway caps its own daemon token checks
+  (about 50/s, burst 100; excess gets 429). `/mcp` calls are serialised with a
+  10 s queue timeout and a 120 s call timeout.
+- A token revoked with `weft token revoke` can keep working on a running
+  gateway for up to 30 seconds. Open WebSockets are not closed on revoke or
+  expiry.
+
+### Changed — workload permits and policy files are stricter (upgrade note)
+
+- The placement control plane now refuses to build, which takes down all
+  `weaver workload place|explain|status|stop|logs|unload` until fixed, if
+  any of these is true of a file in the runtime dir: a permit in
+  `workload-permits.json` accepts `"min_package_trust": "unsigned"` and
+  names no `"principals"`; a policy file (`workload-permits.json`,
+  `workload-trust.json`, peers, container, seeds) is group- or
+  world-writable (for example mode 0664); a policy file is owned by another
+  user. `weaver workload revoke` keeps working in every one of these cases.
+  Fix: `chmod 600 <runtime>/workload-*.json`, `chown` the files to the
+  daemon's user, and add `"principals": ["catalog"]` to an unsigned permit
+  for the catalog verbs. See docs/cogs/operator-guide.md.
+- `workload install` / `unload` are decided by the permit gate as the
+  principal `catalog` on `unsigned` packages (they were always denied).
+
+### Added — `weaver workload revoke` and forced unload
+
+- `weaver workload revoke --package|--signer|--hash` revokes, chains
+  (`workload.revoke`, `workload.unrevoke`), stops and unloads what runs from
+  the subject on this node and on peers that receive the signed notice.
+  `WorkloadGate::new` / `with_rules` now take the revocation list.
+
+### Added — cog manifest `redistributable` flag (ADR-100 amendment, ADR-099 section 6)
+
+- The signed cog manifest has an optional `redistributable` field (default
+  false; `weaver workload pack --redistributable`). Packages are seeded,
+  advertised and served over the artifact swarm only when it is true and the
+  package has no Cognitum provenance. Our own cogs need it to be shared.
+- **Upgrade order:** `CogPackageBody` rejects unknown fields, so verifiers
+  built before this change (v0.8.1 nodes, cog-repo, Seed tooling) reject a
+  manifest signed with `redistributable = true`. Upgrade every verifier in a
+  mixed-version mesh before packing with the flag. Manifests without it are
+  unchanged.
+
+### Changed — unverified mesh peers are not cluster members (ADR-103 A10)
+
+- **Mode-dependent:** this applies only under `kernel.mesh.admission =
+  "enforce"`. Under `observe` (the shipped default) and `off`, every peer
+  joins as `Active` exactly as before: observe means observe, not enforce.
+  `MeshRuntime::set_enforcing` carries the mode (set at boot, by the mesh
+  service, and when an admin changes the mode).
+- Under enforce, `MeshPeerEvent::Joined` and `Recovered` carry `verified`
+  (true when the peer counts as a member). A peer admission did not verify
+  (a dialled seed, a legacy leaf) is held in cluster membership as the new
+  `NodeState::Unverified`, not `Active`: it keeps its routes, but is not in
+  `active_peers()`, is not reported healthy, placement treats it as not alive
+  and refuses to place on it, and the ruvector manager is not told about it.
+  Heartbeats and `Suspect` events never promote it; only a verified join does.
+  An `Unreachable` event, or an hour without a heartbeat, drops it from the
+  list. Anything that treated "present in membership" as "member" should check
+  for `Active`.
+- `seed_peers` entries may be `address#node-id` to pin the id a seed must
+  claim. A dialled seed with no pin is bound to the first id named by an
+  envelope or an assessment frame; frames that name no id before that are
+  dropped (assessment frames used to pass unbound).
+
+### Changed — mesh connection limits and seed dials (ADR-103 A10)
+
+- **Behaviour change:** the per-IP connection cap (default 64) and the
+  first-frame timeout (default 10 s) now apply under every `kernel.mesh.admission`
+  mode, not only `enforce`. A legacy leaf that connects and stays silent for
+  more than 10 s is dropped, and one host can hold at most 64 connections.
+  Tune them with `kernel.mesh.max_connections_per_ip` and
+  `kernel.mesh.first_frame_timeout_secs` for the collapsed daemon, or with
+  `max_connections_per_ip` and `first_frame_timeout_secs` in `mesh.toml` for the
+  machine mesh service (also `weaver mesh install-service
+  --max-connections-per-ip N --first-frame-timeout-secs S`, written only when
+  given). The idle timeout and live revocation check remain `enforce`-only.
+- Seed connections are now bidirectional, redial with jittered exponential
+  backoff, drop after 5 minutes of inbound silence, and stop when the mesh
+  service stops. There is no dial-side keepalive yet, so a seed that stays
+  silent for 300 s flaps `Left`/`Joined` every 5 minutes.
+
+### Changed — Chain authority follow-ups (ADR-103 A7)
+
+- **Behaviour change:** the user daemon now exports its real `max_processes` and
+  subagent `max_per_conv` as the parent policy's limits (they were empty). A
+  project overlay that sets `limits.max_processes` or `limits.spawn_budget`
+  above the parent's cap is refused at boot, reload and push with the parent
+  value in the message; lower it to the parent cap or below.
+- `auth.token` events and `governance.overlay.applied` are never replicated;
+  chain sync stops cleanly at the first authority event (`StoppedAtAuthorityEvent`).
+- Placement RPCs refuse after a `governance.parent.push` until the kernel
+  restarts (`governance changed ... restart this kernel`): the placement gate is
+  fixed at build time, so the older gate no longer decides after a push.
+
+### Changed — Weave topology Phase 1 follow-ups (ADR-103 A8, next release 0.8.2)
+
+- **Legacy clients are refused for mutating calls (breaking).** A request with
+  no `proto` now gets `proto_mismatch` unless the method is read-only, and
+  `weft`/`weaver` clients that meet a daemon with no `kernel.handshake` on the
+  default endpoint send read-only calls only (`unverified_daemon` otherwise).
+  Restart an old daemon with the current build to lift it. The gate is an
+  allowlist (`READ_ONLY_METHODS`), not the capability table. Remote JSON
+  clients on the TCP relay are not stamped by the relay: without `proto` they
+  are read-only from 0.8.2; send `"proto": 1`. The VS Code panel and the
+  child-kernel link now send it. Old no-`proto` clients that call
+  `kernel.subscribe`, `substrate.subscribe` or `agent.chat` now fail with
+  `proto_mismatch` (those are not on the read-only allowlist). Update the
+  client.
+- **launchd no longer cycles on a permanent refusal.** The user daemon writes
+  `~/.weftos/run/REFUSED` on a permanent refusal or a clean exit and the
+  generated plist's `KeepAlive` is `PathState {REFUSED: false}`. Only an
+  instance launchd starts removes it on boot: the plist sets
+  `WEFTOS_SERVICE_MANAGER=launchd`, and a manual `weaver kernel start
+  --profile user` leaves the sentinel in place and prints a hint (otherwise
+  launchd would launch its own, refused, instance beside the manual one every
+  30 s). To hand control back, run `weaver kernel stop --profile user` and then
+  `launchctl kickstart gui/$(id -u)/ai.weftos.user`. A refused duplicate start
+  never writes the sentinel, and a clean-exit write happens only if no
+  successor holds the instance lock. launchd watches `~/.weftos/run/REFUSED`,
+  so a `WEFTOS_RUNTIME_DIR` override is not supervised by launchd. Regenerate
+  the unit with `weaver service unit --kind launchd` to pick up the new plist
+  and its marker. The legacy-chain age-window refusal is now a plain boot error
+  (exit 1, retried); `-cREL` is made absolute on SIGHUP re-exec.
+- `weaver kernel status` without `--profile user` reports a live user daemon
+  instead of booting an inspection kernel; `weft doctor` lists `~/.weftos/run`
+  with the `kernel.lock` holder, `REFUSED`, the migration marker and adoption
+  state; MCP attach messages and `is_daemon_running()` honour a manifest
+  `runtime_dir`.
+
+### Added — Weave topology follow-ups: identity, supervisor, mesh service (ADR-103 A7, A10, A13, A14)
+
+- **User-key rotation.** `weaver migrate user-key --rotate` replaces
+  `~/.weftos/user.key` with a dual-signed handover appended to
+  `user-key-rotations.jsonl`; it needs the user daemon stopped and resumes after
+  a crash. Material sealed by the old key keeps verifying up to the rotation
+  point. `user_key_history_invalid` is the new fail-closed refusal when the
+  rotation log does not end at the key in use. A running project kernel fails
+  its next `mesh.register` (`pop_failed`) and is restarted by the supervisor's
+  liveness pass, not re-certified. Restart children with `weaver kernel restart
+  --project <id>` and run `weaver mesh bind rebind` afterwards (ADR-103 A13).
+- **Anchor reset.** `weaver project anchor reset --project <id>` (RPC
+  `project.anchor.reset`, Admin, user daemon only) opens a new anchor epoch after
+  a project chain was moved aside, so the project's restarted anchors (`seq = 1`)
+  are accepted instead of refused with `anchor_seq`. Within an epoch an anchor
+  statement's `chain_id` must equal the last accepted one (`anchor_chain_id`).
+- **Behaviour change:** a same-uid peer inside a supervised child's process
+  group no longer gets the ADR-070 shortcut: its literal `auth: "admin"` is
+  ignored and it is treated as anonymous (read and chat). Anything an agent runs
+  inside a child kernel that relied on the shortcut against the user daemon now
+  fails with permission denied. The owner's CLI is unaffected.
+- `weft token issue --project` help and tests now state what a project-scoped
+  token does: the token's project is the request's project and a different claim
+  is `project_scope_mismatch`; it is a claim guard, not a capability limit.
+
+### Changed — Supervisor liveness and shared slots (ADR-103 A7 S5-S8)
+
+- **Behaviour change:** a `running` child whose registry session has stayed
+  expired for 30 s (`lost_heartbeat_grace`, after three missed beats) is stopped
+  and restarted inside its restart budget, then marked `failed`. An adopted
+  child's tombstone session and a child whose last beat was busy are never
+  treated as lost.
+- `project.status`, `weaver kernel status` and `weaver doctor` report
+  `stale_build` (`child:<id>:stale-build`) when a child runs another build than
+  the user daemon. Nothing restarts it on its own.
+- `weaver kernel start --legacy-project-daemon` is refused in a tree whose
+  manifest says `via = child-kernel`; `project.stop` on an adopted-but-refused
+  leftover answers `unmanaged_pid`.
+- The four global shared-service slots are fair: a project holding a slot may not
+  take another while a project holding none was refused within 3 s. `shared.*`
+  re-checks on every call that the project is still registered and active.
+
+### Changed — Mesh service journal and record publication (ADR-103 A10)
+
+- **Behaviour change:** at start the service accepts a lone torn final journal
+  line by itself (no newline, nothing readable, no earlier pending quarantine):
+  it truncates the tail and journals `journal.accept_truncate` with
+  `auto: "torn_tail"`, so the journal is modified at start. `status` reports
+  `last_auto_accept`. Any other damage still quarantines and refuses to bind.
+- `service.json` is published only after the socket is bound and a lost bind
+  race never replaces the winner's record. `read_record` waits up to 2 s and
+  retries for a record that is mid-write.
+- `max_connections_per_ip` and `first_frame_timeout_secs` are `mesh.toml` keys;
+  see the connection-limits entry above.
+
+### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
+
+- **Per-project child kernels under the user daemon.** `weaver kernel start
+  --project <id|name>` (never starts the user daemon; it tells you the command),
+  `weaver kernel stop --project | --all-children`, `weaver kernel restart
+  --project`, and `project.start|stop|restart|status|ensure_running` on the
+  user daemon. A project opts in with `weaver project migrate-kernel <id>
+  [--dry-run|--revert]` (refuses while the project's own daemon runs; it is
+  never signalled). `weft` commands start the child on demand for a project
+  marked `via = "child-kernel"`. Idle children stop after `idle_stop_secs`
+  (default 1800 for child-kernel projects).
+- **Supervision:** crashes restart with 1 s to 30 s backoff inside a budget,
+  then `failed` until `weaver kernel restart --project`; a clean exit is never
+  restarted; children survive a user-daemon restart (`weaver update`) and are
+  verified and adopted afterwards; unverifiable leftovers are listed, never
+  signalled. `weaver doctor` reports failed, orphaned and unverified children.
+- **Security:** a child starts with an allow-listed environment (no provider
+  keys), `--profile project`, a signed parent policy, a pinned user key and a
+  Write-only project token that may call only the shared services, the
+  handshake and its own refresh. `project.revoke` stops the child, kills its
+  token and is terminal.
+
+### Changed (package G)
+
+- A plain `weaver kernel start` inside a project, beside a running user daemon,
+  is refused; pass `--legacy-project-daemon` for one more release. Running
+  daemons are not affected by a restart.
+- The launchd unit gains `AbandonProcessGroup` and the systemd unit
+  `KillMode=process` so a service restart keeps project kernels. Regenerate
+  the unit (`weaver service unit`) and reinstall it. Stopping the user daemon
+  with `weaver kernel stop --profile user` stops its children first unless you
+  pass `--keep-children`.
+
+### Fixed — Weave topology Phase 2 integration (ADR-103 A7)
+
+- **Security:** `human_approval_required = true` in a project's
+  `overlay.toml` can no longer turn the parent's denies into approval prompts.
+  The parent's blocking rules stay hard denies, and only actions the parent
+  permits ask for approval.
+- **Security:** callers can no longer append chain events under the kernel's
+  own sources (`governance`, `project`, `project.supervisor`), and the
+  governance rollback floor reads only the kernel's own records. Before, one
+  forged `chain.append` could stop a project kernel from booting.
+- `project.revoke` is now terminal for the project id: no key is certified for
+  it again (`project_revoked`). Give the tree a new identity with
+  `weft project init --fork --force`. If revoke or rekey fails late (the
+  certificate file), it returns `identity_change_incomplete` and still stops
+  the child and writes the marker.
+- `weft project init` also ignores `.weftos/project.cert.json` and
+  `.weftos/state/` in an existing `.gitignore`.
+- **Read before downgrading:** a pre-Phase 2 `weaver` run against a
+  `child-kernel` project starts a fresh chain over the project chain. Move
+  `<root>/.weftos/chain/` aside first (kernel guide, "Never downgrade a
+  child-kernel project").
+- A project kernel now signs its chain with `project.key`. Before, it created
+  a separate `chain.key` beside the checkpoint and its own one-key check then
+  stopped it, so no real child could boot.
+- A project kernel is bound to its project, and its `kernel.handshake` names
+  it. Before, no real child got past the supervisor's readiness check. The
+  user-signed forward header on the supervisor's graceful `kernel.shutdown`
+  now verifies, and governance events on the child carry the project.
+- `project.revoke` writes the terminal marker in the user daemon's run root
+  (`$WEFTOS_RUNTIME_DIR` when set), where the supervisor and the child look
+  for it. Before, the path came from the manifest store, so with a custom run
+  root or store the marker was written where nothing read it.
+- New end-to-end test (`tests/project_kernel_e2e.rs`). The user daemon runs in
+  process and the child is the real `weaver kernel` code path. The test covers
+  registration, the overlay deny, idle stop with the final anchor, restart on
+  demand, three crashes then `failed`, `restart --project` and revoke.
+
+### Changed — Weave topology Phase 0 (ADR-103) — read before upgrading
+
+- **Stop every pre-0.8.2 daemon before first running the new build, and check
+  it is gone** (`ps`, `weaver doctor daemon`). Older daemons take no
+  `chain.lock`, so the new build cannot see them; the 120 s recency guard is a
+  heuristic and turns off once a `chain.lock` exists.
+- **One runtime resolver.** Socket, PID, log, `node.key`, chain, workloads,
+  cluster peers and revocations all resolve from one root:
+  `WEFTOS_RUNTIME_DIR`, else the nearest project marker above the working
+  directory, else `~/.clawft`. `$HOME` is never a project. A project marker is
+  `.weftos/` plus one of `project.toml`, `.weftos/weave.toml`, a `weave.toml`
+  beside it, an existing `.weftos/runtime/`, or a `.git` (worktrees get their
+  own kernel). The fallback to `.weftos/runtime/` files in the working
+  directory is gone.
+- **Chains are no longer forked or shared by accident.** A kernel with no chain
+  of its own keeps using the legacy `~/.clawft` chain and its key, guarded by
+  `chain.lock`. The first adoption of a legacy chain that no lock-aware kernel
+  has used needs `weaver kernel start --adopt-legacy-chain`; `--new-chain`
+  starts a fresh chain instead (refused when it would overwrite the legacy
+  chain in `~/.clawft`). A second kernel on the same runtime root or chain is
+  refused with the holder's PID. `kernel.lock` and `chain.lock` files appear.
+- **Mesh node ids are now 32 hex characters**, `hex(SHA-256(pubkey)[..16])`,
+  stable across restarts. They change on upgrade: re-pin peers, ACL rules and
+  the mic node (`WHISPER_INPUT_NODE_ID` or `voice.mic_node_id`).
+- **Mesh port 9489** by default (was 9470 in code, 9421 in docs). Update
+  `listen_addr`, `seed_peers` and firewalls; the deployed Pi weaver stays on
+  9470 until it is redeployed. A failed mesh bind now stops boot.
+- **Mic source is fail-closed.** An operator pin wins; otherwise the single
+  node publishing `sensor/mic` is used; two or more candidates stop
+  speech-to-text until a node is pinned.
+- **CLI.** `weft agent` needs `--local` when no daemon is running.
+  `weft cron add/remove/enable/disable` need a daemon; `weft cron run` reports
+  it is not implemented. `weft kernel status|ps|services` ask the daemon
+  first and exit non-zero on a daemon error. `weaver kernel start` waits up
+  to 90 s for the daemon socket and exits non-zero if boot fails.
+- **New: `weft doctor` / `weaver doctor`** (install, daemon, runtime, config,
+  mcp, agents). Read-only by default; `--fix` removes only provably stale
+  socket and PID files in the active runtime directory.
+- **Security:** voice commands now go through the authorization chokepoint as
+  a read/chat/write principal (never admin); RVF requests are authorized;
+  `undici` 7.30.0 and `brace-expansion` 5.0.12; new wasmtime advisories are
+  ignored with enforced expiries (see `docs/security/cargo-audit-residual.md`).
+
+### Changed — Weave topology Phase 1 (ADR-103) — read before upgrading
+
+Phase 1 adds the user daemon, projects, tokens and the scope gate. The owner
+steps are in `docs/guides/kernel.md` (User daemon, "Owner migration").
+
+- **The gateway binds to loopback by default.** `gateway.host` changed from
+  `0.0.0.0` to `127.0.0.1`, and loopback binds now check the `Host` header. An
+  install that relied on the implicit LAN bind loses it silently: set
+  `gateway.host = "0.0.0.0"` if you want LAN exposure.
+- **User daemon.** `weaver kernel start --profile user` runs one machine-wide
+  daemon in `~/.weftos/run` (socket, `kernel.lock`, log) with the roles
+  `machine` and `user`, its working directory in `~/.weftos`. It reads
+  `~/.weftos/weave.toml`, which takes precedence over `~/.clawft/config.json`;
+  copy your `[kernel.mesh]` and Noise sections into it or the user daemon runs
+  with the mesh off. It seeds `~/.weftos/projects/` from `workspaces.json`.
+- **`weft` now reaches the user daemon without flags.** The endpoint resolves
+  from `--runtime`, then `WEFTOS_RUNTIME_DIR`, then the project manifest
+  (`[serve] runtime_dir`, or `via = "user-daemon"`, which selects
+  `~/.weftos/run`), then `~/.weftos/run` when no project is known and a user
+  daemon has run there, then the Phase 0 default. The unreachable-daemon
+  error lists every level tried.
+- **User chain migration.** `weaver migrate user-chain [--dry-run]` copies the
+  legacy chain from `~/.clawft` to `~/.weftos/chain`, verifies it (hashes,
+  head, signature) and writes `MIGRATED-TO-WEFTOS.txt` beside the original,
+  which is never modified. After it, any kernel that would still land on the
+  `~/.clawft` chain, including one whose config sets
+  `kernel.chain.checkpoint_path` into that directory, is refused with
+  **exit 78** unless `--adopt-legacy-chain` is passed. `migrate` warns when
+  `~/.clawft/config.json` sets the key.
+- **Projects.** New `weft project init|fork|list|show|seed`; new global flags
+  `--project <ULID>` and `--runtime <DIR>`; new environment variables
+  `WEFTOS_PROJECT` and `WEFTOS_MANIFESTS_DIR`. Manifests live in
+  `~/.weftos/projects/<ULID>.toml` (mode 0600); `project.toml` marks a
+  project directory.
+- **Tokens.** `weft token issue|revoke|list` mint `wft_` secrets (shown once,
+  with a playground link; 24 h maximum). Only hashes go on the chain;
+  revocations are also journaled in `auth-tokens.jsonl`, now in the runtime
+  root (older journals beside the chain or in `~/.clawft` are merged in once,
+  not modified). A token's `project` is recorded but not yet enforced.
+- **Literal `auth` scopes are same-uid only.** `admin`, `write`, `chat` and
+  `read` as an `auth` value work only from a unix-socket peer with the daemon's
+  uid. From another uid on the unix socket the request fails with
+  `peer_uid_mismatch`; over the TCP relay the literal is stripped, so the call
+  is anonymous and a mutating method fails with "permission denied: requires
+  capability". Use a `wft_` token instead.
+- **Scope gate (D12).** On the user daemon, `kernel.governance.outside_project`
+  defaults to `read_only`: outside a project only a reviewed allow-list of read
+  methods works and everything else returns `project_required`. Other modes:
+  `deny_all`, `allow_all` (the pre-Phase 1 behaviour, and the default for
+  project daemons). The allow-list includes the streams and reads first-party
+  clients use without a project (`kernel.logs_stream`, `substrate.read`,
+  `substrate.subscribe`, `cluster.facts`, `voice.trace`), so the egui
+  explorer and `weft voice watch` keep working. `ipc.subscribe_stream` is not
+  on it: it needs a project claim.
+- **Service units.** `weaver service unit --kind launchd|systemd` prints a unit
+  for the user daemon, and `weaver update --restart` restarts it (acting only
+  on the pid-file pid after checking the exe and the handshake). A refused boot
+  exits **78**; the systemd unit lists it in `RestartPreventExitStatus`.
+  launchd cannot filter on exit codes, so it retries a refused boot every 30 s
+  and fills the log until you fix the cause.
+- **Compatibility.** `kernel.status` now carries a `handshake` object. Clients
+  that send no `proto` are accepted for every method this release; they will be
+  refused in Phase 2, so update `weft` and the gateway together.
+
+### Added — Weave topology Phase 3 (ADR-103) — machine mesh service
+
+Phase 3 adds an optional machine mesh service that owns the box node key and
+the one mesh listener, with user daemons as its registered clients. Nothing
+changes until an administrator installs it; without it the user daemon keeps
+running the mesh itself (collapsed mode). Owner steps:
+`docs/guides/weftos-deployment-sops.md` ("Moving to the machine mesh service").
+
+- **`weaver mesh serve`** runs the service as an unprivileged account (it
+  refuses root). It keeps a signed, hash-chained machine journal of bindings,
+  certificates, admissions and policy, issues 24 h user certificates, routes
+  `weft://<node>/<user>/<project>/<topic>` addresses to registered users, and
+  owns no chain, token, secret or governance state (`scripts/build.sh
+  check-mesh-no-owned-state` enforces that).
+- **Admin verbs:** `weaver mesh status | bindings | bind approve|revoke|rebind
+  | peer revoke|unrevoke | journal verify [--accept-truncate] | trust`.
+- **Installing:** `weaver mesh install-service` and `uninstall-service` print a
+  reviewed script (launchd or systemd, service account `_weftos` / `weftos`,
+  binary in `/usr/local/libexec/weftos/`). They run nothing. On a machine that
+  has `~/.weftos/run/node.key`, `install-service` requires `--adopt-node-key`
+  (keep the node id) or `--fresh-node-key` (a new one, with a `# WARNING` in the
+  script). The service listens on `127.0.0.1:9489` by default; LAN peers such
+  as the Pi need `--listen 0.0.0.0:9489`. Admin verbs need root or a uid given
+  with `--admin-uid`. `weaver update` prints the service restart line when the
+  service binary is out of date; it never calls `sudo` for the service (the
+  user-binary copy keeps its old `sudo cp` fallback).
+- **Mode selection.** New `kernel.mesh.service = "auto" | "required" | "off"`
+  (default `auto`) in `~/.weftos/weave.toml`. `auto` uses a service that
+  answers and verifies, else collapsed; a service that answers but fails
+  verification (machine key changed, wrong server uid) fails the boot instead
+  of falling back. `kernel.status` shows `mesh.mode` (`service`, `collapsed`,
+  `off`); in service mode the daemon's node id is the service's and it never
+  reads `~/.weftos/run/node.key`.
+- **User key.** `weaver migrate user-key [--dry-run]` copies the migrated
+  `chain.key` seed to `~/.weftos/user.key` (same public key, same user id;
+  `chain.key` is kept). The user daemon pins the machine key on first contact
+  in `~/.weftos/mesh/machine.pub`; the `weaver mesh` verbs only compare
+  against a pin and write one with `weaver mesh trust`.
+- **Keep `service = "required"` after removing `~/.weftos/run/node.key`.**
+  Under `auto` a daemon whose service is down would need a new node id; it
+  refuses to boot instead when the machine key is pinned, and only `off`
+  collapses deliberately with a new id.
+- **`weaver mesh peer revoke`** closes the peer's live connection. Under
+  `admission = enforce` it is refused on reconnect; under `observe` (the
+  default) the revocation is only recorded and it can reconnect.
+- **Doctor.** `weaver doctor runtime` adds `mesh.*` checks (service reachable,
+  protocol window, pin, journal, box key mode, leftover `node.key`, two
+  listeners on 9489, the daemon's mode against the service) and
+  `user_key_split` when `user.key` and `chain.key` disagree.
+- **Mesh admission** (`admission = off | observe | enforce`, default
+  `observe`) verifies a signed hello bound to the Noise session; `observe`
+  journals would-be refusals and admits.
+- **Tests:** `scripts/build.sh test-mesh-service` runs the mesh crates, the
+  end-to-end test (`scripts/dev/mesh-p3-e2e.sh`: the service and two user
+  daemons as the current user on tempdirs), the no-owned-state gate and the
+  mesh-only kernel build.
+- **Known limits:** macOS service log not rotated; Windows not implemented
+  (the service refuses to start); on macOS the service may start before
+  `/var/run/weftos` exists and converges by launchd restarts; the installer
+  receipt's service tier is not written yet; leaf peers without signed
+  admission are not yet reported by the service; scoped `weft://` sends are
+  reachable from the API and tests only (no RPC or router caller yet).
+
+### Fixed (0.8.2)
+
+- **Ruflo team bus synced to the fixed ADR-402 store** (upstream `ruvnet/ruflo` PR
+  [#3512](https://github.com/ruvnet/ruflo/pull/3512) + [#3513](https://github.com/ruvnet/ruflo/pull/3513),
+  head `040e0f1b0`, which added Codex and generic command hosts, `ruflo team run` /
+  `team hook-stop` / `team trust-host`, and a single locked, atomically-written store per team with
+  per-team mailboxes at `teams/<team>/mailbox/<agent>/` — replacing the earlier per-project
+  `.claude-flow/swarm/mailbox/<agent>/` layout and dropping v0/`schemaVersion` migration entirely).
+  WeftOS's `scripts/grok-team-bus.mjs` and `scripts/grok-subagent-stop-hook.mjs` were already thin
+  shims over `ruflo team <verb>` / `ruflo team hook-stop` (no second store vendored) and needed no
+  logic changes; re-verified against a local build of `040e0f1b0` (per-team mailbox path, no
+  `schemaVersion` field, `role:agent@team` spawn descriptions, `outcome`/`runId`/`reason` on
+  `on-stop` with dedupe and no-advance-on-failure all confirmed). Three real gaps against the fixed
+  protocol are closed:
+  - `.claude-flow/team-hosts.json`'s `weft` command host no longer lists secret-named `passEnv`
+    entries (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`) — the fixed
+    `ruflo team run` now refuses a `team-hosts.json` entry outright if `passEnv` names a
+    secret-looking or `CLAUDE_FLOW_*` variable (confirmed: the old entry is rejected against
+    `040e0f1b0`). `weft` already reads its provider key from local, gitignored `.clawft/config.json`,
+    so `passEnv` is now `[]`. Running the `weft` host also now needs a one-time
+    `ruflo team trust-host weft` per machine (ADR-402's command-host trust step; confirmed working).
+  - `.claude/helpers/grok-team-on-stop.cjs`, a stale ADR-320-era independent writer (its own
+    `.claude-flow/teams/*/team.json` reads plus role/description-guessing heuristics, calling the
+    old `scripts/grok-team-bus.mjs on-stop --team --agent` flags), was retired. `.claude/settings.json`
+    (`SubagentStop`, `PostToolUse` on `get_command_or_subagent_output`) and `.grok/hooks/ruflo-team.json`
+    now call `scripts/grok-subagent-stop-hook.mjs`, which already delegated to
+    `ruflo team hook-stop --host grok` (the fixed hook resolves the `role:agent@team` spawn
+    description and refuses to guess among several active teams, instead of the old script's
+    best-effort member scoring).
+  - `docs/grok/README.md` and `docs/guides/grok-weftos-mcp.md` now record that the local Ruflo
+    authority checkout, `~/dev/ruflo` branch `feat/grok-host`, does not yet carry ADR-402, and that
+    using the bus before that lands needs a separate local checkout including PR #3512 + #3513,
+    referenced only from the local, gitignored `.claude-flow/ruflo-cli-path` — never from a tracked
+    file such as `.grok/config.toml` or `package.json` (WEFT-684/669: no personal checkout paths in
+    tracked config).
+  - `scripts/grok-team-bus.interop.test.mjs` was rewritten against the fixed protocol: dropped the
+    v0-upgrade/`schemaVersion` case and fixture (`scripts/fixtures/team-v0/`, removed — the fixed
+    store has no v0 migration path), added assertions for the per-team mailbox path, the
+    `role:agent@team` spawn description, and `on-stop` outcome/runId dedupe and failed-step
+    no-advance. All cases pass against a local build of `040e0f1b0`.
+  - No Rust changes: `crates/clawft-cli/src/commands/agent.rs` (`weft agent -m`) has no team-bus
+    protocol of its own to update — it is a generic one-shot `<bin> <flags> <prompt>` command host,
+    driven entirely by `ruflo team run` from outside, matching ADR-402's command-adapter contract
+    unchanged.
+
+---
+
 ## v0.8.1
 
 *2026-09-28*
