@@ -1,4 +1,4 @@
-//! weft-cog-manager (COG-009): the WeftOS appliance console.
+//! Weave Manager (`weft-cog-manager`, COG-009): the appliance console.
 //!
 //! This is the OS showing its own interface — the cogs it runs and the marketplace it can pull
 //! from — talking to a `weft-cog-host` over its lifecycle API. A left nav has **Cogs** (running +
@@ -9,6 +9,10 @@
 // companion/scope crates use; silence it crate-wide rather than scatter per-method allows.
 #![allow(deprecated)]
 pub mod client;
+pub(crate) mod address_book;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod mesh_key;
+pub(crate) mod node_tree;
 mod app;
 mod fleet;
 mod fleet_unify;
@@ -39,10 +43,10 @@ pub fn run_native() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 780.0])
             .with_min_inner_size([820.0, 520.0])
-            .with_title("WeftOS — appliance console"),
+            .with_title("Weave Manager"),
         ..Default::default()
     };
-    eframe::run_native("WeftOS console", options, Box::new(|cc| {
+    eframe::run_native("Weave Manager", options, Box::new(|cc| {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         Ok(Box::new(Manager::new()))
     }))

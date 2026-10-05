@@ -70,7 +70,7 @@ pub(super) fn post_headers(req: &mut ehttp::Request, token: &str) {
 /// A readable failure for a non-2xx response; 401 says where the token lives.
 pub(super) fn http_err(r: &ehttp::Response) -> String {
     if r.status == 401 {
-        return "host token required: paste the contents of <host root>/host.token into the token field and Connect".into();
+        return "this request needs a mesh key; the console registers one on a tailnet or local connection".into();
     }
     format!("HTTP {} {}", r.status, r.status_text)
 }

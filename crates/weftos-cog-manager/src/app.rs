@@ -1,6 +1,7 @@
 //! The console app: `Manager` state, the top bar and nav, host switching and the frame loop. The
 //! tabs live in `views/`.
 
+use crate::address_book::{self, AddressBook, BookEntry, Reach};
 use crate::client::{self, Client, HostStatus, Settings};
 use crate::sensor_detail::{Event, GuideCache};
 use crate::sensor_install;
@@ -13,6 +14,16 @@ use eframe::egui::{self, RichText};
 use std::cell::RefCell;
 use weftos_cog_market::hw::HwCatalog;
 use weftos_sensor_guide::{GuideBundle, GuideView};
+use web_time::{Duration, Instant};
+
+/// Launch door. Wait tries the configured host (localhost unless `WEFTOS_HOST` is set).
+/// Ask is the address book. Open is the console, and its menu follows that node.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Phase {
+    Wait,
+    Ask,
+    Open,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Section {
@@ -64,6 +75,21 @@ pub struct Manager {
     pub(crate) fleet_tab: crate::views::fleet::NodeTab,
     /// Network tab: the edge node whose reported fields are expanded.
     pub(crate) edge_open: Option<String>,
+    /// User-local names and URLs. Tokens stay in `tokens`, never in this book.
+    pub(crate) book: AddressBook,
+    pub(crate) ip_draft: String,
+    tail_rx: Option<std::sync::mpsc::Receiver<Result<Vec<BookEntry>, String>>>,
+    pub(crate) tail_peers: Vec<BookEntry>,
+    pub(crate) tail_note: String,
+    tail_started: bool,
+    pub(crate) connect_error: Option<String>,
+    /// A connect is in flight. Cleared when the user opens the book without switching,
+    /// so a still-good session does not snap the door shut.
+    pub(crate) pending: bool,
+    pub(crate) can_return: bool,
+    pub(crate) door_back: bool,
+    tried_at: Instant,
+    pub(crate) phase: Phase,
 }
 
 impl Manager {
@@ -81,11 +107,11 @@ impl Manager {
             section: match client::setting("WEFTOS_TAB", "tab", "").as_str() {
                 "sensors" => Section::Sensors,
                 "catalog" => Section::Catalog,
-                "network" => Section::Network,
+                "network" | "tree" => Section::Network,
                 "system" => Section::System,
                 "cogs" => Section::Cogs,
                 _ if deep.is_some() => Section::Catalog,
-                _ => Section::Cogs,
+                _ => Section::Network,
             },
             host_draft,
             token_draft,
@@ -116,6 +142,18 @@ impl Manager {
             fleet_tab: crate::views::fleet::NodeTab::parse(&client::setting("WEFTOS_NODE_TAB", "nodetab", "")),
             // Deep link: `WEFTOS_EDGE=<edge node id>` / `?edge=` expands that edge node's fields.
             edge_open: Some(client::setting("WEFTOS_EDGE", "edge", "")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            book: AddressBook::load(),
+            ip_draft: String::new(),
+            tail_rx: None,
+            tail_peers: Vec::new(),
+            tail_note: String::new(),
+            tail_started: false,
+            connect_error: None,
+            pending: true,
+            can_return: false,
+            door_back: false,
+            tried_at: Instant::now(),
+            phase: Phase::Wait,
         };
         // Deep link: `WEFTOS_GUIDE=<cog id>` / `?guide=` opens that cog's bundled guide.
         let g = client::setting("WEFTOS_GUIDE", "guide", "");
@@ -137,13 +175,27 @@ impl Manager {
         egui::TopBottomPanel::top("mgr_top").show(ctx, |ui| {
             ui.add_space(style::GAP_S);
             ui.horizontal_wrapped(|ui| {
-                ui.label(style::h1("WeftOS"));
-                ui.label(style::dim(ui, "appliance console"));
+                ui.label(style::h1("Weave"));
+                ui.label(style::dim(ui, "manager"));
                 ui.separator();
                 ui.label(style::dim(ui, "host"));
                 ui.add(egui::TextEdit::singleline(&mut self.host_draft).desired_width(230.0).hint_text("http://<ip>:9480"));
-                ui.label(style::dim(ui, "token"));
-                ui.add(egui::TextEdit::singleline(&mut self.token_draft).password(true).desired_width(110.0).hint_text("<root>/host.token"));
+                let mesh_note = self.client.snapshot().mesh_note.clone();
+                let auto_key = cfg!(not(target_arch = "wasm32"))
+                    && matches!(address_book::classify(&self.client.s.host), Reach::ThisMachine | Reach::Tailnet);
+                if auto_key {
+                    let label = if !self.client.s.token.trim().is_empty() {
+                        "mesh key".to_string()
+                    } else if mesh_note.is_empty() {
+                        "registering a mesh key".into()
+                    } else {
+                        mesh_note
+                    };
+                    ui.label(style::dim(ui, label)).on_hover_text("This connection registers its own key with the cog-host. The address book does not store it.");
+                } else {
+                    ui.label(style::dim(ui, "token"));
+                    ui.add(egui::TextEdit::singleline(&mut self.token_draft).password(true).desired_width(140.0).hint_text("direct connection"));
+                }
                 if ui.button("Connect").clicked() {
                     let mut s = self.client.s.clone();
                     // a token typed for one host is never carried to a different one unchanged
@@ -161,16 +213,29 @@ impl Manager {
                     self.guides.borrow_mut().clear();
                 }
                 ui.separator();
-                if sensor_install::is_loopback_host(&self.client.s.host) {
-                    style::pill(ui, "this machine", AMBER).on_hover_text("The console is pointed at 127.0.0.1, not a remote node. Set the host above (or WEFTOS_HOST) to reach an appliance.");
+                let (reach_label, reach_color, reach_tip) = match address_book::classify(&self.client.s.host) {
+                    Reach::ThisMachine => ("this machine", AMBER, "The console is on this computer's cog-host."),
+                    Reach::Tailnet => ("tailnet", crate::GREEN, "This address is on the tailnet. Nodes under it attach the same way."),
+                    Reach::Lan => ("lan", AMBER, "Direct connection from this computer. A LAN address is not a mesh hop."),
+                    Reach::Other => ("named host", AMBER, "A hostname. The mesh attaches by tailnet address."),
+                };
+                style::pill(ui, reach_label, reach_color).on_hover_text(reach_tip);
+                let host_line = match &self.client.snapshot().host {
+                    Some(Ok(h)) => format!("up:{}", h.running),
+                    Some(Err(e)) => format!("down:{e}"),
+                    None => "dial".into(),
+                };
+                if let Some(n) = host_line.strip_prefix("up:") {
+                    dot(ui, true, &format!("connected · {n} cog(s) running"));
+                } else if let Some(e) = host_line.strip_prefix("down:") {
+                    dot(ui, false, &format!("no host ({e})"));
+                } else {
+                    style::status_dot(ui, AMBER, "connecting…");
                 }
-                let sh = self.client.snapshot();
-                match &sh.host {
-                    Some(Ok(h)) => {
-                        dot(ui, true, &format!("connected · {} cog(s) running", h.running));
-                    }
-                    Some(Err(e)) => dot(ui, false, &format!("no host ({e})")),
-                    None => style::status_dot(ui, AMBER, "connecting…"),
+                if ui.button("Nodes").on_hover_text("Pick another node. This session stays until you open one.").clicked() {
+                    self.phase = Phase::Ask;
+                    self.can_return = true;
+                    self.pending = false;
                 }
             });
             ui.add_space(style::GAP_S);
@@ -180,13 +245,19 @@ impl Manager {
     pub(crate) fn nav(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("mgr_nav").resizable(false).exact_width(164.0).show(ctx, |ui| {
             ui.add_space(style::GAP_M);
-            // Grouped by what each tab is about: runtime, then hardware/data, then the fleet,
-            // then the rest. One rhythm between items, a little more between groups.
-            let groups: [&[(Section, &str)]; 3] = [
+            // The menu follows the node. A cog-host that answered gets the full set. Anything
+            // else keeps Network (the node tree), the sensor guides, and the catalog.
+            let live = self.host_live();
+            let full: &[&[(Section, &str)]] = &[
+                &[(Section::Network, "🌐   Network")],
                 &[(Section::Cogs, "⚙   Cogs")],
                 &[(Section::Sensors, "📈   Sensors"), (Section::Catalog, "📚   Catalog")],
-                &[(Section::Network, "🌐   Network"), (Section::Apps, "▦   Apps"), (Section::System, "🖥   System")],
+                &[(Section::Apps, "▦   Apps"), (Section::System, "🖥   System")],
             ];
+            let quiet: &[&[(Section, &str)]] = &[
+                &[(Section::Network, "🌐   Network"), (Section::Sensors, "📈   Sensors"), (Section::Catalog, "📚   Catalog")],
+            ];
+            let groups = if live { full } else { quiet };
             for (gi, group) in groups.iter().enumerate() {
                 if gi > 0 {
                     ui.add_space(style::GAP_S);
@@ -199,7 +270,7 @@ impl Manager {
             ui.add_space(style::GAP_M);
             ui.separator();
             ui.add_space(style::GAP_S);
-            ui.label(style::dim(ui, "The OS runs cogs here with no per-slot cap; apps land next (COG-009)."));
+            ui.label(style::dim(ui, "The menu follows the node you opened."));
         });
     }
 
@@ -224,9 +295,8 @@ impl Manager {
         }
     }
 
-    /// Point the console at another node. Tokens are per host: the current host's token is kept
-    /// under its own address and is NOT sent to the new node; the new node's token is whatever was
-    /// entered for it before, else empty (the user is asked for it in the top bar).
+    /// Point the console at another node. A saved session stays with the node it was issued for
+    /// and is not sent to the next one. A tailnet or local node registers its own mesh key.
     pub(crate) fn switch_host(&mut self, url: String) {
         let mut s = self.client.s.clone();
         s.token = sensor_install::switch_token(&mut self.tokens, &s.host, &s.token, &url);
@@ -236,6 +306,97 @@ impl Manager {
         self.client.reconnect(s);
         self.guides.borrow_mut().clear();
         self.targets.borrow_mut().clear();
+    }
+
+    /// Point the console at `url` and wait for that node to answer. The current token stays
+    /// with the node being left. A tailnet address and a LAN address both connect directly;
+    /// the tree only offers the tailnet ones as child hops.
+    pub(crate) fn attach_to(&mut self, url: String) {
+        self.switch_host(url);
+        self.pending = true;
+        self.can_return = false;
+        self.door_back = false;
+        self.connect_error = None;
+        self.tried_at = Instant::now();
+        self.phase = Phase::Wait;
+    }
+
+    /// One local `tailscale status` while the address book is showing. A missing binary
+    /// is a note. Peers are tailnet addresses only.
+    pub(crate) fn poll_tailnet(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.tail_note.is_empty() && self.tail_peers.is_empty() {
+                self.tail_note = "This browser reads tailnet peers from the node you open.".into();
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !self.tail_started {
+                self.tail_started = true;
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.tail_rx = Some(rx);
+                std::thread::spawn(move || {
+                    let _ = tx.send(address_book::read_local_tailnet());
+                });
+            }
+            let msg = self.tail_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+            if let Some(msg) = msg {
+                self.tail_rx = None;
+                match msg {
+                    Ok(peers) => {
+                        if peers.is_empty() {
+                            self.tail_note = "No other tailnet peers from this computer.".into();
+                        }
+                        self.tail_peers = peers;
+                    }
+                    Err(e) => self.tail_note = e,
+                }
+            }
+        }
+    }
+
+    fn host_state(&self) -> Option<bool> {
+        match &self.client.snapshot().host {
+            Some(Ok(_)) => Some(true),
+            Some(Err(_)) => Some(false),
+            None => None,
+        }
+    }
+
+    fn host_live(&self) -> bool {
+        self.host_state() == Some(true)
+    }
+
+    fn clamp_section(&mut self) {
+        if self.host_live() {
+            return;
+        }
+        if !matches!(self.section, Section::Network | Section::Sensors | Section::Catalog) {
+            self.section = Section::Network;
+        }
+    }
+
+    fn remember(&mut self) {
+        let url = self.client.s.host.clone();
+        let named = self.client.snapshot().net.as_ref().and_then(|r| r.as_ref().ok()).map(|n| n.node.trim().to_string()).filter(|s| !s.is_empty());
+        let label = named.unwrap_or_else(|| {
+            if sensor_install::is_loopback_host(&url) { "this machine".into() } else { url.clone() }
+        });
+        self.book.upsert(label, &url);
+        let _ = self.book.save();
+    }
+
+    fn advance_door(&mut self) {
+        let waited = self.tried_at.elapsed() >= Duration::from_secs(4);
+        let (phase, pending) = step_door(self.phase, self.pending, self.host_state(), waited);
+        let opened = phase == Phase::Open && self.phase != Phase::Open;
+        self.phase = phase;
+        self.pending = pending;
+        if opened {
+            self.can_return = false;
+            self.remember();
+        }
     }
 
     /// Apply what the panel and cross-links asked for this frame, with the same client calls the
@@ -267,6 +428,38 @@ impl eframe::App for Manager {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(web_time::Duration::from_millis(400));
         self.client.tick(ctx);
+        self.advance_door();
+        if self.phase == Phase::Open {
+            self.client.ensure_mesh_session(ctx);
+            if self.client.take_mesh_clear() {
+                self.tokens.remove(&self.client.s.host);
+                self.token_draft.clear();
+                self.client.s.token.clear();
+            }
+            if let Some(tok) = self.client.take_issued_token() {
+                self.client.s.token = tok.clone();
+                self.token_draft = tok.clone();
+                self.tokens.insert(self.client.s.host.clone(), tok);
+            }
+            let auto = cfg!(not(target_arch = "wasm32")) && matches!(address_book::classify(&self.client.s.host), Reach::ThisMachine | Reach::Tailnet);
+            if auto && self.token_draft.is_empty() && !self.client.s.token.is_empty() {
+                let tok = self.client.s.token.clone();
+                self.token_draft = tok.clone();
+                self.tokens.insert(self.client.s.host.clone(), tok);
+            }
+        }
+        match self.phase {
+            Phase::Wait => {
+                self.wait_view(ctx);
+                return;
+            }
+            Phase::Ask => {
+                self.connect_view(ctx);
+                return;
+            }
+            Phase::Open => {}
+        }
+        self.clamp_section();
         self.top_bar(ctx);
         self.nav(ctx);
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -274,7 +467,7 @@ impl eframe::App for Manager {
                 Section::Cogs => self.cogs_view(ui, ctx),
                 Section::Sensors => self.sensors_view(ui, ctx),
                 Section::Catalog => self.catalog_view(ui, ctx),
-                Section::Network => self.network_view(ui),
+                Section::Network => self.network_view(ui, ctx),
                 Section::Apps => self.apps_view(ui),
                 Section::System => self.system_view(ui),
             });
@@ -286,5 +479,44 @@ impl eframe::App for Manager {
             self.cat_search = j.search;
             self.cat_kind = "all".into();
         }
+    }
+}
+
+/// `host_ok`: Some(true) answered, Some(false) refused, None still dialing.
+/// A book opened over a live session has `pending` false, so a still-good host does not
+/// close the book. A late answer after the wait timed out does open, until the user picks.
+fn step_door(phase: Phase, pending: bool, host_ok: Option<bool>, waited: bool) -> (Phase, bool) {
+    if !pending {
+        return (phase, false);
+    }
+    if host_ok == Some(true) {
+        return (Phase::Open, false);
+    }
+    if phase == Phase::Wait && (host_ok == Some(false) || waited) {
+        return (Phase::Ask, true);
+    }
+    (phase, true)
+}
+
+#[cfg(test)]
+mod door_tests {
+    use super::*;
+
+    #[test]
+    fn localhost_wait_opens_when_the_host_answers() {
+        assert_eq!(step_door(Phase::Wait, true, Some(true), false), (Phase::Open, false));
+    }
+
+    #[test]
+    fn refused_or_slow_wait_opens_the_address_book() {
+        assert_eq!(step_door(Phase::Wait, true, Some(false), false), (Phase::Ask, true));
+        assert_eq!(step_door(Phase::Wait, true, None, true), (Phase::Ask, true));
+        assert_eq!(step_door(Phase::Wait, true, None, false), (Phase::Wait, true));
+    }
+
+    #[test]
+    fn a_late_answer_opens_unless_the_user_is_switching_nodes() {
+        assert_eq!(step_door(Phase::Ask, true, Some(true), true), (Phase::Open, false));
+        assert_eq!(step_door(Phase::Ask, false, Some(true), true), (Phase::Ask, false));
     }
 }

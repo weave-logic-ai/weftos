@@ -10788,6 +10788,7 @@ version = "0.8.2"
 dependencies = [
  "base64 0.22.1",
  "console_error_panic_hook",
+ "ed25519-dalek",
  "eframe",
  "ehttp",
  "serde",

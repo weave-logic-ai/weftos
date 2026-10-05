@@ -9,8 +9,9 @@ pub struct Settings {
     pub our_registry: String,
     /// Cognitum app-registry.json URL (optional; empty = skip).
     pub cognitum_registry: String,
-    /// cog-host bearer token for the `/hw/*` mutating routes (`WEFTOS_HOST_TOKEN`, or `?token=` in
-    /// the browser). Found in `<host root>/host.token`.
+    /// Optional bearer override (`WEFTOS_HOST_TOKEN`, or `?token=` in the browser). On a tailnet
+    /// or local connection the console registers its own mesh key and fills this in. A pasted
+    /// value is that host's own token and is never sent to a different host.
     pub token: String,
     /// ADR-102 gateway base for the fleet snapshot (`WEFTOS_GATEWAY`, or `?gw=`); empty = the
     /// Network tab shows only what this cog-host sees.
@@ -36,7 +37,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             // native: env; browser: ?host= / ?wl= / ?cog= query params; else the default.
-            host: setting("WEFTOS_HOST", "host", "http://127.0.0.1:9480"),
+            host: setting("WEFTOS_HOST", "host", crate::address_book::LOCAL_HOST),
             token: setting("WEFTOS_HOST_TOKEN", "token", ""),
             gateway: setting("WEFTOS_GATEWAY", "gw", ""),
             gateway_token: setting("WEFTOS_GATEWAY_TOKEN", "gwtoken", ""),

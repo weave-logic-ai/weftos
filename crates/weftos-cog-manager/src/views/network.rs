@@ -1,4 +1,4 @@
-//! The Network tab: the tailnet fleet, the Cognitum mesh overlay and edge nodes.
+//! The Network tab: the node you opened, the nodes under it, then the fleet and edge devices.
 
 use crate::app::Manager;
 use crate::client::Net;
@@ -7,8 +7,14 @@ use crate::{AMBER, GREEN, GREY, RED};
 use eframe::egui::{self, RichText};
 
 impl Manager {
-    pub(crate) fn network_view(&mut self, ui: &mut egui::Ui) {
-        style::section_header(ui, "Network", "the fleet this OS is part of — mesh nodes, tailnet peers, the Cognitum overlay and edge nodes");
+    pub(crate) fn network_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        style::section_header(ui, "Network", "the node you opened, the tailnet nodes under it, and the fleet on each");
+        let mesh_note = self.client.snapshot().mesh_note.clone();
+        if !mesh_note.is_empty() {
+            ui.label(style::dim(ui, mesh_note));
+        }
+        self.tree_view(ui, ctx);
+        ui.add_space(style::GAP_S);
         self.fleet_section(ui);
         ui.add_space(style::GAP_S);
         let net = self.client.snapshot().net.clone();

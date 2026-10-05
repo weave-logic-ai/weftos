@@ -2,7 +2,9 @@
 
 pub(crate) mod catalog;
 pub(crate) mod cogs;
+pub(crate) mod connect;
 pub(crate) mod fleet;
+pub(crate) mod tree;
 mod fleet_seed;
 mod fleet_tabs;
 mod network;

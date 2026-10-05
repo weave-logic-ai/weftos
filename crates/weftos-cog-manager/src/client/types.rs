@@ -253,6 +253,16 @@ pub struct Shared {
     pub fleet_hist: crate::fleet::History,
     /// What each Seed agent reported, by base URL.
     pub seeds: std::collections::BTreeMap<String, crate::fleet_unify::SeedView>,
+    /// Session bearer just issued by the connected host. The frame loop copies it onto the token.
+    pub mesh_token: String,
+    /// Why a mesh key is not on this connection yet. Empty once one is held.
+    pub mesh_note: String,
+    /// The host rejected the bearer we sent. The next frame registers again.
+    pub mesh_rejected: bool,
+    /// Drop the per-host token the console was holding for this connection.
+    pub mesh_clear: bool,
+    /// `GET /mesh/enroll` is missing on this host. Stop asking it.
+    pub mesh_unsupported: bool,
 }
 
 /// One cog's export `/status` fetch (the cog's own endpoint, not a host endpoint).

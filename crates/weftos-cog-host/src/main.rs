@@ -87,8 +87,11 @@ fn cmd_serve(a: &[String]) -> Result<(), String> {
     eprintln!("[cog-host] licence dir {} ({})", licence.dir().display(), licence.status()["state"].as_str().unwrap_or("?"));
 
     // Per-host bearer token for the /hw/* mutating routes ($WEFT_COG_HOST_TOKEN, else <root>/host.token).
-    let policy = Arc::new(weftos_cog_host::auth::Policy::load(&root).map_err(|e| format!("host token: {e}"))?);
+    let policy = Arc::new(
+        weftos_cog_host::auth::Policy::load(&root).map_err(|e| format!("host token: {e}"))?.with_mesh(weftos_cog_host::mesh_keys::MeshKeys::open(&root)),
+    );
     eprintln!("[cog-host] /hw token: {} (or $WEFT_COG_HOST_TOKEN); allowed browser origins: loopback + $WEFT_COG_HOST_ORIGINS", weftos_cog_host::auth::token_path(&root).display());
+    eprintln!("[cog-host] mesh keys: {} (a tailnet or local console registers its own key)", weftos_cog_host::mesh_keys::path(&root).display());
     // Persist the dex numbering (append-only) once so read-only GETs never have to write.
     let _ = weftos_cog_host::dex::with_dex(&root, |_| ());
 

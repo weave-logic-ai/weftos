@@ -6,6 +6,9 @@
 //!   GET  /licence              -> the ADR-106 licence state the start check uses (needs the token)
 //!   POST /licence/records      -> verify + apply signed binding/grants/approvals/revocations
 //!   GET  /healthz              -> ok
+//!   GET  /mesh/enroll          -> one nonce, bound to this socket (tailnet or local only)
+//!   POST /mesh/enroll          -> {pub, nonce, sig} registers a session key
+//!   POST /mesh/maintain        -> refresh that session (needs its bearer)
 //!   /hw/*                      -> USB inventory, identify, Hardware Dex (see `hw_http`)
 //!
 //! Browser safety (the CLI binds loopback by default; operators may opt into wider access):
@@ -84,19 +87,31 @@ fn respond(s: &mut TcpStream, code: &str, payload: String, cors: &str) -> std::i
 /// Reads that describe a node's state (not just its identity) and so need the host token, like
 /// `/hw/*`: the mesh view and a cog's last output line (health and reasons can reveal a person's
 /// state, e.g. an ECG's lead-off or rhythm quality). They get no wildcard CORS either.
+fn path_only(path: &str) -> &str {
+    path.split('?').next().unwrap_or(path)
+}
+
 fn token_guarded_read(method: &str, path: &str) -> bool {
     if method != "GET" {
         return false;
     }
-    let p = path.split('?').next().unwrap_or("");
+    let p = path_only(path);
+    if p == "/mesh/enroll" {
+        return false;
+    }
     let parts: Vec<&str> = p.trim_matches('/').split('/').filter(|x| !x.is_empty()).collect();
     matches!(parts.as_slice(), ["mesh", ..] | ["cogs", _, "last"])
+}
+
+fn mesh_key_path(path: &str) -> bool {
+    matches!(path_only(path), "/mesh/enroll" | "/mesh/maintain")
 }
 
 /// CORS headers for this request. Browsers get them only from an allowlisted origin on `/hw/*`
 /// `/licence*` and for POSTs; the legacy GET routes (and edge heartbeats) keep `*`.
 fn cors_headers(method: &str, path: &str, h: &Headers, policy: &Policy) -> String {
-    let open = !path.starts_with("/hw/") && !path.starts_with("/licence") && !token_guarded_read(method, path) && (method == "GET" || path == "/fleet/heartbeat");
+    let closed = path.starts_with("/hw/") || path.starts_with("/licence") || token_guarded_read(method, path) || mesh_key_path(path);
+    let open = !closed && (method == "GET" || path == "/fleet/heartbeat");
     if open {
         return "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\n".into();
     }
@@ -139,6 +154,8 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licenc
                 HEARTBEAT_BODY_CAP
             } else if path.starts_with("/licence") {
                 MAX_IMPORT_BYTES
+            } else if mesh_key_path(path) {
+                4096
             } else {
                 MAX_BODY
             };
@@ -185,11 +202,12 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licenc
         let allowed = headers.get("origin").is_none_or(|o| policy.origin_allowed(o, headers.get("host").map(String::as_str)));
         return respond(&mut s, if allowed { "204 No Content" } else { "403 Forbidden" }, String::new(), &if allowed { preflight(&headers, path, policy) } else { String::new() });
     }
-    if method == "POST"
-        && path != "/fleet/heartbeat"
-        && let Err((code, payload)) = policy.check_post(&headers).and_then(|_| policy.check_token(&headers))
-    {
-        return respond(&mut s, code, payload, &cors);
+    let enroll_post = method == "POST" && path_only(path) == "/mesh/enroll";
+    if method == "POST" && path != "/fleet/heartbeat" {
+        let checked = policy.check_post(&headers).and_then(|_| if enroll_post { Ok(()) } else { policy.check_token(&headers) });
+        if let Err((code, payload)) = checked {
+            return respond(&mut s, code, payload, &cors);
+        }
     }
     if token_guarded_read(method, path)
         && let Err((code, payload)) = policy.check_token(&headers)
@@ -197,6 +215,9 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy, licenc
         return respond(&mut s, code, payload, &cors);
     }
     let authed = policy.check_token(&headers).is_ok();
+    if let Some(answer) = mesh_key_route(method, path, body, peer_ip.as_deref(), &headers, policy) {
+        return respond(&mut s, answer.0, answer.1, &cors);
+    }
     let root: PathBuf = sup.lock().unwrap().root.clone();
     let hw = hw_http::Req { method, path, headers: &headers, body };
     let (code, payload) = match hw_http::handle(&hw, &root, policy) {
@@ -221,6 +242,25 @@ fn preflight(h: &Headers, path: &str, policy: &Policy) -> String {
         return String::new();
     }
     c
+}
+
+fn mesh_key_route(method: &str, path: &str, body: &[u8], peer: Option<&str>, headers: &Headers, policy: &Policy) -> Option<(&'static str, String)> {
+    let path = path_only(path);
+    if path != "/mesh/enroll" && !(method == "POST" && path == "/mesh/maintain") {
+        return None;
+    }
+    let Some(keys) = policy.mesh() else {
+        return Some(("404 Not Found", r#"{"ok":false,"error":"this host does not register mesh keys"}"#.to_string()));
+    };
+    Some(match (method, path) {
+        ("GET", "/mesh/enroll") => weftos_cog_host::mesh_keys::http_challenge(keys, peer),
+        ("POST", "/mesh/enroll") => weftos_cog_host::mesh_keys::http_enroll(keys, peer, body),
+        ("POST", "/mesh/maintain") => {
+            let token = headers.get("authorization").and_then(|a| a.strip_prefix("Bearer ")).map(str::trim).unwrap_or("");
+            weftos_cog_host::mesh_keys::http_maintain(keys, token)
+        }
+        _ => ("404 Not Found", r#"{"ok":false,"error":"not found"}"#.to_string()),
+    })
 }
 
 fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &Arc<Mutex<Supervisor>>, authed: bool) -> (&'static str, String) {
@@ -349,6 +389,7 @@ fn content_length(head: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::Signer;
 
     // the connection counter is process-global: keep these tests from starving each other
     static SERIAL: Mutex<()> = Mutex::new(());
@@ -362,7 +403,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let sup = Arc::new(Mutex::new(Supervisor::new(root.path().to_path_buf())));
-        let policy = Arc::new(Policy::new("tok".into(), vec!["http://127.0.0.1:*".into(), "http://localhost:*".into()]));
+        let policy = Arc::new(
+            Policy::new("tok".into(), vec!["http://127.0.0.1:*".into(), "http://localhost:*".into()]).with_mesh(weftos_cog_host::mesh_keys::MeshKeys::open(root.path())),
+        );
         let licence = Arc::new(HostLicence::open(root.path().join(".licence")));
         std::thread::spawn(move || serve(listener, sup, policy, licence));
         (addr, root)
@@ -531,6 +574,43 @@ mod tests {
         // an unknown cog is a 404 for an authorised caller, never a file read
         let (st, _, _) = send(a, "GET /cogs/..%2f..%2fetc/last HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer tok\r\n\r\n");
         assert!(st.contains("404"), "{st}");
+        drop(root);
+    }
+
+    #[test]
+    fn a_tailnet_or_local_console_registers_a_mesh_key_and_uses_it_for_guarded_reads() {
+        let _g = serial();
+        let (a, root) = start();
+        let (st, h, body) = send(a, "GET /mesh/enroll HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(st.contains("200"), "{st} {body}");
+        assert!(!h.contains("access-control-allow-origin: *"), "the challenge is not a public read: {h}");
+        let nonce = serde_json::from_str::<serde_json::Value>(&body).unwrap()["nonce"].as_str().unwrap().to_string();
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        let pub_hex = weftos_cog_host::mesh_keys::hex_encode(sk.verifying_key().as_bytes());
+        let sig = sk.sign(&weftos_cog_host::mesh_keys::enroll_message(&nonce));
+        let sig_hex = weftos_cog_host::mesh_keys::hex_encode(&sig.to_bytes());
+        let payload = serde_json::json!({"pub": pub_hex, "nonce": nonce, "sig": sig_hex}).to_string();
+        let (st, _, body) = send(a, &post("/mesh/enroll", JSON, &payload));
+        assert!(st.contains("200"), "{st} {body}");
+        let token = serde_json::from_str::<serde_json::Value>(&body).unwrap()["token"].as_str().unwrap().to_string();
+        assert_ne!(token, "tok", "the session is not the host token");
+        let stored = std::fs::read_to_string(root.path().join("mesh-keys.json")).unwrap();
+        assert!(!stored.contains("\"tok\"") && !stored.contains("host.token"));
+        let (st, _, _) = send(a, &format!("GET /hw/buses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n"));
+        assert!(st.contains("200"), "session bearer: {st}");
+        let (st, _, _) = send(a, "GET /hw/buses HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(st.contains("401"), "{st}");
+        let (st, _, _) = send(a, "GET /mesh/cogs HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(st.contains("401"), "mesh cogs stay guarded: {st}");
+        let (st, _, body) = send(a, &post("/mesh/enroll", JSON, &payload));
+        assert!(st.contains("400"), "nonce is single use: {st} {body}");
+        let fresh = send(a, "GET /mesh/enroll HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").2;
+        let fresh_nonce = serde_json::from_str::<serde_json::Value>(&fresh).unwrap()["nonce"].as_str().unwrap().to_string();
+        let bare = serde_json::json!({"pub": pub_hex, "nonce": fresh_nonce, "sig": "00"}).to_string();
+        let (st, _, body) = send(a, &post("/mesh/enroll", JSON, &bare));
+        assert!(st.contains("400") && !body.contains(&token), "the public key alone is not the session: {st} {body}");
+        let (st, _, _) = send(a, &post("/mesh/maintain", &format!("{JSON}Authorization: Bearer {token}\r\n"), "{}"));
+        assert!(st.contains("200"), "maintain: {st}");
         drop(root);
     }
 

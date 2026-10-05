@@ -4,9 +4,10 @@
 //!
 //! - every `POST` (except edge heartbeats) needs `Content-Type: application/json` and
 //!   `X-Weft-Host: 1`; a custom header forces a CORS preflight, which only allowlisted origins pass;
-//! - every POST except `/fleet/heartbeat`, and every `GET /hw/*`, also needs
-//!   `Authorization: Bearer <token>`, where the token is `$WEFT_COG_HOST_TOKEN` or the 0600 file
-//!   `<root>/host.token` created on first start;
+//! - every POST except `/fleet/heartbeat` and `POST /mesh/enroll`, and every `GET /hw/*`, also needs
+//!   `Authorization: Bearer <token>`. The token is `$WEFT_COG_HOST_TOKEN`, the 0600 file
+//!   `<root>/host.token` created on first start, or a mesh session from `mesh_keys`
+//!   (a tailnet or local console registers that key; it is not a copy of `host.token`);
 //! - the `Host` header must be a loopback name, an IP literal, this machine's hostname (plus `.local`
 //!   and its tailnet MagicDNS name when known) or one of `$WEFT_COG_HOST_NAMES`; anything else is a
 //!   DNS-rebinding style request and is refused (421).
@@ -14,6 +15,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub type Headers = HashMap<String, String>;
 pub type Refusal = (&'static str, String);
@@ -67,6 +69,8 @@ pub struct Policy {
     origins: Vec<String>,
     /// Lowercase DNS names accepted in the `Host` header (IP literals and loopback always are).
     names: Vec<String>,
+    /// Session bearers from `POST /mesh/enroll`. Absent when a caller only has the static host token.
+    mesh: Option<Arc<crate::mesh_keys::MeshKeys>>,
 }
 
 /// Host header -> lowercase name without port, brackets or trailing dot.
@@ -139,7 +143,17 @@ fn refuse(code: &'static str, msg: &str, hint: &str) -> Refusal {
 
 impl Policy {
     pub fn new(token: String, origins: Vec<String>) -> Self {
-        Self { token, origins, names: Vec::new() }
+        Self { token, origins, names: Vec::new(), mesh: None }
+    }
+
+    /// Accept session bearers registered over the tailnet or from this machine.
+    pub fn with_mesh(mut self, keys: crate::mesh_keys::MeshKeys) -> Self {
+        self.mesh = Some(Arc::new(keys));
+        self
+    }
+
+    pub fn mesh(&self) -> Option<&crate::mesh_keys::MeshKeys> {
+        self.mesh.as_deref()
     }
 
     /// Add DNS names accepted in the `Host` header.
@@ -175,7 +189,7 @@ impl Policy {
             origins.extend(extra.split(',').map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()));
         }
         let extra_names = std::env::var(NAMES_ENV).unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>();
-        Ok(Self { token, origins, names: Vec::new() }.with_names(machine_names()).with_names(extra_names))
+        Ok(Self { token, origins, names: Vec::new(), mesh: None }.with_names(machine_names()).with_names(extra_names))
     }
 
     /// Is `origin` allowed to call the API cross-origin? Allowlist entries may end in `:*` (any
@@ -205,13 +219,18 @@ impl Policy {
         Ok(())
     }
 
-    /// Bearer-token check for the mutating `/hw/*` routes.
+    /// Bearer check: the static host token, or a mesh session registered for this host.
     pub fn check_token(&self, h: &Headers) -> Result<(), Refusal> {
         let given = h.get("authorization").and_then(|a| a.strip_prefix("Bearer ")).map(str::trim).unwrap_or("");
-        if ct_eq(given, &self.token) {
+        let session = self.mesh.as_ref().is_some_and(|m| m.accepts(given));
+        if !given.is_empty() && (ct_eq(given, &self.token) || session) {
             Ok(())
         } else {
-            Err(refuse("401 Unauthorized", "host token required", &format!("send Authorization: Bearer <token>; the token is in <root>/host.token or ${TOKEN_ENV}")))
+            Err(refuse(
+                "401 Unauthorized",
+                "host token required",
+                &format!("send Authorization: Bearer <token>; a tailnet or local console registers a mesh key, and the host token is in <root>/host.token or ${TOKEN_ENV}"),
+            ))
         }
     }
 }

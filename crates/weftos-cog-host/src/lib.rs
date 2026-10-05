@@ -13,6 +13,7 @@ pub mod hw_http;
 pub mod introspect;
 pub mod licence;
 pub mod mesh;
+pub mod mesh_keys;
 pub mod network;
 pub mod proc;
 pub mod supervise;

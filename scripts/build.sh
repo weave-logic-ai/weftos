@@ -487,13 +487,13 @@ cmd_scope_web() {
 
 cmd_manager() {
     local profile="${PROFILE:-release}"
-    header "Building weft-cog-manager (WeftOS appliance console, native, profile: $profile)"
+    header "Building Weave Manager (appliance console, native, profile: $profile)"
     timer_start
-    run_cmd cargo build -p weftos-cog-manager --bin weft-cog-manager --profile "$profile"
+    run_cmd cargo build -p weftos-cog-manager --bin weave-manager --profile "$profile"
     timer_end
     local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
-    report_binary_size "target/${dir}/weft-cog-manager" "weft-cog-manager"
-    pass "run: WEFTOS_HOST=http://<ip>:9480 target/${dir}/weft-cog-manager"
+    report_binary_size "target/${dir}/weave-manager" "weave-manager"
+    pass "run: target/${dir}/weave-manager   (WEFTOS_HOST overrides the first address; unset tries this machine)"
 }
 
 cmd_manager_web() {
