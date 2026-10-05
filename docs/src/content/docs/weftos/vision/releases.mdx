@@ -10,6 +10,40 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 > overwritten on the next docs build. To change a release entry, edit
 > `CHANGELOG.md` and re-run the script.
 
+## v0.8.3-rc.2
+
+*2026-10-05*
+
+Second release candidate for the project console batch (`target-0.8.3`). Prerelease.
+
+### Added
+
+- **Daemon-native dashboard reporter.** A `[dashboard]` section in `~/.weftos/weave.toml`
+  makes the user daemon post heartbeats (version, mesh, gateway, unit states, each
+  project's child state) to the WeftOS dashboard. The token file must be a regular `0600`
+  file owned by the daemon's user. `weaver dashboard status`.
+- **Token rotation over the mesh.** `weaver dashboard rotate-token [--node <id>]` rotates
+  a node's dashboard token (the dashboard revokes the presented token and issues a new
+  one; the node writes it atomically). `--node` sends a signed, expiring, replay-guarded
+  `workload.ctl` request to that peer; the peer must be pinned in `workload-peers.json`
+  and list the controller's key in its `workload-host.json`. The reply never carries the
+  token.
+- **`scripts/build.sh cog-host-x86`** builds `weft-cog-host` for x86_64 Linux servers.
+
+### Fixed
+
+- The CLI prefers a live user daemon at `~/.weftos/run` over an idle legacy `~/.clawft`
+  when no project is in scope.
+- Project kernels of a nested user instance exit when that instance dies (no orphans
+  after a SIGKILL).
+- `weaver kernel restart`: the re-exec releases the instance lock before `exec`, retries
+  a lock that names its own pid, and refuses clearly (exit 78) instead of exiting
+  silently. The original outage was not reproduced; this hardens the path.
+- The console under `/console/` starts under the gateway's CSP (the bootstrap is no
+  longer an inline script).
+
+---
+
 ## v0.8.3-rc.1
 
 *2026-10-05*
