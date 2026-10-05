@@ -64,8 +64,11 @@ pub enum TokenScope {
     /// reaches no Admin-gated method.
     Project,
     /// A read-only operator credential (ADR-102 D4 amendment): `Read` only,
-    /// never Write or Admin, and no project. The gateway opens only its GET
-    /// read routes to it, so a console need not hold an owner-equivalent token.
+    /// never Write or Admin. The gateway opens only its GET read routes to
+    /// it, so a console need not hold an owner-equivalent token. It may also
+    /// carry a project ([`TokenInfo::project`]): the daemon then treats the
+    /// caller as that project's (fleet snapshot filtered) and the gateway
+    /// confines it to that project.
     Read,
 }
 

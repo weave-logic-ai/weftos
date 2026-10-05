@@ -9,6 +9,7 @@ pub mod broadcaster;
 pub mod channels_api;
 pub mod chat;
 pub mod config_api;
+pub mod console;
 pub mod cron_api;
 pub mod daemon_facade;
 pub mod delegation;
@@ -21,6 +22,7 @@ pub mod memory_api;
 pub mod middleware;
 pub mod monitoring;
 pub mod playground;
+pub mod projects_api;
 pub mod skills;
 pub mod voice_api;
 pub mod voice_status;
@@ -326,7 +328,22 @@ pub async fn serve(
     static_dir: Option<&str>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    let mut router = build_router(state, cors_origins, static_dir);
+    serve_with(listener, state, cors_origins, static_dir, console::ConsoleOptions::default(), shutdown)
+        .await
+}
+
+/// [`serve`] plus the project console options (`/console/` static files and
+/// the tailnet-identity token route).
+pub async fn serve_with(
+    listener: tokio::net::TcpListener,
+    state: ApiState,
+    cors_origins: &[String],
+    static_dir: Option<&str>,
+    console: console::ConsoleOptions,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    let mut router = build_router_with(state, cors_origins, static_dir, console)
+        .map_err(std::io::Error::other)?;
     // Loopback binds are exposed to DNS rebinding; pin the Host header.
     if listener.local_addr().is_ok_and(|a| a.ip().is_loopback()) {
         router = router.layer(axum::middleware::from_fn(middleware::host_guard_middleware));
@@ -355,6 +372,18 @@ pub async fn serve(
 /// fallback is added so that the built frontend is served for any path
 /// not matched by the API or WebSocket routes.
 pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option<&str>) -> Router {
+    build_router_with(state, cors_origins, static_dir, console::ConsoleOptions::default())
+        .expect("default console options are valid")
+}
+
+/// [`build_router`] with the project console options. Errors only on an
+/// invalid `consoleConnectSrc` origin or an unusable console CSP.
+pub fn build_router_with(
+    state: ApiState,
+    cors_origins: &[String],
+    static_dir: Option<&str>,
+    console: console::ConsoleOptions,
+) -> Result<Router, String> {
     health::mark_start();
     let cors = middleware::build_cors_layer(cors_origins);
     let rate_limit_state = Arc::new(middleware::RateLimitState::new());
@@ -391,6 +420,16 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
         ));
     }
 
+    // The project console: static files under `/console/` and, when
+    // tailnet identity is on, the unauthenticated-by-bearer token mint.
+    if let Some(dir) = console.static_dir.as_deref() {
+        let csp = console::console_csp(&console.connect_src)?;
+        router = router.merge(console::console_static_router(dir, &csp)?);
+    }
+    if let Some(mint) = console.tailnet {
+        router = router.merge(console::token_route(mint));
+    }
+
     // Serve built UI as SPA fallback when a static directory is provided.
     if let Some(dir) = static_dir {
         use tower_http::services::ServeDir;
@@ -399,7 +438,7 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
         router = router.fallback_service(ServeDir::new(dir).append_index_html_on_directories(true));
     }
 
-    router
+    Ok(router
         // Rate limit before auth so 429 doesn't expose token validity.
         .layer(axum::middleware::from_fn_with_state(
             rate_limit_state,
@@ -410,7 +449,7 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
         // CSP outermost so every response (including 401/429/static)
         // carries the header.
         .layer(axum::middleware::from_fn(middleware::csp_middleware))
-        .with_state(state)
+        .with_state(state))
 }
 
 /// Span for one request. It records the method and the path only: the full

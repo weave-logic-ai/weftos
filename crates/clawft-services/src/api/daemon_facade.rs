@@ -53,7 +53,18 @@ const READ_METHODS: &[&str] = &[
     "ecc.calibrate",
     // Fleet manager: read-only composite of what the daemon knows.
     "fleet.snapshot",
+    // Project console reads (see `projects_api`).
+    "project.list",
+    "project.show",
+    "project.status",
 ];
+
+/// Methods that are read-only but need a higher daemon capability than
+/// `read`: `project.status` reports the supervisor's view and is `Admin`
+/// on the daemon. The gateway sends it only with an explicit project id
+/// from its own `/api/projects/{id}` handler and returns a sanitised subset
+/// (no pid, socket or failure text), so it is a fixed read, not a lever.
+const ADMIN_READS: &[&str] = &["project.status"];
 
 /// Mutating methods, disabled until gateway auth distinguishes principals.
 const DISABLED_MUTATING: &[&str] = &["agent.spawn", "agent.stop", "custody.attest"];
@@ -211,7 +222,8 @@ impl KernelFacadeBackend for DaemonKernelFacade {
         let Ok(Some(mut client)) = tokio::time::timeout(self.timeout, self.connect()).await else {
             return self.unavailable();
         };
-        let request = Request::with_params(method, params).with_auth(FACADE_AUTH_SCOPE);
+        let scope = if ADMIN_READS.contains(&method) { "admin" } else { FACADE_AUTH_SCOPE };
+        let request = Request::with_params(method, params).with_auth(scope);
         match tokio::time::timeout(self.timeout, client.call(request)).await {
             Err(_) => {
                 tracing::warn!(method, "daemon call timed out after send");
@@ -248,6 +260,8 @@ impl KernelFacadeBackend for DaemonKernelFacade {
                 }
                 let (status, msg) = match resp.error_kind.as_deref() {
                     Some("gate_deny") => (403, "daemon denied the request"),
+                    Some("project_not_found") => (404, "no such project"),
+                    Some("invalid_project" | "invalid_params") => (400, "invalid request"),
                     Some("timeout") => (504, "daemon operation timed out"),
                     _ => (500, "daemon error"),
                 };

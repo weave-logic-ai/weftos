@@ -923,6 +923,62 @@ pub struct GatewayConfig {
     /// `--dangerously-plain-http` is passed.
     #[serde(default, alias = "dangerouslyPlainHttp")]
     pub dangerously_plain_http: bool,
+
+    /// Directory holding the built cog-manager web console. When set, the
+    /// gateway serves it under `/console/` (never at the root). `weft
+    /// gateway --static-dir` overrides it.
+    #[serde(default, alias = "staticDir")]
+    pub static_dir: Option<String>,
+
+    /// Extra origins the console page may `connect-src` to, on top of
+    /// `'self'` (for example the project's Cog Host and Seeds). Each entry
+    /// is a bare origin such as `http://192.168.1.50:8081`.
+    #[serde(default, alias = "consoleConnectSrc")]
+    pub console_connect_src: Vec<String>,
+
+    /// Tailnet-identity token minting for the console (`POST
+    /// /api/console/token`). Disabled by default.
+    #[serde(default, alias = "tailnetIdentity")]
+    pub tailnet_identity: TailnetIdentityConfig,
+}
+
+/// `gateway.tailnetIdentity`: mint short-lived read-only project tokens for
+/// callers that Tailscale identifies as an allowlisted login.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TailnetIdentityConfig {
+    /// Master switch. Off unless set.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Tailscale login names (`user@domain`) allowed to mint. Empty means
+    /// nobody, even when `enabled`.
+    #[serde(default, alias = "allowedLogins")]
+    pub allowed_logins: Vec<String>,
+
+    /// Lifetime of a minted token, seconds. Capped at the token
+    /// authority's maximum.
+    #[serde(default = "default_tailnet_ttl_secs", alias = "ttlSecs")]
+    pub ttl_secs: u64,
+
+    /// Path of the `tailscale` binary used for `whois`. Default: `tailscale`
+    /// from `PATH`.
+    #[serde(default, alias = "tailscaleBin")]
+    pub tailscale_bin: Option<String>,
+}
+
+fn default_tailnet_ttl_secs() -> u64 {
+    900
+}
+
+impl Default for TailnetIdentityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowed_logins: Vec::new(),
+            ttl_secs: default_tailnet_ttl_secs(),
+            tailscale_bin: None,
+        }
+    }
 }
 
 fn default_gateway_host() -> String {
@@ -953,6 +1009,9 @@ impl Default for GatewayConfig {
             cors_origins: default_cors_origins(),
             api_enabled: false,
             dangerously_plain_http: false,
+            static_dir: None,
+            console_connect_src: Vec::new(),
+            tailnet_identity: TailnetIdentityConfig::default(),
         }
     }
 }

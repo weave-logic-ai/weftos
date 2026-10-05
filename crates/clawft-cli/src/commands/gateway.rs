@@ -83,6 +83,11 @@ pub struct GatewayArgs {
     /// is set (or `gateway.dangerously_plain_http`).
     #[arg(long)]
     pub dangerously_plain_http: bool,
+
+    /// Serve the built cog-manager web console from this directory under
+    /// `/console/` (overrides `gateway.staticDir`).
+    #[arg(long)]
+    pub static_dir: Option<String>,
 }
 
 /// Resolve the cron JSONL storage path.
@@ -132,6 +137,9 @@ async fn run_with_channels(args: GatewayArgs) -> anyhow::Result<()> {
     let platform = Arc::new(NativePlatform::new());
     let mut loaded = super::load_config_layered(&*platform, args.config.as_deref()).await?;
     loaded.config.gateway.dangerously_plain_http |= args.dangerously_plain_http;
+    if args.static_dir.is_some() {
+        loaded.config.gateway.static_dir = args.static_dir.clone();
+    }
     // Prefer explicit `--config` / CLAWFT_CONFIG, else discovery chain.
     let config_watch_path = args
         .config
@@ -147,6 +155,37 @@ async fn run_with_channels(args: GatewayArgs) -> anyhow::Result<()> {
         config_watch_path,
     )
     .await
+}
+
+/// `/console/` static dir, CSP origins and the tailnet-identity mint, from
+/// `gateway.*` config. Everything is off unless configured.
+#[cfg(all(feature = "channels", feature = "api"))]
+fn console_options(
+    config: &clawft_types::config::Config,
+) -> clawft_services::api::console::ConsoleOptions {
+    use clawft_services::api::console::{ConsoleOptions, DaemonTokenMinter, TailnetMint, TailscaleCli};
+    let g = &config.gateway;
+    let t = &g.tailnet_identity;
+    let tailnet = if t.enabled {
+        if t.allowed_logins.is_empty() {
+            warn!("gateway.tailnetIdentity.enabled but allowedLogins is empty: nobody can mint");
+        }
+        let minter = DaemonTokenMinter(Arc::new(clawft_services::api::DaemonKernelFacade::new()));
+        Some(Arc::new(TailnetMint::new(
+            &t.allowed_logins,
+            t.ttl_secs,
+            &g.cors_origins,
+            Arc::new(TailscaleCli::new(t.tailscale_bin.clone())),
+            Arc::new(minter),
+        )))
+    } else {
+        None
+    };
+    ConsoleOptions {
+        static_dir: g.static_dir.clone(),
+        connect_src: g.console_connect_src.clone(),
+        tailnet,
+    }
 }
 
 /// Refuse to serve the API on a non-loopback address over plain HTTP unless
@@ -329,12 +368,14 @@ pub async fn run_with_config(
         eprintln!("API listening on http://{}:{}", api_host, port);
         let api_cancel = cancel.clone();
         let api_static_dir = static_dir.clone();
+        let console = console_options(&config);
         let handle = tokio::spawn(async move {
-            if let Err(e) = clawft_services::api::serve(
+            if let Err(e) = clawft_services::api::serve_with(
                 listener,
                 api_state,
                 &cors_origins,
                 api_static_dir.as_deref(),
+                console,
                 api_cancel.cancelled_owned(),
             )
             .await
@@ -889,6 +930,7 @@ mod tests {
             config: None,
             intelligent_routing: false,
             dangerously_plain_http: false,
+            static_dir: None,
         };
         assert!(args.config.is_none());
     }
@@ -936,6 +978,7 @@ mod tests {
             config: Some("/tmp/gw-config.json".into()),
             intelligent_routing: false,
             dangerously_plain_http: false,
+            static_dir: None,
         };
         assert_eq!(args.config.as_deref(), Some("/tmp/gw-config.json"));
     }

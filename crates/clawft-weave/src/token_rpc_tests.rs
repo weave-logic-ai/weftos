@@ -215,10 +215,21 @@ fn a_read_scope_token_validates_as_read_and_is_never_write_or_admin() {
 }
 
 #[test]
-fn a_read_token_cannot_carry_a_project_and_an_unknown_scope_is_refused() {
+fn a_read_token_may_be_confined_to_a_project_and_an_unknown_scope_is_refused() {
+    use crate::capability::CallerCapabilities;
     let a = authority();
-    let r = run(&a, "auth.token.issue", &json!({"scope": "read", "project": "01ARZ3NDEKTSV4RRFFQ69G5FAV"}), Some("admin"));
-    assert!(!r.ok);
+    let p = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let v = ok(run(&a, "auth.token.issue", &json!({"scope": "read", "project": p}), Some("admin")));
+    assert_eq!((v["scope"].as_str(), v["project"].as_str()), (Some("read"), Some(p)));
+    // It validates with both claims, and still carries only Read.
+    let secret = v["secret"].as_str().unwrap().to_owned();
+    let val = ok(run(&a, "auth.token.validate", &json!({"token": secret}), None));
+    assert_eq!((val["token"]["scope"].as_str(), val["token"]["project"].as_str()), (Some("read"), Some(p)));
+    let info = a.validate(&secret).unwrap();
+    let caps = CallerCapabilities::from_scopes(info.scope.capability_scopes().iter().copied());
+    assert!(caps.allows_method("fleet.snapshot") && !caps.allows_method("agent.spawn"));
+    // A malformed project is still refused, and an unknown scope too.
+    assert!(!run(&a, "auth.token.issue", &json!({"scope": "read", "project": "nope"}), Some("admin")).ok);
     assert!(!run(&a, "auth.token.issue", &json!({"scope": "root"}), Some("admin")).ok);
     // The default is still owner.
     let v = ok(run(&a, "auth.token.issue", &json!({}), Some("admin")));

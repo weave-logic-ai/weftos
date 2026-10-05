@@ -164,6 +164,7 @@ expression: json
   "gateway": {
     "api_enabled": false,
     "api_port": 18789,
+    "console_connect_src": [],
     "cors_origins": [
       "http://localhost:5173"
     ],
@@ -171,7 +172,14 @@ expression: json
     "heartbeat_interval_minutes": 0,
     "heartbeat_prompt": "heartbeat",
     "host": "127.0.0.1",
-    "port": 18790
+    "port": 18790,
+    "static_dir": null,
+    "tailnet_identity": {
+      "allowed_logins": [],
+      "enabled": false,
+      "tailscale_bin": null,
+      "ttl_secs": 900
+    }
   },
   "kernel": {
     "brand": "WeftOS",

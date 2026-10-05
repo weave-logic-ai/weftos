@@ -40,14 +40,17 @@ pub enum TokenAction {
         /// Scope the token to a project (ULID). The daemon treats it as the
         /// request's project and refuses a request that names another
         /// (`project_scope_mismatch`). It is a claim guard, not a capability
-        /// limit: the token still carries owner scope.
+        /// limit: the token still carries owner scope, unless combined with
+        /// `--read-only`, which makes it read-only AND confined to the project.
         #[arg(long)]
         project: Option<String>,
 
         /// Mint a read-only token: it opens only the gateway's GET read routes
         /// (`/api/fleet/snapshot`, `/api/health`, ...) and every other route
-        /// answers 403. Use it for a console. Cannot be combined with `--project`.
-        #[arg(long, conflicts_with = "project")]
+        /// answers 403. Use it for a console. With `--project <ulid>` the token is
+        /// also restricted to that project (the gateway lists only it, 403s
+        /// every other project and filters the fleet snapshot to it).
+        #[arg(long)]
         read_only: bool,
 
         /// Config file override (used to find the gateway address).
@@ -170,7 +173,10 @@ pub async fn run<P: clawft_platform::Platform>(
             println!("id:      {}", v["id"].as_str().unwrap_or("?"));
             println!("expires: {}", v["expires_at"].as_str().unwrap_or("?"));
             if read_only {
-                println!("scope:   read-only (GET read routes only)");
+                match project.as_deref() {
+                    Some(p) => println!("scope:   read-only, project {p} (GET read routes only)"),
+                    None => println!("scope:   read-only (GET read routes only)"),
+                }
             }
             println!("This is the only time the token is shown.");
             if read_only {
@@ -223,14 +229,15 @@ mod tests {
     }
 
     #[test]
-    fn read_only_flag_sets_the_read_scope_and_refuses_a_project() {
+    fn read_only_flag_sets_the_read_scope_and_may_carry_a_project() {
         assert_eq!(issue_params_scoped(60, "console", None, true)["scope"], "read");
         assert!(issue_params(60, "x", None).get("scope").is_none(), "owner is the unmarked default");
         let w = Wrap::try_parse_from(["t", "issue", "--read-only", "--label", "console"]).unwrap();
         assert!(matches!(w.args.action, TokenAction::Issue { read_only: true, .. }));
-        assert!(
-            Wrap::try_parse_from(["t", "issue", "--read-only", "--project", "01ARZ3NDEKTSV4RRFFQ69G5FAV"]).is_err()
-        );
+        let w = Wrap::try_parse_from(["t", "issue", "--read-only", "--project", "01ARZ3NDEKTSV4RRFFQ69G5FAV"]).unwrap();
+        assert!(matches!(w.args.action, TokenAction::Issue { read_only: true, project: Some(_), .. }));
+        let p = issue_params_scoped(60, "console", Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"), true);
+        assert_eq!((p["scope"].as_str(), p["project"].as_str()), (Some("read"), Some("01ARZ3NDEKTSV4RRFFQ69G5FAV")));
     }
 
     #[test]
