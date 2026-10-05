@@ -1739,6 +1739,38 @@ cmd_cog_host_x86() {
     timer_end
 }
 
+# Windows compile check of every cargo-dist app (weft, weaver, weftos, the egui GUI)
+# for x86_64-pc-windows-gnu with mingw-w64. The release builds x86_64-pc-windows-msvc,
+# which macOS cannot compile (ring needs MSVC), but cfg(unix)-only code breaks both the
+# same way; this catches it before a tag. Returns 0 pass, 1 fail, 2 skipped.
+cmd_windows_check_impl() {
+    if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 \
+        || ! rustup target list --installed 2>/dev/null | grep -qx x86_64-pc-windows-gnu; then
+        return 2
+    fi
+    CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar \
+        cargo check --release --target x86_64-pc-windows-gnu \
+        -p clawft-cli -p clawft-gui-egui -p clawft-weave -p weftos --bins
+}
+
+cmd_windows_check() {
+    header "Windows compile check (x86_64-pc-windows-gnu, cargo-dist apps)"
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   cargo check --release --target x86_64-pc-windows-gnu -p clawft-cli -p clawft-gui-egui -p clawft-weave -p weftos --bins\n"
+        return 0
+    fi
+    timer_start
+    local rc=0
+    cmd_windows_check_impl || rc=$?
+    case $rc in
+        0) pass "Windows compile check" ;;
+        2) skip "needs mingw-w64 (brew install mingw-w64) and rustup target add x86_64-pc-windows-gnu" ;;
+        *) fail "Windows compile check" ;;
+    esac
+    timer_end
+    [ $rc -eq 1 ] && return 1 || return 0
+}
+
 cmd_licence_cross() {
     cross_build_bin weft-licence weft-licence "--features net" "$ROOT/target/licence-cross"
 }
@@ -2074,9 +2106,9 @@ cmd_gate() {
     if [ "${GATE_RELEASE_DRY_RUN:-}" = "1" ] || [ "${GATE_RELEASE_DRY_RUN:-}" = "true" ]; then
         WITH_RELEASE_DRY_RUN=true
     fi
-    local total=22
+    local total=23
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        total=23
+        total=24
     fi
     header "Phase Gate — ${total} checks"
     local passed=0 failed=0 skipped=0
@@ -2282,12 +2314,30 @@ cmd_gate() {
     run_gate_check 22 "workspace clippy, all targets (warnings as errors)" \
         cargo clippy --keep-going --all-targets --workspace -- -D warnings
 
-    # 23. WEFT-460 — optional cargo-dist host-triple release rehearsal.
+    # 23. Windows compile check of the cargo-dist apps (mingw cross-check). Two release
+    #     candidates failed on Windows after a green gate; this closes that gap.
+    printf "\n${BOLD}[%2d/%d]${NC} %s\n" 23 "$total" "Windows compile check (cargo-dist apps)"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   scripts/build.sh windows-check\n"
+        passed=$((passed + 1))
+    else
+        local wrc=0
+        cmd_windows_check_impl >"$ROOT/target/gate-logs/check-23.log" 2>&1 || wrc=$?
+        case $wrc in
+            0) pass "Windows compile check (cargo-dist apps)"; passed=$((passed + 1)) ;;
+            2) skip "Windows compile check: needs mingw-w64 + rustup target x86_64-pc-windows-gnu"; skipped=$((skipped + 1)) ;;
+            *) fail "Windows compile check (cargo-dist apps)"; printf "  LOG   %s\n" "$ROOT/target/gate-logs/check-23.log"; failed=$((failed + 1)) ;;
+        esac
+    fi
+    timer_end
+
+    # 24. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
     #   scripts/build.sh gate --with-release-dry-run
     #   GATE_RELEASE_DRY_RUN=1 scripts/build.sh gate
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 23 "$total" "release-dry-run (cargo-dist host triple)"
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 24 "$total" "release-dry-run (cargo-dist host triple)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   scripts/build.sh release-dry-run\n"
@@ -2438,6 +2488,8 @@ ${BOLD}Commands:${NC}
                   that cogs-conformance --launcher uses to run cogs through
                   the WorkloadRuntime adapters; --linux-arm64 builds it in an
                   arm64 Rust container (COG_LAUNCHER_BUILDER, default rust:1-bookworm).
+  windows-check   Compile the cargo-dist apps for x86_64-pc-windows-gnu (mingw-w64) to catch
+                  unix-only code before a release tag. Also gate check 23.
   cog-host-x86    Build weft-cog-host for x86_64 Linux servers (photo-gallery) in the pinned
                   rust image under linux/amd64, offline. Output under target/cog-host-x86/.
   cog-host-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
@@ -2741,6 +2793,7 @@ main() {
         licence-cross)      cmd_licence_cross ;;
         cog-host-cross)     cmd_cog_host_cross ;;
         cog-host-x86)       cmd_cog_host_x86 ;;
+        windows-check)      cmd_windows_check ;;
         licence-uid-check)  cmd_licence_uid_check ;;
         test-pi)            cmd_test_pi ;;
         n6-leaf)            cmd_n6_leaf ;;

@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
+#[cfg(all(feature = "placement", unix))]
 use async_trait::async_trait;
+#[cfg(all(feature = "placement", unix))]
 use clawft_kernel::workload_ctl::NodeAdmin;
 use clawft_rpc::Response;
 use serde_json::{Value, json};
@@ -34,6 +36,7 @@ const ROTATE: &str = "dashboard.token.rotate";
 /// the reporter is looked up per call, so it may start after the host does.
 pub struct MeshAdmin;
 
+#[cfg(all(feature = "placement", unix))]
 #[async_trait]
 impl NodeAdmin for MeshAdmin {
     async fn call(&self, method: &str, requester: &str, body: &Value) -> Result<Value, String> {
@@ -46,6 +49,7 @@ impl NodeAdmin for MeshAdmin {
 /// [`MeshAdmin`] for a given reporter (what it does once it has found one).
 pub struct DashAdmin(pub Arc<Dashboard>);
 
+#[cfg(all(feature = "placement", unix))]
 #[async_trait]
 impl NodeAdmin for DashAdmin {
     async fn call(&self, method: &str, requester: &str, _body: &Value) -> Result<Value, String> {
@@ -66,8 +70,25 @@ pub async fn run_local(d: &Dashboard, method: &str, remote: bool) -> Result<Valu
     }
 }
 
+#[cfg(all(feature = "placement", unix))]
 fn is_local(node: &str) -> bool {
     crate::workload_place_rpc::local_mesh_node_id().is_some_and(|me| me == node)
+}
+
+/// Send `method` to peer `node` on the signed `workload.ctl` mesh wire.
+#[cfg(all(feature = "placement", unix))]
+async fn remote(kernel: &KernelRef, node: &str, method: &str) -> Result<Value, String> {
+    crate::workload_place_rpc::node_admin(kernel, node, method, json!({})).await
+}
+
+#[cfg(not(all(feature = "placement", unix)))]
+fn is_local(_node: &str) -> bool {
+    false
+}
+
+#[cfg(not(all(feature = "placement", unix)))]
+async fn remote(_kernel: &KernelRef, _node: &str, _method: &str) -> Result<Value, String> {
+    Err("sending a dashboard request to another node needs a unix build with mesh placement".into())
 }
 
 async fn handle_inner(
@@ -84,7 +105,7 @@ async fn handle_inner(
     match node {
         // Contacting a peer is an Admin act even for the read-only status.
         Some(_) if !is_admin => Err("sending a dashboard request to another node needs Admin".into()),
-        Some(n) if !is_local(n) => crate::workload_place_rpc::node_admin(kernel, n, method, json!({})).await,
+        Some(n) if !is_local(n) => remote(kernel, n, method).await,
         _ => match dashboard_report::global() {
             Some(d) => run_local(&d, method, false).await,
             None if method == STATUS => Ok(json!({ "enabled": false })),

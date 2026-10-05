@@ -66,6 +66,7 @@ impl ChildSource for SupervisorChildren {
         })
         .await
         .unwrap_or_default();
+        #[cfg(all(unix, feature = "exochain", feature = "placement"))]
         let states: Vec<(String, String)> = match crate::project_supervisor::global() {
             Some(sup) => sup
                 .status_all()
@@ -81,6 +82,9 @@ impl ChildSource for SupervisorChildren {
                 .collect(),
             None => Vec::new(),
         };
+        // No project supervisor on this build: report each project, state unknown.
+        #[cfg(not(all(unix, feature = "exochain", feature = "placement")))]
+        let states: Vec<(String, String)> = Vec::new();
         ids.into_iter()
             .map(|id| {
                 let st = states.iter().find(|(i, _)| *i == id).map(|(_, s)| s.clone());
