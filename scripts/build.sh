@@ -1702,6 +1702,43 @@ cross_build_bin() {
     return $rc
 }
 
+# Builds weft-cog-host natively for x86_64 Linux servers (e.g. photo-gallery) inside the
+# pinned rust image under linux/amd64 emulation, offline from the host cargo cache.
+# Output: target/cog-host-x86/release/weft-cog-host(.stripped).
+cmd_cog_host_x86() {
+    header "weft-cog-host build (x86_64-unknown-linux-gnu)"
+    local image="${COG_HOST_X86_IMAGE:-rust:1.95-bookworm}" out="$ROOT/target/cog-host-x86"
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   docker run --platform linux/amd64 %s cargo build --locked --offline --release -p weftos-cog-host\n" "$image"
+        return 0
+    fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker image inspect "$image" >/dev/null 2>&1; then
+        skip "need docker and the $image image (docker pull --platform linux/amd64 $image)"
+        return 0
+    fi
+    [ -d "$HOME/.cargo/registry/cache" ] || { fail "no host cargo registry at ~/.cargo/registry (offline build needs it)"; return 1; }
+    cargo fetch --locked --offline --target x86_64-unknown-linux-gnu >/dev/null 2>&1 \
+        || { fail "host cargo cache is missing crates for x86_64-unknown-linux-gnu; run 'cargo fetch --locked --target x86_64-unknown-linux-gnu' once with network, then retry"; return 1; }
+    timer_start
+    mkdir -p "$out/cargo-src"
+    docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
+        -v "$ROOT":/src:ro -v "$out":/target \
+        -v "$HOME/.cargo/registry/cache":/cargo-home/registry/cache:ro \
+        -v "$HOME/.cargo/registry/index":/cargo-home/registry/index:ro \
+        -v "$out/cargo-src":/cargo-home/registry/src \
+        -w /src -e HOME=/tmp -e CARGO_HOME=/cargo-home -e CARGO_TARGET_DIR=/target \
+        -e CARGO_NET_OFFLINE=true -e RUSTUP_TOOLCHAIN=1.95 \
+        "$image" bash -euo pipefail -c '
+            export PATH=/usr/local/cargo/bin:$PATH RUSTUP_HOME=/usr/local/rustup
+            cargo build --locked --offline --release -p weftos-cog-host
+            cp /target/release/weft-cog-host /target/release/weft-cog-host.stripped
+            strip /target/release/weft-cog-host.stripped
+        ' || { fail "x86_64 build failed"; timer_end; return 1; }
+    local st="$out/release/weft-cog-host.stripped"
+    pass "x86_64: stripped $(wc -c < "$st" | tr -d ' ') bytes ($st)"
+    timer_end
+}
+
 cmd_licence_cross() {
     cross_build_bin weft-licence weft-licence "--features net" "$ROOT/target/licence-cross"
 }
@@ -2401,6 +2438,8 @@ ${BOLD}Commands:${NC}
                   that cogs-conformance --launcher uses to run cogs through
                   the WorkloadRuntime adapters; --linux-arm64 builds it in an
                   arm64 Rust container (COG_LAUNCHER_BUILDER, default rust:1-bookworm).
+  cog-host-x86    Build weft-cog-host for x86_64 Linux servers (photo-gallery) in the pinned
+                  rust image under linux/amd64, offline. Output under target/cog-host-x86/.
   cog-host-cross [armv7-unknown-linux-gnueabihf|aarch64-unknown-linux-gnu]...
                   Cross-build weft-cog-host for the Seed in the cogs cross image (same
                   offline mechanism as licence-cross). Output under target/cog-host-cross/.
@@ -2701,6 +2740,7 @@ main() {
         cogs-launcher)      cmd_cogs_launcher ;;
         licence-cross)      cmd_licence_cross ;;
         cog-host-cross)     cmd_cog_host_cross ;;
+        cog-host-x86)       cmd_cog_host_x86 ;;
         licence-uid-check)  cmd_licence_uid_check ;;
         test-pi)            cmd_test_pi ;;
         n6-leaf)            cmd_n6_leaf ;;
