@@ -9,7 +9,9 @@
 //!    Without a `runtime_dir`, a manifest with `[serve] via = "user-daemon"`
 //!    selects the user daemon's root (`~/.weftos/run`).
 //! 4. user default: with no project known, `~/.weftos/run` when its
-//!    `kernel.sock` or `kernel.lock` exists
+//!    `kernel.sock` answers, or (neither it nor `~/.clawft` answering) when
+//!    it has a `kernel.sock`/`kernel.lock` and the legacy root has no socket;
+//!    a live legacy `~/.clawft` kernel keeps winning otherwise
 //! 5. default: [`RuntimePaths::resolve_with`] (the Phase 0 answer)
 //!
 //! The expected project id is chosen independently with the same order
@@ -24,7 +26,7 @@ use clawft_types::project::{
     ServeVia, find_project_toml, read_manifest, read_project_toml, validate_id,
 };
 use clawft_types::runtime_paths::{
-    LOCK_FILE_NAME, RUNTIME_DIR_ENV, RuntimePaths, SOCKET_NAME, home_dir, user_runtime_root,
+    RUNTIME_DIR_ENV, RuntimePaths, SOCKET_NAME, home_dir, prefer_user_root, user_runtime_root,
 };
 
 use crate::probe::{SocketState, describe_state};
@@ -339,9 +341,9 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
     let env_rt = nonempty(&i.env_runtime).map(PathBuf::from);
     let default = RuntimePaths::resolve_with(None, i.cwd.as_deref(), home);
     // User default (D14): no project, but a user daemon has been there.
-    let user_default = home
-        .map(user_runtime_root)
-        .filter(|r| r.join(SOCKET_NAME).exists() || r.join(LOCK_FILE_NAME).exists());
+    // Same rule as the runtime-paths resolver: a live user daemon wins, a
+    // live legacy `~/.clawft` kernel keeps winning over a stale user root.
+    let user_default = home.and_then(prefer_user_root);
     let user_default = if project.is_none() { user_default } else { None };
     let user_note = match (&user_default, home) {
         (Some(r), _) => format!("user daemon root {}", r.display()),

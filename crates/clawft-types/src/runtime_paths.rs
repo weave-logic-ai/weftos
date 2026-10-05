@@ -18,7 +18,12 @@
 //!    directory; covers git worktrees). The walk never returns `$HOME` and
 //!    stops when it reaches it, so the `~/.weftos/` that holds apps and
 //!    models is not mistaken for a project.
-//! 3. `~/.clawft` (legacy).
+//! 3. With no project in scope, the user daemon root `~/.weftos/run` when a
+//!    live user daemon is there (its `kernel.sock` answers), or when neither
+//!    it nor the legacy root answers and only the user root shows a daemon
+//!    (`kernel.sock` / `kernel.lock`). A live legacy `~/.clawft` kernel (older
+//!    installs) keeps winning when the user daemon is not live.
+//! 4. `~/.clawft` (legacy; the default when nothing above applies).
 //!
 //! Phase 1 of ADR-103 changes the root; keep that change inside
 //! [`resolve_root`].
@@ -267,11 +272,49 @@ pub fn resolve_root(
             RootSource::Project(project),
         );
     }
+    if let Some(user) = home.and_then(prefer_user_root) {
+        return (user, RootSource::User);
+    }
     let legacy = home
         .map(Path::to_path_buf)
         .unwrap_or_else(std::env::temp_dir)
         .join(".clawft");
     (legacy, RootSource::LegacyHome)
+}
+
+/// True when something answers on `<root>/kernel.sock` (unix only; a stale
+/// socket file refuses the connection and is not live).
+fn socket_answers(root: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::net::UnixStream::connect(root.join(SOCKET_NAME)).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        false
+    }
+}
+
+/// With no project in scope, the user daemon root (`<home>/.weftos/run`)
+/// when it should win over the legacy `<home>/.clawft`:
+///
+/// - the user daemon answers: it wins, whatever the legacy root holds;
+/// - else the legacy kernel answers: legacy wins (older installs);
+/// - else neither is live: the user root wins only when it shows signs of a
+///   daemon (`kernel.sock` or `kernel.lock`) and the legacy root has no
+///   `kernel.sock`; otherwise `None`, and the caller falls back to legacy.
+pub fn prefer_user_root(home: &Path) -> Option<PathBuf> {
+    let user = user_runtime_root(home);
+    let legacy = home.join(".clawft");
+    if socket_answers(&user) {
+        return Some(user);
+    }
+    if socket_answers(&legacy) {
+        return None;
+    }
+    let user_marked = user.join(SOCKET_NAME).exists() || user.join(LOCK_FILE_NAME).exists();
+    (user_marked && !legacy.join(SOCKET_NAME).exists()).then_some(user)
 }
 
 impl RuntimePaths {
@@ -716,6 +759,95 @@ mod tests {
         assert_eq!(legacy_chain_left_behind(&env, Some(&home)), None);
         let leg = RuntimePaths::resolve_with(None, None, Some(&home));
         assert_eq!(legacy_chain_left_behind(&leg, Some(&home)), None);
+    }
+
+    /// Short temp home so `<home>/.weftos/run/kernel.sock` fits sun_path.
+    #[cfg(unix)]
+    fn short_home() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("rp")
+            .tempdir_in("/tmp")
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn listen(root: &Path) -> std::os::unix::net::UnixListener {
+        fs::create_dir_all(root).unwrap();
+        std::os::unix::net::UnixListener::bind(root.join(SOCKET_NAME)).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn resolve_in(home: &Path, cwd: &Path) -> RuntimePaths {
+        RuntimePaths::resolve_with(None, Some(cwd), Some(home))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn both_present_only_user_live_resolves_user() {
+        let t = short_home();
+        let home = t.path();
+        let _user = listen(&user_runtime_root(home));
+        // Legacy dir exists with a dead socket file and no listener.
+        let legacy = home.join(".clawft");
+        drop(listen(&legacy));
+        let p = resolve_in(home, home);
+        assert_eq!(p.source(), &RootSource::User);
+        assert_eq!(p.root(), user_runtime_root(home));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn both_present_only_legacy_live_resolves_legacy() {
+        let t = short_home();
+        let home = t.path();
+        // User root shows signs of a daemon (stale socket file), not live.
+        drop(listen(&user_runtime_root(home)));
+        let _legacy = listen(&home.join(".clawft"));
+        let p = resolve_in(home, home);
+        assert_eq!(p.source(), &RootSource::LegacyHome);
+        assert_eq!(p.root(), home.join(".clawft"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn both_live_prefers_user() {
+        let t = short_home();
+        let home = t.path();
+        let _u = listen(&user_runtime_root(home));
+        let _l = listen(&home.join(".clawft"));
+        assert_eq!(resolve_in(home, home).source(), &RootSource::User);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn neither_live_defaults_to_legacy_unless_only_user_has_signs() {
+        let t = short_home();
+        let home = t.path();
+        // Empty .clawft, no user root: legacy.
+        fs::create_dir_all(home.join(".clawft")).unwrap();
+        assert_eq!(resolve_in(home, home).source(), &RootSource::LegacyHome);
+        // Both have stale sockets: legacy (documented default).
+        drop(listen(&user_runtime_root(home)));
+        drop(listen(&home.join(".clawft")));
+        assert_eq!(resolve_in(home, home).source(), &RootSource::LegacyHome);
+        // Only the user root has a lock file: user.
+        let t2 = short_home();
+        mk(&user_runtime_root(t2.path()), "kernel.lock");
+        fs::create_dir_all(t2.path().join(".clawft")).unwrap();
+        assert_eq!(resolve_in(t2.path(), t2.path()).source(), &RootSource::User);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_and_project_still_beat_a_live_user_daemon() {
+        let t = short_home();
+        let home = t.path();
+        let _u = listen(&user_runtime_root(home));
+        let env = RuntimePaths::resolve_with(Some("/x/rt"), Some(home), Some(home));
+        assert_eq!(env.source(), &RootSource::Env);
+        mk(home, "work/p/.weftos/project.toml");
+        let p = resolve_in(home, &home.join("work/p"));
+        assert_eq!(p.root(), home.join("work/p/.weftos/runtime"));
     }
 
     #[test]

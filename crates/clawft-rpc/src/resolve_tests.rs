@@ -3,6 +3,7 @@
 
 use super::*;
 use std::fs;
+use clawft_types::runtime_paths::LOCK_FILE_NAME;
 
 const ID_A: &str = "01J0000000000000000000000A";
 const ID_B: &str = "01J0000000000000000000000B";
