@@ -14,11 +14,6 @@
 <body>
   <canvas id="mgr_canvas"></canvas>
   <div id="loading">Loading the WeftOS console… (add <code>?host=http://&lt;ip&gt;:9480</code> to pick the cog-host)</div>
-  <script type="module">
-    import init, { mgr_start } from "./pkg/weftos_cog_manager.js";
-    await init();
-    await mgr_start("mgr_canvas");
-    document.getElementById("loading").remove();
-  </script>
+  <script type="module" src="./main.js"></script>
 </body>
 </html>
