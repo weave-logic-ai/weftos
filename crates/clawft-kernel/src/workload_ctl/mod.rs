@@ -24,12 +24,14 @@ pub mod cog_kind;
 pub mod facts;
 mod host_instances;
 pub mod host_licence;
+pub mod host_node_admin;
 pub mod host_revoke;
 pub mod host_service;
 pub mod host_supervise;
 pub mod lifecycle;
 pub mod msg;
 pub mod plane;
+pub mod plane_node_admin;
 pub mod plane_peers;
 pub mod plane_lifecycle;
 pub mod plane_place;
@@ -82,9 +84,12 @@ mod tests_teardown;
 mod tests_two_node;
 #[cfg(test)]
 mod tests_licence;
+#[cfg(test)]
+mod tests_node_admin;
 
 pub use cog_kind::cog_workload_spec;
 pub use facts::{LiveNodeFacts, engine_tier, governance_tier, liveness_of, placement_view};
+pub use host_node_admin::NodeAdmin;
 pub use host_revoke::ForcedTeardown;
 pub use host_supervise::Supervised;
 pub use lifecycle::{

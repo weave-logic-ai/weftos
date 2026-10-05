@@ -1168,6 +1168,10 @@ pub async fn run(
     // ADR-103 A6 (package I): a project-bound kernel attributes every
     // governance request to its own bound project.
     crate::caller_principal::attest_instance(&daemon_identity.node_id);
+    let dashboard_gateway = config
+        .gateway
+        .api_enabled
+        .then(|| format!("http://{}:{}", config.gateway.host, config.gateway.api_port));
     let kernel =
         boot_kernel_with_identity(config, kernel_config, Arc::new(platform), &daemon_identity)
             .await?;
@@ -1194,6 +1198,12 @@ pub async fn run(
     if crate::user_daemon::is_active() {
         seed_user_projects();
         crate::anchor_rpc::reconcile_startup(&kernel).await;
+    }
+    // Daemon-native dashboard reporter (`[dashboard]` in weave.toml; off by default).
+    if crate::user_daemon::is_active()
+        && let Some(home) = clawft_types::runtime_paths::home_dir()
+    {
+        crate::dashboard_rpc::start(&kernel, &home, dashboard_gateway).await;
     }
     // ADR-103 P3-U: start the service link now that the router and gate exist.
     #[cfg(all(unix, feature = "mesh"))]

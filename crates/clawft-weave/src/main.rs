@@ -74,6 +74,9 @@ enum Commands {
     /// Fleet manager: every known node with trust, last seen, cogs and location.
     Fleet(commands::fleet_cmd::FleetArgs),
 
+    /// Dashboard reporter: status and token rotation (locally or on a peer).
+    Dashboard(commands::dashboard_cmd::DashboardArgs),
+
     /// Chain management (status, events, checkpoints).
     Chain(commands::chain_cmd::ChainArgs),
 
@@ -193,6 +196,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Cog(args) => commands::cog_cmd::run(args).await?,
         Commands::Cluster(args) => commands::cluster_cmd::run(args).await?,
         Commands::Fleet(args) => commands::fleet_cmd::run(args).await?,
+        Commands::Dashboard(args) => commands::dashboard_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,
         Commands::Resource(args) => commands::resource_cmd::run(args).await?,

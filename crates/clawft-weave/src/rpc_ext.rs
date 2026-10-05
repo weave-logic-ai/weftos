@@ -455,6 +455,18 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::fleet_rpc::handle,
     },
+    // Dashboard reporter: status is read-only; rotating the node token is Admin
+    // (with `node`, it is sent to that peer over the signed mesh wire).
+    ExtRoute {
+        prefix: "dashboard.status",
+        capability: Capability::Read,
+        handler: crate::dashboard_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "dashboard.token.rotate",
+        capability: Capability::Admin,
+        handler: crate::dashboard_rpc::handle,
+    },
     // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
     // handler resolves the project itself (token scope or Admin) and refuses
     // anonymous callers; `Write` is the floor.
@@ -682,6 +694,18 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "fleet.location.set",
         capability: Capability::Admin,
         handler: crate::fleet_rpc::handle,
+    },
+    // Dashboard reporter: status is read-only; rotating the node token is Admin
+    // (with `node`, it is sent to that peer over the signed mesh wire).
+    ExtRoute {
+        prefix: "dashboard.status",
+        capability: Capability::Read,
+        handler: crate::dashboard_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "dashboard.token.rotate",
+        capability: Capability::Admin,
+        handler: crate::dashboard_rpc::handle,
     },
     // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
     // handler resolves the project itself (token scope or Admin) and refuses

@@ -529,6 +529,8 @@ async fn build(
     })?);
     // ADR-106 phase 3: grant plus approval before a Cognitum-origin cog runs here.
     local.set_licence_gate(crate::licence_steward::run_gate(policy.store()));
+    // Mesh-routed `dashboard.*` calls from an authorised controller key.
+    local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
     let _ = HOST.set(local.clone());
     let conn = Arc::new(MeshConnector::new(true));
     let local_addr = conn.register_local("local", local);
@@ -834,14 +836,26 @@ pub(crate) async fn dispatch_checked(
     if m == "workload.revoke" {
         return revoke_dispatch(params, &kernel).await;
     }
-    let plane = match PLANE.get_or_try_init(|| build(&kernel)).await {
-        Ok(p) => p.clone(),
-        Err(e) => return Response::error(format!("placement unavailable: {e}")),
-    };
-    let now = kernel.read().await.governance_overlay().map(|o| o.applied().effective_hash);
-    if let Err(e) = governance_changed(built, now.as_deref()) {
-        return Response::error(e);
+    match ready_plane(&kernel, built).await {
+        Ok(plane) => route(&plane, m, params).await,
+        Err(e) => Response::error(e),
     }
+}
+
+/// The control plane with its guards applied (built, governance unchanged,
+/// this node's host a target, operator peers synced). Shared by every verb
+/// that talks to peers.
+async fn ready_plane(
+    kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
+    built: Option<&Option<String>>,
+) -> Result<Arc<PlacementControlPlane>, String> {
+    let plane = PLANE
+        .get_or_try_init(|| build(kernel))
+        .await
+        .map_err(|e| format!("placement unavailable: {e}"))?
+        .clone();
+    let now = kernel.read().await.governance_overlay().map(|o| o.applied().effective_hash);
+    governance_changed(built, now.as_deref())?;
     if HOST.get().is_some() && !plane.targets().iter().any(|t| t.addr == LOCAL_ADDR) {
         // Facts were not probed yet when the plane was built.
         let _ = plane.add_target(LOCAL_ADDR, TrustTier::Pinned).await;
@@ -851,9 +865,36 @@ pub(crate) async fn dispatch_checked(
     {
         // Fail closed: a broken peers file places nowhere remote.
         let _ = plane.apply_operator_peers(&[], &[LOCAL_ADDR]).await;
-        return Response::error(e);
+        return Err(e);
     }
-    route(&plane, m, params).await
+    Ok(plane)
+}
+
+/// This node's id as its peers address it on the mesh, once placement is
+/// initialised (the key's own id, or the machine's in service mode).
+pub fn local_mesh_node_id() -> Option<String> {
+    BOOT.get().map(|b| b.mesh_node_id.clone())
+}
+
+/// Send node-admin method `m` (`dashboard.status`, `dashboard.token.rotate`)
+/// to the peer `node` over the signed `workload.ctl` wire and return its
+/// result. The peer must be in `workload-peers.json` (rotation needs tier
+/// `pinned`) and must list this node's key as a controller in its
+/// `workload-host.json`.
+pub async fn node_admin(
+    kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
+    node: &str,
+    m: &str,
+    body: Value,
+) -> Result<Value, String> {
+    let plane = ready_plane(kernel, BUILT_RULES.get()).await?;
+    plane.node_admin(node, m, body).await.map_err(|e| match e {
+        clawft_kernel::workload_ctl::PlaneError::Unknown(_) => format!(
+            "{e}: add it to workload-peers.json (tier pinned) and make sure it serves workload-host \
+             with this node's key as a controller"
+        ),
+        other => other.to_string(),
+    })
 }
 
 /// Daemon boot: when `workload-host.json` is present, build the control
