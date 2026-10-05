@@ -25,11 +25,15 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use clawft_kernel::token_authority::MAX_TTL;
 use serde_json::{Value, json};
 
 use super::ApiState;
 use super::daemon_facade::DaemonKernelFacade;
+
+/// Longest console token lifetime, mirroring `clawft_kernel::token_authority::MAX_TTL`
+/// (24 h). That module needs the `exochain` feature, which the `weft` build does not
+/// enable; the daemon enforces the authoritative cap when it issues the token.
+const MAX_TTL_SECS: u64 = 24 * 60 * 60;
 
 /// Longest the `tailscale whois` subprocess may run.
 const WHOIS_TIMEOUT: Duration = Duration::from_secs(3);
@@ -253,7 +257,7 @@ impl TailnetMint {
     ) -> Self {
         Self {
             allowed: allowed_logins.iter().map(|l| l.trim().to_lowercase()).filter(|l| !l.is_empty()).collect(),
-            ttl_secs: ttl_secs.clamp(1, MAX_TTL.num_seconds() as u64),
+            ttl_secs: ttl_secs.clamp(1, MAX_TTL_SECS),
             whois,
             minter,
             origins: origins.to_vec(),
