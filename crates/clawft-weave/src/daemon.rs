@@ -1035,6 +1035,11 @@ pub async fn run(
     if crate::user_daemon::project_profile_requested() {
         config.kernel.profile = Some(clawft_types::config::KernelProfile::Project);
         kernel_config.profile = Some(clawft_types::config::KernelProfile::Project);
+        // A nested user instance owns its project kernels (D10): exit when it dies.
+        #[cfg(unix)]
+        if crate::parent_liveness::requested() {
+            crate::parent_liveness::spawn_stdin_watcher();
+        }
     }
     #[cfg(all(unix, feature = "exochain"))]
     let nested_master = config.weave.master;

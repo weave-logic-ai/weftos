@@ -15,7 +15,41 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 const ID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
-fn dir() -> tempfile::TempDir {
+/// The test's private root. On drop (also while unwinding from a panic) it
+/// SIGKILLs any process whose working directory lies under it, so a failed test
+/// leaves no nested daemon or project kernel behind. Only processes whose cwd
+/// is under this root are touched.
+struct Root(tempfile::TempDir);
+impl Root {
+    fn path(&self) -> &Path {
+        self.0.path()
+    }
+}
+impl Drop for Root {
+    fn drop(&mut self) {
+        let Ok(root) = self.0.path().canonicalize() else { return };
+        let Ok(out) = std::process::Command::new("lsof")
+            .args(["-a", "-d", "cwd", "-F", "pn"])
+            .output()
+        else {
+            return;
+        };
+        let me = std::process::id();
+        let mut pid = None;
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some(p) = line.strip_prefix('p') {
+                pid = p.parse::<u32>().ok();
+            } else if let (Some(n), Some(pid)) = (line.strip_prefix('n'), pid)
+                && pid != me
+                && Path::new(n).starts_with(&root)
+            {
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            }
+        }
+    }
+}
+
+fn dir() -> Root {
     // No live HOME and no /tmp. For real daemon tests choose a short docs path
     // with D10_TEST_ROOT (macOS has a 104-byte Unix socket path limit).
     let root = std::env::var_os("D10_TEST_ROOT")
@@ -32,10 +66,12 @@ fn dir() -> tempfile::TempDir {
             }
         });
     std::fs::create_dir_all(&root).unwrap();
-    tempfile::Builder::new()
-        .prefix("n")
-        .tempdir_in(root)
-        .unwrap()
+    Root(
+        tempfile::Builder::new()
+            .prefix("n")
+            .tempdir_in(root)
+            .unwrap(),
+    )
 }
 fn master() -> SigningKey {
     SigningKey::from_bytes(&[42; 32])
@@ -504,4 +540,52 @@ async fn nested_owned_pipe_cascades_when_deny_all_rejects_shutdown_rpc() {
             .is_err(),
         "inner projects must stop with inner user even when shutdown RPC is denied"
     );
+}
+
+fn pid_gone(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) }
+}
+
+/// The nested instance dies without any cleanup (SIGKILL: the test process
+/// dying, a nextest kill). Its project kernel, in its own process group, must
+/// still exit within a bound, by its stdin liveness pipe closing.
+#[tokio::test]
+async fn nested_sigkill_reaps_supervised_project_child() {
+    let root = dir();
+    let sup = sup(root.path(), Path::new(env!("CARGO_BIN_EXE_weaver")));
+    let config: Config = serde_json::from_value(json!({"kernel": {
+        "llm": {"service_url":"http://127.0.0.1:0", "model":"d10-test"}
+    }}))
+    .unwrap();
+    sup.register(ID, config, policy(71), OverlayFile::default())
+        .await
+        .unwrap();
+    let c = contract(&sup);
+    let project = c.home.join("p");
+    std::fs::create_dir(&project).unwrap();
+    let manifest = clawft_types::project::adopt_or_init(
+        &project,
+        &c.home.join(".weftos/projects"),
+        Some("sigkill-inner-project"),
+    )
+    .unwrap();
+    let nested = sup.start(ID).await.unwrap()["pid"].as_i64().unwrap() as i32;
+    let sock = c.runtime.join("kernel.sock");
+    let started = rpc(&sock, "project.start", json!({"id":manifest.id})).await;
+    assert_eq!(started["ok"], true, "{started}");
+    let child_socket = c.runtime.join(&manifest.id).join("kernel.sock");
+    let child_pid = rpc(&child_socket, "kernel.handshake", json!({})).await["result"]["pid"]
+        .as_i64()
+        .expect("project kernel pid") as i32;
+    assert_ne!(child_pid, nested);
+    assert!(!pid_gone(child_pid));
+    unsafe { libc::kill(nested, libc::SIGKILL) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
+    while !pid_gone(child_pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "project kernel {child_pid} outlived its SIGKILLed nested instance"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }

@@ -258,6 +258,9 @@ pub mod cog_ingest_serve;
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;
 
+#[cfg(unix)]
+pub mod parent_liveness;
+
 #[cfg(all(unix, feature = "exochain"))]
 pub mod nested_boot;
 #[cfg(all(unix, feature = "exochain"))]
