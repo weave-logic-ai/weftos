@@ -8,7 +8,7 @@ use crate::style;
 use crate::sensor_link::export_port;
 use crate::views::cogs::dot;
 use crate::{hw_dex, hw_identify};
-use crate::AMBER;
+use crate::{AMBER, WL};
 use eframe::egui::{self, RichText};
 use std::cell::RefCell;
 use weftos_cog_market::hw::HwCatalog;
@@ -64,6 +64,10 @@ pub struct Manager {
     pub(crate) fleet_tab: crate::views::fleet::NodeTab,
     /// Network tab: the edge node whose reported fields are expanded.
     pub(crate) edge_open: Option<String>,
+    /// The WeftOS project ULID the console is scoped to (empty = unscoped), and why a given one
+    /// was ignored. Clearing the filter empties `project`.
+    pub(crate) project: String,
+    pub(crate) project_warning: Option<String>,
 }
 
 impl Manager {
@@ -76,7 +80,10 @@ impl Manager {
         // card in the Catalog.
         let deep = client::setting("WEFTOS_MODULE", "module", "");
         let deep = (!deep.trim().is_empty()).then(|| deep.trim().to_string());
+        let (project, project_warning) = (s.project.clone(), s.project_warning.clone());
         let mut me = Self {
+            project,
+            project_warning,
             client: Client::new(s),
             section: match client::setting("WEFTOS_TAB", "tab", "").as_str() {
                 "sensors" => Section::Sensors,
@@ -173,7 +180,34 @@ impl Manager {
                     None => style::status_dot(ui, AMBER, "connecting…"),
                 }
             });
+            self.project_bar(ui);
             ui.add_space(style::GAP_S);
+        });
+    }
+
+    /// The project context line: the ULID (and name, when the fleet snapshot lists it) with a
+    /// control to clear the filter, or the warning for a project that was ignored.
+    fn project_bar(&mut self, ui: &mut egui::Ui) {
+        if let Some(w) = &self.project_warning {
+            ui.colored_label(AMBER, w);
+        }
+        if self.project.is_empty() {
+            return;
+        }
+        let name = {
+            let sh = self.client.snapshot();
+            sh.fleet.as_ref().and_then(|r| r.as_ref().ok()).and_then(|s| crate::project::name(s, &self.project))
+        };
+        ui.horizontal_wrapped(|ui| {
+            style::pill(ui, "project", WL);
+            if let Some(n) = &name {
+                ui.label(style::h1(n));
+            }
+            ui.label(style::dim(ui, &self.project));
+            ui.label(style::dim(ui, format!("showing project {} only", name.as_deref().unwrap_or(&self.project))));
+            if ui.small_button("clear filter").on_hover_text("Show every node and cog, not just this project's").clicked() {
+                self.project.clear();
+            }
         });
     }
 

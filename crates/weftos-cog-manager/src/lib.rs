@@ -14,6 +14,7 @@ mod fleet;
 mod fleet_unify;
 mod hw_dex;
 mod hw_identify;
+mod project;
 mod sensor_detail;
 mod sensor_install;
 mod sensor_link;

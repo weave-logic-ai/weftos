@@ -17,9 +17,12 @@ mod fetch;
 mod http;
 mod hw;
 mod install;
+mod console_token;
+pub mod params;
 mod settings;
 mod types;
 
+pub use console_token::{MintState, Minted};
 pub use hw::*;
 pub use settings::*;
 pub use types::*;
@@ -38,11 +41,17 @@ pub struct Client {
     /// Seed URLs with a read in flight (and since when), so a silent address never piles up requests.
     seeds_busy: Arc<Mutex<std::collections::BTreeMap<String, Instant>>>,
     catalog_started: bool,
+    /// Gateway-issued console token (memory only) and the (gateway, project) it was asked for.
+    mint: Arc<Mutex<MintState>>,
+    mint_key: (String, String),
 }
 
 impl Client {
     pub fn new(s: Settings) -> Self {
+        let mint_key = (s.gateway.trim().to_owned(), s.project.clone());
         Self {
+            mint_key,
+            mint: Arc::new(Mutex::new(MintState::Idle)),
             s,
             shared: Arc::new(Mutex::new(Shared::default())),
             status_busy: Arc::new(AtomicBool::new(false)),
@@ -64,6 +73,14 @@ impl Client {
     /// Reconnect to a (possibly new) host/registries: clear state and refetch.
     pub fn reconnect(&mut self, s: Settings) {
         self.s = s;
+        // A new gateway or project needs its own token; a failed ask is retried on "Use".
+        let key = (self.s.gateway.trim().to_owned(), self.s.project.clone());
+        let mut m = self.mint.lock().unwrap();
+        if key != self.mint_key || matches!(*m, MintState::Failed(_) | MintState::Pending) {
+            *m = MintState::Idle;
+        }
+        drop(m);
+        self.mint_key = key;
         {
             let mut sh = self.shared.lock().unwrap();
             let epoch = sh.epoch + 1;
@@ -83,6 +100,7 @@ impl Client {
     pub fn tick(&mut self, ctx: &eframe::egui::Context) {
         self.poll_status(ctx);
         self.poll_network(ctx);
+        self.poll_mint(ctx);
         self.poll_fleet(ctx);
         self.poll_seeds(ctx);
         if !self.catalog_started {
@@ -116,6 +134,10 @@ impl Client {
     /// The daemon's `fleet.snapshot` through the ADR-102 gateway, every 5 s, when a gateway is set.
     fn poll_fleet(&mut self, ctx: &eframe::egui::Context) {
         let Some(url) = crate::fleet::snapshot_url(&self.s.gateway) else { return };
+        // Wait for the gateway-issued token rather than fetch once without one.
+        if self.s.gateway_token.trim().is_empty() && matches!(self.mint_state(), MintState::Pending) {
+            return;
+        }
         let now = Instant::now();
         let stale = self.fleet_fired.is_some_and(|f| now.duration_since(f) > STALE);
         let waited = self.fleet_fired.is_none_or(|f| now.duration_since(f) >= Duration::from_secs(5));
@@ -128,9 +150,18 @@ impl Client {
         let epoch = epoch_of(&shared);
         let busy = Arc::clone(&self.fleet_busy);
         let ctx = ctx.clone();
-        ehttp::fetch(get_req(url, &self.s.gateway_token), move |res| {
+        let token = self.gateway_token();
+        let minted = self.s.gateway_token.trim().is_empty();
+        let mint = Arc::clone(&self.mint);
+        ehttp::fetch(get_req(url, &token), move |res| {
             let parsed = match &res {
                 Ok(r) if r.status == 401 || r.status == 403 => {
+                    if minted {
+                        let mut m = mint.lock().unwrap();
+                        if matches!(*m, MintState::Done(_)) {
+                            *m = MintState::Failed("gateway rejected the issued console token".into());
+                        }
+                    }
                     Err("the gateway wants a token: weft token issue --read-only, then set it as the gateway token".into())
                 }
                 _ => parse_json::<serde_json::Value>(&res),
