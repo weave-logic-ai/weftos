@@ -87,6 +87,8 @@ libc = "0.2"
 # `weaver update` verifies releases with the COG-008 pinned WeaveLogic release key.
 weftos-cog-repo = { path = "../weftos-cog-repo", default-features = false }
 rand = { workspace = true }
+# The dashboard reporter (heartbeat + token rotation) is a plain HTTPS client.
+reqwest = { workspace = true }
 sha2 = { workspace = true }
 # `weaver update` extracts release archives itself (regular files only, no links).
 flate2 = "1"

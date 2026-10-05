@@ -62,6 +62,22 @@ pub mod method {
     /// Every method of the set.
     pub const ALL: &[&str] = &[DESCRIBE, PLACE, LOAD, START, STOP, UNLOAD, STATUS, LOGS];
 
+    /// Dashboard reporter status on the target node (read-only). Not part of
+    /// [`ALL`]: it is a node-admin method served by the node's
+    /// [`NodeAdmin`](crate::workload_ctl::NodeAdmin) hook, not by an adapter.
+    pub const DASHBOARD_STATUS: &str = "dashboard.status";
+    /// Rotate the target node's dashboard token (changes state; carries a
+    /// decision id and is chained on both nodes).
+    pub const DASHBOARD_ROTATE: &str = "dashboard.token.rotate";
+    /// Node-admin methods: signed like the rest of the set, but answered by
+    /// the node's own admin hook rather than a workload adapter.
+    pub const NODE_ADMIN: &[&str] = &[DASHBOARD_STATUS, DASHBOARD_ROTATE];
+
+    /// True for a node-admin method.
+    pub fn is_node_admin(m: &str) -> bool {
+        NODE_ADMIN.contains(&m)
+    }
+
     /// Methods that only take down what is running. Trust policy never
     /// blocks these on the controller: an operator can always stop and
     /// unload what they placed.
@@ -71,7 +87,7 @@ pub mod method {
 
     /// Methods that change state (they need a decision id).
     pub fn mutates(m: &str) -> bool {
-        matches!(m, PLACE | LOAD | START | STOP | UNLOAD)
+        matches!(m, PLACE | LOAD | START | STOP | UNLOAD | DASHBOARD_ROTATE)
     }
 }
 

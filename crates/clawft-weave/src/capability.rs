@@ -90,6 +90,8 @@ pub fn required_capability(method: &str) -> Capability {
         "workload.node.reset-floor" => Capability::Admin,
         // Fleet manager: a location label is an operator decision on the chain.
         "fleet.location.set" => Capability::Admin,
+        // Rotating the node's dashboard credential (locally or on a peer).
+        "dashboard.token.rotate" => Capability::Admin,
         // ADR-106 phase 3: an operator hash approval is a trust change, and a
         // checkout spends the Seed's licence and transfer budget.
         "workload.cog.checkout.approve" => Capability::Admin,
@@ -214,7 +216,13 @@ pub fn required_capability(method: &str) -> Capability {
         | "infer.status"
         // Fleet manager: one read-only document composed from sources the
         // daemon already holds; contacts no peer and no device.
-        | "fleet.snapshot" => Capability::Read,
+        | "fleet.snapshot"
+        // Reporter state without token material; a `node` that is another
+        // peer needs Admin inside the handler (it contacts that peer).
+        | "dashboard.status" => Capability::Read,
+
+        // An unclassified `dashboard.*` verb is a mutation, never anonymous Read.
+        m if m.starts_with("dashboard.") && m != "dashboard.status" => Capability::Admin,
 
         // An unclassified `fleet.*` verb is a mutation, never anonymous Read.
         m if m.starts_with("fleet.") => Capability::Admin,

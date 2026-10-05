@@ -184,6 +184,8 @@ pub struct WorkloadHostService {
     pub(super) last_contact_ms: std::sync::atomic::AtomicU64,
     /// The ADR-106 run gate for Cognitum-origin cogs (unset: not consulted).
     pub(super) licence_gate: std::sync::OnceLock<Arc<dyn crate::licence::CognitumRunGate>>,
+    /// Answers the node-admin methods (`dashboard.*`); unset: they are refused.
+    pub(super) node_admin: std::sync::OnceLock<Arc<dyn super::host_node_admin::NodeAdmin>>,
 }
 
 fn now_ms() -> u64 {
@@ -238,6 +240,7 @@ impl WorkloadHostService {
             departed: Mutex::new(std::collections::VecDeque::new()),
             last_contact_ms: std::sync::atomic::AtomicU64::new(now_ms()),
             licence_gate: std::sync::OnceLock::new(),
+            node_admin: std::sync::OnceLock::new(),
         }
     }
 
@@ -485,6 +488,7 @@ impl WorkloadHostService {
             method::DESCRIBE => {
                 Ok(json!({ "facts": self.current_facts(), "advertisement": self.advertisement() }))
             }
+            m if method::is_node_admin(m) => self.node_admin_op(req).await,
             method::PLACE | method::LOAD => self.place(req, fetch).await,
             method::START | method::STOP | method::UNLOAD | method::STATUS | method::LOGS => {
                 self.instance_op(req).await

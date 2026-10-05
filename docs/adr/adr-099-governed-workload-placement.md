@@ -202,3 +202,12 @@ Risks: scope creep into a general scheduler (mitigation: pure constraint plus sc
 5. **Adopt-in-place and weight transfer**: no hard transfer-size ceiling in v1; adopt-in-place is allowed on removable drives, and a detached drive marks the workload Degraded (never silently broken). Chunk size 64 MiB remains a tunable placeholder.
 6. **Vocabulary file** (`config/capabilities.toml`): changed only through the governance path, not freely editable. It remains advisory (does not gate matching).
 7. Other decisions on inference (proxy, `~/llm`, exposure, first slice) are recorded in ADR-101; cog scope and Seed strategy in ADR-100.
+
+## Amendment 2026-10-05: node-admin methods on the `workload.ctl` wire
+
+An operator needs to reach a specific peer to run an admin action on it (first use: rotate that node's WeftOS dashboard token, `weaver dashboard rotate-token --node <id>`). The mesh had no general remote-RPC path, but `workload.ctl` already is a signed, expiring, replay-guarded request to one named node, answered by a controller-key check and Noise XX, so the amendment reuses it rather than adding a transport.
+
+- **Methods.** `dashboard.status` and `dashboard.token.rotate` join the message set as *node-admin* methods (`method::NODE_ADMIN`). They are not in `method::ALL` (no adapter serves them) and are answered by a `NodeAdmin` hook the daemon installs on its `workload-host` (`WorkloadHostService::set_node_admin`). With no hook the host refuses them as `unknown_method`. `dashboard.token.rotate` is a mutation: it carries a decision id and a lost answer is `Indeterminate`.
+- **Trust, in order.** The local caller needs Admin (`dashboard.token.rotate`; any `node` that is another peer, for status too). The controller sends a mutating node-admin call only to a target the operator pinned in `workload-peers.json` (`PlacementControlPlane::node_admin`, tier `pinned`; `paired` may read status). The target serves it only when the signing key is in its `workload-host.json` `controllers`. The hook may refuse further (`[dashboard] allow_remote_rotate = false`).
+- **Chain.** The controller chains `node_admin.sent` and `node_admin.outcome`; the target chains `node_admin.request` and `node_admin.result`. Neither carries the body or any secret; the method result is `{rotated, rotated_at, token_file}` and never a token.
+- **Code.** `clawft-kernel/src/workload_ctl/{host_node_admin,plane_node_admin}.rs`; daemon side `clawft-weave/src/dashboard_rpc.rs`. Guide: `docs/guides/dashboard-reporter.md`.

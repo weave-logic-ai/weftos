@@ -192,6 +192,12 @@ mod infer_cfg_tests;
 mod infer_hardening_tests;
 pub mod node_facts_rpc;
 /// Operator location labels for the fleet manager (site and room per node).
+pub mod dashboard_cfg;
+pub mod dashboard_report;
+pub mod dashboard_rpc;
+pub mod dashboard_token;
+#[cfg(test)]
+pub(crate) mod dashboard_test_support;
 pub mod fleet_labels;
 /// `fleet.snapshot` and `fleet.location.set` (fleet manager P1).
 pub mod fleet_rpc;
