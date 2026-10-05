@@ -321,7 +321,7 @@ pub async fn dispatch(
     #[cfg(all(feature = "placement", unix))]
     let policy_dir = crate::workload_place_rpc::runtime_dir();
     #[cfg(not(all(feature = "placement", unix)))]
-    let policy_dir = None;
+    let policy_dir: Option<std::path::PathBuf> = None;
     dispatch_in(method, params, kernel, policy_dir.as_deref()).await
 }
 

@@ -212,7 +212,11 @@ pub fn adjust_services(config: &mut Config, kernel_config: &mut KernelConfig) {
     // `project_boot::pre_boot` has already read and deleted `spawn.json`; its
     // contents come from there. Without it (tests, a hand-built kernel) the
     // file is read as before.
-    let link = Arc::new(match crate::project_boot::spawn_link() {
+    #[cfg(unix)]
+    let spawn = crate::project_boot::spawn_link();
+    #[cfg(not(unix))]
+    let spawn: Option<(std::path::PathBuf, String, Option<String>)> = None;
+    let link = Arc::new(match spawn {
         Some((socket, id, Some(token))) if !token.trim().is_empty() => ParentLink::new_from_spawn(socket, id, token),
         Some(_) => ParentLink::unconfigured("spawn.json carried no project token"),
         None => ParentLink::from_spawn_json(&RuntimePaths::resolve().spawn_json()),

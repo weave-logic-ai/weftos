@@ -3998,7 +3998,7 @@ async fn authorize_caller(
             format!(
                 "permission denied: this daemon runs as uid {}; use a token \
                  (`weft token issue` as that user) or connect as that user",
-                nix::unistd::geteuid().as_raw()
+                daemon_uid_label()
             ),
         ));
     }
@@ -4017,8 +4017,18 @@ async fn authorize_caller(
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
     // Only a call that passed every check above counts for the idle clock: a
     // denied or token-rejected call must not keep a project kernel awake.
+    #[cfg(unix)]
     crate::project_boot_run::note_activity(method);
     Ok(caps)
+}
+
+/// This daemon's effective uid, for permission messages.
+fn daemon_uid_label() -> String {
+    #[cfg(unix)]
+    let uid = nix::unistd::geteuid().as_raw().to_string();
+    #[cfg(not(unix))]
+    let uid = "(another account)".to_owned();
+    uid
 }
 
 /// Dispatch a request that already passed [`authorize_caller`]: extension

@@ -502,21 +502,25 @@ const ROUTES: &[ExtRoute] = &[
     },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.
+    #[cfg(unix)]
     ExtRoute {
         prefix: "mesh.challenge",
         capability: Capability::Read,
         handler: crate::mesh_local_rpc::handle,
     },
+    #[cfg(unix)]
     ExtRoute {
         prefix: "mesh.register",
         capability: Capability::Read,
         handler: crate::mesh_local_rpc::handle,
     },
+    #[cfg(unix)]
     ExtRoute {
         prefix: "mesh.heartbeat",
         capability: Capability::Read,
         handler: crate::mesh_local_rpc::handle,
     },
+    #[cfg(unix)]
     ExtRoute {
         prefix: "mesh.unregister",
         capability: Capability::Read,
@@ -726,21 +730,25 @@ const ROUTES: &[ExtRoute] = &[
     },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.
+    #[cfg(unix)]
     ExtRoute {
         prefix: "mesh.challenge",
         capability: Capability::Read,
         handler: crate::mesh_local_rpc::handle,
     },
+    #[cfg(unix)]
     ExtRoute {
         prefix: "mesh.register",
         capability: Capability::Read,
         handler: crate::mesh_local_rpc::handle,
     },
+    #[cfg(unix)]
     ExtRoute {
         prefix: "mesh.heartbeat",
         capability: Capability::Read,
         handler: crate::mesh_local_rpc::handle,
     },
+    #[cfg(unix)]
     ExtRoute {
         prefix: "mesh.unregister",
         capability: Capability::Read,

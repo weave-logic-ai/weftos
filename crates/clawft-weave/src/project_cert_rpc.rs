@@ -395,7 +395,10 @@ impl MarkerError {
 fn mark_revoked(_env: &CertEnv, id: &str, _why: &str) {
     // The marker itself is written by [`on_identity_change`] (package G, the
     // single writer) once the journal write has succeeded.
+    #[cfg(unix)]
     crate::mesh_local_registry::registry().evict(id);
+    #[cfg(not(unix))]
+    let _ = id;
 }
 
 /// Write the terminal `revoked` marker (atomic, 0600; the run dir is created
@@ -427,7 +430,10 @@ fn write_marker_under(root: Option<&Path>, id: &str, why: &str) -> Result<PathBu
 /// re-register is refused `key_revoked`) but NO marker is written, because
 /// the rekeyed child must be able to boot under its new certificate.
 fn drop_session(id: &str) {
+    #[cfg(unix)]
     crate::mesh_local_registry::registry().evict(id);
+    #[cfg(not(unix))]
+    let _ = id;
 }
 
 fn cert_path(dir: &Path, id: &str) -> PathBuf {

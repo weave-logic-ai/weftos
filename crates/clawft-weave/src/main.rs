@@ -137,9 +137,12 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Err(error) = clawft_weave::project_supervisor::sandbox::run_helper(&args) {
-        anyhow::bail!("{error}");
+    #[cfg(all(unix, feature = "exochain", feature = "placement"))]
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if let Err(error) = clawft_weave::project_supervisor::sandbox::run_helper(&args) {
+            anyhow::bail!("{error}");
+        }
     }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
