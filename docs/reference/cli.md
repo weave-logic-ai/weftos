@@ -1168,6 +1168,8 @@ weaver kernel restart --project <ID|NAME>
 weaver kernel status --profile user
 ```
 
+`weaver kernel restart` (no `--project`) sends `SIGHUP`; the daemon stops cleanly, releases `kernel.lock` and re-execs itself with the same pid and arguments. The new image waits up to 10 s for a lock that still names its own pid (a child that inherited the descriptor) before it gives up. If it cannot take the lock back it exits 78 with `restart could not re-take the lock ... the kernel is NOT running`; start it again with `weaver kernel start`.
+
 | Command | What it does |
 |---------|--------------|
 | `start --project` | Start the project's kernel, or find the one already running (`project.start`). It is ready when its handshake names the project. |

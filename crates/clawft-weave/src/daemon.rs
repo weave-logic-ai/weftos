@@ -1046,7 +1046,15 @@ pub async fn run(
     // ADR-103 P0b: one kernel per runtime dir. Hold the advisory lock for
     // the daemon's whole lifetime; with it held nobody else is serving the
     // socket, so a leftover socket file can be reclaimed safely.
-    let _instance_lock = crate::instance_lock::InstanceLock::acquire(&paths)?;
+    let reexec = std::env::var_os(crate::boot_refusal::REEXEC_ENV).is_some();
+    let instance_lock = if reexec {
+        crate::instance_lock::InstanceLock::acquire_after_reexec(
+            &paths,
+            crate::boot_refusal::REEXEC_LOCK_WAIT,
+        )?
+    } else {
+        crate::instance_lock::InstanceLock::acquire(&paths)?
+    };
     info!(root = %paths.root().display(), "runtime dir locked");
 
     // WEFT-39: persist shared LLM RetryModel learned weights so the next
@@ -3753,6 +3761,9 @@ pub async fn run(
             crate::boot_refusal::reexec_plan(&std::env::current_exe()?, crate::boot_refusal::replay());
         let mut cmd = std::process::Command::new(&plan.exe);
         cmd.args(&plan.args);
+        cmd.env(crate::boot_refusal::REEXEC_ENV, "1");
+        // Release the lock now rather than rely on close-on-exec alone.
+        drop(instance_lock);
         if let Some(rt) = &plan.runtime_dir {
             cmd.env(clawft_types::runtime_paths::RUNTIME_DIR_ENV, rt);
         }
@@ -3761,7 +3772,7 @@ pub async fn run(
         std::process::exit(1);
     }
     #[cfg(windows)]
-    let _ = restart_requested;
+    let _ = (restart_requested, &instance_lock);
 
     Ok(())
 }

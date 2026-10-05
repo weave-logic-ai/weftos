@@ -24,6 +24,13 @@ use crate::service_units::strip_deleted;
 pub const EX_CONFIG: i32 = crate::service_units::REFUSED_EXIT;
 
 /// Flags that apply to one boot only and must not be replayed on re-exec.
+/// Set in the environment of a SIGHUP re-exec so the new image knows its
+/// instance lock may still be held, briefly, under its own pid.
+pub const REEXEC_ENV: &str = "WEFTOS_REEXEC";
+
+/// How long a re-exec waits for an inherited lock descriptor to close.
+pub const REEXEC_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 const ONE_SHOT_FLAGS: [&str; 2] = ["--new-chain", "--adopt-legacy-chain"];
 
 /// A boot that retrying will not fix.
@@ -44,7 +51,7 @@ pub struct AlreadyRunning(pub String);
 pub fn leaves_sentinel(e: &anyhow::Error) -> bool {
     exit_code(e) == EX_CONFIG
         && e.downcast_ref::<AlreadyRunning>().is_none()
-        && !matches!(e.downcast_ref::<LockError>(), Some(LockError::Held { .. }))
+        && !matches!(e.downcast_ref::<LockError>(), Some(LockError::Held { .. } | LockError::SelfHeld { .. }))
 }
 
 /// Process exit code for an error that ended `kernel start --foreground`.
@@ -59,7 +66,7 @@ pub fn exit_code(e: &anyhow::Error) -> i32 {
     let refused = e.downcast_ref::<BootRefused>().is_some()
         || e.downcast_ref::<AlreadyRunning>().is_some()
         || matches!(e.downcast_ref::<KernelError>(), Some(KernelError::BootRefused(_)))
-        || matches!(e.downcast_ref::<LockError>(), Some(LockError::Held { .. }));
+        || matches!(e.downcast_ref::<LockError>(), Some(LockError::Held { .. } | LockError::SelfHeld { .. }));
     if refused { EX_CONFIG } else { 1 }
 }
 
