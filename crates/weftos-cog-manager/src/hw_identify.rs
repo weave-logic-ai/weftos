@@ -89,7 +89,7 @@ impl HwIdentify {
                 }
                 Some(Err(e)) => {
                     ui.label(RichText::new(format!("scan failed: {e}")).color(RED));
-                    ui.label(RichText::new("needs a weft-cog-host with /hw/usb/scan and the host token (token field, top bar).").color(GREY).small());
+                    ui.label(RichText::new("needs a weft-cog-host with /hw/usb/scan. A tailnet or local connection registers a mesh key for that.").color(GREY).small());
                 }
                 Some(Ok(r)) => jump = self.rows(ui, ctx, client, cat, r, &answers),
             }

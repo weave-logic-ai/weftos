@@ -116,10 +116,10 @@ fn install_flow(ui: &mut Ui, v: &CogView, m: &Module, pc: &PanelCtx) {
     if picked != "self" {
         let node = reachable.iter().find(|n| n.key() == picked);
         let name = node.map(|n| label_of(n)).unwrap_or_default();
-        ui.label(style::dim(ui, "Checks and install run through the node's own cog-host, so the console must point at it. It will ask for that node's own token; the current host's token is not sent there."));
+        ui.label(style::dim(ui, "Checks and install run on that node's own cog-host. Opening it registers a mesh key there. This node's key stays here."));
         match node.and_then(|n| inst::peer_url(&pc.client.s.host, &n.ip)) {
             Some(url) => {
-                if ui.button(format!("Switch the console to {url}")).on_hover_text(format!("{name}. Clears the token field.")).clicked() {
+                if ui.button(format!("Switch the console to {url}")).on_hover_text(format!("{name}. Registers a mesh key on that node.")).clicked() {
                     pc.events.borrow_mut().push(Event::SwitchHost { url });
                 }
             }

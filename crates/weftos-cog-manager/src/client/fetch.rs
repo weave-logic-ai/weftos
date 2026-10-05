@@ -3,6 +3,28 @@
 
 use super::*;
 
+/// What to say when a guarded read has no usable bearer yet.
+fn mesh_auth_gap(host: &str) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = host;
+        return "needs the host token (set it in the top bar)".into();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    match crate::address_book::classify(host) {
+        crate::address_book::Reach::ThisMachine | crate::address_book::Reach::Tailnet => "registering a mesh key for this node".into(),
+        _ => "the mesh registers a key on a tailnet or local connection".into(),
+    }
+}
+
+fn guarded_read_gap(shared: &Arc<Mutex<Shared>>, host: &str) -> String {
+    if shared.lock().unwrap().mesh_unsupported {
+        "this host does not register mesh keys yet".into()
+    } else {
+        mesh_auth_gap(host)
+    }
+}
+
 impl Client {
     /// Fetch a running cog's `/guide` bundle from its export port into `Shared.guide`. The Sensors
     /// tab renders it with `weftos-sensor-guide`. Guides need no Seed agent — only the cog's export.
@@ -60,6 +82,7 @@ impl Client {
         let host_url = format!("{}/cogs/{id}/last", base(&self.s.host));
         let export_url = (port != 0).then(|| format!("{}/status", self.export_base(port)));
         let token = self.s.token.clone();
+        let host = base(&self.s.host);
         let shared = Arc::clone(&self.shared);
         let epoch = epoch_of(&shared);
         let id = id.to_string();
@@ -75,7 +98,7 @@ impl Client {
         };
         ehttp::fetch(get_req(host_url, &token), move |res| match &res {
             Ok(r) if r.ok => finish(serde_json::from_slice(&r.bytes).map_err(|e| e.to_string())),
-            Ok(r) if r.status == 401 || r.status == 403 => finish(Err("needs the host token (set it in the top bar)".into())),
+            Ok(r) if r.status == 401 || r.status == 403 => finish(Err(mesh_auth_gap(&host))),
             Ok(r) if r.status == 404 && !route_missing(&r.bytes) => finish(Err("no output yet".into())),
             Ok(r) if export_url.is_none() => finish(Err(format!("HTTP {} {}", r.status, r.status_text))),
             Err(e) if export_url.is_none() => finish(Err(e.clone())),
@@ -106,16 +129,23 @@ impl Client {
             sh.mesh = Some(MeshFetch { fired: Instant::now(), in_flight: true, result: prev });
         }
         let url = format!("{}/mesh/cogs", base(&self.s.host));
+        let host = base(&self.s.host);
+        let have_token = !self.s.token.trim().is_empty();
         let shared = Arc::clone(&self.shared);
         let epoch = epoch_of(&shared);
         let ctx = ctx.clone();
         ehttp::fetch(get_req(url, &self.s.token), move |res| {
             let parsed = match &res {
                 Ok(r) if r.status == 404 => Err("unsupported".to_string()),
-                Ok(r) if r.status == 401 || r.status == 403 => Err("needs the host token (set it in the top bar)".to_string()),
+                Ok(r) if r.status == 401 && have_token => Err("the host refused the mesh key".to_string()),
+                Ok(r) if r.status == 401 || r.status == 403 => Err(guarded_read_gap(&shared, &host)),
                 _ => parse_json::<MeshCogs>(&res),
             };
+            let refused = matches!(&parsed, Err(e) if e == "the host refused the mesh key");
             apply(&shared, epoch, |sh| {
+                if refused {
+                    sh.mesh_rejected = true;
+                }
                 if let Some(f) = sh.mesh.as_mut() {
                     f.in_flight = false;
                     f.result = Some(parsed);
@@ -125,8 +155,8 @@ impl Client {
         });
     }
 
-    /// Fetch the connected host's bus facts for the pre-install check (needs the host token). At
-    /// most every 8 s; callers invoke it each frame the check is showing.
+    /// Fetch the connected host's bus facts for the pre-install check. At most every 8 s; callers
+    /// invoke it each frame the check is showing. A tailnet or local console fills the bearer.
     pub fn ensure_node_facts(&self, ctx: &eframe::egui::Context) {
         {
             let mut sh = self.shared.lock().unwrap();
@@ -135,17 +165,26 @@ impl Client {
             }
             sh.node_facts_at = Some(Instant::now());
         }
-        let url = format!("{}/hw/buses", base(&self.s.host));
+        let host = base(&self.s.host);
+        let url = format!("{host}/hw/buses");
         let have_token = !self.s.token.trim().is_empty();
         let (shared, ctx) = (Arc::clone(&self.shared), ctx.clone());
         let epoch = epoch_of(&shared);
         ehttp::fetch(get_req(url, &self.s.token), move |res| {
             let parsed = match &res {
-                Ok(r) if r.status == 401 || r.status == 403 => Err(if have_token { "the host refused the token".to_string() } else { "needs the host token (set it in the top bar)".to_string() }),
+                Ok(r) if r.status == 401 && have_token => Err("the host refused the mesh key".to_string()),
+                Ok(r) if r.status == 401 || r.status == 403 => Err(guarded_read_gap(&shared, &host)),
                 Ok(r) if r.status == 404 => Err("this host predates the pre-install check".to_string()),
                 _ => parse_json::<NodeFacts>(&res),
             };
-            apply(&shared, epoch, |sh| sh.node_facts = Some(parsed));
+            let refused = matches!(&parsed, Err(e) if e == "the host refused the mesh key");
+            apply(&shared, epoch, |sh| {
+                if refused {
+                    sh.mesh_rejected = true;
+                    sh.mesh_note = "the host refused the mesh key; registering again".into();
+                }
+                sh.node_facts = Some(parsed);
+            });
             ctx.request_repaint();
         });
     }

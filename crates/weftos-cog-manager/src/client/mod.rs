@@ -19,6 +19,7 @@ mod hw;
 mod install;
 mod console_token;
 pub mod params;
+mod mesh_session;
 mod settings;
 mod types;
 
@@ -44,6 +45,8 @@ pub struct Client {
     /// Gateway-issued console token (memory only) and the (gateway, project) it was asked for.
     mint: Arc<Mutex<MintState>>,
     mint_key: (String, String),
+    #[cfg(not(target_arch = "wasm32"))]
+    mesh_auto: mesh_session::MeshAuto,
 }
 
 impl Client {
@@ -63,6 +66,8 @@ impl Client {
             seeds_fired: None,
             seeds_busy: Arc::new(Mutex::new(Default::default())),
             catalog_started: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            mesh_auto: mesh_session::MeshAuto::new(),
         }
     }
 
@@ -94,6 +99,12 @@ impl Client {
         self.seeds_fired = None;
         self.fleet_busy.store(false, Ordering::Release);
         self.catalog_started = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let op = self.mesh_auto.operator.clone();
+            self.mesh_auto = mesh_session::MeshAuto::new();
+            self.mesh_auto.operator = op;
+        }
     }
 
     /// Call every frame: poll the host + network, and (once) the registries, then build the catalog.
