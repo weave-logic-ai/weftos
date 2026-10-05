@@ -213,23 +213,7 @@ pub fn enter(
     }
     // Parent owns the pipe's write end. Even SIGKILL of the master closes it;
     // do not leave an unregistered inner mesh listener running after parent death.
-    std::thread::spawn(|| {
-        use std::io::Read;
-        let mut byte = [0u8; 1];
-        loop {
-            match std::io::stdin().read(&mut byte) {
-                Ok(0) | Err(_) => {
-                    // Use the normal shutdown cascade, then bound any wedged exit.
-                    unsafe {
-                        libc::kill(libc::getpid(), libc::SIGTERM);
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(10));
-                    std::process::exit(78);
-                }
-                Ok(_) => {}
-            }
-        }
-    });
+    crate::parent_liveness::spawn_stdin_watcher();
     ACTIVE
         .set(contract)
         .map_err(|_| anyhow::anyhow!("nested boot already installed"))?;

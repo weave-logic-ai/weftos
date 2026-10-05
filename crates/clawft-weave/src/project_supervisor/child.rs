@@ -1010,7 +1010,14 @@ impl Launcher {
                 .map_err(|e| backend(format!("sandbox HOME permissions: {e}")))?;
             home
         };
-        let env = child_env(&home, run_dir, &spec.root, id, |k| std::env::var(k).ok());
+        let mut env = child_env(&home, run_dir, &spec.root, id, |k| std::env::var(k).ok());
+        // A nested user instance owns its project kernels: hold a stdin liveness
+        // pipe so they exit when it dies by any means (D10). A top-level user
+        // daemon keeps null stdin: its children outlive a restart for adoption.
+        let owned_liveness = crate::nested_boot::active().is_some();
+        if owned_liveness {
+            env.push((crate::parent_liveness::ENV.to_owned(), "stdin".to_owned()));
+        }
         let bounded = sandbox != clawft_types::project::ProjectSandbox::Logical;
         let launcher = if bounded {
             std::env::current_exe()
@@ -1026,7 +1033,11 @@ impl Launcher {
             .env_clear()
             .envs(env)
             .current_dir(&spec.root)
-            .stdin(std::process::Stdio::null())
+            .stdin(if owned_liveness {
+                std::process::Stdio::piped()
+            } else {
+                std::process::Stdio::null()
+            })
             .stdout(log)
             .stderr(log2)
             .process_group(0);
@@ -1050,8 +1061,12 @@ impl Launcher {
         // prune must find the group already noted (else it would be noted
         // after its own prune, and stay until the next accept).
         note_group(pid);
+        // `Child::wait` closes stdin first, so take the write end and hold it for
+        // the child's life: it closes when this thread, or the daemon, ends.
+        let liveness = child.stdin.take();
         std::thread::spawn(move || {
             let info = child.wait().map(exit_info).unwrap_or_default();
+            drop(liveness);
             prune_if_gone(pid);
             let _ = tx.send(Some(info));
         });
