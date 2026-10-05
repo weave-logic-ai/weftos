@@ -66,6 +66,13 @@ fn status_request() -> crate::Request {
 /// (`project.status`): project id -> [`ChildView`]. `None` when the daemon
 /// cannot be reached or does not answer within two seconds, so the process
 /// table alone never vouches for a child.
+#[cfg(not(unix))]
+pub fn supervisor_view(_run_root: &Path) -> Option<std::collections::HashMap<String, ChildView>> {
+    None
+}
+
+/// See the non-unix stub above; the daemon socket is a unix socket.
+#[cfg(unix)]
 pub fn supervisor_view(run_root: &Path) -> Option<std::collections::HashMap<String, ChildView>> {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::time::Duration;
