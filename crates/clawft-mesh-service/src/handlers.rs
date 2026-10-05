@@ -163,30 +163,6 @@ fn valid_project_claim(user_pubkey: &[u8; 32], claim: &clawft_mesh_local::proto:
         .is_ok_and(|key| key.verify(&payload, &ed25519_dalek::Signature::from_bytes(&claim.cert_sig)).is_ok())
 }
 
-#[cfg(test)]
-mod project_claim_tests {
-    use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
-    use clawft_mesh_local::proto::{ProjectBinding, project_binding_payload};
-
-    #[test]
-    fn project_address_claim_binds_user_project_and_key() {
-        let user = SigningKey::from_bytes(&[41; 32]);
-        let project_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-        let project_pubkey = SigningKey::from_bytes(&[42; 32]).verifying_key().to_bytes();
-        let mut claim = ProjectBinding {
-            project_id: project_id.into(), project_pubkey,
-            cert_sig: user.sign(&project_binding_payload(project_id, &project_pubkey)).to_bytes(),
-        };
-        assert!(valid_project_claim(&user.verifying_key().to_bytes(), &claim));
-        assert!(!valid_project_claim(&SigningKey::from_bytes(&[43; 32]).verifying_key().to_bytes(), &claim));
-        claim.project_pubkey[0] ^= 1;
-        assert!(!valid_project_claim(&user.verifying_key().to_bytes(), &claim));
-        claim.project_pubkey[0] ^= 1;
-        claim.project_id.push('X');
-        assert!(!valid_project_claim(&user.verifying_key().to_bytes(), &claim));
-    }
-}
 
 /// `None`: the binding was revoked or replaced. Otherwise the current or a
 /// freshly issued certificate (a renew inside the throttle window returns the
@@ -218,4 +194,29 @@ fn renew_blocking(
         st.last_certs.lock().expect("certs lock").insert(reg.user_id.clone(), c.clone());
     }
     Some(cert)
+}
+
+#[cfg(test)]
+mod project_claim_tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use clawft_mesh_local::proto::{ProjectBinding, project_binding_payload};
+
+    #[test]
+    fn project_address_claim_binds_user_project_and_key() {
+        let user = SigningKey::from_bytes(&[41; 32]);
+        let project_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let project_pubkey = SigningKey::from_bytes(&[42; 32]).verifying_key().to_bytes();
+        let mut claim = ProjectBinding {
+            project_id: project_id.into(), project_pubkey,
+            cert_sig: user.sign(&project_binding_payload(project_id, &project_pubkey)).to_bytes(),
+        };
+        assert!(valid_project_claim(&user.verifying_key().to_bytes(), &claim));
+        assert!(!valid_project_claim(&SigningKey::from_bytes(&[43; 32]).verifying_key().to_bytes(), &claim));
+        claim.project_pubkey[0] ^= 1;
+        assert!(!valid_project_claim(&user.verifying_key().to_bytes(), &claim));
+        claim.project_pubkey[0] ^= 1;
+        claim.project_id.push('X');
+        assert!(!valid_project_claim(&user.verifying_key().to_bytes(), &claim));
+    }
 }

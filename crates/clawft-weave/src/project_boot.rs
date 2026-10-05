@@ -311,11 +311,10 @@ pub async fn bootstrap_with(
             run_dir.display()
         )));
     }
-    if let Some(c) = &spawn.container {
-        if run_dir != c.guest_runtime_root
-            || trust_dir.as_deref() != Some(c.guest_trust_root.as_path()) {
-            return Err(BootError::NotSpawned("container runtime and trust mounts differ from the protected spawn contract".into()));
-        }
+    if let Some(c) = &spawn.container
+        && (run_dir != c.guest_runtime_root || trust_dir.as_deref() != Some(c.guest_trust_root.as_path()))
+    {
+        return Err(BootError::NotSpawned("container runtime and trust mounts differ from the protected spawn contract".into()));
     }
     let paths = match &spawn.container {
         Some(c) => RuntimePaths::child_container_at(run_dir, &c.guest_trust_root, project_id, &c.guest_project_root),

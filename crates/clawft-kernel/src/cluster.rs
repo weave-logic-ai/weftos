@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "exochain")]
+#[cfg(any(feature = "exochain", all(feature = "mesh", feature = "native")))]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

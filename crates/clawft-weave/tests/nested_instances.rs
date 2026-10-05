@@ -21,7 +21,15 @@ fn dir() -> tempfile::TempDir {
     let root = std::env::var_os("D10_TEST_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/test-runs/d10")
+            let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/test-runs/d10");
+            // Sockets nest ~45 bytes below the root (`n…/<16 hex>/h/r/kernel.sock`). A deep
+            // checkout (a worktree) overflows the ~104-byte SUN_LEN, and so does the macOS
+            // per-user temp dir, so fall back to a short cache dir. Never the live ~/.weftos.
+            if repo.as_os_str().len() + 50 > 100 {
+                PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".cache/wd10")
+            } else {
+                repo
+            }
         });
     std::fs::create_dir_all(&root).unwrap();
     tempfile::Builder::new()

@@ -152,11 +152,11 @@ mod claim_sync_tests {
         assert!(claim_sync_sender(&state).unwrap().is_none(), "collapsed or never-service has no claims");
         let (old, _) = tokio::sync::mpsc::unbounded_channel();
         state.service_required = true; // selected service mode, before first session poll
-        assert!(claim_sync_sender(&state).err().expect("first-session gap must fail closed").contains("cleanup is not confirmed"));
+        assert!(claim_sync_sender(&state).expect_err("first-session gap must fail closed").contains("cleanup is not confirmed"));
         state.active = Some((1, old));
         assert!(claim_sync_sender(&state).unwrap().is_some());
         state.active = None; // lease dropped before remote connection cleanup
-        assert!(claim_sync_sender(&state).err().expect("disconnect must fail closed").contains("cleanup is not confirmed"));
+        assert!(claim_sync_sender(&state).expect_err("disconnect must fail closed").contains("cleanup is not confirmed"));
         let (new, _) = tokio::sync::mpsc::unbounded_channel();
         state.active = Some((2, new));
         assert!(claim_sync_sender(&state).unwrap().is_some());

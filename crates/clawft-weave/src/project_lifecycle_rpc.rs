@@ -195,6 +195,9 @@ async fn master_for(call: &ExtCall, sup: &Supervisor) -> Result<ProjectManifest,
     Ok(master)
 }
 
+// `Response` is this module's error currency (it is what the RPC returns); boxing it here
+// alone would only add a deref at every call site.
+#[allow(clippy::result_large_err)]
 fn child_under_master(master: &ProjectManifest, root: &Path) -> Result<String, Response> {
     let parent = master.root.canonicalize().map_err(|e| {
         Response::error_with_kind("nested_project_refused", format!("master root: {e}"))

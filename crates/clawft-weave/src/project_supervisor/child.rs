@@ -737,7 +737,7 @@ impl ChildLauncher for Launcher {
         let token = self.issue_token(id)?;
         let run_dir = self.run_dir(id);
         let sandbox = clawft_types::project::find_by_id(&self.cfg.manifests_dir, id)
-            .map_err(|e| backend(e))?
+            .map_err(backend)?
             .and_then(|m| m.serve)
             .map_or(ProjectSandbox::Logical, |s| s.sandbox);
         let started = match sandbox {

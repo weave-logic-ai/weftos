@@ -72,6 +72,12 @@ impl NestedRegistration {
     }
 }
 
+impl WeaveConfig {
+    pub fn is_default(&self) -> bool {
+        !self.master && self.nested.is_none()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,8 +99,3 @@ mod tests {
     }
 }
 
-impl WeaveConfig {
-    pub fn is_default(&self) -> bool {
-        !self.master && self.nested.is_none()
-    }
-}

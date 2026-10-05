@@ -157,15 +157,14 @@ impl SpawnFile {
         if !self.root.is_absolute() || !self.parent_socket.is_absolute() {
             return bad("`root` and `parent_socket` must be absolute paths");
         }
-        if let Some(c) = &self.container {
-            if !matches!(c.engine.as_str(), "docker" | "podman")
+        if let Some(c) = &self.container
+            && (!matches!(c.engine.as_str(), "docker" | "podman")
                 || c.container_id.len() != 64
                 || !c.container_id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
                 || ![&c.guest_parent_socket, &c.guest_runtime_root, &c.guest_trust_root,
-                    &c.guest_project_root, &c.host_child_socket].iter().all(|p| p.is_absolute())
-            {
-                return bad("invalid container identity or transport paths");
-            }
+                    &c.guest_project_root, &c.host_child_socket].iter().all(|p| p.is_absolute()))
+        {
+            return bad("invalid container identity or transport paths");
         }
         Ok(())
     }

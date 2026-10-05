@@ -76,7 +76,7 @@ pub fn run(args: &[String]) -> ! {
     }
 }
 
-fn probe_escaped_admin(run: &PathBuf) -> bool {
+fn probe_escaped_admin(run: &std::path::Path) -> bool {
     let spawn: Value = serde_json::from_slice(&std::fs::read(run.join("spawn.json")).unwrap()).unwrap();
     let socket = spawn["parent_socket"].as_str().unwrap().to_owned();
     let owner_token = std::fs::read_to_string(run.join("probe-owner-token")).unwrap();

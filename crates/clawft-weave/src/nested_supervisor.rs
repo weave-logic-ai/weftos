@@ -264,10 +264,10 @@ impl NestedSupervisor {
         let mut all = self.instances.lock().await;
         let instance = all.get_mut(id).context("nested instance not registered")?;
         ensure!(!instance.revoked, "nested instance revoked");
-        if let Some(child) = &mut instance.child {
-            if child.try_wait()?.is_none() {
-                return Ok(json!({"id": id, "pid": child.id(), "started": false}));
-            }
+        if let Some(child) = &mut instance.child
+            && child.try_wait()?.is_none()
+        {
+        return Ok(json!({"id": id, "pid": child.id(), "started": false}));
         }
         instance.child = None;
         // Recovery may have no Child handle even though the old daemon is still
@@ -346,8 +346,9 @@ impl NestedSupervisor {
     }
 
     async fn terminate(instance: &mut Instance) -> anyhow::Result<()> {
-        if let Some(child) = &mut instance.child {
-            if child.try_wait()?.is_none() {
+        if let Some(child) = &mut instance.child
+            && child.try_wait()?.is_none()
+        {
                 // Try RPC briefly, but shutdown policy (including deny_all)
                 // must not prevent the owner's graceful project cascade.
                 let graceful = async {
@@ -381,7 +382,6 @@ impl NestedSupervisor {
                         .await
                         .context("could not stop nested instance; revocation incomplete")?;
                 }
-            }
         }
         instance.child = None;
         // No handle after registry recovery is NOT evidence of death. The

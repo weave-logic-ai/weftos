@@ -376,6 +376,10 @@ fn nested_peer_allowed(ceiling: Option<&[String]>, id: &str) -> bool {
     ceiling.is_none_or(|peers| peers.iter().any(|peer| peer == id))
 }
 
+
+/// Nested instances must never take the legacy unverified outbound-seed path.
+pub fn nested_peer_ceiling_active() -> bool { NESTED_PEERS.get().is_some() }
+
 #[cfg(test)]
 mod nested_peer_tests {
     use super::nested_peer_allowed;
@@ -388,6 +392,3 @@ mod nested_peer_tests {
         assert!(!nested_peer_allowed(Some(&[]), "unregistered"));
     }
 }
-
-/// Nested instances must never take the legacy unverified outbound-seed path.
-pub fn nested_peer_ceiling_active() -> bool { NESTED_PEERS.get().is_some() }

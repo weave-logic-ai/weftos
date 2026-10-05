@@ -444,8 +444,10 @@ impl ProjectRegistry {
     /// before the process existed), so the first registration's claimed
     /// pid is checked against the one the supervisor started (review S8c).
     pub fn note_pid(&self, project_id: &str, pid: u32) {
-        if let Some(s) = self.lock().get_mut(project_id) {
-            if s.facts.container.is_none() { s.facts.pid = pid; }
+        if let Some(s) = self.lock().get_mut(project_id)
+            && s.facts.container.is_none()
+        {
+            s.facts.pid = pid;
         }
         note_spawn_pid(project_id, pid);
     }

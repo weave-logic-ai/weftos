@@ -217,7 +217,7 @@ pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
         use ed25519_dalek::Signer;
         let kernel = call.ctx.kernel.read().await;
-        let h = current_handshake(&*kernel);
+        let h = current_handshake(&kernel);
         let mut value = handshake_value(&h);
         if let (Some(id), Some(nonce)) = (h.project_id.as_deref(), call.params.get("challenge").and_then(|v| v.as_str()))
             && nonce.len() == 64 && nonce.bytes().all(|b| b.is_ascii_hexdigit())
