@@ -1,5 +1,6 @@
 //! Where the console points (host, registries, token) and how those settings are read: an env
-//! var natively, a `?query` param in the browser.
+//! var natively, a `?query` or `#fragment` param in the browser (the fragment wins; tokens read
+//! from the URL are removed from the address bar).
 
 #[derive(Clone)]
 pub struct Settings {
@@ -21,6 +22,10 @@ pub struct Settings {
     /// Cognitum Seed agent base URLs to read (`WEFTOS_SEEDS` / `?seeds=`, comma-separated). The
     /// connected cog-host's own agent is probed as well, without being listed here.
     pub seeds: Vec<String>,
+    /// WeftOS project ULID the console is scoped to (`WEFTOS_PROJECT`, or `?project=`); empty = no
+    /// project, the unfiltered console. An invalid value is ignored, with `project_warning` set.
+    pub project: String,
+    pub project_warning: Option<String>,
 }
 
 /// Comma- or space-separated Seed URLs; a bare host gets `http://`.
@@ -34,7 +39,10 @@ pub fn parse_seeds(s: &str) -> Vec<String> {
 
 impl Default for Settings {
     fn default() -> Self {
+        let (project, project_warning) = super::params::check_project(&setting("WEFTOS_PROJECT", "project", ""));
         Self {
+            project,
+            project_warning,
             // native: env; browser: ?host= / ?wl= / ?cog= query params; else the default.
             host: setting("WEFTOS_HOST", "host", "http://127.0.0.1:9480"),
             token: setting("WEFTOS_HOST_TOKEN", "token", ""),
@@ -52,7 +60,8 @@ impl Default for Settings {
 }
 
 // ---- setting resolution ---------------------------------------------------
-// Native reads an env var; the browser reads a `?<query>=` param; else the default.
+// Native reads an env var; the browser reads a `#<key>=` fragment param, else `?<key>=`; else the
+// default.
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn setting(env_key: &str, _query_key: &str, default: &str) -> String {
@@ -61,46 +70,34 @@ pub(crate) fn setting(env_key: &str, _query_key: &str, default: &str) -> String 
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn setting(_env_key: &str, query_key: &str, default: &str) -> String {
-    web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .and_then(|q| {
-            let prefix = format!("{query_key}=");
-            q.trim_start_matches('?').split('&').find_map(|kv| {
-                kv.strip_prefix(&prefix).map(|v| js_decode(v))
-            })
-        })
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| default.to_string())
+    let (query, fragment) = initial_url();
+    super::params::lookup(query, fragment, query_key).unwrap_or_else(|| default.to_string())
 }
 
-/// Minimal percent-decode for query values (handles %3A %2F etc. in URLs passed as params).
+/// The page's `(search, hash)` as first loaded. Captured once: the secrets are then removed from
+/// the address bar, and later `Settings::default()` calls must still see them.
 #[cfg(target_arch = "wasm32")]
-fn js_decode(s: &str) -> String {
-    let bytes = s.replace('+', " ");
-    let mut out = Vec::new();
-    let mut it = bytes.bytes();
-    while let Some(b) = it.next() {
-        if b == b'%' {
-            let h = (it.next(), it.next());
-            if let (Some(a), Some(c)) = h {
-                if let (Some(x), Some(y)) = (hexval(a), hexval(c)) {
-                    out.push(x * 16 + y);
-                    continue;
-                }
-            }
-        } else {
-            out.push(b);
-        }
+fn initial_url() -> &'static (String, String) {
+    static URL: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+    URL.get_or_init(|| {
+        let Some(w) = web_sys::window() else { return Default::default() };
+        let loc = w.location();
+        let (search, hash) = (loc.search().unwrap_or_default(), loc.hash().unwrap_or_default());
+        scrub_address_bar(&w, &loc, &search);
+        (search, hash)
+    })
+}
+
+/// Drop the fragment and the token query params from the address bar (no history entry), so a
+/// token does not linger in history or a Referer header.
+#[cfg(target_arch = "wasm32")]
+fn scrub_address_bar(w: &web_sys::Window, loc: &web_sys::Location, search: &str) {
+    let (stripped, hash) = (super::params::strip_secret_query(search), loc.hash().unwrap_or_default());
+    if stripped == search && hash.is_empty() {
+        return;
     }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn hexval(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
+    let url = format!("{}{stripped}", loc.pathname().unwrap_or_default());
+    if let Ok(h) = w.history() {
+        let _ = h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url));
     }
 }

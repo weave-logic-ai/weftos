@@ -38,7 +38,7 @@ impl Manager {
 
         style::section_header(ui, "Running on this OS", "cogs supervised by weft-cog-host — restarted on exit, no 3-cog agent cap");
         match &host {
-            Some(Ok(h)) => self.running_table(ui, ctx, h),
+            Some(Ok(h)) => self.project_running_table(ui, ctx, h),
             Some(Err(e)) => {
                 ui.colored_label(RED, format!("Can't reach the cog-host: {e}"));
                 ui.label(style::dim(ui, "Start it on the appliance: weft-cog-host serve --bind 0.0.0.0 --port 9480, then set the host above."));
@@ -75,6 +75,23 @@ impl Manager {
         if mods.len() > 2 {
             ui.label(style::dim(ui, format!("+{}", mods.len() - 2)));
         }
+    }
+
+    /// The running table, narrowed to the project's workloads when the console is scoped to one
+    /// (needs the gateway's fleet snapshot to know them; without it every cog is shown, said so).
+    fn project_running_table(&self, ui: &mut egui::Ui, ctx: &egui::Context, h: &HostStatus) {
+        if self.project.is_empty() {
+            return self.running_table(ui, ctx, h);
+        }
+        let works = self.client.snapshot().fleet.as_ref().and_then(|r| r.as_ref().ok()).map(|s| crate::project::workloads(s, &self.project));
+        let Some(works) = works else {
+            ui.label(style::dim(ui, format!("Project {}: the fleet snapshot is needed to filter cogs (set the gateway); showing every cog on this host.", self.project)));
+            return self.running_table(ui, ctx, h);
+        };
+        let mut shown = h.clone();
+        shown.cogs.retain(|c| crate::project::owns_cog(&works, &c.id));
+        ui.label(style::dim(ui, format!("Project {}: {} of {} cog(s) on this host belong to it.", self.project, shown.cogs.len(), h.cogs.len())));
+        self.running_table(ui, ctx, &shown);
     }
 
     pub(crate) fn running_table(&self, ui: &mut egui::Ui, ctx: &egui::Context, h: &HostStatus) {

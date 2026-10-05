@@ -6,6 +6,7 @@
 
 use super::fleet_tabs as tabs;
 use crate::app::Manager;
+use crate::client::MintState;
 use crate::fleet::{self, FleetRow};
 use crate::fleet_unify;
 use crate::sensor_detail::Event;
@@ -92,6 +93,27 @@ impl Manager {
         } else if let Some(Err(e)) = &fleet {
             ui.colored_label(RED, format!("fleet snapshot unavailable: {e}"));
         }
+        match self.client.mint_state() {
+            MintState::Done(m) if self.client.s.gateway_token.trim().is_empty() => {
+                let until = m.expires_at.map_or_else(String::new, |e| format!(", expires in {}", fleet::age(e, now).trim_end_matches(" ago")));
+                ui.label(style::dim(ui, format!("token issued by the gateway for this session (memory only{until})")));
+            }
+            MintState::Pending => {
+                ui.label(style::dim(ui, "asking the gateway for a console token…"));
+            }
+            MintState::Failed(why) if self.client.s.gateway_token.trim().is_empty() => {
+                ui.label(style::dim(ui, format!("{why}; enter a read-only token above.")));
+            }
+            _ => {}
+        }
+        // Project scope: the nodes that host none of the project's instances stay listed, marked.
+        let hosting = (!self.project.is_empty()).then(|| snap.map(|s| crate::project::hosting_nodes(s, &self.project))).flatten();
+        if !self.project.is_empty() {
+            ui.label(style::dim(ui, match &hosting {
+                Some(h) => format!("project {}: {} node(s) host its instances; the rest are marked", self.project, h.len()),
+                None => format!("project {}: the fleet snapshot is needed to tell which nodes host it (set the gateway)", self.project),
+            }));
+        }
         if let Some(Err(e)) = &net {
             ui.colored_label(RED, format!("connected host's /network unavailable: {e}"));
         }
@@ -105,7 +127,7 @@ impl Manager {
             }
             ui.end_row();
             for e in &entries {
-                self.fleet_entry_row(ui, e, rows.get(e.node_id.as_deref().unwrap_or("")), now);
+                self.fleet_entry_row(ui, e, rows.get(e.node_id.as_deref().unwrap_or("")), now, hosting.as_ref());
                 ui.end_row();
             }
         });
@@ -146,7 +168,7 @@ impl Manager {
         });
     }
 
-    fn fleet_entry_row(&mut self, ui: &mut Ui, e: &fleet_unify::Entry, r: Option<&FleetRow>, now: u64) {
+    fn fleet_entry_row(&mut self, ui: &mut Ui, e: &fleet_unify::Entry, r: Option<&FleetRow>, now: u64, hosting: Option<&std::collections::BTreeSet<String>>) {
         ui.horizontal(|ui| {
             let revoked = r.is_some_and(|r| r.revoked);
             style::dot(ui, match (revoked, e.online) {
@@ -174,6 +196,9 @@ impl Manager {
             }
             if revoked {
                 style::pill(ui, "revoked", RED);
+            }
+            if hosting.is_some_and(|h| !e.node_id.as_deref().is_some_and(|id| h.contains(id))) {
+                style::pill(ui, "none of this project", GREY).on_hover_text("No instance of the project runs on this machine");
             }
         });
         ui.label(RichText::new(e.class.label()).small());
@@ -273,8 +298,11 @@ impl Manager {
     }
 
     fn node_workloads(&self, ui: &mut Ui, n: &Value) {
-        let placed = fleet::instances(n);
-        style::subhead(ui, "Placed workloads");
+        let mut placed = fleet::instances(n);
+        if !self.project.is_empty() {
+            placed.retain(|i| i.project.eq_ignore_ascii_case(&self.project));
+        }
+        style::subhead(ui, if self.project.is_empty() { "Placed workloads" } else { "Placed workloads (this project)" });
         prov_pill(ui, fleet::provenance(n, "instances"));
         if placed.is_empty() {
             ui.label(style::dim(ui, "no placed workloads on this node"));
