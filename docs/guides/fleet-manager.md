@@ -105,6 +105,25 @@ What the token can and cannot do:
 - Without a token the route answers 401. With no daemon it answers 503
   (`weaver kernel start`).
 
+### Project reads and project-bound tokens
+
+Read tokens can also `GET /api/projects` (the registered projects),
+`GET /api/projects/{ulid}` (manifest plus a sanitised supervisor status: state,
+restarts, versions; no pid, socket or failure text) and
+`GET /api/fleet/snapshot?project=<ulid>` (only that project's instances; nodes
+stay machine-level, as in the daemon's own project-scoped snapshot).
+
+`weft token issue --read-only --project <ulid>` mints a token confined to one
+project. The gateway then lists only that project, answers 403 for any other
+`/api/projects/{id}` or `?project=`, forces the snapshot to that project, gives
+`/api/health` only the anonymous view and refuses the machine-wide reads
+(`/api/processes`, `/api/services`, `/api/chain/*`, `/api/vectors/*`). Owner
+tokens that carry a project claim are still refused by the gateway.
+
+A console on the tailnet can get such a token itself from
+`POST /api/console/token` `{"project":"<ulid>"}`; see `gateway.tailnetIdentity`
+in [configuration](configuration.md#gateway).
+
 ## Edge heartbeat v2
 
 `POST /fleet/heartbeat` on a cog host accepts the v1 body unchanged and these

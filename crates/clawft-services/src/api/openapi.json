@@ -1562,6 +1562,127 @@
           "503": {
             "$ref": "#/components/responses/DaemonUnavailable"
           }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project ULID: keep only that project's instances"
+          }
+        ]
+      }
+    },
+    "/api/console/token": {
+      "post": {
+        "summary": "Mint a short-lived read-only token for one project from a tailnet identity",
+        "operationId": "post_api_console_token",
+        "tags": [
+          "console"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "project"
+                ],
+                "properties": {
+                  "project": {
+                    "type": "string",
+                    "description": "Project ULID"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{token, expires_at, project}"
+          },
+          "400": {
+            "description": "Bad body"
+          },
+          "403": {
+            "description": "Not a tailnet peer, login not allowlisted, or cross-origin"
+          },
+          "404": {
+            "description": "Unknown project, or tailnet identity is not enabled"
+          },
+          "503": {
+            "description": "whois or daemon unavailable"
+          }
+        },
+        "description": "Disabled (404) unless gateway.tailnetIdentity.enabled. No bearer: the caller is identified by its TCP peer address and tailscale whois."
+      }
+    },
+    "/api/projects": {
+      "get": {
+        "summary": "Registered projects (a project-bound read token sees only its own)",
+        "operationId": "get_api_projects",
+        "tags": [
+          "projects_api"
+        ],
+        "responses": {
+          "200": {
+            "description": "{projects:[...], skipped:[...]}"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Token scope does not cover this route"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
+        }
+      }
+    },
+    "/api/projects/{id}": {
+      "get": {
+        "summary": "One project: manifest plus sanitised supervisor status",
+        "operationId": "get_api_projects_id",
+        "tags": [
+          "projects_api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project ULID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{project, status}"
+          },
+          "400": {
+            "description": "Not a ULID"
+          },
+          "404": {
+            "description": "No such project"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Token scope does not cover this route"
+          },
+          "503": {
+            "$ref": "#/components/responses/DaemonUnavailable"
+          }
         }
       }
     }

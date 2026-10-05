@@ -56,6 +56,8 @@ pub fn api_routes() -> Router<ApiState> {
         .merge(super::voice_api::voice_routes())
         // WEFT-122: kernel http_facade REST surface (status/chain/vectors/ecc/agents)
         .merge(super::http_facade_api::kernel_facade_api_routes())
+        // Project console reads: /projects, /projects/{id}, /fleet/snapshot.
+        .merge(super::projects_api::project_routes())
 }
 
 async fn list_agents(State(state): State<ApiState>) -> Json<Vec<super::AgentInfo>> {

@@ -2,6 +2,7 @@
 
 - **Status**: Partially implemented (decisions D1–D5 set by the user 2026-09-29). Done: D1 tiered `/api/health` and `/status` removal, D3 gateway validation through the daemon, D5 mint route and `TokenStore` removed, the non-loopback TLS guard (cards 01-05, 09 in part). Also done: `/mcp` mounted in the gateway (card 06, POST only, no SSE). Not done: the `/playground` page (card 08), upstream MCP servers and bind-address/client-count fields in `/api/health`, `weft mcp-server --issue-token` change.
 - **Date**: 2026-09-29
+- **Updated**: 2026-10-05: read tokens may be bound to one project (`weft token issue --read-only --project`), the gateway serves project read routes and the console under `/console/`, and `POST /api/console/token` mints those tokens from a tailnet identity (`gateway.tailnetIdentity`). See `docs/guides/configuration.md#gateway`.
 - **Deciders**: Platform / ops
 - **Depends-On**: ADR-022 (mandatory ExoChain audit), ADR-075 (Grok ↔ WeftOS MCP bridge, session capability tokens), ADR-076 (MCP tool surface and profiles)
 - **Relates-To**: WEFT-122 (gateway kernel facade stub), WEFT-570 (server-side revoke), WEFT-102 (token sweep), WEFT-697 (MCP session capabilities)

@@ -320,6 +320,9 @@ HTTP server and heartbeat settings.
 | `api_port` | integer | `18789` | API listen port. |
 | `cors_origins` | string[] | `["http://localhost:5173"]` | Allowed CORS origins for the API. |
 | `dangerously_plain_http` | boolean | `false` | Allow the API on a non-loopback `host` over plain HTTP. Same as `weft gateway --dangerously-plain-http`. |
+| `static_dir` (`staticDir`) | string | none | Built cog-manager web console, served under `/console/` (never the root). Same as `weft gateway --static-dir <dir>`. |
+| `console_connect_src` (`consoleConnectSrc`) | string[] | `[]` | Extra `connect-src` origins for the `/console/` page (the project's Cog Host and Seeds), each a bare origin such as `http://192.168.1.50:8081`. Anything else is refused at startup. The API keeps its own CSP. |
+| `tailnet_identity` (`tailnetIdentity`) | object | disabled | Tailnet-identity token mint, see below. |
 | `heartbeat_interval_minutes` | integer | `0` | Minutes between heartbeat messages. `0` disables heartbeats. |
 | `heartbeat_prompt` | string | `"heartbeat"` | Prompt text sent on each heartbeat tick. |
 
@@ -333,6 +336,37 @@ of its own. With the API enabled, a non-loopback `host` (for example
 `0.0.0.0`) is refused at startup unless `dangerously_plain_http` is set or
 `--dangerously-plain-http` is passed, which states that TLS is terminated in
 front of the gateway (a reverse proxy). Loopback binds are unaffected.
+
+**Project console.** With `static_dir` set the gateway serves the console at
+`/console/` (unknown paths fall back to `index.html`) under a CSP of
+`connect-src 'self'` plus `console_connect_src`, `frame-ancestors 'none'`.
+
+`tailnet_identity` lets a console on the tailnet get a token without anyone
+pasting one:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Mounts `POST /api/console/token`. Off: the route does not exist (404). |
+| `allowed_logins` (`allowedLogins`) | string[] | `[]` | Tailscale login names (`user@domain`, case-insensitive). Empty means nobody. |
+| `ttl_secs` (`ttlSecs`) | integer | `900` | Lifetime of a minted token, capped at the authority maximum (24 h). |
+| `tailscale_bin` (`tailscaleBin`) | string | `tailscale` | Binary used for `tailscale whois --json`. |
+
+```json
+{ "gateway": { "staticDir": "/opt/weftos/console", "consoleConnectSrc": ["http://192.168.1.50:8081"],
+  "tailnetIdentity": { "enabled": true, "allowedLogins": ["me@example.com"], "ttlSecs": 900 } } }
+```
+
+Security model: the tailnet is the boundary. The route takes the TCP peer
+address (never `X-Forwarded-For`), requires it to be in `100.64.0.0/10` or
+`fd7a:115c:a1e0::/48`, asks the local tailscaled who it is (`tailscale whois`,
+3 s timeout, no shell) and checks the login against the allowlist. It mints
+only a read-only token confined to the one project in the request, through the
+daemon, valid for `ttl_secs`. It needs `Content-Type: application/json`, and a
+request that carries an `Origin` must be same-origin (or on `cors_origins`), so
+a web page elsewhere cannot make a tailnet user's browser mint. It shares the
+auth rate limit (10 per minute per peer). The login and project are logged;
+the token never is. Bind the gateway to the tailnet address and keep
+`dangerously_plain_http` for that case only: WireGuard encrypts the hop.
 
 ### channels
 

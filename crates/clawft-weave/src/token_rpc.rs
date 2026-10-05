@@ -261,9 +261,6 @@ fn issue(authority: &TokenAuthority, params: &Value) -> Response {
         Some("read") => TokenScope::Read,
         Some(_) => return Response::error("auth.token.issue: 'scope' must be 'owner' or 'read'"),
     };
-    if scope == TokenScope::Read && project.is_some() {
-        return Response::error("auth.token.issue: a read-only token cannot be scoped to a project");
-    }
     let issuer = Issuer { uid: local_uid() };
     match authority.issue_scoped_at(chrono::Utc::now(), label, ttl, project, scope, &issuer) {
         Ok((secret, info)) => {

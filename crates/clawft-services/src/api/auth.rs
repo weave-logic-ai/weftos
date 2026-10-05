@@ -48,6 +48,7 @@ pub enum TokenScope {
 /// no config, memory, sessions, tools, MCP, WebSocket or SSE.
 pub const READ_TOKEN_PATHS: &[&str] = &[
     "/fleet/snapshot",
+    "/projects",
     "/health",
     "/processes",
     "/services",
@@ -56,13 +57,35 @@ pub const READ_TOKEN_PATHS: &[&str] = &[
     "/vectors/status",
 ];
 
+/// Routes a read token bound to one project may GET: its own project view,
+/// the fleet snapshot (filtered to it) and the minimal health probe. The
+/// machine-wide reads (`/processes`, `/services`, `/chain/*`, `/vectors/*`)
+/// are not part of a project's view.
+const PROJECT_READ_PATHS: &[&str] = &["/fleet/snapshot", "/projects", "/health"];
+
+/// The id in a `/projects/{id}` path (nest-relative or with the `/api`
+/// prefix), if it is one.
+pub fn project_path_id(path: &str) -> Option<&str> {
+    let rel = path.strip_prefix("/api").unwrap_or(path).trim_end_matches('/');
+    rel.strip_prefix("/projects/").filter(|id| !id.is_empty() && !id.contains('/'))
+}
+
 /// Whether a read-scoped token may make this request. A read token may also
 /// revoke itself (`POST /auth/revoke` acts only on the calling token).
-pub fn read_scope_allows(method: &axum::http::Method, path: &str) -> bool {
+///
+/// A read token bound to a project (`project` is `Some`) is narrower: only
+/// [`PROJECT_READ_PATHS`] plus `/projects/{its own id}`.
+pub fn read_scope_allows(method: &axum::http::Method, path: &str, project: Option<&str>) -> bool {
     let rel = path.strip_prefix("/api").unwrap_or(path);
     let rel = rel.trim_end_matches('/');
     match *method {
-        axum::http::Method::GET | axum::http::Method::HEAD => READ_TOKEN_PATHS.contains(&rel),
+        axum::http::Method::GET | axum::http::Method::HEAD => match project {
+            None => READ_TOKEN_PATHS.contains(&rel) || project_path_id(rel).is_some(),
+            Some(own) => {
+                PROJECT_READ_PATHS.contains(&rel)
+                    || project_path_id(rel).is_some_and(|id| id == own)
+            }
+        },
         axum::http::Method::POST => rel == "/auth/revoke",
         _ => false,
     }
@@ -81,6 +104,9 @@ pub struct TokenMeta {
     pub issued_at: String,
     /// RFC 3339 expiry time.
     pub expires_at: String,
+    /// The project a read token is confined to; `None` for an unbound token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// Outcome of checking a bearer.
@@ -338,15 +364,21 @@ fn is_expired(meta: &TokenMeta) -> bool {
 /// Parse the `token` object of an `auth.token.validate` reply. Owner and
 /// read-only tokens pass: a project token (ADR-103) is a child kernel's
 /// credential for the user daemon, not a gateway operator credential.
+///
+/// A read token may carry a project and is then confined to it. An owner
+/// token carrying a project claim (`weft token issue --project`) stays
+/// refused: the claim is a guard on the daemon, not a gateway capability.
 fn parse_meta(info: &serde_json::Value) -> Option<TokenMeta> {
     let scope = match info.get("scope").and_then(|v| v.as_str()) {
         Some("owner") => TokenScope::Owner,
         Some("read") => TokenScope::Read,
         _ => return None,
     };
-    if info.get("project").is_some_and(|v| !v.is_null()) {
-        return None;
-    }
+    let project = match info.get("project") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) if scope == TokenScope::Read => Some(v.as_str()?.to_owned()),
+        Some(_) => return None,
+    };
     let field = |k: &str| info.get(k).and_then(|v| v.as_str()).map(str::to_owned);
     Some(TokenMeta {
         scope,
@@ -354,6 +386,7 @@ fn parse_meta(info: &serde_json::Value) -> Option<TokenMeta> {
         label: field("label")?,
         issued_at: field("issued_at")?,
         expires_at: field("expires_at")?,
+        project,
     })
 }
 
@@ -443,6 +476,7 @@ pub struct MemoryTokenValidator {
 
 struct MemoryEntry {
     scope: TokenScope,
+    project: Option<String>,
     id: String,
     created_at: Instant,
     ttl_secs: u64,
@@ -462,9 +496,20 @@ impl MemoryTokenValidator {
 
     /// [`generate_token`](Self::generate_token) with an explicit scope.
     pub fn generate_token_scoped(&self, ttl_secs: u64, scope: TokenScope) -> Option<String> {
+        self.generate_token_for_project(ttl_secs, scope, None)
+    }
+
+    /// A token confined to `project` (meaningful for [`TokenScope::Read`]).
+    pub fn generate_token_for_project(
+        &self,
+        ttl_secs: u64,
+        scope: TokenScope,
+        project: Option<&str>,
+    ) -> Option<String> {
         let token = uuid::Uuid::new_v4().to_string();
         let entry = MemoryEntry {
             scope,
+            project: project.map(str::to_owned),
             id: token.chars().take(16).collect(),
             created_at: Instant::now(),
             ttl_secs,
@@ -504,6 +549,7 @@ impl TokenValidator for MemoryTokenValidator {
                     label: "memory".into(),
                     issued_at: issued.to_rfc3339(),
                     expires_at: (issued + chrono::Duration::seconds(e.ttl_secs as i64)).to_rfc3339(),
+                    project: e.project.clone(),
                 })
             }
             _ => TokenCheck::Invalid,
@@ -594,7 +640,9 @@ pub async fn auth_middleware(
     let public = is_public_path(request.uri().path());
     match check_request(&state, credentials(&request, false)).await {
         TokenCheck::Valid(meta) => {
-            if meta.scope == TokenScope::Read && !read_scope_allows(request.method(), request.uri().path()) {
+            if meta.scope == TokenScope::Read
+                && !read_scope_allows(request.method(), request.uri().path(), meta.project.as_deref())
+            {
                 return Err(forbidden_response());
             }
             request.extensions_mut().insert(meta);
@@ -800,6 +848,7 @@ mod tests {
             label: "l".into(),
             issued_at: "2026-01-01T00:00:00+00:00".into(),
             expires_at: "2099-01-01T00:00:00+00:00".into(),
+            project: None,
         }
     }
 
@@ -892,12 +941,15 @@ mod tests {
     #[test]
     fn read_scope_covers_only_the_listed_get_routes_and_its_own_revoke() {
         use axum::http::Method;
-        for p in ["/api/fleet/snapshot", "/fleet/snapshot", "/api/health", "/api/chain/status", "/api/fleet/snapshot/"] {
-            assert!(read_scope_allows(&Method::GET, p), "{p}");
+        for p in [
+            "/api/fleet/snapshot", "/fleet/snapshot", "/api/health", "/api/chain/status", "/api/fleet/snapshot/",
+            "/api/projects", "/api/projects/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        ] {
+            assert!(read_scope_allows(&Method::GET, p, None), "{p}");
         }
-        assert!(read_scope_allows(&Method::POST, "/api/auth/revoke"));
+        assert!(read_scope_allows(&Method::POST, "/api/auth/revoke", None));
         for p in ["/api/config", "/api/memory", "/api/sessions", "/api/tools", "/mcp", "/ws", "/events", "/api/fleet/location", "/api/fleet"] {
-            assert!(!read_scope_allows(&Method::GET, p), "{p}");
+            assert!(!read_scope_allows(&Method::GET, p, None), "{p}");
         }
         for (m, p) in [
             (Method::POST, "/api/fleet/snapshot"),
@@ -906,18 +958,47 @@ mod tests {
             (Method::POST, "/mcp"),
             (Method::PUT, "/api/config"),
         ] {
-            assert!(!read_scope_allows(&m, p), "{m} {p}");
+            assert!(!read_scope_allows(&m, p, None), "{m} {p}");
         }
     }
 
     #[test]
-    fn parse_meta_accepts_owner_and_read_not_project() {
+    fn a_project_bound_read_token_sees_only_its_project_views() {
+        use axum::http::Method;
+        let own = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let other = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+        let ok = |m: &Method, p: &str| read_scope_allows(m, p, Some(own));
+        for p in [
+            "/api/projects", "/api/fleet/snapshot", "/api/health",
+            "/api/projects/01ARZ3NDEKTSV4RRFFQ69G5FAV", "/projects/01ARZ3NDEKTSV4RRFFQ69G5FAV/",
+        ] {
+            assert!(ok(&Method::GET, p), "{p}");
+        }
+        for p in [
+            format!("/api/projects/{other}"),
+            "/api/processes".into(), "/api/services".into(), "/api/chain/status".into(),
+            "/api/chain/events".into(), "/api/vectors/status".into(), "/api/config".into(),
+            "/api/projects/a/b".into(),
+        ] {
+            assert!(!ok(&Method::GET, &p), "{p}");
+        }
+        assert!(!ok(&Method::POST, "/api/projects"));
+        assert!(ok(&Method::POST, "/api/auth/revoke"), "it may still revoke itself");
+    }
+
+    #[test]
+    fn parse_meta_accepts_owner_and_read_and_binds_a_read_token_to_its_project() {
         let mut read = serde_json::json!({
             "id": "a", "label": "l", "issued_at": "2026-01-01T00:00:00Z",
             "expires_at": "2099-01-01T00:00:00Z", "scope": "read", "project": null,
         });
-        assert_eq!(parse_meta(&read).unwrap().scope, TokenScope::Read);
+        let m = parse_meta(&read).unwrap();
+        assert_eq!((m.scope, m.project), (TokenScope::Read, None));
         read["project"] = "01HZXAAAAAAAAAAAAAAAAAAAAA".into();
+        let m = parse_meta(&read).unwrap();
+        assert_eq!((m.scope, m.project.as_deref()), (TokenScope::Read, Some("01HZXAAAAAAAAAAAAAAAAAAAAA")));
+        // A non-string project claim never validates.
+        read["project"] = 7.into();
         assert!(parse_meta(&read).is_none());
     }
 

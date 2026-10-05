@@ -77,7 +77,13 @@ pub async fn health_check(
     State(state): State<ApiState>,
     request: axum::extract::Request,
 ) -> Response {
-    let caller = request.extensions().get::<TokenMeta>().cloned();
+    // A token confined to one project gets the same minimal view as an
+    // anonymous caller: the detailed one is machine-wide.
+    let caller = request
+        .extensions()
+        .get::<TokenMeta>()
+        .filter(|m| m.project.is_none())
+        .cloned();
 
     let status = match state.health_cache.probe() {
         Some(r) => r,

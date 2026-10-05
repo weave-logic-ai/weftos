@@ -222,7 +222,9 @@ impl RateClass {
         } else if path == "/events" || path.starts_with("/custody/") {
             // Top-level facade routes (SSE, witness): generic API budget.
             Some(Self::Api)
-        } else if path.starts_with("/api/auth/") || path.starts_with("/api/token/") {
+        } else if path.starts_with("/api/auth/")
+            || path.starts_with("/api/token/")
+            || path.starts_with("/api/console/") {
             Some(Self::Auth)
         } else if path.starts_with("/api/") {
             // Anonymous health is exempt: cheap (cached probe) and must

@@ -98,7 +98,7 @@ mod tests {
                 let rest = &code[whole.end()..];
                 let seg = end.find(rest).map_or(rest, |e| &rest[..e.start()]);
                 let p = &m[1];
-                let full = if TOP_LEVEL.contains(&p) {
+                let full = if TOP_LEVEL.contains(&p) || p.starts_with("/api/") {
                     p.to_owned()
                 } else {
                     format!("/api{p}")
@@ -128,7 +128,9 @@ mod tests {
         for (path, item) in s["paths"].as_object().unwrap() {
             for (m, op) in item.as_object().unwrap() {
                 let opts_out = op.get("security").is_some();
-                let is_health = path == "/api/health" && m == "get";
+                let is_health = (path == "/api/health" && m == "get")
+                    // Tailnet identity, not a bearer, is its credential.
+                    || (path == "/api/console/token" && m == "post");
                 assert_eq!(opts_out, is_health, "{m} {path}");
             }
         }
@@ -171,7 +173,41 @@ mod tests {
         let mut shell = McpServerShell::new(composite);
         shell.add_middleware(Box::new(audit));
         state.mcp = Some(Arc::new(McpMount::new(shell, label, "full", 0)));
-        (build_router(state, &[], None), auth)
+        // The tailnet mint route exists only when enabled; mount it (inert
+        // fakes: the probe has no tailnet peer and is refused before them).
+        struct NoWhois;
+        #[async_trait]
+        impl crate::api::console::TailnetWhois for NoWhois {
+            async fn login_of(
+                &self,
+                _: std::net::IpAddr,
+            ) -> Result<Option<String>, crate::api::console::WhoisError> {
+                Ok(None)
+            }
+        }
+        struct NoMint;
+        #[async_trait]
+        impl crate::api::console::TokenMinter for NoMint {
+            async fn mint_read_for_project(
+                &self,
+                _: &str,
+                _: &str,
+                _: u64,
+            ) -> Result<crate::api::console::Minted, crate::api::console::MintError> {
+                Err(crate::api::console::MintError::Refused)
+            }
+        }
+        let console = crate::api::console::ConsoleOptions {
+            tailnet: Some(Arc::new(crate::api::console::TailnetMint::new(
+                &[],
+                900,
+                &[],
+                Arc::new(NoWhois),
+                Arc::new(NoMint),
+            ))),
+            ..Default::default()
+        };
+        (crate::api::build_router_with(state, &[], None, console).unwrap(), auth)
     }
 
     fn probe_uri(path: &str) -> String {
@@ -240,6 +276,9 @@ mod tests {
                 .unwrap();
             if op == "GET /api/health" {
                 assert_eq!(resp.status(), StatusCode::OK, "{op}");
+            } else if op == "POST /api/console/token" {
+                // No bearer needed; an anonymous non-tailnet caller is refused.
+                assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{op}");
             } else {
                 assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{op}");
             }
