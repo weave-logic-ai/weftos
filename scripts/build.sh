@@ -18,6 +18,8 @@ cd "$ROOT"
 
 # ── Defaults ─────────────────────────────────────────────────────────
 PROFILE=""
+# wasm-project: which half to build (guest | runner | all)
+WASM_PROJECT_PART=""
 FEATURES=""
 VERBOSE=false
 DRY_RUN=false
@@ -410,6 +412,65 @@ cmd_wasi() {
     run_cmd "${args[@]}"
     timer_end
     report_binary_size "target/wasm32-wasip2/${profile}/clawft_wasm.wasm" "WASI WASM"
+}
+
+# ADR-103 D9 Wasmtime project kernel. The guest is a core wasm32-wasip1 module
+# (not the wasip2 library above) and the runner is the native Wasmtime process the
+# user daemon launches; the daemon itself never links Wasmtime. Debug builds by
+# default; `--profile release` for release. Never installs targets.
+wasm_project_paths() {
+    local dir="${CARGO_TARGET_DIR:-$ROOT/target}" sub=debug
+    [ "$PROFILE" = release ] && sub=release
+    WASM_PROJECT_GUEST="$dir/wasm32-wasip1/$sub/weftos-project-guest.wasm"
+    WASM_PROJECT_RUNNER="$dir/$sub/weftos-wasm-project-runner"
+}
+
+cmd_wasm_project() {
+    local part="${WASM_PROJECT_PART:-all}" rel=()
+    [ "$PROFILE" = release ] && rel=(--release)
+    case "$part" in guest|runner|all) ;; *) fail "wasm-project: unknown part '$part' (guest|runner|all)"; return 1 ;; esac
+    wasm_project_paths
+    if [ "$part" != runner ]; then
+        header "Building the Wasmtime project guest (wasm32-wasip1)"
+        if ! check_target_installed wasm32-wasip1; then return 1; fi
+        timer_start
+        run_cmd cargo build ${rel[@]+"${rel[@]}"} -p clawft-wasm --no-default-features --features project-kernel \
+            --bin weftos-project-guest --target wasm32-wasip1
+        timer_end
+        report_binary_size "$WASM_PROJECT_GUEST" "project guest"
+    fi
+    if [ "$part" != guest ]; then
+        header "Building the Wasmtime project runner (native)"
+        timer_start
+        run_cmd cargo build ${rel[@]+"${rel[@]}"} -p clawft-wasm-host --features project-kernel \
+            --bin weftos-wasm-project-runner
+        timer_end
+        report_binary_size "$WASM_PROJECT_RUNNER" "project runner"
+    fi
+}
+
+# Build both halves, then drive them with the signing-parent protocol fixture
+# (scripts/test-wasm-project.py; needs python3 `cryptography`). All state lives
+# in a fresh, short temp directory; HOME is never touched.
+cmd_test_wasm_project() {
+    # The runner compiles the whole guest on every start: a release build keeps
+    # the fixture to minutes instead of the better part of an hour.
+    [ -n "$PROFILE" ] || PROFILE=release
+    WASM_PROJECT_PART=all
+    cmd_wasm_project || return 1
+    header "Wasmtime project lifecycle fixture"
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   python3 scripts/test-wasm-project.py --runner <runner> --guest <guest> --state-root <fresh dir>\n"
+        return 0
+    fi
+    python3 -c 'import cryptography' 2>/dev/null || { fail "python3 'cryptography' is required"; return 1; }
+    local root
+    root="$(mktemp -d "${TMPDIR:-/tmp}/wp.XXXXXX")" || return 1
+    timer_start
+    python3 "$ROOT/scripts/test-wasm-project.py" --runner "$WASM_PROJECT_RUNNER" --guest "$WASM_PROJECT_GUEST" \
+        --state-root "$root/s" --startup-timeout 60 || { rm -rf "$root"; fail "wasm project lifecycle fixture"; return 1; }
+    rm -rf "$root"
+    timer_end
 }
 
 cmd_browser() {
@@ -2425,6 +2486,13 @@ ${BOLD}Commands:${NC}
                   Installs npm deps + chromium on first run.
   releases-mdx    Regenerate docs/src/content/docs/weftos/vision/releases.mdx
                   from CHANGELOG.md (also runs as --check before commits)
+  wasm-project [guest|runner|all]
+                  ADR-103 D9 Wasmtime project kernel: the wasm32-wasip1 guest and the
+                  native runner (clawft-wasm / clawft-wasm-host --features project-kernel).
+                  --profile release for release; never installs targets.
+  test-wasm-project
+                  Build both halves, then run scripts/test-wasm-project.py (signing
+                  parent protocol fixture; needs python3 cryptography) in a fresh dir.
   all             Build everything (native + wasi + browser + ui)
   test [pkg…] [--filter <substr>]
                   Run cargo test --workspace (or scoped: test clawft-channels …);
@@ -2666,6 +2734,12 @@ parse_args() {
         done
     fi
 
+    # wasm-project [guest|runner|all]
+    if [ "$COMMAND" = "wasm-project" ] && [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+        WASM_PROJECT_PART="$1"
+        shift
+    fi
+
     # Capture positional args for bench command:
     #   scripts/build.sh bench <crate> <bench-name> [--features f]
     if [ "$COMMAND" = "bench" ]; then
@@ -2816,6 +2890,8 @@ main() {
         licence-cross)      cmd_licence_cross ;;
         cog-host-cross)     cmd_cog_host_cross ;;
         cog-host-x86)       cmd_cog_host_x86 ;;
+        wasm-project)       cmd_wasm_project ;;
+        test-wasm-project)  cmd_test_wasm_project ;;
         windows-check)      cmd_windows_check ;;
         licence-uid-check)  cmd_licence_uid_check ;;
         test-pi)            cmd_test_pi ;;

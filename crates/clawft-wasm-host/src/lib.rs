@@ -57,3 +57,8 @@ pub use sandboxed_http::{HttpResponse as SandboxedHttpResponse, SandboxedHttpCli
 
 /// Crate version (mirrors workspace package version).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Verification helper for a supervisor adopting a persistent WASM project.
+#[cfg(feature = "project-kernel")]
+#[path = "project_kernel/adoption.rs"]
+pub mod project_kernel;
