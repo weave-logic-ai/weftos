@@ -12,6 +12,7 @@
 //! # gateway_url = "http://127.0.0.1:8080"                    # reported as-is when set
 //! # units = ["weftos.service", "weftos-gateway.service"]     # systemd --user units to report
 //! # allow_remote_rotate = true                               # accept a mesh rotate from a controller
+//! # report_workspaces = true                                 # report project checkouts + git state
 //! ```
 //!
 //! Off by default. A section that is present but invalid stops the reporter
@@ -60,6 +61,10 @@ pub struct DashboardConfig {
     /// the controller must still be in `workload-host.json`).
     #[serde(default = "yes")]
     pub allow_remote_rotate: bool,
+    /// Report each registered project's checkout and git state as
+    /// `report.workspaces` (default on; ADR-108). Counts and refnames only.
+    #[serde(default = "yes")]
+    pub report_workspaces: bool,
 }
 
 fn default_interval() -> u64 {
@@ -84,6 +89,7 @@ impl Default for DashboardConfig {
             gateway_url: None,
             units: default_units(),
             allow_remote_rotate: true,
+            report_workspaces: true,
         }
     }
 }

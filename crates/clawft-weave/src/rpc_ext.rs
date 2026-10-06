@@ -463,6 +463,11 @@ const ROUTES: &[ExtRoute] = &[
         handler: crate::dashboard_rpc::handle,
     },
     ExtRoute {
+        prefix: "dashboard.actions",
+        capability: Capability::Read,
+        handler: crate::dashboard_rpc::handle,
+    },
+    ExtRoute {
         prefix: "dashboard.token.rotate",
         capability: Capability::Admin,
         handler: crate::dashboard_rpc::handle,
@@ -699,6 +704,11 @@ const ROUTES: &[ExtRoute] = &[
     // (with `node`, it is sent to that peer over the signed mesh wire).
     ExtRoute {
         prefix: "dashboard.status",
+        capability: Capability::Read,
+        handler: crate::dashboard_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "dashboard.actions",
         capability: Capability::Read,
         handler: crate::dashboard_rpc::handle,
     },

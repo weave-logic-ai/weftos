@@ -21,7 +21,9 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use crate::dashboard_actions::{ActionBook, ActionHandler};
 use crate::dashboard_cfg::{self, DashboardConfig};
+use crate::dashboard_workspaces::{self, WorkspaceSource};
 
 /// First heartbeat is sent this long after start.
 pub const FIRST_BEAT: Duration = Duration::from_secs(5);
@@ -141,6 +143,11 @@ pub struct Dashboard {
     pub(crate) pending: Mutex<Option<String>>,
     ambient: Ambient,
     children: Arc<dyn ChildSource>,
+    /// `report.workspaces` source; `None` leaves the key out.
+    workspaces: Option<Arc<dyn WorkspaceSource>>,
+    /// Dashboard actions: queue and log (ADR-108 P2).
+    pub(crate) book: Mutex<ActionBook>,
+    pub(crate) handlers: Mutex<std::collections::HashMap<String, Arc<dyn ActionHandler>>>,
 }
 
 /// `unit_<name>` key of a systemd unit: `weftos.service` is `unit_weftos`,
@@ -173,6 +180,17 @@ async fn unit_state(unit: &str) -> String {
 impl Dashboard {
     /// A reporter for a validated, enabled config.
     pub fn new(cfg: DashboardConfig, ambient: Ambient, children: Arc<dyn ChildSource>) -> Result<Arc<Self>, String> {
+        Self::with_workspaces(cfg, ambient, children, None)
+    }
+
+    /// [`Self::new`] with a `report.workspaces` source (used when
+    /// `report_workspaces` is on).
+    pub fn with_workspaces(
+        cfg: DashboardConfig,
+        ambient: Ambient,
+        children: Arc<dyn ChildSource>,
+        workspaces: Option<Arc<dyn WorkspaceSource>>,
+    ) -> Result<Arc<Self>, String> {
         cfg.validate()?;
         let http = reqwest::Client::builder()
             .timeout(HTTP_TIMEOUT)
@@ -189,6 +207,9 @@ impl Dashboard {
             pending: Mutex::new(None),
             ambient,
             children,
+            workspaces,
+            book: Mutex::new(ActionBook::default()),
+            handlers: Mutex::new(crate::dashboard_actions::default_handlers()),
         }))
     }
 
@@ -248,10 +269,14 @@ impl Dashboard {
             }
             observed.insert(ulid, Value::Object(o));
         }
+        let mut report = json!({ "host": self.cfg.installation_id, "weaver_version": version, "observed": observed });
+        if let (true, Some(src)) = (self.cfg.report_workspaces, &self.workspaces) {
+            dashboard_workspaces::attach(&mut report, src.workspaces().await);
+        }
         json!({
             "node_id": self.cfg.node_id,
             "installation_id": self.cfg.installation_id,
-            "report": { "host": self.cfg.installation_id, "weaver_version": version, "observed": observed },
+            "report": report,
         })
     }
 
@@ -264,6 +289,9 @@ impl Dashboard {
             Beat::Failed(e) => format!("failed: {e}"),
         };
         let ok = beat == Beat::Ok;
+        if ok {
+            self.process_actions().await;
+        }
         self.with_state(|s| {
             s.last_heartbeat_at = Some(chrono::Utc::now().to_rfc3339());
             s.last_heartbeat = Some(text);
@@ -280,7 +308,10 @@ impl Dashboard {
         };
         for attempt in 0..2 {
             match self.post("/api/nodes/heartbeat", &token, &body).await {
-                Ok((s, _)) if (200..300).contains(&s) => return Beat::Ok,
+                Ok((s, text)) if (200..300).contains(&s) => {
+                    self.ingest_actions(&text);
+                    return Beat::Ok;
+                }
                 Ok((s @ (401 | 403), _)) => {
                     // A rotation may have landed between reading the token and
                     // sending: retry once with the current one before reporting.
@@ -341,6 +372,7 @@ impl Dashboard {
             Ok(Ok(())) => "ok".to_owned(),
             Ok(Err(e)) | Err(e) => e,
         };
+        let book = self.book.lock().unwrap_or_else(|e| e.into_inner());
         let unpersisted = self.pending.lock().unwrap_or_else(|e| e.into_inner()).is_some();
         json!({
             "enabled": true,
@@ -357,6 +389,8 @@ impl Dashboard {
             "consecutive_failures": s.consecutive_failures,
             "last_rotation_at": s.last_rotation_at,
             "last_rotation": s.last_rotation,
+            "actions_recorded": book.recorded(),
+            "actions_queued": book.queued(),
         })
     }
 }

@@ -26,10 +26,13 @@ use serde_json::{Value, json};
 
 use crate::dashboard_cfg::DashboardConfig;
 use crate::dashboard_report::{self, Ambient, Dashboard, SupervisorChildren};
+use crate::dashboard_workspaces::{ManifestWorkspaces, WorkspaceSource};
 use crate::rpc_ext::{ExtCall, ExtFuture, KernelRef};
 
 const STATUS: &str = "dashboard.status";
 const ROTATE: &str = "dashboard.token.rotate";
+const ACTIONS: &str = "dashboard.actions";
+const ACTIONS_DEFAULT: usize = 20;
 
 /// The mesh-side hook: answers a controller's `dashboard.*` request from the
 /// running reporter. Installed on the node's `workload-host` at placement build;
@@ -62,6 +65,8 @@ impl NodeAdmin for DashAdmin {
 pub async fn run_local(d: &Dashboard, method: &str, remote: bool) -> Result<Value, String> {
     match method {
         STATUS => Ok(d.status_json()),
+        ACTIONS if remote => Err("dashboard.actions is local only".into()),
+        ACTIONS => Ok(d.actions_json(ACTIONS_DEFAULT)),
         ROTATE if remote && !d.config().allow_remote_rotate => {
             Err("remote rotation is switched off on this node ([dashboard] allow_remote_rotate = false)".into())
         }
@@ -102,7 +107,13 @@ async fn handle_inner(
         Some(Value::String(n)) if !n.is_empty() && n.len() <= 128 => Some(n.as_str()),
         Some(_) => return Err("`node` must be a non-empty node id string".into()),
     };
+    let limit = params.get("limit").and_then(Value::as_u64).map_or(ACTIONS_DEFAULT, |n| n.clamp(1, 128) as usize);
     match node {
+        Some(n) if method == ACTIONS && !is_local(n) => Err("dashboard.actions is local only".into()),
+        _ if method == ACTIONS => match dashboard_report::global() {
+            Some(d) => Ok(d.actions_json(limit)),
+            None => Ok(json!({ "enabled": false, "queued": 0, "recorded": 0, "actions": [] })),
+        },
         // Contacting a peer is an Admin act even for the read-only status.
         Some(_) if !is_admin => Err("sending a dashboard request to another node needs Admin".into()),
         Some(n) if !is_local(n) => remote(kernel, n, method).await,
@@ -156,7 +167,10 @@ async fn start_with(kernel: &KernelRef, cfg: DashboardConfig, home: &std::path::
         .map(|m| m.listen_addr.clone());
     let ambient = Ambient { mesh_listen, gateway_url: cfg.gateway_url.clone().or(gateway) };
     let children = Arc::new(SupervisorChildren { manifests_dir: crate::user_daemon::manifests_dir(home) });
-    let d = match Dashboard::new(cfg, ambient, children) {
+    let workspaces: Option<Arc<dyn WorkspaceSource>> = cfg
+        .report_workspaces
+        .then(|| Arc::new(ManifestWorkspaces { manifests_dir: crate::user_daemon::manifests_dir(home) }) as _);
+    let d = match Dashboard::with_workspaces(cfg, ambient, children, workspaces) {
         Ok(d) => d,
         Err(e) => {
             tracing::error!(error = %e, "dashboard reporter not started");
