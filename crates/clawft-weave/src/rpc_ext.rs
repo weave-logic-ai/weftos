@@ -517,6 +517,14 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::licence_checkout_rpc::handle_ext,
     },
+    // weftos.cog.v1. Exact name: a `cog.` prefix would cover methods this
+    // table does not classify. Read: a start check does not spend budget.
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.check_run",
+        capability: Capability::Read,
+        handler: crate::cog_check_rpc::handle,
+    },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.
     #[cfg(unix)]
@@ -761,6 +769,14 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "workload.cog.checkout.renew",
         capability: Capability::Admin,
         handler: crate::licence_checkout_rpc::handle_ext,
+    },
+    // weftos.cog.v1. Exact name: a `cog.` prefix would cover methods this
+    // table does not classify. Read: a start check does not spend budget.
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "cog.check_run",
+        capability: Capability::Read,
+        handler: crate::cog_check_rpc::handle,
     },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.

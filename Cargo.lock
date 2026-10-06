@@ -2147,6 +2147,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "weft-licence",
+ "weftos-cog-protocol",
  "weftos-cog-repo",
  "weftos-cog-sources",
  "weftos-leaf-scene",
@@ -10797,6 +10798,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "weftos-cog-market",
+ "weftos-cog-protocol",
  "weftos-cog-repo",
 ]
 
