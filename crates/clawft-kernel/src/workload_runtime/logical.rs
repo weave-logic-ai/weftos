@@ -18,8 +18,8 @@ use tokio::sync::Mutex;
 
 use super::evidence::RunEvidence;
 use super::types::{
-    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, RuntimeError,
-    VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
+    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, RuntimeError, VerifiedWorkload,
+    WorkloadConfig, WorkloadRuntime, WorkloadSource,
 };
 use crate::workload_governance::NetworkPolicy;
 
@@ -31,6 +31,8 @@ pub const CAP_PROJECT_LOGICAL: &str = "runtime.project.logical";
 /// What a launcher needs to start one child kernel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildSpec {
+    /// Immutable adapter selection; restart cannot reinterpret the manifest.
+    pub adapter: String,
     /// Project id (ULID).
     pub project_id: String,
     /// Canonical project root.
@@ -77,8 +79,7 @@ pub trait ChildLauncher: Send + Sync {
     async fn spawn(&self, spec: &ChildSpec) -> Result<ChildRef, RuntimeError>;
     /// Stop it: graceful shutdown first, then terminate after `grace`.
     /// Returns the exit code when known.
-    async fn terminate(&self, child: &ChildRef, grace: Duration)
-    -> Result<Option<i32>, RuntimeError>;
+    async fn terminate(&self, child: &ChildRef, grace: Duration) -> Result<Option<i32>, RuntimeError>;
     /// Current state of the project's child.
     async fn probe(&self, project_id: &str) -> ChildProbe;
 }
@@ -90,14 +91,30 @@ struct Instance {
 
 /// The adapter.
 pub struct LogicalRuntime {
+    adapter: &'static str,
+    capability: &'static str,
     launcher: Arc<dyn ChildLauncher>,
     instances: Mutex<HashMap<String, Instance>>,
 }
 
 impl LogicalRuntime {
+    /// Persistent Wasmtime project lifecycle, using a dedicated runner launcher.
+    /// Shares process bookkeeping only; admission, capability and evidence carry
+    /// the explicit Wasmtime identity and reject logical payloads.
+    pub fn wasmtime_project(launcher: Arc<dyn ChildLauncher>) -> Self {
+        Self {
+            adapter: "wasmtime-project-v1",
+            capability: "runtime.project.wasmtime",
+            launcher,
+            instances: Mutex::new(HashMap::new()),
+        }
+    }
+
     /// An adapter over `launcher`.
     pub fn new(launcher: Arc<dyn ChildLauncher>) -> Self {
         Self {
+            adapter: LOGICAL_ID,
+            capability: CAP_PROJECT_LOGICAL,
             launcher,
             instances: Mutex::new(HashMap::new()),
         }
@@ -111,6 +128,7 @@ fn instance_id(project_id: &str) -> String {
 fn spec_of(w: &VerifiedWorkload) -> Result<ChildSpec, RuntimeError> {
     match &w.source {
         WorkloadSource::Project(p) => Ok(ChildSpec {
+            adapter: p.adapter.clone(),
             project_id: p.project_id.clone(),
             root: p.root.clone(),
             key_id: p.key_id.clone(),
@@ -125,11 +143,11 @@ fn spec_of(w: &VerifiedWorkload) -> Result<ChildSpec, RuntimeError> {
 #[async_trait]
 impl WorkloadRuntime for LogicalRuntime {
     fn id(&self) -> &str {
-        LOGICAL_ID
+        self.adapter
     }
 
     fn provides(&self) -> Vec<Capability> {
-        let Ok(id) = CapabilityId::new(CAP_PROJECT_LOGICAL) else {
+        let Ok(id) = CapabilityId::new(self.capability) else {
             return Vec::new();
         };
         vec![Capability::new(id, Provenance::Probed).with_attr("os", AttrValue::from(std::env::consts::OS))]
@@ -137,6 +155,9 @@ impl WorkloadRuntime for LogicalRuntime {
 
     async fn admit(&self, w: &VerifiedWorkload) -> Result<Admission, RuntimeError> {
         let spec = spec_of(w)?;
+        if spec.adapter != self.adapter {
+            return Err(RuntimeError::AdmissionRefused("project adapter mismatch".into()));
+        }
         if !spec.root.is_dir() {
             return Err(RuntimeError::AdmissionRefused(format!(
                 "project root {} is gone",
@@ -144,18 +165,19 @@ impl WorkloadRuntime for LogicalRuntime {
             )));
         }
         Ok(Admission {
-            runtime: LOGICAL_ID.into(),
-            arch: std::env::consts::ARCH.into(),
+            runtime: self.adapter.into(),
+            arch: if self.adapter == LOGICAL_ID {
+                std::env::consts::ARCH
+            } else {
+                "wasm32-wasip1"
+            }
+            .into(),
             emulated: false,
             notes: vec![format!("project {} root {}", spec.project_id, spec.root.display())],
         })
     }
 
-    async fn load(
-        &self,
-        w: &VerifiedWorkload,
-        _cfg: &WorkloadConfig,
-    ) -> Result<InstanceHandle, RuntimeError> {
+    async fn load(&self, w: &VerifiedWorkload, _cfg: &WorkloadConfig) -> Result<InstanceHandle, RuntimeError> {
         self.admit(w).await?;
         let spec = spec_of(w)?;
         let iid = instance_id(&spec.project_id);
@@ -166,7 +188,7 @@ impl WorkloadRuntime for LogicalRuntime {
         let workload_id = spec.project_id.clone();
         map.insert(iid.clone(), Instance { spec, child: None });
         Ok(InstanceHandle {
-            runtime: LOGICAL_ID.into(),
+            runtime: self.adapter.into(),
             instance_id: iid,
             workload_id,
             store_installed: false,
@@ -201,7 +223,7 @@ impl WorkloadRuntime for LogicalRuntime {
             .ok_or_else(|| RuntimeError::UnknownInstance(h.instance_id.clone()))?;
         let started = std::time::Instant::now();
         let mut ev = RunEvidence {
-            runtime: LOGICAL_ID.into(),
+            runtime: self.adapter.into(),
             instance_id: h.instance_id.clone(),
             ..RunEvidence::default()
         };
@@ -268,6 +290,78 @@ impl WorkloadRuntime for LogicalRuntime {
     }
 
     async fn console(&self, _h: &InstanceHandle, _command: &str) -> Result<RunEvidence, RuntimeError> {
-        Err(RuntimeError::Unsupported("a project kernel has no console cycle".into()))
+        Err(RuntimeError::Unsupported(
+            "a project kernel has no console cycle".into(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod wasmtime_lifecycle_tests {
+    use super::super::{HostContract, ProjectPayload, RunMode};
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[derive(Default)]
+    struct Runner {
+        live: AtomicBool,
+    }
+    #[async_trait]
+    impl ChildLauncher for Runner {
+        async fn spawn(&self, spec: &ChildSpec) -> Result<ChildRef, RuntimeError> {
+            assert_eq!(spec.adapter, "wasmtime-project-v1");
+            self.live.store(true, Ordering::SeqCst);
+            Ok(ChildRef {
+                project_id: spec.project_id.clone(),
+                pid: 4242,
+            })
+        }
+        async fn terminate(&self, _: &ChildRef, _: Duration) -> Result<Option<i32>, RuntimeError> {
+            self.live.store(false, Ordering::SeqCst);
+            Ok(Some(0))
+        }
+        async fn probe(&self, _: &str) -> ChildProbe {
+            if self.live.load(Ordering::SeqCst) {
+                ChildProbe::Running { pid: 4242 }
+            } else {
+                ChildProbe::NotStarted
+            }
+        }
+    }
+    #[tokio::test]
+    async fn wasmtime_identity_survives_load_start_stop_and_rejects_logical_admission() {
+        let launcher = Arc::new(Runner::default());
+        let wasm = LogicalRuntime::wasmtime_project(launcher.clone());
+        let logical = LogicalRuntime::new(launcher);
+        let w = VerifiedWorkload {
+            kind: "project".into(),
+            id: "p".into(),
+            version: "cert-1".into(),
+            source: WorkloadSource::Project(ProjectPayload {
+                adapter: "wasmtime-project-v1".into(),
+                project_id: "p".into(),
+                key_id: "k".into(),
+                cert_serial: 1,
+                user_key_id: "u".into(),
+                policy_hash: String::new(),
+                root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            }),
+        };
+        assert!(logical.admit(&w).await.is_err());
+        assert_eq!(wasm.admit(&w).await.unwrap().arch, "wasm32-wasip1");
+        let cfg = WorkloadConfig {
+            mode: RunMode::Listener,
+            args: vec![],
+            host: HostContract::default_feed(),
+            node_id: "p".into(),
+        };
+        let h = wasm.load(&w, &cfg).await.unwrap();
+        assert_eq!(h.runtime, "wasmtime-project-v1");
+        wasm.start(&h).await.unwrap();
+        assert_eq!(wasm.status(&h).await.state, InstanceState::Running);
+        assert!(wasm.start(&h).await.is_err());
+        let evidence = wasm.stop(&h, Duration::ZERO).await.unwrap();
+        assert_eq!(evidence.runtime, "wasmtime-project-v1");
+        assert_eq!(evidence.exit_code, Some(0));
+        wasm.unload(h).await.unwrap();
     }
 }

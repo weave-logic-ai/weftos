@@ -2038,7 +2038,9 @@ name = "clawft-wasm"
 version = "0.8.1"
 dependencies = [
  "chrono",
+ "ciborium",
  "clawft-core",
+ "clawft-kernel",
  "clawft-llm",
  "clawft-platform",
  "clawft-tools",
@@ -2046,15 +2048,24 @@ dependencies = [
  "clawft-wasm-host",
  "console_error_panic_hook",
  "dlmalloc",
+ "ed25519-dalek",
  "js-sys",
  "lol_alloc",
+ "rand 0.8.7",
+ "rvf-runtime",
+ "rvf-types",
  "serde",
  "serde_json",
+ "sha2",
  "talc",
+ "thiserror 2.0.18",
+ "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "weftos-rvf-crypto",
+ "weftos-rvf-wire",
 ]
 
 [[package]]
@@ -2063,14 +2074,19 @@ version = "0.8.1"
 dependencies = [
  "chrono",
  "clawft-plugin",
+ "clawft-types",
  "dirs",
+ "ed25519-dalek",
+ "libc",
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tracing",
  "url",
  "wasmtime",
+ "wasmtime-wasi",
  "wat",
 ]
 

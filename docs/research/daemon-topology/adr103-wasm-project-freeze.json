@@ -1,0 +1,240 @@
+{
+  "schema": 1,
+  "status": "source-only freeze for import and review; not compiled or runtime validated",
+  "created_utc": "2026-10-04T21:08:03.788030+00:00",
+  "worktree": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos",
+  "base_commit": "e6662b818be7511c283cc68c8e6df46681f342a2",
+  "wasmtime_version": "48.0.5",
+  "wasmtime_wasi_version": "48.0.5",
+  "compiler_jobs_started": false,
+  "runtime_tests_executed": false,
+  "source_checks": [
+    "rustfmt parse of changed Rust sources",
+    "Python AST parse",
+    "TOML parse",
+    "bash -n build script",
+    "git diff --check"
+  ],
+  "reviewer_fixes": {
+    "signed_checkpoint": "bind authenticated checkpoint head, sequence, chain ID and event count to reconstructed history",
+    "socket_deadlines": "nonblocking connect/read/write with absolute deadlines and cancellation checks",
+    "parent_restart": "retry spawn_not_expected only after certified session loss; fixture requires signed adoption and matching PID",
+    "shutdown": "accept signed kernel.shutdown; bounded final anchor attempt, unregister, durable save"
+  },
+  "import_rules": [
+    "Do not copy tracked files over main: merge changes and preserve container/Seatbelt/nested/leaf lanes.",
+    "Add new files intact after verifying their SHA256.",
+    "Cargo.lock: merge only local dependency edges; preserve existing pinned package versions.",
+    "Apply the handoff document merge map for ChildIdentity, sandbox selection, child endpoint and proof APIs.",
+    "Do not build until the lead releases the compiler lane."
+  ],
+  "remaining_limits": [
+    "Full native Kernel::boot/services parity is not implemented.",
+    "No agent/workload execution, shared ParentLink services or subscription streams.",
+    "Depth-1 user-daemon child only; no nested Wasmtime supervision.",
+    "No key rotation or anchor-ledger divergence/reset reconciliation.",
+    "No disk quota/compaction, automatic artifact pin migration or packaging/install integration.",
+    "Final anchor delivery is attempted, not guaranteed; failed delivery retains pending state.",
+    "WASIp1 portability, real-parent integration, platform behavior and test execution remain unverified."
+  ],
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/Cargo.lock",
+      "action": "merge",
+      "sha256": "79f73066d5ed7c7b76d99e069e987c9020f6063c08c28113cded573f0807cfed",
+      "bytes": 283283,
+      "baseline_sha256": "6b2ae6f877a964f523b91d569ca43699189f33930254e6737402615aec68a804"
+    },
+    {
+      "path": "crates/clawft-kernel/src/workload_ctl/tests_kind.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-kernel/src/workload_ctl/tests_kind.rs",
+      "action": "merge",
+      "sha256": "9a0bdb28f21059971a0d8bd1309903fb598abffa92efd666ecb131439b4c6ea4",
+      "bytes": 7440,
+      "baseline_sha256": "7964d22644315165d96d32ece76c5b6c14362327dc36f5f76f1375eea0113d32"
+    },
+    {
+      "path": "crates/clawft-kernel/src/workload_kind/project.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-kernel/src/workload_kind/project.rs",
+      "action": "merge",
+      "sha256": "294df26f3418c28daf34fac741a7f1cece9d1d79c06fb2efe1c41df5d9467542",
+      "bytes": 8246,
+      "baseline_sha256": "6b41fcfd43db4142e07c64179b4ffb78d4fd2b98b1f2b141204373031eaab471"
+    },
+    {
+      "path": "crates/clawft-kernel/src/workload_runtime/logical.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-kernel/src/workload_runtime/logical.rs",
+      "action": "merge",
+      "sha256": "c054814ecc262115a45f4a8f66fcbb8536e61d658e09127cec504530621d6838",
+      "bytes": 12946,
+      "baseline_sha256": "147b79f567f9958957f3ce2d911f0b87b926044c0035313bd707c9019860747f"
+    },
+    {
+      "path": "crates/clawft-kernel/src/workload_runtime/types.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-kernel/src/workload_runtime/types.rs",
+      "action": "merge",
+      "sha256": "01b532835c5d6f978061a94497b8572c078216ed4bcf4a4bdb58d7d5db2e13ac",
+      "bytes": 15347,
+      "baseline_sha256": "fcf2eec54c90e6e05375f5db20dcd25f294da685cbe62b72bebe2ed792fa6f01"
+    },
+    {
+      "path": "crates/clawft-types/src/project/mod.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-types/src/project/mod.rs",
+      "action": "merge",
+      "sha256": "ce0a069dcdb65f08baeb7701bff8b95fb0d49c1c9a2f9e6fe565214662277921",
+      "bytes": 1877,
+      "baseline_sha256": "197ac7ba0277e9c63e14f67107d4f2bc83297b519728fb162b40f9123505423d"
+    },
+    {
+      "path": "crates/clawft-types/src/project/schema.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-types/src/project/schema.rs",
+      "action": "merge",
+      "sha256": "9f1aa646bf692b9389daa26be66156d6d67932ce56dfdfa3e9d6e8bbbad7a0c3",
+      "bytes": 10712,
+      "baseline_sha256": "23b21135d3270d998caf8eac9adee42cd5aeb313739cd8eab5cb432a3120e12c"
+    },
+    {
+      "path": "crates/clawft-wasm-host/Cargo.toml",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm-host/Cargo.toml",
+      "action": "merge",
+      "sha256": "f34de6d9a57446c51544322015b463d8bc2f5fd11cc90fa1acdf784eddbc7f00",
+      "bytes": 1909,
+      "baseline_sha256": "e9b66fc6b474a1a0e7a68e179f9ac33e712dd338ab72b5543abe5b50cc632047"
+    },
+    {
+      "path": "crates/clawft-wasm-host/src/lib.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm-host/src/lib.rs",
+      "action": "merge",
+      "sha256": "6dc4a55faa2025d6feaf7d9adf72d7d5c7a1d30faaa3b0c86e4ba49d2efbd8b2",
+      "bytes": 2618,
+      "baseline_sha256": "a795051dbb7e60f978c7eaa0fbd8cc6eb50c90f6f327491c54172484a064eef5"
+    },
+    {
+      "path": "crates/clawft-wasm-host/src/project_kernel/adoption.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm-host/src/project_kernel/adoption.rs",
+      "action": "add",
+      "sha256": "9d5ba46d49283d5b52b89be603d2a0c9c43084d89567bc15797228ac6ef5fed2",
+      "bytes": 5118
+    },
+    {
+      "path": "crates/clawft-wasm-host/src/project_kernel/main.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm-host/src/project_kernel/main.rs",
+      "action": "add",
+      "sha256": "66966d2a0469ee7a73705823a17688d42c77a3d44164d814e97bdd47c91b6542",
+      "bytes": 19826
+    },
+    {
+      "path": "crates/clawft-wasm/Cargo.toml",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm/Cargo.toml",
+      "action": "merge",
+      "sha256": "e09739efa72d9159a8e08cc8ead099216c7e8f12d6115dd9a104053f73111473",
+      "bytes": 4294,
+      "baseline_sha256": "ef004189f7cb5976be4426f4836b934428a727f13ee0f8e512b1537b937a77fe"
+    },
+    {
+      "path": "crates/clawft-wasm/src/project_kernel/abi.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm/src/project_kernel/abi.rs",
+      "action": "add",
+      "sha256": "ad9884f6bf57f696dfe7328ce2162b40dc9bc778edab749d86190663130dcf23",
+      "bytes": 1181
+    },
+    {
+      "path": "crates/clawft-wasm/src/project_kernel/forward.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm/src/project_kernel/forward.rs",
+      "action": "add",
+      "sha256": "91b7006eada03effebaff6e986759d7bd3072fdc9d93c9171d6b3c6156784766",
+      "bytes": 2105
+    },
+    {
+      "path": "crates/clawft-wasm/src/project_kernel/main.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm/src/project_kernel/main.rs",
+      "action": "add",
+      "sha256": "9d3bac2158d9389295b34d3fdfba340931b0b733a3a55b3929f7db673a6d5618",
+      "bytes": 2620
+    },
+    {
+      "path": "crates/clawft-wasm/src/project_kernel/storage.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm/src/project_kernel/storage.rs",
+      "action": "add",
+      "sha256": "a0e1d77a74362e7f3d112bce14737ecd56a8c954d1c242f5041a51cd42436024",
+      "bytes": 7222
+    },
+    {
+      "path": "crates/clawft-wasm/src/project_kernel/supervisor.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-wasm/src/project_kernel/supervisor.rs",
+      "action": "add",
+      "sha256": "9f7918f9cef566906577163b59499874b72c20f444460742b0d1c7a79d256344",
+      "bytes": 21898
+    },
+    {
+      "path": "crates/clawft-weave/Cargo.toml",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-weave/Cargo.toml",
+      "action": "merge",
+      "sha256": "6a8b745b1eaed66d49907f5bd4f32c11a541d7836fc78796cc558e7a86159995",
+      "bytes": 6763,
+      "baseline_sha256": "e853e510e85609d49f5165966d241b926787b756363e2b57a4d9a77dd7de2a87"
+    },
+    {
+      "path": "crates/clawft-weave/src/project_supervisor/boot.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-weave/src/project_supervisor/boot.rs",
+      "action": "merge",
+      "sha256": "1aecd964a7fad8f6656d44371a81d5854c28bc5f0d92b57e862fc48fdb80ddb3",
+      "bytes": 18803,
+      "baseline_sha256": "274954f96e133dda875bb9c44a48f055b72ce9626ca78c9fcec1f528bb3d1c37"
+    },
+    {
+      "path": "crates/clawft-weave/src/project_supervisor/child.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-weave/src/project_supervisor/child.rs",
+      "action": "merge",
+      "sha256": "d0496ba10eac982876d8485ba1fddfb39304b4755a482f9d15e3c78f22ee1c6b",
+      "bytes": 27818,
+      "baseline_sha256": "067cf8110119bd0405cb48ebf6c4379eeeeb0823c8d6083e4c607fc7692b5c04"
+    },
+    {
+      "path": "crates/clawft-weave/src/project_supervisor/io.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-weave/src/project_supervisor/io.rs",
+      "action": "merge",
+      "sha256": "708aac26589293d144577860ab300fcc63737fe25e97635d398559913ac2f07a",
+      "bytes": 4462,
+      "baseline_sha256": "f70567db58c7822bd91d3c858fdaf6c565c7126093e0290091fd1f96d18edeb9"
+    },
+    {
+      "path": "crates/clawft-weave/src/project_supervisor/mod.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-weave/src/project_supervisor/mod.rs",
+      "action": "merge",
+      "sha256": "8d92ecd1f2fd3016454b77013b064b2d97d798e45c29697f7e27d454303a3949",
+      "bytes": 35986,
+      "baseline_sha256": "3ac303fe3a1d046ee6eaf20f20402b305be04c1ac98bea352a884947a2e44176"
+    },
+    {
+      "path": "crates/clawft-weave/src/project_supervisor/wasmtime.rs",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/crates/clawft-weave/src/project_supervisor/wasmtime.rs",
+      "action": "add",
+      "sha256": "c7583a455a08b7f1496267ebd75d55c4db0901e2b56de5da0365703fffaf5596",
+      "bytes": 19740
+    },
+    {
+      "path": "docs/research/daemon-topology/adr103-wasm-project-slice.md",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-slice.md",
+      "action": "add",
+      "sha256": "e4438c18a17c84207b72834821b803984494ae94c7557f9034e72f92f7da151c",
+      "bytes": 21205
+    },
+    {
+      "path": "scripts/build-wasm-project.sh",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/scripts/build-wasm-project.sh",
+      "action": "add",
+      "sha256": "7c17be11b4c7ee4dc39de483bc8c04fee1f2d8889151d7daba2d0bb33dc3af86",
+      "bytes": 930
+    },
+    {
+      "path": "scripts/test-wasm-project.py",
+      "absolute_path": "/Users/mathewbeane/.codex/worktrees/wasm-project/weftos/scripts/test-wasm-project.py",
+      "action": "add",
+      "sha256": "0a46d2ffa397459a2f8d07616e9701d288e4a964ca391df17d9f1098a363b0bd",
+      "bytes": 19656
+    }
+  ],
+  "manifest_self_excluded": true
+}

@@ -33,8 +33,8 @@ use clawft_kernel::overlay_runtime::write_user_pin;
 use clawft_kernel::parent_policy::export_rules_to;
 use clawft_kernel::token_authority::{Issuer, TokenAuthority};
 use clawft_kernel::workload_runtime::{ChildLauncher, ChildProbe, ChildRef, ChildSpec, RuntimeError};
-use clawft_types::project::cert::key_id;
 use clawft_types::project::SpawnFile;
+use clawft_types::project::cert::key_id;
 use clawft_types::project::token_consts::PROJECT_TOKEN_TTL_SECS;
 use clawft_types::runtime_paths::{LOG_FILE_NAME, PARENT_POLICY_FILE, SOCKET_NAME, SPAWN_JSON_FILE};
 use ed25519_dalek::SigningKey;
@@ -44,9 +44,9 @@ use rand::RngCore;
 use tokio::sync::watch;
 
 use super::SupervisorConfig;
-use crate::mesh_local_registry::{SpawnExpectation, cancel_spawn, expect_spawn, registry};
 use super::io::ChildIo;
 use super::state;
+use crate::mesh_local_registry::{SpawnExpectation, cancel_spawn, expect_spawn, registry};
 
 /// Process groups of every child this daemon started or adopted, until the
 /// group is gone (see [`Launcher::supervised_pids`]).
@@ -110,12 +110,21 @@ impl ExitInfo {
 
 fn exit_info(st: std::process::ExitStatus) -> ExitInfo {
     use std::os::unix::process::ExitStatusExt as _;
-    ExitInfo { code: st.code(), signal: st.signal(), clean_hint: false }
+    ExitInfo {
+        code: st.code(),
+        signal: st.signal(),
+        clean_hint: false,
+    }
 }
 
 enum Proc {
-    Owned { pid: u32, exit: watch::Receiver<Option<ExitInfo>> },
-    Adopted { pid: u32 },
+    Owned {
+        pid: u32,
+        exit: watch::Receiver<Option<ExitInfo>>,
+    },
+    Adopted {
+        pid: u32,
+    },
 }
 
 struct Entry {
@@ -181,10 +190,18 @@ pub fn child_env(
 
 /// The arguments a child kernel is started with.
 pub fn child_args(project_id: &str) -> Vec<String> {
-    ["kernel", "start", "--foreground", "--profile", "project", "--project", project_id]
-        .iter()
-        .map(|s| (*s).to_owned())
-        .collect()
+    [
+        "kernel",
+        "start",
+        "--foreground",
+        "--profile",
+        "project",
+        "--project",
+        project_id,
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect()
 }
 
 /// True when an ADOPTED `pid` is alive. After a SIGHUP re-exec of the user
@@ -253,7 +270,10 @@ impl Launcher {
         note_group(pid);
         self.procs().insert(
             id.to_owned(),
-            Entry { proc: Proc::Adopted { pid }, stop: Arc::new(AtomicBool::new(false)) },
+            Entry {
+                proc: Proc::Adopted { pid },
+                stop: Arc::new(AtomicBool::new(false)),
+            },
         );
     }
 
@@ -316,7 +336,11 @@ impl Launcher {
                 prune_if_gone(pid);
                 // A clean shutdown removes kernel.pid; a crash leaves it.
                 let clean = !self.run_dir(id).join("kernel.pid").exists();
-                ExitInfo { code: None, signal: None, clean_hint: clean }
+                ExitInfo {
+                    code: None,
+                    signal: None,
+                    clean_hint: clean,
+                }
             }
         }
     }
@@ -345,9 +369,7 @@ impl Launcher {
         let pubkey = self.parts.user_key.verifying_key().to_bytes();
         write_user_pin(&run_dir, &pubkey).map_err(|e| backend(format!("user.pub: {e}")))?;
         let snap = (self.parts.snapshot)().ok_or_else(|| {
-            RuntimeError::AdmissionRefused(
-                "this daemon has no governance engine to export a parent policy from".into(),
-            )
+            RuntimeError::AdmissionRefused("this daemon has no governance engine to export a parent policy from".into())
         })?;
         export_rules_to(
             &run_dir.join(PARENT_POLICY_FILE),
@@ -381,7 +403,13 @@ impl Launcher {
             project_id: spec.project_id.clone(),
             nonce,
             pid: 0,
-            exe_sha: self.exe_sha(),
+            exe_sha: if spec.adapter == super::wasmtime::ADAPTER {
+                super::wasmtime::OperatorConfig::load(&self.cfg, &spec.root)
+                    .map_err(backend)?
+                    .runner_sha256
+            } else {
+                self.exe_sha()
+            },
             root: spec.root.clone(),
             expires_unix: spawn.expires_unix,
         })
@@ -396,10 +424,18 @@ impl Launcher {
 
     /// Issue the child's project token (Write only, project-scoped).
     fn issue_token(&self, id: &str) -> Result<String, RuntimeError> {
-        let Some(auth) = &self.parts.tokens else { return Ok(String::new()) };
+        let Some(auth) = &self.parts.tokens else {
+            return Ok(String::new());
+        };
         let ttl = chrono::Duration::seconds(PROJECT_TOKEN_TTL_SECS as i64);
         let (secret, info) = auth
-            .issue_project(id, ttl, &Issuer { uid: Some(nix::unistd::getuid().as_raw()) })
+            .issue_project(
+                id,
+                ttl,
+                &Issuer {
+                    uid: Some(nix::unistd::getuid().as_raw()),
+                },
+            )
             .map_err(|e| backend(format!("project token: {e}")))?;
         let mut slots = self.token_slots();
         let slot = slots.entry(id.to_owned()).or_default();
@@ -414,11 +450,7 @@ impl Launcher {
     /// Renew a child's token (`project.token.refresh`). The presented token
     /// must be a live project-scoped token for `id` that this supervisor
     /// issued last (or the one before); the older one is revoked.
-    pub fn refresh_token(
-        &self,
-        id: &str,
-        presented: &str,
-    ) -> Result<(String, chrono::DateTime<Utc>), String> {
+    pub fn refresh_token(&self, id: &str, presented: &str) -> Result<(String, chrono::DateTime<Utc>), String> {
         use clawft_kernel::token_authority::TokenScope;
         let auth = self.parts.tokens.as_ref().ok_or("no token authority")?;
         let info = auth.validate(presented).ok_or("token is unknown, expired or revoked")?;
@@ -439,7 +471,13 @@ impl Launcher {
         }
         let ttl = chrono::Duration::seconds(PROJECT_TOKEN_TTL_SECS as i64);
         let (secret, new) = auth
-            .issue_project(id, ttl, &Issuer { uid: Some(nix::unistd::getuid().as_raw()) })
+            .issue_project(
+                id,
+                ttl,
+                &Issuer {
+                    uid: Some(nix::unistd::getuid().as_raw()),
+                },
+            )
             .map_err(|e| e.to_string())?;
         let mut slots = self.token_slots();
         let slot = slots.entry(id.to_owned()).or_default();
@@ -471,6 +509,16 @@ impl ChildLauncher for Launcher {
         if self.pid_of(id).is_some() {
             return Err(RuntimeError::InvalidState(format!("{id} already has a live kernel")));
         }
+        let manifest = clawft_types::project::find_by_id(&self.cfg.manifests_dir, id)
+            .map_err(backend)?
+            .ok_or_else(|| backend("missing project manifest"))?;
+        let adapter = super::wasmtime::selected(&manifest, &self.run_dir(id)).map_err(backend)?;
+        if adapter != spec.adapter {
+            return Err(backend("loaded adapter differs from manifest"));
+        }
+        if adapter == super::wasmtime::ADAPTER {
+            super::wasmtime::preflight(&self.cfg, &spec.root, &self.run_dir(id)).map_err(backend)?;
+        }
         let token = self.issue_token(id)?;
         let run_dir = self.run_dir(id);
         let started = match self.write_run_files(spec, &token) {
@@ -499,6 +547,9 @@ impl ChildLauncher for Launcher {
 impl Launcher {
     async fn launch(&self, spec: &ChildSpec, run_dir: &Path) -> Result<ChildRef, RuntimeError> {
         let id = spec.project_id.as_str();
+        if spec.adapter == super::wasmtime::ADAPTER {
+            super::wasmtime::validate_log(run_dir).map_err(backend)?;
+        }
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -506,19 +557,34 @@ impl Launcher {
             .open(run_dir.join(LOG_FILE_NAME))
             .map_err(|e| backend(format!("kernel.log: {e}")))?;
         let log2 = log.try_clone().map_err(backend)?;
-        let env = child_env(&self.cfg.home, run_dir, id, |k| std::env::var(k).ok());
-        let mut cmd = std::process::Command::new(&self.cfg.exe);
-        cmd.args(child_args(id))
-            .env_clear()
-            .envs(env)
-            .current_dir(&spec.root)
-            .stdin(std::process::Stdio::null())
+        let (exe, mut cmd) = if spec.adapter == super::wasmtime::ADAPTER {
+            let (exe, config) = super::wasmtime::launch(
+                &self.cfg,
+                spec,
+                run_dir,
+                &clawft_types::project::canon::hex_encode(&self.parts.user_key.verifying_key().to_bytes()),
+            )
+            .map_err(backend)?;
+            let mut cmd = std::process::Command::new(&exe);
+            cmd.arg(config).env_clear().current_dir(run_dir);
+            (exe, cmd)
+        } else if spec.adapter == "logical" {
+            let mut cmd = std::process::Command::new(&self.cfg.exe);
+            cmd.args(child_args(id))
+                .env_clear()
+                .envs(child_env(&self.cfg.home, run_dir, id, |k| std::env::var(k).ok()))
+                .current_dir(&spec.root);
+            (self.cfg.exe.clone(), cmd)
+        } else {
+            return Err(backend("unsupported project adapter"));
+        };
+        cmd.stdin(std::process::Stdio::null())
             .stdout(log)
             .stderr(log2)
             .process_group(0);
         let mut child = cmd
             .spawn()
-            .map_err(|e| backend(format!("cannot start {}: {e}", self.cfg.exe.display())))?;
+            .map_err(|e| backend(format!("cannot start {}: {e}", exe.display())))?;
         let pid = child.id();
         registry().note_pid(id, pid);
         self.spawns.fetch_add(1, Ordering::SeqCst);
@@ -534,18 +600,24 @@ impl Launcher {
         });
         self.procs().insert(
             id.to_owned(),
-            Entry { proc: Proc::Owned { pid, exit: rx }, stop: Arc::new(AtomicBool::new(false)) },
+            Entry {
+                proc: Proc::Owned { pid, exit: rx },
+                stop: Arc::new(AtomicBool::new(false)),
+            },
         );
         state::update(run_dir, |st| {
             st.state = clawft_types::project::ChildState::Starting;
             st.pid = Some(pid);
-            st.exe = Some(self.cfg.exe.display().to_string());
+            st.exe = Some(exe.display().to_string());
             st.started_unix = Some(state::now_unix());
             // The new process has not said which build it is yet.
             st.kernel_sha = None;
             st.kernel_version = None;
         });
-        Ok(ChildRef { project_id: id.to_owned(), pid })
+        Ok(ChildRef {
+            project_id: id.to_owned(),
+            pid,
+        })
     }
 
     async fn terminate_inner(&self, child: &ChildRef, grace: Duration) -> Result<Option<i32>, RuntimeError> {
@@ -591,9 +663,15 @@ impl Launcher {
         match p {
             P::None => ChildProbe::NotStarted,
             P::Owned(None, pid) => ChildProbe::Running { pid },
-            P::Owned(Some(i), _) => ChildProbe::Exited { code: i.code, signal: i.signal },
+            P::Owned(Some(i), _) => ChildProbe::Exited {
+                code: i.code,
+                signal: i.signal,
+            },
             P::Adopted(pid) if adopted_alive(pid) => ChildProbe::Running { pid },
-            P::Adopted(_) => ChildProbe::Exited { code: None, signal: None },
+            P::Adopted(_) => ChildProbe::Exited {
+                code: None,
+                signal: None,
+            },
         }
     }
 }
@@ -616,6 +694,9 @@ impl Launcher {
     /// (pid reuse since adoption must never kill a stranger).
     fn adopted_still_ours(&self, id: &str) -> bool {
         let Some(pid) = self.pid_of(id) else { return false };
+        if super::wasmtime::is_wasm_run(&self.run_dir(id)) {
+            return super::wasmtime::identity(&self.run_dir(id), pid);
+        }
         super::adopt::identity_ok(&self.run_dir(id), pid, &self.cfg.exe)
     }
 
@@ -630,7 +711,7 @@ impl Launcher {
         // An adopted pid is signalled only while it still verifies as ours,
         // and as a group only when it really leads one (a recycled pid that
         // leads nothing is never group-killed).
-        if !super::adopt::identity_ok(&self.run_dir(id), pid, &self.cfg.exe) {
+        if !self.adopted_still_ours(id) {
             return;
         }
         let leads_group = nix::unistd::getpgid(Some(target)).is_ok_and(|g| g == target);

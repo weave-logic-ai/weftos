@@ -34,6 +34,11 @@ pub struct ChildHandshake {
 /// Calls to a child kernel.
 #[async_trait]
 pub trait ChildIo: Send + Sync {
+    /// Full challenge-bound Wasmtime identity; unsupported transports fail closed.
+    async fn wasm_handshake(&self, _socket: &Path, _challenge: &str) -> Option<serde_json::Value> {
+        None
+    }
+
     /// `kernel.handshake` at `socket`; `None` when nothing answers.
     async fn handshake(&self, socket: &Path) -> Option<ChildHandshake>;
     /// Ask the kernel at `socket` (project `project_id`) to shut down
@@ -51,7 +56,10 @@ impl RpcChildIo {
     /// Calls signed with `user_key`; the child's key id is read from
     /// `<manifests_dir>/<id>.cert.json` for the forward header.
     pub fn new(user_key: SigningKey, manifests_dir: PathBuf) -> Self {
-        Self { user_key, manifests_dir }
+        Self {
+            user_key,
+            manifests_dir,
+        }
     }
 
     fn target_key_id(&self, id: &str) -> Option<String> {
@@ -63,12 +71,35 @@ impl RpcChildIo {
 
 #[async_trait]
 impl ChildIo for RpcChildIo {
+    async fn wasm_handshake(&self, socket: &Path, challenge: &str) -> Option<serde_json::Value> {
+        let call = async {
+            let mut client = DaemonClient::connect_path(socket).await?;
+            let reply = client
+                .call(Request::with_params(
+                    "kernel.handshake",
+                    serde_json::json!({"challenge":challenge}),
+                ))
+                .await
+                .ok()?;
+            if !reply.ok {
+                return None;
+            }
+            reply.result
+        };
+        tokio::time::timeout(CALL_TIMEOUT, call).await.ok().flatten()
+    }
+
     async fn handshake(&self, socket: &Path) -> Option<ChildHandshake> {
         let call = async {
             let mut client = DaemonClient::connect_path(socket).await?;
             let resp = client.call(Request::new("kernel.handshake")).await.ok()?;
             let h: Handshake = serde_json::from_value(resp.result?).ok()?;
-            Some(ChildHandshake { project_id: h.project_id, pid: h.pid, sha: h.sha, version: h.version })
+            Some(ChildHandshake {
+                project_id: h.project_id,
+                pid: h.pid,
+                sha: h.sha,
+                version: h.version,
+            })
         };
         tokio::time::timeout(CALL_TIMEOUT, call).await.ok().flatten()
     }

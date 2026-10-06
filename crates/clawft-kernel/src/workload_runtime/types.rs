@@ -51,9 +51,9 @@ impl RunMode {
     /// Boundary validation.
     pub fn validate(&self) -> Result<(), RuntimeError> {
         match self {
-            RunMode::Interval { secs } if !(1..=3600).contains(secs) => Err(
-                RuntimeError::InvalidConfig("interval must be 1..=3600 seconds".into()),
-            ),
+            RunMode::Interval { secs } if !(1..=3600).contains(secs) => {
+                Err(RuntimeError::InvalidConfig("interval must be 1..=3600 seconds".into()))
+            }
             _ => Ok(()),
         }
     }
@@ -92,6 +92,8 @@ pub struct InferencePayload {
 /// Identity of the project a [`WorkloadSource::Project`] workload belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectPayload {
+    /// Explicit adapter selected by the certificate-verifying supervisor.
+    pub adapter: String,
     /// Project id.
     pub project_id: String,
     /// Key id of the project signing key.
@@ -353,11 +355,7 @@ pub trait WorkloadRuntime: Send + Sync {
     /// Self-check: can this node run `w`? Reserves nothing it cannot undo.
     async fn admit(&self, w: &VerifiedWorkload) -> Result<Admission, RuntimeError>;
     /// Stage the payload and config; returns a handle for the instance.
-    async fn load(
-        &self,
-        w: &VerifiedWorkload,
-        cfg: &WorkloadConfig,
-    ) -> Result<InstanceHandle, RuntimeError>;
+    async fn load(&self, w: &VerifiedWorkload, cfg: &WorkloadConfig) -> Result<InstanceHandle, RuntimeError>;
     /// Start the instance.
     async fn start(&self, h: &InstanceHandle) -> Result<(), RuntimeError>;
     /// Stop it (terminate, then kill after `grace`) and return evidence.
@@ -397,10 +395,7 @@ pub trait WorkloadRuntime: Send + Sync {
     }
     /// Instances that must stop before a console run of `h`. The host
     /// gates each one as `workload.stop` before calling [`Self::preempt`].
-    async fn console_preemptions(
-        &self,
-        _h: &InstanceHandle,
-    ) -> Result<Vec<Preemption>, RuntimeError> {
+    async fn console_preemptions(&self, _h: &InstanceHandle) -> Result<Vec<Preemption>, RuntimeError> {
         Ok(Vec::new())
     }
     /// Stop one preempted instance.

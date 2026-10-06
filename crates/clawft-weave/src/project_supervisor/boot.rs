@@ -16,7 +16,9 @@ impl Supervisor {
     /// heartbeats. Without a certificate in force nothing is filed.
     fn file_adopted_session(&self, id: &str, pid: u32) {
         use crate::mesh_local_registry::{NewSession, registry};
-        let Ok(view) = crate::project_cert_rpc::current_view(&self.deps.cert_env) else { return };
+        let Ok(view) = crate::project_cert_rpc::current_view(&self.deps.cert_env) else {
+            return;
+        };
         let Some(cert) = view.current_cert(id) else { return };
         let Some(project_pubkey) = clawft_types::project::canon::hex_decode::<32>(&cert.project_pubkey) else {
             return;
@@ -38,18 +40,18 @@ impl Supervisor {
     /// never left silently running: a revoked project's child is stopped
     /// (identity re-checked before any signal), anything else is reported
     /// with the reason.
-    pub(super) async fn adopt_one(
-        self: &Arc<Self>,
-        id: &str,
-        pid: u32,
-        slot: &Arc<Slot>,
-    ) -> Result<(), adopt::Skip> {
+    pub(super) async fn adopt_one(self: &Arc<Self>, id: &str, pid: u32, slot: &Arc<Slot>) -> Result<(), adopt::Skip> {
         let (w, manifest) = match self.prepare(id) {
             Ok(x) => x,
             Err(e) => return Err(self.refuse_adopted(id, pid, e).await),
         };
         self.launcher.adopt(id, pid);
-        let handle = match self.host.load(&w, &Self::host_cfg(id)).await {
+        let handle = match self
+            .driver_host(self.selected_adapter(id).map_err(adopt::Skip::Refused)?)
+            .map_err(|e| adopt::Skip::Refused(e.to_string()))?
+            .load(&w, &Self::host_cfg(id))
+            .await
+        {
             Ok(h) => h,
             Err(e) => {
                 self.launcher.forget(id);
@@ -83,12 +85,21 @@ impl Supervisor {
         self.launcher.adopt(id, pid);
         let stopped = self
             .launcher
-            .terminate(&ChildRef { project_id: id.to_owned(), pid }, self.cfg.term_grace)
+            .terminate(
+                &ChildRef {
+                    project_id: id.to_owned(),
+                    pid,
+                },
+                self.cfg.term_grace,
+            )
             .await;
         let alive = self.launcher.pid_of(id).is_some();
         self.launcher.forget(id);
         self.launcher.revoke_tokens(id);
-        self.chain("project.kernel.stopped", json!({"project_id": id, "pid": pid, "reason": "revoked at adoption"}));
+        self.chain(
+            "project.kernel.stopped",
+            json!({"project_id": id, "pid": pid, "reason": "revoked at adoption"}),
+        );
         adopt::Skip::Refused(if alive || stopped.is_err() {
             format!("project is revoked and kernel pid {pid} could NOT be stopped; stop it by hand")
         } else {
@@ -98,7 +109,17 @@ impl Supervisor {
 
     /// Verify and adopt children left by an earlier daemon (see [`adopt`]).
     pub async fn adopt_on_boot(self: &Arc<Self>) -> Vec<Found> {
-        let mut found = adopt::scan(&self.cfg.run_root, &self.cfg.exe, self.deps.io.as_ref()).await;
+        let mut found = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&self.cfg.run_root) {
+            for entry in entries.flatten() {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                if clawft_types::project::validate_id(&id).is_ok() {
+                    if let Some(f) = self.scan_project(&id).await {
+                        found.push(f);
+                    }
+                }
+            }
+        }
         for f in &mut found {
             match f {
                 Found::Adopted { id, pid } => {
@@ -106,7 +127,11 @@ impl Supervisor {
                     let slot = self.slot(&id2);
                     let _g = slot.gate.lock().await;
                     if let Err(reason) = self.adopt_one(&id2, pid2, &slot).await {
-                        *f = Found::Unverifiable { id: id2, pid: Some(pid2), reason };
+                        *f = Found::Unverifiable {
+                            id: id2,
+                            pid: Some(pid2),
+                            reason,
+                        };
                     }
                 }
                 Found::Unverifiable { id, pid, reason } if *reason != adopt::Skip::Dead => {
@@ -135,14 +160,18 @@ impl Supervisor {
             for f in found.iter_mut().filter(|f| waiting(f)) {
                 let Found::Unverifiable { id, .. } = f else { continue };
                 let id = id.clone();
-                let rescan = adopt::scan_one(&self.run_dir(&id), &id, &self.cfg.exe, self.deps.io.as_ref()).await;
+                let rescan = self.scan_project(&id).await;
                 match rescan {
                     Some(Found::Adopted { id, pid }) => {
                         let slot = self.slot(&id);
                         let _g = slot.gate.lock().await;
                         *f = match self.adopt_one(&id, pid, &slot).await {
                             Ok(()) => Found::Adopted { id, pid },
-                            Err(reason) => Found::Unverifiable { id, pid: Some(pid), reason },
+                            Err(reason) => Found::Unverifiable {
+                                id,
+                                pid: Some(pid),
+                                reason,
+                            },
                         };
                     }
                     Some(other) => {
@@ -266,7 +295,10 @@ impl Supervisor {
                 slot.st().restarts += 1;
                 match self.start_locked(id, slot).await {
                     Ok(_) => {
-                        self.chain("project.kernel.restarted", json!({"project_id": id, "reason": "heartbeat lost"}));
+                        self.chain(
+                            "project.kernel.restarted",
+                            json!({"project_id": id, "reason": "heartbeat lost"}),
+                        );
                         true
                     }
                     Err(e) => {
@@ -346,9 +378,15 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
     if !crate::user_daemon::is_active() {
         return;
     }
-    let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
-    let Some(chain) = kernel.chain_manager().cloned() else { return };
-    let Some(user_key) = chain.signing_key_clone() else { return };
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let Some(chain) = kernel.chain_manager().cloned() else {
+        return;
+    };
+    let Some(user_key) = chain.signing_key_clone() else {
+        return;
+    };
     let (Some(home), Some(manifests_dir)) = (
         clawft_types::runtime_paths::home_dir(),
         crate::project_rpc::configured_dir(),
@@ -358,7 +396,9 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
     let Ok(exe) = std::env::current_exe() else { return };
     let paths = clawft_types::runtime_paths::RuntimePaths::resolve();
     // The run root the revoked-marker writer uses too (one derivation).
-    let Some(run_root) = crate::project_cert_rpc::user_run_root() else { return };
+    let Some(run_root) = crate::project_cert_rpc::user_run_root() else {
+        return;
+    };
     let mut cfg = SupervisorConfig::new(&home, exe);
     cfg.run_root = run_root;
     cfg.parent_socket = paths.socket();
@@ -369,7 +409,11 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
     let kc = kernel.kernel_config();
     let parent_limits = clawft_kernel::gate::parent_limits_of(kc);
     let deps = Deps {
-        cert_env: CertEnv { chain, user_key: user_key.clone(), manifests_dir: manifests_dir.clone() },
+        cert_env: CertEnv {
+            chain,
+            user_key: user_key.clone(),
+            manifests_dir: manifests_dir.clone(),
+        },
         snapshot: Arc::new(move || {
             gate.as_ref().and_then(|g| g.governance_snapshot()).map(|mut s| {
                 s.limits = parent_limits;

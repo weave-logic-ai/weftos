@@ -24,6 +24,8 @@ path = "src/main.rs"
 dist = true
 
 [features]
+# Native launcher; Wasmtime itself lives only in the pinned runner process.
+wasmtime-project = ["placement"]
 # WEFT-497: removed empty `agent-core-chat` cutover flag after D3 soak.
 # `agent.chat` always dispatches via `clawft-service-agent::AgentService`.
 default = ["cluster", "ecc", "exochain", "mesh", "placement"]

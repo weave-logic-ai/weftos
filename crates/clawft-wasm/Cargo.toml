@@ -17,6 +17,8 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
+# Persistent ADR-103 project supervisor; separate from plugin calls.
+project-kernel = ["dep:clawft-kernel", "clawft-types/native", "dep:ed25519-dalek", "dep:sha2", "dep:rand", "dep:chrono", "dep:weftos-rvf-crypto", "dep:weftos-rvf-wire", "dep:rvf-types", "dep:rvf-runtime", "dep:ciborium", "dep:tracing", "dep:thiserror"]
 browser = [
     "dep:clawft-core",
     "dep:clawft-llm",
@@ -84,3 +86,53 @@ lol_alloc = { version = "0.4", optional = true }
 # native test runs.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[[bin]]
+name = "weftos-project-guest"
+path = "src/project_kernel/main.rs"
+required-features = ["project-kernel"]
+
+[dependencies.clawft-kernel]
+workspace = true
+default-features = false
+optional = true
+
+[dependencies.ed25519-dalek]
+workspace = true
+optional = true
+
+[dependencies.sha2]
+workspace = true
+optional = true
+
+[dependencies.rand]
+workspace = true
+optional = true
+
+[dependencies.weftos-rvf-crypto]
+workspace = true
+optional = true
+
+[dependencies.weftos-rvf-wire]
+workspace = true
+optional = true
+
+[dependencies.rvf-types]
+workspace = true
+optional = true
+
+[dependencies.ciborium]
+workspace = true
+optional = true
+
+[dependencies.tracing]
+workspace = true
+optional = true
+
+[dependencies.thiserror]
+workspace = true
+optional = true
+
+[dependencies.rvf-runtime]
+workspace = true
+optional = true

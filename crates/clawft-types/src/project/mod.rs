@@ -23,8 +23,8 @@ mod ids;
 mod schema;
 mod seed;
 pub mod spawn;
-pub mod token_consts;
 mod store;
+pub mod token_consts;
 
 pub use adopt::{adopt_or_init, reinit_fork};
 pub use cert::{CertError, CertRequest, ProjectAnchorStmt, ProjectCert};
@@ -32,11 +32,11 @@ pub use error::ProjectError;
 pub use ids::{new_id, validate_id};
 pub use schema::{
     BinaryInfo, ChainSection, ChildState, DEFAULT_IDLE_STOP_SECS, DEFAULT_RESTART_MAX, DEFAULT_RESTART_WINDOW_SECS,
-    LegacySection, ProjectManifest, ProjectState, ProjectToml,
-    ProjectTomlPresence, SCHEMA_VERSION, SeedSection, ServeSection, ServeVia, WeaveSection,
+    LegacySection, ProjectManifest, ProjectSandbox, ProjectState, ProjectToml, ProjectTomlPresence, SCHEMA_VERSION,
+    SeedSection, ServeSection, ServeVia, WeaveSection,
 };
-pub use spawn::{SPAWN_TTL_SECS, SpawnError, SpawnFile};
 pub use seed::{SeedReport, seed_from_registry, seed_from_workspaces};
+pub use spawn::{SPAWN_TTL_SECS, SpawnError, SpawnFile};
 pub use store::{
     ManifestListing, PROJECT_DIR, PROJECT_TOML, find_by_id, find_by_root, find_project_toml,
     list_manifests, manifest_path, project_toml_path, read_manifest, read_project_toml,
