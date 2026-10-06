@@ -1356,6 +1356,545 @@
    "grade": "C",
    "why": "hobby 3-axis compass; catalog spec range=+-8 gauss, resolution=16-bit, odr=up to 200 Hz",
    "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld012-5g",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2410",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2412-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2410b",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2411",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2411s",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2410s",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 20 × 20; unit mm 2",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld6002c-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6002c",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2410s-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 20 × 20; unit mm 2",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2410b-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2412",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld8001h",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld8001h-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld8001b",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld8001b-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-zw111",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-zw111-test-kit",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-zw101",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-zw101-test-kit",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2415h",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2415h-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-zw0901",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; catalog spec resolution=508DPI",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-zw0901-test-kit",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; catalog spec resolution=508DPI",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-zw0906",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; catalog spec resolution=508DPI",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-zw0906-test-kit",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; catalog spec resolution=508DPI",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2451",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld020",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2401",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2402",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 20X20; unit mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2402-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 20X20; unit mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld6002h",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec fov=min -60; max +60; unit °",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2413",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec frequency=min 23; unit GHz, size=typical 44*36; unit mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2413-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec frequency=min 23; unit GHz, size=typical 44*36; unit mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld6001a",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6001a-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6001c",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6001c-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6001",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6001-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2460",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-zw3020",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; catalog spec resolution=508DPI",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-zw3020-test-kit",
+   "type": "capacitive",
+   "grade": "C",
+   "why": "consumer capacitive-semiconductor fingerprint module; catalog spec resolution=508DPI",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld1040c",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld1040",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-sx670",
+   "type": "presence-contact",
+   "grade": "C",
+   "why": "slot-type photoelectric interrupter switch (NPN); no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-sx671",
+   "type": "presence-contact",
+   "grade": "C",
+   "why": "slot-type photoelectric interrupter switch (NPN); no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-sx672",
+   "type": "presence-contact",
+   "grade": "C",
+   "why": "slot-type photoelectric interrupter switch (NPN); no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld021",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2410d",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 7X35; unit mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2410d-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 7X35; unit mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-sw01s",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-as201-9",
+   "type": "imu",
+   "grade": "C",
+   "why": "hobby attitude module / phone-class MEMS; catalog spec size=24mm *16mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2452",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2452-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld1040-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld1040c-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-as201-6-test-kit",
+   "type": "imu",
+   "grade": "C",
+   "why": "hobby attitude module / phone-class MEMS; catalog spec size=24mm *16mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2451sensor-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld020-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-as201-9-test-kit",
+   "type": "imu",
+   "grade": "C",
+   "why": "hobby attitude module / phone-class MEMS; catalog spec size=24mm *16mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2416",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 14*14; unit mm²",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2416-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 14*14; unit mm²",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2410-aa",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 24*24; unit mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2410-aa-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 24*24; unit mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2453",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 7*30; unit mm*mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2453-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec size=typical 7*30; unit mm*mm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2423",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2423-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2417",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2417-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld2454",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec interface=1* UART",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld2454-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; catalog spec interface=1* UART",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hlk-ld6003b",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6003b-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6003d",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
+  },
+  {
+   "ref": "module:hlk-ld6003d-test-kit",
+   "type": "radar",
+   "grade": "C",
+   "why": "low-cost Hi-Link mmWave presence/ranging radar module; no figures in the catalog spec",
+   "confidence": "low"
   }
  ]
 }

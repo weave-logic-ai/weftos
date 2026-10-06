@@ -10,6 +10,56 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 > overwritten on the next docs build. To change a release entry, edit
 > `CHANGELOG.md` and re-run the script.
 
+## v0.8.3
+
+*2026-10-06*
+
+The project console batch (`target-0.8.3`). Stable release of everything in 0.8.3-rc.1
+through rc.3 (listed below), plus the following.
+
+### Added
+
+- **Project workspaces in the dashboard (ADR-108 P1).** The daemon's `[dashboard]`
+  reporter sends each registered project's workspace facts (ULID, root, git remote,
+  branch, head, dirty count, last activity) in its heartbeat, so the dashboard lists where
+  every project is installed.
+- **Node actions over the heartbeat (ADR-108 P2).** The reporter receives actions queued
+  in the dashboard (`install`, `update`, `remove`, `pair`) in the heartbeat response,
+  acknowledges them and reports a result on later beats; `weaver dashboard actions`
+  lists them. Nothing is executed yet: every kind answers `failed` (not implemented in
+  this release) and unknown kinds fail with a clear error.
+- **x86_64 cogs in a COG-008 repository.** `weft-cog-repo sign-tree` records an `x86_64`
+  (glibc Linux host) artifact next to `arm` and `arm64`; Seed sideload installs still
+  refuse anything but `arm`/`arm64`.
+- **Wasmtime project kernel (ADR-103 Phase 4), off by default.** A project can run its
+  kernel as a `wasm32-wasip1` guest under a native Wasmtime runner
+  (`serve.sandbox = "wasmtime"`, `serve.adapter = "wasmtime-project-v1"`). Needs a build
+  with the `wasmtime-project` feature and an operator pin file
+  (`~/.weftos/project-wasmtime.json`) naming the runner and guest by SHA-256; otherwise
+  the supervisor refuses, never falling back to the native kernel. The runner enforces
+  fuel, memory and epoch cancellation; adoption needs a challenge-bound guest signature.
+  `scripts/build.sh wasm-project` and `test-wasm-project`. Not in release binaries.
+- **`weftos-guide-view`** and `scripts/build.sh guide-web`: a browser popup that renders
+  one ADR-104 sensor guide (used by Sensor Explorer).
+- Cog market catalog refresh; hardware KB entries for DEBIX, Hi-Link and Infineon.
+- ADR-108 (install projects locally), ADR-109 (agent environment profiles and a local
+  doctor) and ADR-110 (agent transcript collection), all accepted. Later phases are not
+  in this release.
+
+### Security
+
+- New critical/high npm advisories cleared without breaking upgrades: `proxy-addr`
+  2.0.8 (root override), `seroval` and `source-map-js` (`clawft-ui`, `docs/src`, `gui`).
+
+### Known limits
+
+- ADR-108 pairing (P2b), install over the mesh (P3) and configure (P4) are not built;
+  a local install still needs the existing trust files.
+- The Wasmtime project kernel has passed its own lifecycle fixture but has not run under a
+  real user daemon; the runner compiles the guest on every start.
+
+---
+
 ## v0.8.3-rc.3
 
 *2026-10-05*

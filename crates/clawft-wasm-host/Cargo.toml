@@ -12,6 +12,12 @@ description = "Native wasmtime host runtime for clawft WASM plugins (sandbox, en
 keywords = ["wasm", "wasmtime", "plugin", "sandbox", "ai"]
 categories = ["wasm", "development-tools"]
 
+
+# The ADR-103 Wasmtime project-kernel binary is feature-gated and not shipped yet
+# (signed packaging: board card 3cd118d1). Keep cargo-dist from building it.
+[package.metadata.dist]
+dist = false
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
