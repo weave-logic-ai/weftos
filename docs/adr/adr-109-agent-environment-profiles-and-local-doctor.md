@@ -1,6 +1,6 @@
 # ADR-109: Agent environment profiles and a local doctor
 
-- **Status**: Proposed (2026-10-05)
+- **Status**: Accepted (2026-10-05; open questions decided by the owner the same day)
 - **Deciders**: owner
 - **Builds on**: ADR-108 (node actions over the heartbeat, pairing), the daemon `[dashboard]`
   reporter, `weaver doctor` (existing doctor framework in `clawft-rpc::doctor`), ADR-103 (user
@@ -34,10 +34,21 @@ sessions, histories and caches that must never leave the machine.
    - Values under keys matching token, secret, key, password, auth or cookie are dropped.
    - A secret scanner runs over the result before it is stored. Any hit aborts the capture and
      names the file.
-3. **Layers.** An org baseline (from the owner's machine, reviewed) plus optional per-member
-   overrides. Personal content in instruction files stays in the member layer unless promoted.
-4. **The profile store is versioned and private.** Diffs are reviewable and every apply names
-   the profile version it used.
+3. **Layers, kept in step both ways.** An org baseline (from the owner's machine, reviewed)
+   plus per-member layers. Instruction files (`CLAUDE.md`, `AGENTS.md`) are an ongoing,
+   bilateral process driven from the dashboard, not the shell:
+   - The doctor extracts rules a member added locally.
+   - Each rule is analysed (overlap with the baseline, conflicts, risk, usefulness).
+   - The dashboard proposes one of three outcomes: share it (promote into the baseline, after
+     owner review), urge removal (it conflicts with or weakens the baseline, or it is risky),
+     or keep it as the member's own.
+   - Baseline changes flow back to every member the same way.
+   - Accepted outcomes are applied on the member's machine as node actions. Those may run
+     shell commands there, after the member confirms.
+4. **The profile store is the private `weftos-weavelogic` repo.** That follows the
+   `weftos-<projectslug>` convention for a project's private repo, and this one is
+   WeaveLogic's own. It is versioned, and baseline changes land by PR. Every apply names the
+   profile commit it used.
 5. **The doctor runs locally and reports to the dashboard.**
    - `weaver doctor agents` compares the machine with the profile and reports findings: tool
      missing or drifted, MCP server missing, setting differs, skill/agent missing or stale,
@@ -54,6 +65,8 @@ sessions, histories and caches that must never leave the machine.
    - The node shows the plan (files to write, commands to run), runs it after confirmation,
      backs up every file it changes, and reports the result.
    - Apply never writes credentials. Required secrets are listed for the member to supply.
+   - Apply may install or upgrade the CLIs themselves (Claude Code, Codex, Grok, ruflo) to the
+     profile's pinned versions, through each tool's official install method, after consent.
 
 ## Phases
 
@@ -70,11 +83,3 @@ sessions, histories and caches that must never leave the machine.
 - New sensitive surface: capture and apply touch folders that also hold credentials. They
   are therefore allowlist-only, scanned, fail closed, and covered by negative tests (planted
   fake secrets in every tool folder must never appear in a profile or a report).
-
-## Open questions
-
-- Where the profile store lives: a private repo (git history, review by PR) or the dashboard
-  (Supabase storage, edited in the UI)?
-- Are instruction files (`CLAUDE.md`, `AGENTS.md`) part of the org baseline, or member-owned with
-  only a shared section managed?
-- Should apply install or upgrade the CLIs themselves, or only configure tools already installed?
