@@ -1,0 +1,485 @@
+{
+  "source": "https://www.infineon.com/products",
+  "pulled": "2026-10-05",
+  "modules": [
+    {
+      "id": "infineon-pasco2v01",
+      "name": "XENSIV PASCO2V01",
+      "vendor": "Infineon",
+      "kind": "sensor",
+      "summary": "The XENSIV™ PASCO2V01 gas sensor is a 12V, real carbon dioxide (CO2) sensor based on photoacoustic spectroscopy (PAS) technology.",
+      "good_for": [
+        "real CO2 in ppm",
+        "HVAC and indoor air quality",
+        "smart thermostat"
+      ],
+      "not_for": [
+        "new designs; productStatusInfo is discontinued",
+        "VOC or estimated eCO2"
+      ],
+      "notes": [
+        "https://www.infineon.com/part/PASCO2V01"
+      ],
+      "spec": {
+        "source": "https://www.infineon.com/part/PASCO2V01",
+        "opn": "PASCO2V01AUMA3",
+        "product_status": "discontinued",
+        "principle": "photoacoustic spectroscopy (PAS)",
+        "accuracy": "±30 ppm ±3% between 400 and 5000 ppm",
+        "measurement_range": "0 ppm to 32000 ppm",
+        "response_time": "90 s",
+        "supply": "12V power supply (IR emitter); parametric range 3.3 V to 12 V",
+        "interface": "UART, I²C, PWM",
+        "package": "14 x 13.8 x 7.5 mm³ SMD",
+        "temperature": "0 to +50°C",
+        "dust": "Dust-proof design (ISO 20653:2013-02)"
+      },
+      "pins": [],
+      "chips": [],
+      "photo": "",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-pasco2v01-datasheet-en.pdf",
+      "mouser_query": "PASCO2V01AUMA3",
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/c/?q=PASCO2V01AUMA3",
+          "ships_from": ""
+        }
+      ],
+      "seen_in": [
+        "docs/hardware/infineon.md"
+      ],
+      "hash": "wh_487c2290f56cb530",
+      "cogs": [],
+      "docs": [],
+      "firmware": {
+        "version": "",
+        "read_with": "",
+        "read_config_key": "",
+        "update": "",
+        "url": "",
+        "notes": ""
+      }
+    },
+    {
+      "id": "infineon-kit-csk-bgt60cutr13",
+      "name": "KIT_CSK_BGT60CUTR13",
+      "vendor": "Infineon",
+      "kind": "board",
+      "summary": "This Connected Sensor Kit features XENSIV™ BGT60CUTR13AIP CMOS 60GHz radar sensor.",
+      "good_for": [
+        "rapid prototyping of 60 GHz CMOS radar",
+        "battery-powered IoT evaluation",
+        "real-time sensor data evaluation"
+      ],
+      "not_for": [
+        "a production module; it is an evaluation board"
+      ],
+      "notes": [
+        "https://www.infineon.com/evaluation-board/KIT-CSK-BGT60CUTR13"
+      ],
+      "spec": {
+        "source": "https://www.infineon.com/evaluation-board/KIT-CSK-BGT60CUTR13",
+        "opn": "KIT-CSK-BGT60CUTR13",
+        "product_status": "active and preferred",
+        "board_type": "Evaluation Board",
+        "radar": "XENSIV BGT60CUTR13AIP",
+        "antenna": "Antennas in package",
+        "channels": "1 Tx, 3 Rx",
+        "mcu": "Dual core, low-power PSOC 6 MCU",
+        "radio": "Wi-Fi and Bluetooth combo radio module",
+        "form_factor": "Adafruit feather-compatible, 22.5 x 63 x 30 mm³",
+        "power": "can be powered by a battery"
+      },
+      "pins": [],
+      "chips": [
+        "bgt60cutr13aip"
+      ],
+      "photo": "",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/44/infineon-ug113247-kit-csk-bgt60cutr13-xensiv-connected-sensor-kit-usermanual-en.pdf",
+      "mouser_query": "KIT-CSK-BGT60CUTR13",
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/c/?q=KIT-CSK-BGT60CUTR13",
+          "ships_from": ""
+        }
+      ],
+      "seen_in": [
+        "docs/hardware/infineon.md"
+      ],
+      "hash": "wh_f2111b943c1bb8a3",
+      "cogs": [],
+      "docs": [],
+      "firmware": {
+        "version": "",
+        "read_with": "",
+        "read_config_key": "",
+        "update": "",
+        "url": "",
+        "notes": ""
+      }
+    }
+  ],
+  "chips": [
+    {
+      "id": "bgt60ltr11saip",
+      "name": "BGT60LTR11SAIP",
+      "manufacturer": "Infineon",
+      "role": "60 GHz 1Tx/1Rx Doppler radar, lower-spec AIP",
+      "tags": [
+        "radar",
+        "60ghz",
+        "doppler",
+        "motion",
+        "xensiv",
+        "aip"
+      ],
+      "summary": "The BGT60LTR11SAIP is a lower-spec variant of the BGT60LTR11AIP radar sensor, with a shorter detection range and reduced operating temperature range.",
+      "spec": {
+        "source": "https://www.infineon.com/part/BGT60LTR11SAIP",
+        "opn": "BGT60LTR11SAIPXUMA1",
+        "product_status": "active",
+        "frequency": "61 GHz to 61.5 GHz",
+        "supply": "1.5 V",
+        "current": "110 mA",
+        "package": "3.3 x 6.7 x 0.56 mm³",
+        "antenna": "1Tx 1Rx Antennas in Package (AIP)",
+        "fov_hpbw": "90",
+        "gain": "6 dBi",
+        "max_detection_range": "14 m",
+        "min_detection_range": "0.5 m",
+        "temperature": "-10 to + 70°C",
+        "interface": "autonomous mode, or SPI configuration",
+        "benefits_range": "Up to 6 m detection range for humans; Up to 14 m detection range for human targets",
+        "power_benefit": "Less than 2 mW power consumption possible"
+      },
+      "mouser_query": "BGT60LTR11SAIPXUMA1",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-bgt60ltr11saip-datasheet-en.pdf",
+      "hash": "wh_d157133cc05872ab"
+    },
+    {
+      "id": "bgt60ltr11baip",
+      "name": "BGT60LTR11BAIP",
+      "manufacturer": "Infineon",
+      "role": "60 GHz 1Tx/1Rx Doppler radar, Japanese variant",
+      "tags": [
+        "radar",
+        "60ghz",
+        "doppler",
+        "xensiv"
+      ],
+      "summary": "BGT60LTR11BAIP: 1 Tx, 1 Rx – Japanese variant of BGT60LTR11AIP.",
+      "spec": {
+        "source": "https://www.infineon.com/products/sensor/radar-sensors/radar-sensors-for-iot/60ghz-radar",
+        "product_status": "named on the 60 GHz IoT family page; https://www.infineon.com/part/BGT60LTR11BAIP returned 404",
+        "tx": "1",
+        "rx": "1",
+        "variant": "Japanese variant of BGT60LTR11AIP"
+      },
+      "mouser_query": "BGT60LTR11BAIP",
+      "datasheet": "https://www.infineon.com/products/sensor/radar-sensors/radar-sensors-for-iot/60ghz-radar",
+      "hash": "wh_fbfa6e7d5eb6fc07"
+    },
+    {
+      "id": "bgt60cutr13aip",
+      "name": "BGT60CUTR13AIP",
+      "manufacturer": "Infineon",
+      "role": "60 GHz CMOS FMCW radar with on-chip hardware accelerator",
+      "tags": [
+        "radar",
+        "60ghz",
+        "fmcw",
+        "cmos",
+        "xensiv",
+        "aip"
+      ],
+      "summary": "The BGT60CUTR13AIP is a 60 GHz FMCW radar sensor with Antennas-in-Package (AIP) in an L-shaped array, optimized for ultra-low-power IoT devices.",
+      "spec": {
+        "source": "https://www.infineon.com/part/BGT60CUTR13AIP",
+        "opn": "BGT60CUTR13AIPXUMA1",
+        "product_status": "active and preferred",
+        "frequency": "57 GHz to 64 GHz",
+        "bandwidth": "7 GHz",
+        "supply": "1.2 V, 1.8 V",
+        "package": "6.05 x 4.3 x 0.9 mm³",
+        "antenna": "1 Tx, 3 Rx, Antennas-in-Package, L-shaped array",
+        "fov_hpbw": "150",
+        "max_detection_range": "20 m",
+        "min_detection_range": "0.025 m",
+        "temperature": "-20 to +85 °C",
+        "interface": "SPI",
+        "tx_output_power": "11 dBm (conducted power at pad)",
+        "deep_sleep": "0.1 mW",
+        "low_power_sensing_mode": "less than 1 mW",
+        "ultra_low_power_mode": "less than 200 µW",
+        "embedded_processing": "Integrated hardware accelerator (HWA) for autonomous presence detection and on-chip radar pre-processing"
+      },
+      "mouser_query": "BGT60CUTR13AIPXUMA1",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-bgt60cutr13aip-datasheet-en.pdf",
+      "hash": "wh_10d87f6835941365"
+    },
+    {
+      "id": "bgt24ltr22",
+      "name": "BGT24LTR22",
+      "manufacturer": "Infineon",
+      "role": "24 GHz 2Tx/2Rx SiGe radar transceiver",
+      "tags": [
+        "radar",
+        "24ghz",
+        "fmcw",
+        "doppler",
+        "xensiv"
+      ],
+      "summary": "The BGT24LTR22 is a low-power, low-noise multichannel Silicon Germanium transceiver MMIC designed for 24 GHz radar applications.",
+      "spec": {
+        "source": "https://www.infineon.com/part/BGT24LTR22",
+        "opn": "BGT24LTR22E6327XTSA1",
+        "product_status": "active and preferred",
+        "frequency": "24 GHz to 24.25 GHz",
+        "supply": "1.5 V",
+        "current": "170 mA",
+        "package": "3.6 x 3.6 mm²",
+        "antenna": "External",
+        "channels": "2 Tx, 2 Rx",
+        "gain": "25 dB",
+        "nf": "8 dB",
+        "max_detection_range": "20 m",
+        "min_detection_range": "0.5 m",
+        "temperature": "-40 to + 85°C",
+        "interface": "Single ended RF and IF terminals"
+      },
+      "mouser_query": "BGT24LTR22E6327XTSA1",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-bgt24ltr22-datasheet-en.pdf",
+      "hash": "wh_add508f050d13776"
+    },
+    {
+      "id": "tli4971-a120t5-e0001",
+      "name": "TLI4971-A120T5-E0001",
+      "manufacturer": "Infineon",
+      "role": "coreless magnetic current sensor, ±120 A",
+      "tags": [
+        "current",
+        "magnetic",
+        "isolation",
+        "xensiv",
+        "industrial"
+      ],
+      "summary": "TLI4971-A120T5-E0001 is a coreless magnetic sensor for AC/DC ±120A, 240kHz bandwidth, dual OCD outputs, and 1150V isolation.",
+      "spec": {
+        "source": "https://www.infineon.com/part/TLI4971-A120T5-E0001",
+        "opn": "TLI4971A120T5E0001XUMA1",
+        "product_status": "active and preferred",
+        "current_range": "120 A",
+        "current_rail": "internal (iCR)",
+        "rail_resistance": "225 µΩ",
+        "supply": "3.1 V to 3.5 V",
+        "bandwidth": "Typical bandwidth of 240kHz",
+        "accuracy": "2 %",
+        "sensitivity_error_over_temp": "max. 2.5%",
+        "isolation_viorm": "1150 V",
+        "interface": "Analog",
+        "diagnosis": "OCD 1, OCD2, OV, UV, diagnosis mode",
+        "temperature": "-40…+105°C",
+        "available_until": "2038"
+      },
+      "mouser_query": "TLI4971A120T5E0001XUMA1",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-tli4971-25-50-75-120-datasheet-en.pdf",
+      "hash": "wh_99e3b170119ed516"
+    },
+    {
+      "id": "dps368",
+      "name": "DPS368",
+      "manufacturer": "Infineon",
+      "role": "digital barometric pressure and temperature sensor",
+      "tags": [
+        "pressure",
+        "barometer",
+        "temperature",
+        "i2c",
+        "spi",
+        "xensiv"
+      ],
+      "summary": "XENSIV™ DPS368 is a miniaturized digital barometric air pressure sensor with ultra-high precision (±2 cm) and low current consumption, measuring pressure and temperature.",
+      "spec": {
+        "source": "https://www.infineon.com/part/DPS368",
+        "opn": "DPS368XTSA1",
+        "product_status": "active and preferred",
+        "pressure": "300 hPa to 1200 hPa",
+        "temperature": "-40 °C to 85 °C",
+        "precision": "± 0.002 hPa (or ±0.02 m)",
+        "relative_accuracy": "± 0.06 hPa (or ±0.5 m)",
+        "absolute_accuracy": "± 1 hPa (or ±8 m)",
+        "temperature_accuracy": "± 0.5°C",
+        "supply": "1.7 V to 3.6 V",
+        "current": "1.7 µA(pressure measurement) @1Hzsampling rate, standby: 0.5 µA.",
+        "interface": "I2C and SPI (both with optional interrupt)",
+        "package": "8-pin LGA, 2.0 x 2.5 x 1.1 mm3",
+        "protection": "IPx8, survives 50 m underwater for one hour",
+        "available_until": "2034"
+      },
+      "mouser_query": "DPS368XTSA1",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-dps368-datasheet-en.pdf",
+      "hash": "wh_d404fe138371b97a"
+    },
+    {
+      "id": "im73d122",
+      "name": "IM73D122",
+      "manufacturer": "Infineon",
+      "role": "digital PDM MEMS microphone",
+      "tags": [
+        "microphone",
+        "mems",
+        "pdm",
+        "audio",
+        "xensiv"
+      ],
+      "summary": "Infineon's ultra-low noise digital XENSIV™ MEMS microphone, IM73D122, features high SNR and sensitivity for high-quality audio capturing in laptops, tablets, and conferencing devices.",
+      "spec": {
+        "source": "https://www.infineon.com/part/IM73D122",
+        "opn": "IM73D122V01XTMA1",
+        "product_status": "active and preferred",
+        "snr": "73 dB(A)",
+        "sensitivity": "-26 dBFS",
+        "aop": "122 dBSPL",
+        "interface": "Digital PDM",
+        "supply": "1.62 - 3.60 V",
+        "current": "980 µA",
+        "lfro": "20 Hz",
+        "package": "4.00 x 3.00 x 1.20 mm³",
+        "ingress": "IP57 at microphone level",
+        "group_delay": "7µs @ 1kHz"
+      },
+      "mouser_query": "IM73D122V01XTMA1",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-im73d122-datasheet-en.pdf",
+      "hash": "wh_768172f0cd6d2b04"
+    },
+    {
+      "id": "tli493d-a2b6",
+      "name": "TLI493D-A2B6",
+      "manufacturer": "Infineon",
+      "role": "3-axis Hall magnetic sensor",
+      "tags": [
+        "hall",
+        "3d",
+        "magnetic",
+        "i2c",
+        "xensiv"
+      ],
+      "summary": "Infineon's TLI493D-A2B6 is designed for diverse sensing applications, especially in industrial settings like multifunction knobs or white goods.",
+      "spec": {
+        "source": "https://www.infineon.com/part/TLI493D-A2B6",
+        "opn": "TLI493DA2B6HTSA1",
+        "product_status": "active and preferred",
+        "interface": "I²C",
+        "axes": "X, Y, and Z magnetic flux density",
+        "resolution": "12-bit data resolution",
+        "magnetic_range": "±160 mT",
+        "power_down": "7 nA",
+        "qualification": "JEDEC JESD47",
+        "available_until": "2039"
+      },
+      "mouser_query": "TLI493DA2B6HTSA1",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-tli493d-a2b6-datasheet-en.pdf",
+      "hash": "wh_28a0eb715aad944b"
+    },
+    {
+      "id": "tle5501-e0001",
+      "name": "TLE5501 E0001",
+      "manufacturer": "Infineon",
+      "role": "analog TMR magnetic angle sensor",
+      "tags": [
+        "angle",
+        "tmr",
+        "magnetic",
+        "analog",
+        "xensiv",
+        "automotive"
+      ],
+      "summary": "TLE5501 E0001 analog TMR angle sensor for highly accurate position detection.",
+      "spec": {
+        "source": "https://www.infineon.com/part/TLE5501-E0001",
+        "opn": "TLE5501E0001XUMA1",
+        "product_status": "active and preferred",
+        "technology": "TMR",
+        "interface": "Analog",
+        "supply_current": "~2 mA",
+        "supply_voltage_range": "-0.5 V to 6.5 V",
+        "magnetic_field": "20 mT to 100 mT",
+        "angle_error": "Typ. angle error ~ 1.0 °",
+        "channels": "2 independent dual channel sensors",
+        "package": "SMD",
+        "temperature": "-40 °C to 150 °C",
+        "classification": "QM",
+        "iso_26262": "compliant",
+        "available_until": "2034"
+      },
+      "mouser_query": "TLE5501E0001XUMA1",
+      "datasheet": "https://www.infineon.com/assets/row/public/documents/30/49/infineon-infineon-tle5501-ds--datasheet-en.pdf",
+      "hash": "wh_9143006af3e437b0"
+    },
+    {
+      "id": "irs2877a",
+      "name": "IRS2877A",
+      "manufacturer": "Infineon",
+      "role": "REAL3 automotive VGA time-of-flight imager",
+      "tags": [
+        "tof",
+        "real3",
+        "3d",
+        "imager",
+        "automotive"
+      ],
+      "summary": "IRS2877A is an automotive qualified member of Infineon’s REAL3™ Time-of-Flight (ToF) imager family.",
+      "spec": {
+        "source": "https://www.infineon.com/part/IRS2877A",
+        "opn": "IRS2877AXUMA1",
+        "product_status": "active and preferred",
+        "resolution": "VGA 640 x 480 (upscaled)",
+        "resolution_pixels": "307 K",
+        "wavelength": "940 nm",
+        "package": "9x9 mm optical BGA, PG-LFBGA-65",
+        "image_circle": "1/4\" (4 mm)",
+        "supply": "1.8 V and 3.3 V",
+        "pixel": "5th generation ToF pixel with on-chip suppression of background illumination",
+        "ambient_temperature": "-40 °C to 105 °C",
+        "classification": "AEC-Q100",
+        "companion_vcsel_driver": "IRS9103A"
+      },
+      "mouser_query": "IRS2877AXUMA1",
+      "datasheet": "https://www.infineon.com/part/IRS2877A",
+      "hash": "wh_5702e466a7c2d612"
+    }
+  ],
+  "already_present": [
+    "infineon-bgt60tr13c",
+    "infineon-demo-bgt60tr13c",
+    "bgt60tr13c",
+    "infineon-bgt60ltr11aip",
+    "infineon-bgt60utr11aip",
+    "infineon-bgt-24ltr11n16-e6327",
+    "infineon-cypress-cy8cmbr3110-sx2i"
+  ],
+  "areas_opened": [
+    "coreless magnetic current sensing (TLI4971-A120T5-E0001; catalog current chips are shunt amplifiers)",
+    "photoacoustic CO2 (PASCO2V01; part page status discontinued)",
+    "barometric pressure (DPS368)",
+    "Infineon digital MEMS microphone (IM73D122)",
+    "3D Hall (TLI493D-A2B6)",
+    "TMR magnetic angle (TLE5501 E0001)",
+    "REAL3 VGA ToF imager (IRS2877A)",
+    "60 GHz Doppler cost-down (BGT60LTR11SAIP) and CMOS FMCW with on-chip HWA (BGT60CUTR13AIP)",
+    "60 GHz Japanese Doppler variant (BGT60LTR11BAIP; family-page line only)",
+    "24 GHz 2Tx/2Rx transceiver (BGT24LTR22)",
+    "CMOS radar connected-sensor eval kit (KIT_CSK_BGT60CUTR13)"
+  ],
+  "families_skipped_because_catalog_is_full": [
+    "temperature sensors",
+    "capacitive sensors (catalog already has infineon-cypress-cy8cmbr3110-sx2i plus FDC2214 and FDC1004)",
+    "AIROC consumer/industrial UWB ranging (catalog already has decawave-dw1000, dw3110, qorvo-dw3000, decawave-dwm1001, qorvo-dwm3000, qorvo-mdek1001)",
+    "60 GHz parts already stocked: BGT60TR13C, BGT60LTR11AIP, BGT60UTR11AIP, and DEMO-BGT60TR13C",
+    "24 GHz BGT24LTR11 (catalog chip infineon-bgt-24ltr11n16-e6327)"
+  ]
+}

@@ -65,6 +65,8 @@ members = [
     "crates/clawft-gui-egui",
     "crates/weftos-ecg-scope",
     "crates/weftos-sensor-guide",
+    # Browser popup: one ADR-104 guide on a canvas (Sensor Explorer).
+    "crates/weftos-guide-view",
     "crates/weftos-cog-companion",
     "crates/weftos-tof-scope",
     "crates/weftos-sound-scope",

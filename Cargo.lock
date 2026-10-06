@@ -10862,6 +10862,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-guide-view"
+version = "0.8.3-rc.1"
+dependencies = [
+ "console_error_panic_hook",
+ "eframe",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "weftos-sensor-guide",
+]
+
+[[package]]
 name = "weftos-leaf-scene"
 version = "0.1.0"
 dependencies = [

@@ -5,7 +5,7 @@
 //! ```text
 //! <repo-dir>/repo.toml     name + public key (committable)
 //! <repo-dir>/.gitignore    ignores keys and the working copies
-//! <repo-dir>/dist/<id>/    staged cogs: cog-<id>-arm[-arm64] + manifest.json
+//! <repo-dir>/dist/<id>/    staged cogs: cog-<id>-arm[-arm64][-x86_64] + manifest.json
 //! <repo-dir>/repo/         signed output: registry.json + cogs/<arch>/...  (this is what you host)
 //! ```
 //!
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use weftos_cog_repo::{Registry, RevokedKeys};
+use weftos_cog_repo::{Registry, RevokedKeys, COG_ARCHES};
 
 use crate::{arg, fetch, revocations, sign_tree, verify_any, R};
 
@@ -41,10 +41,18 @@ struct RepoConfig {
 
 fn load_config(dir: &Path) -> R<RepoConfig> {
     let p = dir.join(REPO_TOML);
-    let text = std::fs::read_to_string(&p).map_err(|e| format!("{} is not a private repo (no {REPO_TOML}: {e}); run `init` first", dir.display()))?;
+    let text = std::fs::read_to_string(&p).map_err(|e| {
+        format!(
+            "{} is not a private repo (no {REPO_TOML}: {e}); run `init` first",
+            dir.display()
+        )
+    })?;
     let v: toml::Value = toml::from_str(&text).map_err(|e| format!("parse {p:?}: {e}"))?;
     let get = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
-    Ok(RepoConfig { name: get("name").ok_or("repo.toml has no name")?, pubkey: get("pubkey") })
+    Ok(RepoConfig {
+        name: get("name").ok_or("repo.toml has no name")?,
+        pubkey: get("pubkey"),
+    })
 }
 
 fn write_config(dir: &Path, c: &RepoConfig) -> R<()> {
@@ -53,12 +61,18 @@ fn write_config(dir: &Path, c: &RepoConfig) -> R<()> {
     if let Some(k) = &c.pubkey {
         t.insert("pubkey".into(), toml::Value::String(k.clone()));
     }
-    std::fs::write(dir.join(REPO_TOML), toml::to_string_pretty(&t).map_err(|e| e.to_string())?).map_err(|e| format!("write {REPO_TOML}: {e}"))
+    std::fs::write(
+        dir.join(REPO_TOML),
+        toml::to_string_pretty(&t).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write {REPO_TOML}: {e}"))
 }
 
 fn repo_key(dir: &Path) -> R<VerifyingKey> {
     let c = load_config(dir)?;
-    let k = c.pubkey.ok_or("repo.toml has no pubkey: run `keygen --out <key.pem> --repo <repo-dir>` first")?;
+    let k = c
+        .pubkey
+        .ok_or("repo.toml has no pubkey: run `keygen --out <key.pem> --repo <repo-dir>` first")?;
     parse_pubkey(&k)
 }
 
@@ -67,7 +81,8 @@ fn valid_name(s: &str) -> bool {
     !b.is_empty()
         && b.len() <= 32
         && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
-        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-' || *c == b'_')
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-' || *c == b'_')
 }
 
 fn valid_cog_id(s: &str) -> bool {
@@ -76,26 +91,46 @@ fn valid_cog_id(s: &str) -> bool {
         && !s.starts_with('-')
         && !s.ends_with('-')
         && !s.contains("--")
-        && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 // ---- init ------------------------------------------------------------------
 
 pub fn cmd_init(args: &[String]) -> R<()> {
-    let dir = args.first().filter(|a| !a.starts_with("--")).ok_or("init needs <repo-dir>")?;
-    let name = arg(args, "--name").ok_or("init needs --name <repo-name> (lower-case, e.g. acme-private)")?;
+    let dir = args
+        .first()
+        .filter(|a| !a.starts_with("--"))
+        .ok_or("init needs <repo-dir>")?;
+    let name = arg(args, "--name")
+        .ok_or("init needs --name <repo-name> (lower-case, e.g. acme-private)")?;
     if !valid_name(name) {
-        return Err(format!("bad repo name {name:?} (use [a-z0-9][a-z0-9_-]{{0,31}})"));
+        return Err(format!(
+            "bad repo name {name:?} (use [a-z0-9][a-z0-9_-]{{0,31}})"
+        ));
     }
     let dir = PathBuf::from(dir);
     if dir.join(REPO_TOML).exists() {
-        return Err(format!("{} already holds a repo ({REPO_TOML} exists); not overwriting", dir.display()));
+        return Err(format!(
+            "{} already holds a repo ({REPO_TOML} exists); not overwriting",
+            dir.display()
+        ));
     }
     std::fs::create_dir_all(dir.join("dist")).map_err(|e| format!("mkdir: {e}"))?;
-    write_config(&dir, &RepoConfig { name: name.to_string(), pubkey: None })?;
-    std::fs::write(dir.join(".gitignore"), GITIGNORE).map_err(|e| format!("write .gitignore: {e}"))?;
+    write_config(
+        &dir,
+        &RepoConfig {
+            name: name.to_string(),
+            pubkey: None,
+        },
+    )?;
+    std::fs::write(dir.join(".gitignore"), GITIGNORE)
+        .map_err(|e| format!("write .gitignore: {e}"))?;
     eprintln!("initialised private repo '{name}' in {}", dir.display());
-    eprintln!("next: weft-cog-repo keygen --out <path outside the repo>/{name}.pem --repo {}", dir.display());
+    eprintln!(
+        "next: weft-cog-repo keygen --out <path outside the repo>/{name}.pem --repo {}",
+        dir.display()
+    );
     Ok(())
 }
 
@@ -118,7 +153,9 @@ fn resolve_lenient(path: &Path) -> R<PathBuf> {
     let abs = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir().map_err(|e| format!("cwd: {e}"))?.join(path)
+        std::env::current_dir()
+            .map_err(|e| format!("cwd: {e}"))?
+            .join(path)
     };
     let mut rest: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = abs.as_path();
@@ -132,11 +169,17 @@ fn resolve_lenient(path: &Path) -> R<PathBuf> {
         }
         match cur.components().next_back() {
             Some(Component::Normal(n)) => rest.push(n.to_os_string()),
-            Some(Component::ParentDir) => return Err(format!("refusing a '..' component in {path:?} below a directory that does not exist yet")),
+            Some(Component::ParentDir) => {
+                return Err(format!(
+                "refusing a '..' component in {path:?} below a directory that does not exist yet"
+            ))
+            }
             Some(Component::CurDir) => {}
             _ => return Err(format!("cannot resolve {path:?}")),
         }
-        cur = cur.parent().ok_or_else(|| format!("cannot resolve {path:?}"))?;
+        cur = cur
+            .parent()
+            .ok_or_else(|| format!("cannot resolve {path:?}"))?;
     }
 }
 
@@ -157,7 +200,9 @@ pub fn cmd_keygen(args: &[String]) -> R<()> {
         load_config(r)?; // fail before writing a key if the repo is not initialised
     }
     let key = SigningKey::from_bytes(&random_seed()?);
-    let pem = key.to_pkcs8_pem(LineEnding::LF).map_err(|e| format!("encode key: {e}"))?;
+    let pem = key
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|e| format!("encode key: {e}"))?;
     write_private(&out, pem.as_bytes())?;
     let pubkey = hex::encode(key.verifying_key().to_bytes());
     if let Some(r) = &repo {
@@ -165,7 +210,10 @@ pub fn cmd_keygen(args: &[String]) -> R<()> {
         c.pubkey = Some(pubkey.clone());
         write_config(r, &c)?;
     }
-    eprintln!("wrote private key {} (mode 0600). Back it up; never commit it.", out.display());
+    eprintln!(
+        "wrote private key {} (mode 0600). Back it up; never commit it.",
+        out.display()
+    );
     println!("{pubkey}");
     Ok(())
 }
@@ -183,8 +231,11 @@ fn write_private(path: &Path, bytes: &[u8]) -> R<()> {
     if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {dir:?}: {e}"))?;
     }
-    let mut f = o.open(path).map_err(|e| format!("create {path:?}: {e} (an existing key is never overwritten)"))?;
-    f.write_all(bytes).map_err(|e| format!("write {path:?}: {e}"))
+    let mut f = o
+        .open(path)
+        .map_err(|e| format!("create {path:?}: {e} (an existing key is never overwritten)"))?;
+    f.write_all(bytes)
+        .map_err(|e| format!("write {path:?}: {e}"))
 }
 
 // ---- add -------------------------------------------------------------------
@@ -201,36 +252,65 @@ struct Meta {
 fn meta_from_cog_toml(path: &str) -> R<Meta> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
     let v: toml::Value = toml::from_str(&text).map_err(|e| format!("parse {path}: {e}"))?;
-    let c = v.get("cog").ok_or_else(|| format!("{path} has no [cog] table"))?;
+    let c = v
+        .get("cog")
+        .ok_or_else(|| format!("{path} has no [cog] table"))?;
     let s = |k: &str| c.get(k).and_then(|x| x.as_str()).map(String::from);
     let hardware = c
         .get("hardware_requirement")
         .and_then(|h| h.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
-    Ok(Meta { id: s("id"), name: s("name"), version: s("version"), category: s("category"), description: s("description"), hardware })
+    Ok(Meta {
+        id: s("id"),
+        name: s("name"),
+        version: s("version"),
+        category: s("category"),
+        description: s("description"),
+        hardware,
+    })
 }
 
 pub fn cmd_add(args: &[String]) -> R<()> {
-    let dir = PathBuf::from(args.first().filter(|a| !a.starts_with("--")).ok_or("add needs <repo-dir>")?);
+    let dir = PathBuf::from(
+        args.first()
+            .filter(|a| !a.starts_with("--"))
+            .ok_or("add needs <repo-dir>")?,
+    );
     load_config(&dir)?;
     let binary = arg(args, "--binary").ok_or("add needs --binary <cog binary>")?;
     let arch = arg(args, "--arch").unwrap_or("arm");
-    let suffix = match arch {
-        "arm" => "-arm",
-        "arm64" => "-arm64",
-        other => return Err(format!("--arch must be arm or arm64, got {other:?}")),
-    };
+    let suffix = COG_ARCHES
+        .iter()
+        .find(|pair| pair.0 == arch)
+        .map(|pair| pair.1)
+        .ok_or_else(|| format!("--arch must be arm, arm64, or x86_64, got {arch:?}"))?;
     let mut meta = match arg(args, "--cog-toml") {
         Some(p) => meta_from_cog_toml(p)?,
-        None => Meta { id: None, name: None, version: None, category: None, description: None, hardware: vec![] },
+        None => Meta {
+            id: None,
+            name: None,
+            version: None,
+            category: None,
+            description: None,
+            hardware: vec![],
+        },
     };
     if let Some(v) = arg(args, "--id") {
         meta.id = Some(v.into());
     }
-    let id = meta.id.clone().ok_or("add needs --id <cog-id> (or a --cog-toml with [cog].id)")?;
+    let id = meta
+        .id
+        .clone()
+        .ok_or("add needs --id <cog-id> (or a --cog-toml with [cog].id)")?;
     if !valid_cog_id(&id) {
-        return Err(format!("bad cog id {id:?} (lower-case alphanumerics and single hyphens)"));
+        return Err(format!(
+            "bad cog id {id:?} (lower-case alphanumerics and single hyphens)"
+        ));
     }
     let bytes = std::fs::read(binary).map_err(|e| format!("read {binary}: {e}"))?;
     if bytes.is_empty() {
@@ -238,15 +318,34 @@ pub fn cmd_add(args: &[String]) -> R<()> {
     }
     let cog_dir = dir.join("dist").join(&id);
     std::fs::create_dir_all(&cog_dir).map_err(|e| format!("mkdir: {e}"))?;
-    std::fs::write(cog_dir.join(format!("cog-{id}{suffix}")), &bytes).map_err(|e| format!("write binary: {e}"))?;
+    std::fs::write(cog_dir.join(format!("cog-{id}{suffix}")), &bytes)
+        .map_err(|e| format!("write binary: {e}"))?;
 
     let manifest_path = cog_dir.join("manifest.json");
     if let Some(m) = arg(args, "--manifest") {
         std::fs::copy(m, &manifest_path).map_err(|e| format!("copy manifest: {e}"))?;
-    } else if !manifest_path.exists() || args.iter().any(|a| a.starts_with("--name") || a == "--version" || a == "--category" || a == "--description" || a == "--hardware") || arg(args, "--cog-toml").is_some() {
-        let pick = |flag: &str, from: &Option<String>, dflt: &str| arg(args, flag).map(String::from).or_else(|| from.clone()).unwrap_or_else(|| dflt.to_string());
+    } else if !manifest_path.exists()
+        || args.iter().any(|a| {
+            a.starts_with("--name")
+                || a == "--version"
+                || a == "--category"
+                || a == "--description"
+                || a == "--hardware"
+        })
+        || arg(args, "--cog-toml").is_some()
+    {
+        let pick = |flag: &str, from: &Option<String>, dflt: &str| {
+            arg(args, flag)
+                .map(String::from)
+                .or_else(|| from.clone())
+                .unwrap_or_else(|| dflt.to_string())
+        };
         let hardware: Vec<String> = match arg(args, "--hardware") {
-            Some(h) => h.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+            Some(h) => h
+                .split(',')
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect(),
             None => meta.hardware.clone(),
         };
         let manifest = serde_json::json!({
@@ -256,9 +355,17 @@ pub fn cmd_add(args: &[String]) -> R<()> {
             "description": pick("--description", &meta.description, ""),
             "hardware_requirement": hardware,
         });
-        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?).map_err(|e| format!("write manifest: {e}"))?;
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| format!("write manifest: {e}"))?;
     }
-    eprintln!("staged {id} [{arch}] ({} bytes) in {}", bytes.len(), cog_dir.display());
+    eprintln!(
+        "staged {id} [{arch}] ({} bytes) in {}",
+        bytes.len(),
+        cog_dir.display()
+    );
     Ok(())
 }
 
@@ -275,29 +382,45 @@ pub fn cmd_sign(dir: &str, args: &[String]) -> R<()> {
         return Err(format!("the signing key does not match the public key in {}/{REPO_TOML}; consumers pinning that key would reject the repo", dir.display()));
     }
     let from = dir.join("dist");
-    sign_tree(from.to_str().ok_or("bad path")?, &dir.join("repo"), &cfg.name, &key)
+    sign_tree(
+        from.to_str().ok_or("bad path")?,
+        &dir.join("repo"),
+        &cfg.name,
+        &key,
+    )
 }
 
 /// Checks every artifact of `<dir>/repo` against `pins`, or the key in repo.toml when `pins` is
 /// empty; returns the artifact count. A `--pin` that differs from repo.toml fails, it is never
 /// silently replaced by the repo's own key.
 fn verify_repo(dir: &Path, pins: &[VerifyingKey], revoked: &RevokedKeys) -> R<usize> {
-    let keys: Vec<VerifyingKey> = if pins.is_empty() { vec![repo_key(dir)?] } else { pins.to_vec() };
+    let keys: Vec<VerifyingKey> = if pins.is_empty() {
+        vec![repo_key(dir)?]
+    } else {
+        pins.to_vec()
+    };
     let base = dir.join("repo");
     let base_s = base.to_str().ok_or("bad path")?;
-    let reg: Registry = serde_json::from_slice(&fetch(base_s, "registry.json")?).map_err(|e| format!("parse registry.json: {e}"))?;
+    let reg: Registry = serde_json::from_slice(&fetch(base_s, "registry.json")?)
+        .map_err(|e| format!("parse registry.json: {e}"))?;
     let mut n = 0;
     let mut bad = Vec::new();
     for cog in &reg.cogs {
         for (arch, art) in &cog.artifacts {
-            match fetch(base_s, &art.path).and_then(|b| verify_any(&b, art, &keys, revoked).map_err(|e| e.to_string())) {
+            match fetch(base_s, &art.path)
+                .and_then(|b| verify_any(&b, art, &keys, revoked).map_err(|e| e.to_string()))
+            {
                 Ok(()) => n += 1,
                 Err(e) => bad.push(format!("{} [{arch}]: {e}", cog.id)),
             }
         }
     }
     if !bad.is_empty() {
-        return Err(format!("{} artifact(s) failed verification:\n  {}", bad.len(), bad.join("\n  ")));
+        return Err(format!(
+            "{} artifact(s) failed verification:\n  {}",
+            bad.len(),
+            bad.join("\n  ")
+        ));
     }
     Ok(n)
 }
@@ -307,18 +430,26 @@ pub fn cmd_verify(dir: &str, pins: &[VerifyingKey], revoked: &RevokedKeys) -> R<
     if pins.is_empty() {
         eprintln!("{n} artifact(s) verified against the key in {dir}/{REPO_TOML}");
     } else {
-        eprintln!("{n} artifact(s) verified against the {} key(s) given with --pin", pins.len());
+        eprintln!(
+            "{n} artifact(s) verified against the {} key(s) given with --pin",
+            pins.len()
+        );
     }
     Ok(())
 }
 
 fn copy_tree(from: &Path, to: &Path) -> R<()> {
     std::fs::create_dir_all(to).map_err(|e| format!("mkdir {to:?}: {e}"))?;
-    for e in std::fs::read_dir(from).map_err(|e| format!("read {from:?}: {e}"))?.flatten() {
+    for e in std::fs::read_dir(from)
+        .map_err(|e| format!("read {from:?}: {e}"))?
+        .flatten()
+    {
         let (src, dst) = (e.path(), to.join(e.file_name()));
         let lower = e.file_name().to_string_lossy().to_ascii_lowercase();
         if lower.ends_with(".pem") || lower.ends_with(".key") || lower.ends_with(".seed") {
-            return Err(format!("refusing to publish {src:?}: it looks like key material"));
+            return Err(format!(
+                "refusing to publish {src:?}: it looks like key material"
+            ));
         }
         if src.is_dir() {
             copy_tree(&src, &dst)?;
@@ -330,7 +461,11 @@ fn copy_tree(from: &Path, to: &Path) -> R<()> {
 }
 
 pub fn cmd_publish(args: &[String]) -> R<()> {
-    let dir = PathBuf::from(args.first().filter(|a| !a.starts_with("--")).ok_or("publish needs <repo-dir>")?);
+    let dir = PathBuf::from(
+        args.first()
+            .filter(|a| !a.starts_with("--"))
+            .ok_or("publish needs <repo-dir>")?,
+    );
     let to = PathBuf::from(arg(args, "--to").ok_or("publish needs --to <dir>")?);
     let cfg = load_config(&dir)?;
     let n = verify_repo(&dir, &[], &revocations(args)?)?; // never publish something that does not verify
@@ -358,10 +493,27 @@ mod tests {
         let repo = tmp.path().join("acme");
         let keys = tmp.path().join("keys");
         cmd_init(&a(&[&s(&repo), "--name", "acme-private"])).unwrap();
-        cmd_keygen(&a(&["--out", &s(&keys.join("acme.pem")), "--repo", &s(&repo)])).unwrap();
+        cmd_keygen(&a(&[
+            "--out",
+            &s(&keys.join("acme.pem")),
+            "--repo",
+            &s(&repo),
+        ]))
+        .unwrap();
         let bin = tmp.path().join("cog-gauge");
         std::fs::write(&bin, b"\x7fELF acme gauge").unwrap();
-        cmd_add(&a(&[&s(&repo), "--binary", &s(&bin), "--id", "acme-gauge", "--version", "0.2.0", "--hardware", "pi-zero-2w,v0-appliance"])).unwrap();
+        cmd_add(&a(&[
+            &s(&repo),
+            "--binary",
+            &s(&bin),
+            "--id",
+            "acme-gauge",
+            "--version",
+            "0.2.0",
+            "--hardware",
+            "pi-zero-2w,v0-appliance",
+        ]))
+        .unwrap();
         (tmp, repo, keys.join("acme.pem"))
     }
 
@@ -370,23 +522,44 @@ mod tests {
         let (tmp, repo, key) = setup();
         cmd_sign(&s(&repo), &a(&["--key", &s(&key)])).unwrap();
         cmd_verify(&s(&repo), &[], &RevokedKeys::none()).unwrap();
-        let reg: Registry = serde_json::from_slice(&std::fs::read(repo.join("repo/registry.json")).unwrap()).unwrap();
+        let reg: Registry =
+            serde_json::from_slice(&std::fs::read(repo.join("repo/registry.json")).unwrap())
+                .unwrap();
         assert_eq!(reg.repo, "acme-private");
         assert_eq!(reg.cogs[0].id, "acme-gauge");
         assert_eq!(reg.cogs[0].version, "0.2.0");
-        assert_eq!(reg.cogs[0].hardware_requirement, vec!["pi-zero-2w", "v0-appliance"]);
+        assert_eq!(
+            reg.cogs[0].hardware_requirement,
+            vec!["pi-zero-2w", "v0-appliance"]
+        );
 
         let out = tmp.path().join("hosted");
         cmd_publish(&a(&[&s(&repo), "--to", &s(&out)])).unwrap();
-        assert!(out.join("registry.json").is_file() && out.join("cogs/arm/cog-acme-gauge-arm").is_file());
+        assert!(
+            out.join("registry.json").is_file()
+                && out.join("cogs/arm/cog-acme-gauge-arm").is_file()
+        );
         // the published tree verifies against the repo key with the generic --pin path too
         let pubkey = load_config(&repo).unwrap().pubkey.unwrap();
         let k = parse_pubkey(&pubkey).unwrap();
-        let r: Registry = serde_json::from_slice(&std::fs::read(out.join("registry.json")).unwrap()).unwrap();
+        let r: Registry =
+            serde_json::from_slice(&std::fs::read(out.join("registry.json")).unwrap()).unwrap();
         let art = &r.cogs[0].artifacts["arm"];
-        verify_any(&std::fs::read(out.join(&art.path)).unwrap(), art, &[k], &RevokedKeys::none()).unwrap();
+        verify_any(
+            &std::fs::read(out.join(&art.path)).unwrap(),
+            art,
+            &[k],
+            &RevokedKeys::none(),
+        )
+        .unwrap();
         // and does not verify under the WeaveLogic key
-        assert!(verify_any(&std::fs::read(out.join(&art.path)).unwrap(), art, &[weftos_cog_repo::weavelogic_key()], &RevokedKeys::none()).is_err());
+        assert!(verify_any(
+            &std::fs::read(out.join(&art.path)).unwrap(),
+            art,
+            &[weftos_cog_repo::weavelogic_key()],
+            &RevokedKeys::none()
+        )
+        .is_err());
     }
 
     #[test]
@@ -400,9 +573,22 @@ mod tests {
 
         // The kernel's list format, from a file.
         let list = tmp.path().join("revoked_subjects.json");
-        std::fs::write(&list, format!(r#"[{{"kind":"signer_key","id":"{pubkey}","revoked_at":1,"reason":"leaked"}}]"#)).unwrap();
+        std::fs::write(
+            &list,
+            format!(
+                r#"[{{"kind":"signer_key","id":"{pubkey}","revoked_at":1,"reason":"leaked"}}]"#
+            ),
+        )
+        .unwrap();
         let out = tmp.path().join("hosted");
-        let e = cmd_publish(&a(&[&s(&repo), "--to", &s(&out), "--revocations", &s(&list)])).unwrap_err();
+        let e = cmd_publish(&a(&[
+            &s(&repo),
+            "--to",
+            &s(&out),
+            "--revocations",
+            &s(&list),
+        ]))
+        .unwrap_err();
         assert!(e.contains("revoked"), "{e}");
         assert!(!out.exists(), "nothing published");
 
@@ -411,10 +597,19 @@ mod tests {
         let args = a(&[&s(&out), "--pin", &pubkey]);
         assert!(crate::cmd_verify(&args).is_ok());
         let args = a(&[&s(&out), "--pin", &pubkey, "--revocations", &s(&list)]);
-        assert!(crate::cmd_verify(&args).unwrap_err().contains("failed verification"));
+        assert!(crate::cmd_verify(&args)
+            .unwrap_err()
+            .contains("failed verification"));
         // a revocation of some other key changes nothing
         let other = tmp.path().join("other.json");
-        std::fs::write(&other, format!(r#"[{{"kind":"signer_key","id":"{}","revoked_at":1,"reason":"r"}}]"#, "cd".repeat(32))).unwrap();
+        std::fs::write(
+            &other,
+            format!(
+                r#"[{{"kind":"signer_key","id":"{}","revoked_at":1,"reason":"r"}}]"#,
+                "cd".repeat(32)
+            ),
+        )
+        .unwrap();
         let args = a(&[&s(&out), "--pin", &pubkey, "--revocations", &s(&other)]);
         assert!(crate::cmd_verify(&args).is_ok());
         // a malformed list fails closed
@@ -448,28 +643,56 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&key).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
-        assert!(std::fs::read_to_string(&key).unwrap().contains("PRIVATE KEY"));
+        assert!(std::fs::read_to_string(&key)
+            .unwrap()
+            .contains("PRIVATE KEY"));
         // overwrite refused
         let e = cmd_keygen(&a(&["--out", &s(&key)])).unwrap_err();
         assert!(e.contains("never overwritten"), "{e}");
         // inside the repo refused
-        let e = cmd_keygen(&a(&["--out", &s(&repo.join("dist/oops.pem")), "--repo", &s(&repo)])).unwrap_err();
+        let e = cmd_keygen(&a(&[
+            "--out",
+            &s(&repo.join("dist/oops.pem")),
+            "--repo",
+            &s(&repo),
+        ]))
+        .unwrap_err();
         assert!(e.contains("inside the repo"), "{e}");
         assert!(!repo.join("dist/oops.pem").exists());
         // ... also when the parent directory does not exist yet
-        let e = cmd_keygen(&a(&["--out", &s(&repo.join("keys/new/acme.pem")), "--repo", &s(&repo)])).unwrap_err();
+        let e = cmd_keygen(&a(&[
+            "--out",
+            &s(&repo.join("keys/new/acme.pem")),
+            "--repo",
+            &s(&repo),
+        ]))
+        .unwrap_err();
         assert!(e.contains("inside the repo"), "{e}");
-        assert!(!repo.join("keys").exists(), "nothing was created inside the repo");
+        assert!(
+            !repo.join("keys").exists(),
+            "nothing was created inside the repo"
+        );
         // ... and with a relative path and a `..` that climbs back in
-        let e = cmd_keygen(&a(&["--out", &s(&tmp.path().join("fresh/../acme/keys/k.pem")), "--repo", &s(&repo)])).unwrap_err();
+        let e = cmd_keygen(&a(&[
+            "--out",
+            &s(&tmp.path().join("fresh/../acme/keys/k.pem")),
+            "--repo",
+            &s(&repo),
+        ]))
+        .unwrap_err();
         assert!(e.contains("inside the repo") || e.contains("'..'"), "{e}");
         assert!(!repo.join("keys").exists());
         // a path outside the repo whose parent does not exist yet is fine
         cmd_keygen(&a(&["--out", &s(&tmp.path().join("brand/new/dir/k.pem"))])).unwrap();
         // .gitignore guards keys
-        assert!(std::fs::read_to_string(repo.join(".gitignore")).unwrap().contains("*.pem"));
+        assert!(std::fs::read_to_string(repo.join(".gitignore"))
+            .unwrap()
+            .contains("*.pem"));
         let _ = tmp;
     }
 
@@ -487,28 +710,73 @@ mod tests {
     fn verify_and_publish_refuse_a_tampered_repo() {
         let (tmp, repo, key) = setup();
         cmd_sign(&s(&repo), &a(&["--key", &s(&key)])).unwrap();
-        std::fs::write(repo.join("repo/cogs/arm/cog-acme-gauge-arm"), b"\x7fELF evil gauge!").unwrap();
+        std::fs::write(
+            repo.join("repo/cogs/arm/cog-acme-gauge-arm"),
+            b"\x7fELF evil gauge!",
+        )
+        .unwrap();
         assert!(cmd_verify(&s(&repo), &[], &RevokedKeys::none()).is_err());
         let out = tmp.path().join("hosted");
         assert!(cmd_publish(&a(&[&s(&repo), "--to", &s(&out)])).is_err());
-        assert!(!out.exists(), "nothing is published when verification fails");
+        assert!(
+            !out.exists(),
+            "nothing is published when verification fails"
+        );
     }
 
     #[test]
     fn init_refuses_existing_and_bad_names_and_add_validates() {
         let (tmp, repo, _) = setup();
-        assert!(cmd_init(&a(&[&s(&repo), "--name", "x"])).unwrap_err().contains("already"));
-        assert!(cmd_init(&a(&[&s(&tmp.path().join("n")), "--name", "Bad:Name"])).unwrap_err().contains("bad repo name"));
+        assert!(cmd_init(&a(&[&s(&repo), "--name", "x"]))
+            .unwrap_err()
+            .contains("already"));
+        assert!(
+            cmd_init(&a(&[&s(&tmp.path().join("n")), "--name", "Bad:Name"]))
+                .unwrap_err()
+                .contains("bad repo name")
+        );
         let bin = tmp.path().join("b");
         std::fs::write(&bin, b"x").unwrap();
         assert!(cmd_add(&a(&[&s(&repo), "--binary", &s(&bin), "--id", "Bad_Id"])).is_err());
-        assert!(cmd_add(&a(&[&s(&repo), "--binary", &s(&bin), "--id", "ok", "--arch", "x86"])).is_err());
+        assert!(cmd_add(&a(&[
+            &s(&repo),
+            "--binary",
+            &s(&bin),
+            "--id",
+            "ok",
+            "--arch",
+            "x86"
+        ]))
+        .is_err());
+        cmd_add(&a(&[
+            &s(&repo),
+            "--binary",
+            &s(&bin),
+            "--id",
+            "host",
+            "--arch",
+            "x86_64",
+        ]))
+        .unwrap();
+        assert!(repo.join("dist/host/cog-host-x86_64").is_file());
         assert!(cmd_add(&a(&["/no/such/repo", "--binary", &s(&bin), "--id", "ok"])).is_err());
         // metadata from a cog.toml
         let ct = tmp.path().join("cog.toml");
         std::fs::write(&ct, "[cog]\nid=\"from-toml\"\nname=\"From Toml\"\nversion=\"3.1.0\"\ncategory=\"sensing\"\nhardware_requirement=[\"v0-appliance\"]\n").unwrap();
-        cmd_add(&a(&[&s(&repo), "--binary", &s(&bin), "--cog-toml", &s(&ct), "--arch", "arm64"])).unwrap();
-        let m: serde_json::Value = serde_json::from_slice(&std::fs::read(repo.join("dist/from-toml/manifest.json")).unwrap()).unwrap();
+        cmd_add(&a(&[
+            &s(&repo),
+            "--binary",
+            &s(&bin),
+            "--cog-toml",
+            &s(&ct),
+            "--arch",
+            "arm64",
+        ]))
+        .unwrap();
+        let m: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(repo.join("dist/from-toml/manifest.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(m["version"], "3.1.0");
         assert!(repo.join("dist/from-toml/cog-from-toml-arm64").is_file());
     }

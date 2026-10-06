@@ -17,29 +17,36 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 mod private;
-use weftos_cog_repo::{check_signable, sha256_hex, verify_artifact_unrevoked, weavelogic_key, Artifact, CogEntry, Registry, RevokedKeys, VerifyError, SCHEMA};
+use weftos_cog_repo::{
+    check_signable, sha256_hex, verify_artifact_unrevoked, weavelogic_key, Artifact, CogEntry,
+    Registry, RevokedKeys, VerifyError, COG_ARCHES, SCHEMA,
+};
 
 type R<T> = Result<T, String>;
 
 fn arg<'a>(a: &'a [String], f: &str) -> Option<&'a str> {
-    a.iter().position(|x| x == f).and_then(|i| a.get(i + 1)).map(String::as_str)
+    a.iter()
+        .position(|x| x == f)
+        .and_then(|i| a.get(i + 1))
+        .map(String::as_str)
 }
 
 fn usage() -> ! {
     eprintln!(
         "weft-cog-repo — WeaveLogic cog repository (COG-008), signed-only trust model\n\n\
          sign    --from <dist-dir> --out <repo-dir> [--key <priv.pem>] [--repo-name weavelogic]\n\
-         \t\tSigns every cog in <dist-dir>/<id>/ (cog-<id>-arm[-arm64] + manifest.json) and writes <repo-dir>/registry.json.\n\
+         \t\tSigns every cog in <dist-dir>/<id>/ (cog-<id>-arm, -arm64, -x86_64 + manifest.json) and writes <repo-dir>/registry.json.\n\
          \t\tKey: --key <pkcs8 pem>, or WEAVELOGIC_RELEASE_KEY=<32-byte seed hex>.\n\
          verify  <repo-url|repo-dir>\n\
          \t\tFetches registry.json and verifies sha256 + Ed25519 for every artifact against the pinned key.\n\
          install <repo-url|repo-dir> <cog-id> --seed <user@host> [--arch arm|arm64] [--apps-dir <path>]\n\
-         \t\tVerifies the chosen cog, then sideloads the binary + manifest to the Seed (default arch arm).\n\n\
+         \t\tVerifies the chosen cog, then sideloads the binary + manifest to the Seed (default arch arm).\n\
+         \t\tx86_64 is a host registry key. Seed install does not sideload it.\n\n\
          Private repositories (ADR-105): a project's own signed COG-008 repo, signed with a key it holds.\n\
          init    <repo-dir> --name <repo-name>\n\
          keygen  --out <key.pem> [--repo <repo-dir>]\n\
          \t\tWrites an Ed25519 key (PKCS#8 PEM, mode 0600, never overwrites) and prints the public key. Never commit it.\n\
-         add     <repo-dir> --binary <file> [--id <id>] [--arch arm|arm64] [--cog-toml <cog.toml>] [--manifest <manifest.json>]\n\
+         add     <repo-dir> --binary <file> [--id <id>] [--arch arm|arm64|x86_64] [--cog-toml <cog.toml>] [--manifest <manifest.json>]\n\
          \t\t[--name N] [--version V] [--category C] [--description D] [--hardware a,b]   stage a cog into <repo-dir>/dist/\n\
          sign    <repo-dir> --key <key.pem>      sign dist/ into <repo-dir>/repo/registry.json (key must match repo.toml)\n\
          verify  <repo-dir>                      verify <repo-dir>/repo against the key in repo.toml\n\
@@ -73,7 +80,8 @@ fn main() {
 
 fn load_signing_key(args: &[String]) -> R<SigningKey> {
     if let Some(pem_path) = arg(args, "--key") {
-        let pem = std::fs::read_to_string(pem_path).map_err(|e| format!("read key {pem_path}: {e}"))?;
+        let pem =
+            std::fs::read_to_string(pem_path).map_err(|e| format!("read key {pem_path}: {e}"))?;
         return SigningKey::from_pkcs8_pem(&pem).map_err(|e| format!("parse pkcs8 pem: {e}"));
     }
     if let Ok(hexseed) = std::env::var("WEAVELOGIC_RELEASE_KEY") {
@@ -90,16 +98,34 @@ fn load_signing_key(args: &[String]) -> R<SigningKey> {
 
 /// Reads a cog's agent `manifest.json` (as produced by seed-sideload) for the registry metadata.
 fn meta_from_manifest(manifest: &serde_json::Value, id: &str) -> CogEntry {
-    let s = |k: &str| manifest.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let s = |k: &str| {
+        manifest
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     let hw = manifest
         .get("hardware_requirement")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     CogEntry {
         id: id.to_string(),
-        name: if s("name").is_empty() { id.to_string() } else { s("name") },
-        version: if s("version").is_empty() { "0.0.0".into() } else { s("version") },
+        name: if s("name").is_empty() {
+            id.to_string()
+        } else {
+            s("name")
+        },
+        version: if s("version").is_empty() {
+            "0.0.0".into()
+        } else {
+            s("version")
+        },
         category: s("category"),
         description: s("description"),
         hardware_requirement: hw,
@@ -145,11 +171,13 @@ fn sign_tree(from: &str, out: &Path, repo_name: &str, key: &SigningKey) -> R<()>
             eprintln!("  skip {id}: no manifest.json");
             continue;
         }
-        let manifest_bytes = std::fs::read(&manifest_path).map_err(|e| format!("read {manifest_path:?}: {e}"))?;
-        let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).map_err(|e| format!("parse {manifest_path:?}: {e}"))?;
+        let manifest_bytes =
+            std::fs::read(&manifest_path).map_err(|e| format!("read {manifest_path:?}: {e}"))?;
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+            .map_err(|e| format!("parse {manifest_path:?}: {e}"))?;
         let mut entry = meta_from_manifest(&manifest, id);
 
-        for (arch, suffix) in [("arm", "-arm"), ("arm64", "-arm64")] {
+        for (arch, suffix) in COG_ARCHES {
             let bin = dist.join(format!("cog-{id}{suffix}"));
             if !bin.exists() {
                 continue;
@@ -161,9 +189,11 @@ fn sign_tree(from: &str, out: &Path, repo_name: &str, key: &SigningKey) -> R<()>
             let rel_manifest = format!("cogs/{arch}/manifest-{id}.json");
             // stage files into the repo
             let dst_bin = out.join(&rel_bin);
-            std::fs::create_dir_all(dst_bin.parent().unwrap()).map_err(|e| format!("mkdir: {e}"))?;
+            std::fs::create_dir_all(dst_bin.parent().unwrap())
+                .map_err(|e| format!("mkdir: {e}"))?;
             std::fs::write(&dst_bin, &bytes).map_err(|e| format!("write {dst_bin:?}: {e}"))?;
-            std::fs::write(out.join(&rel_manifest), &manifest_bytes).map_err(|e| format!("write manifest: {e}"))?;
+            std::fs::write(out.join(&rel_manifest), &manifest_bytes)
+                .map_err(|e| format!("write manifest: {e}"))?;
             entry.artifacts.insert(
                 arch.to_string(),
                 Artifact {
@@ -177,21 +207,31 @@ fn sign_tree(from: &str, out: &Path, repo_name: &str, key: &SigningKey) -> R<()>
             eprintln!("  signed {id} [{arch}] ({} bytes)", bytes.len());
         }
         if entry.artifacts.is_empty() {
-            eprintln!("  skip {id}: no cog-{id}-arm / -arm64 binaries");
+            eprintln!("  skip {id}: no cog-{id}-arm / -arm64 / -x86_64 binaries");
             continue;
         }
         cogs.push(entry);
     }
 
     if cogs.is_empty() {
-        return Err(format!("no signable cogs found under {from} (need <id>/cog-<id>-arm + manifest.json)"));
+        return Err(format!("no signable cogs found under {from} (need <id>/manifest.json and cog-<id>-arm, -arm64, or -x86_64)"));
     }
 
-    let registry = Registry { schema: SCHEMA, repo: repo_name.to_string(), updated: today(), cogs };
+    let registry = Registry {
+        schema: SCHEMA,
+        repo: repo_name.to_string(),
+        updated: today(),
+        cogs,
+    };
     let json = serde_json::to_string_pretty(&registry).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&out).map_err(|e| format!("mkdir {out:?}: {e}"))?;
-    std::fs::write(out.join("registry.json"), json).map_err(|e| format!("write registry.json: {e}"))?;
-    eprintln!("wrote {}/registry.json with {} cog(s)", out.display(), registry.cogs.len());
+    std::fs::write(out.join("registry.json"), json)
+        .map_err(|e| format!("write registry.json: {e}"))?;
+    eprintln!(
+        "wrote {}/registry.json with {} cog(s)",
+        out.display(),
+        registry.cogs.len()
+    );
     Ok(())
 }
 
@@ -216,7 +256,10 @@ fn fetch(base: &str, rel: &str) -> R<Vec<u8>> {
         if !resp.status().is_success() {
             return Err(format!("GET {url}: HTTP {}", resp.status()));
         }
-        Ok(resp.bytes().map_err(|e| format!("body {url}: {e}"))?.to_vec())
+        Ok(resp
+            .bytes()
+            .map_err(|e| format!("body {url}: {e}"))?
+            .to_vec())
     } else {
         let p = Path::new(base).join(rel);
         std::fs::read(&p).map_err(|e| format!("read {p:?}: {e}"))
@@ -244,7 +287,9 @@ fn explicit_pins(args: &[String]) -> R<Vec<VerifyingKey>> {
     let mut keys = Vec::new();
     for (i, a) in args.iter().enumerate() {
         if a == "--pin" {
-            let hex_key = args.get(i + 1).ok_or("--pin needs a public key (64 hex chars)")?;
+            let hex_key = args
+                .get(i + 1)
+                .ok_or("--pin needs a public key (64 hex chars)")?;
             keys.push(private::parse_pubkey(hex_key)?);
         }
     }
@@ -254,7 +299,12 @@ fn explicit_pins(args: &[String]) -> R<Vec<VerifyingKey>> {
 /// Verifies against each key; size and sha256 failures do not depend on the key, so only a
 /// rejected signature or a revoked key moves on to the next one. A revoked key is reported as
 /// such when no other key verifies.
-fn verify_any(bytes: &[u8], art: &Artifact, keys: &[VerifyingKey], revoked: &RevokedKeys) -> Result<(), VerifyError> {
+fn verify_any(
+    bytes: &[u8],
+    art: &Artifact,
+    keys: &[VerifyingKey],
+    revoked: &RevokedKeys,
+) -> Result<(), VerifyError> {
     let mut last = VerifyError::SignatureRejected;
     for k in keys {
         match verify_artifact_unrevoked(bytes, art, k, revoked) {
@@ -296,15 +346,27 @@ fn cmd_verify(args: &[String]) -> R<()> {
     let reg = load_registry(base)?;
     let key = pins(args)?;
     let revoked = revocations(args)?;
-    eprintln!("repo '{}' schema {} — {} cog(s)", reg.repo, reg.schema, reg.cogs.len());
+    eprintln!(
+        "repo '{}' schema {} — {} cog(s)",
+        reg.repo,
+        reg.schema,
+        reg.cogs.len()
+    );
     let mut bad = 0u32;
     let mut ok = 0u32;
     for cog in &reg.cogs {
         for (arch, art) in &cog.artifacts {
-            match fetch(base, &art.path).and_then(|b| verify_any(&b, art, &key, &revoked).map_err(|e| e.to_string())) {
+            match fetch(base, &art.path)
+                .and_then(|b| verify_any(&b, art, &key, &revoked).map_err(|e| e.to_string()))
+            {
                 Ok(()) => {
                     ok += 1;
-                    println!("  OK    {} [{arch}] v{}  {}", cog.id, cog.version, &art.sha256[..16]);
+                    println!(
+                        "  OK    {} [{arch}] v{}  {}",
+                        cog.id,
+                        cog.version,
+                        &art.sha256[..16]
+                    );
                 }
                 Err(e) => {
                     bad += 1;
@@ -323,21 +385,41 @@ fn cmd_verify(args: &[String]) -> R<()> {
 // ---- install --------------------------------------------------------------
 
 fn cmd_install(args: &[String]) -> R<()> {
-    let base = args.first().ok_or("install needs <repo-url|repo-dir> <cog-id>")?;
-    let cog_id = args.get(1).filter(|s| !s.starts_with("--")).ok_or("install needs a <cog-id>")?;
+    let base = args
+        .first()
+        .ok_or("install needs <repo-url|repo-dir> <cog-id>")?;
+    let cog_id = args
+        .get(1)
+        .filter(|s| !s.starts_with("--"))
+        .ok_or("install needs a <cog-id>")?;
     let seed = arg(args, "--seed").ok_or("install needs --seed <user@host>")?;
     let arch = arg(args, "--arch").unwrap_or("arm");
+    if arch != "arm" && arch != "arm64" {
+        return Err(format!("Seed install accepts arm or arm64; {arch} is listed for a Linux host and is not sideloaded"));
+    }
     let apps_dir = arg(args, "--apps-dir").unwrap_or("/var/lib/cognitum/apps");
 
     let reg = load_registry(base)?;
-    let cog = reg.cogs.iter().find(|c| &c.id == cog_id).ok_or_else(|| format!("cog '{cog_id}' not in registry"))?;
-    let art = cog.artifacts.get(arch).ok_or_else(|| format!("cog '{cog_id}' has no '{arch}' artifact"))?;
+    let cog = reg
+        .cogs
+        .iter()
+        .find(|c| &c.id == cog_id)
+        .ok_or_else(|| format!("cog '{cog_id}' not in registry"))?;
+    let art = cog
+        .artifacts
+        .get(arch)
+        .ok_or_else(|| format!("cog '{cog_id}' has no '{arch}' artifact"))?;
 
     // VERIFY before anything touches the Seed. Signed-only, always.
     let bytes = fetch(base, &art.path)?;
-    verify_any(&bytes, art, &pins(args)?, &revocations(args)?).map_err(|e| format!("refusing to install {cog_id}: {e}"))?;
+    verify_any(&bytes, art, &pins(args)?, &revocations(args)?)
+        .map_err(|e| format!("refusing to install {cog_id}: {e}"))?;
     let manifest = fetch(base, &art.manifest_path)?;
-    eprintln!("verified {cog_id} [{arch}] v{} ({} bytes) — signed by a pinned key", cog.version, bytes.len());
+    eprintln!(
+        "verified {cog_id} [{arch}] v{} ({} bytes) — signed by a pinned key",
+        cog.version,
+        bytes.len()
+    );
 
     // Stage locally, then sideload over ssh/scp into apps/<id>/.
     let staging = std::env::temp_dir().join(format!("weft-cog-install-{cog_id}"));
@@ -352,7 +434,10 @@ fn cmd_install(args: &[String]) -> R<()> {
     eprintln!("sideloading to {seed}:{dest}/ ...");
     run("ssh", &[seed, &format!("sudo mkdir -p {dest}")])?;
     scp(&local_bin, &format!("{seed}:/tmp/{agent_bin}"))?;
-    scp(&local_manifest, &format!("{seed}:/tmp/manifest-{cog_id}.json"))?;
+    scp(
+        &local_manifest,
+        &format!("{seed}:/tmp/manifest-{cog_id}.json"),
+    )?;
     run(
         "ssh",
         &[
@@ -360,12 +445,18 @@ fn cmd_install(args: &[String]) -> R<()> {
             &format!("sudo install -m 0755 /tmp/{agent_bin} {dest}/{agent_bin} && sudo install -m 0644 /tmp/manifest-{cog_id}.json {dest}/manifest.json && rm -f /tmp/{agent_bin} /tmp/manifest-{cog_id}.json"),
         ],
     )?;
-    eprintln!("installed {cog_id} v{} to {seed}:{dest}/ — the agent will pick it up.", cog.version);
+    eprintln!(
+        "installed {cog_id} v{} to {seed}:{dest}/ — the agent will pick it up.",
+        cog.version
+    );
     Ok(())
 }
 
 fn run(cmd: &str, args: &[&str]) -> R<()> {
-    let status = Command::new(cmd).args(args).status().map_err(|e| format!("{cmd}: {e}"))?;
+    let status = Command::new(cmd)
+        .args(args)
+        .status()
+        .map_err(|e| format!("{cmd}: {e}"))?;
     if !status.success() {
         return Err(format!("{cmd} {}: exit {status}", args.join(" ")));
     }
@@ -384,7 +475,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let cog = d.path().join("dist/probe");
         std::fs::create_dir_all(&cog).unwrap();
-        std::fs::write(cog.join("manifest.json"), br#"{"name":"probe","version":"0.1.0"}"#).unwrap();
+        std::fs::write(
+            cog.join("manifest.json"),
+            br#"{"name":"probe","version":"0.1.0"}"#,
+        )
+        .unwrap();
         std::fs::write(cog.join("cog-probe-arm"), payload).unwrap();
         d
     }
@@ -402,5 +497,50 @@ mod tests {
         let from = d.path().join("dist");
         sign_tree(from.to_str().unwrap(), &d.path().join("repo"), "t", &key).unwrap();
         assert!(d.path().join("repo/registry.json").is_file());
+    }
+
+    #[test]
+    fn sign_tree_records_an_x86_64_artifact() {
+        let key = SigningKey::from_bytes(&[3; 32]);
+        let d = tempfile::tempdir().unwrap();
+        let cog = d.path().join("dist/probe");
+        std::fs::create_dir_all(&cog).unwrap();
+        std::fs::write(
+            cog.join("manifest.json"),
+            br#"{"name":"probe","version":"0.1.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(cog.join("cog-probe-x86_64"), b"\x7fELF probe-x86").unwrap();
+        sign_tree(
+            d.path().join("dist").to_str().unwrap(),
+            &d.path().join("repo"),
+            "t",
+            &key,
+        )
+        .unwrap();
+        let reg: Registry =
+            serde_json::from_slice(&std::fs::read(d.path().join("repo/registry.json")).unwrap())
+                .unwrap();
+        let art = reg.cogs[0]
+            .artifacts
+            .get("x86_64")
+            .expect("x86_64 registry key");
+        assert_eq!(art.path, "cogs/x86_64/cog-probe-x86_64");
+        assert!(d.path().join("repo").join(&art.path).is_file());
+        assert!(!reg.cogs[0].artifacts.contains_key("arm"));
+    }
+
+    #[test]
+    fn install_refuses_to_sideload_x86_64() {
+        let e = cmd_install(&[
+            "repo".into(),
+            "probe".into(),
+            "--seed".into(),
+            "user@host".into(),
+            "--arch".into(),
+            "x86_64".into(),
+        ])
+        .unwrap_err();
+        assert!(e.contains("not sideloaded"), "{e}");
     }
 }

@@ -1,7 +1,7 @@
 {
   "generated": "2026-10-03",
-  "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool. Sipeed, Pololu, Toradex added 2026-10-04.",
-  "count": 74,
+  "note": "Where to find each known sensor/board manufacturer's full product catalog. Built by 5 area agents. best_ingest_path = how to bulk-pull into the parts pool. Sipeed, Pololu, Toradex added 2026-10-04. DEBIX added 2026-10-05. Banana Pi and Akizuki Denshi added 2026-10-06. sensiBel added 2026-10-06.",
+  "count": 78,
   "manufacturers": [
     {
       "manufacturer": "Adafruit",
@@ -815,6 +815,50 @@
       "access_notes": "Swiss maker of industrial Arm System-on-Modules (SoMs): Verdin (260-pin DDR4 SODIMM edge), Apalis (MXM3 314-pin), Colibri (SODIMM-200), and OSM (solderable) families, plus matching carrier boards (Verdin Dev Board, Dahlia, Yavia, Mallow, Ivy, Ixora, Aster) and the Torizon OS + Torizon Cloud fleet/OTA platform. NPU-equipped SoMs: Verdin iMX8M Plus (2.3 TOPS), Verdin iMX95 (eIQ Neutron ~2.0 TOPS, verify), OSM iMX93 (small eIQ Neutron). 10-15 yr guaranteed availability, -40/+85C industrial. www.toradex.com is bot-walled (HTTP 403 to naive fetch); developer.toradex.com + docs.toradex.com datasheet PDFs are the accessible primary sources. Toradex is a Mouser line (eu.mouser.com/new/toradex) for orderable SoM/carrier SKUs. Industrial SoMs, not a sensor/broadline parts pull. Full writeup in docs/hardware/toradex.md.",
       "approx_products": 40,
       "best_ingest_path": "Registry only: enumerate SoMs + carriers from toradex.com/computer-on-modules family pages + per-module docs.toradex.com datasheet PDFs; Mouser Toradex line for orderable SKUs. Not a broadline distributor parametric pull.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "DEBIX (Polyhex)",
+      "area": "boards",
+      "website": "https://debix.io",
+      "catalog_source": "https://debix.io/products/single-board-computer/ (NXP i.MX 8, NXP i.MX 9, R-series) and https://debix.io/products/system-on-module/; legacy Polyhex index at http://www.polyhex.net/product/embedded-motherboard.html",
+      "source_type": "product-listing",
+      "access_notes": "Industrial SBC and SoM brand of Polyhex Technology. First-party store, not a Mouser line. NPU boards: Model A/B and SOM A (i.MX 8M Plus, 2.3 TOPS), Model C and SOM B (i.MX 93, 0.5 TOPS Ethos-U65), R3576-01 (RK3576, 6 TOPS). No-NPU SKUs to keep distinct: Model A Lite, Infinity (Quad Lite), T62P-01 (AM62P), SOM C and Model D (i.MX 91). M8391-01 (Genio 720, 9 TOPS) was reported 2026-10-05 and was not on a retrieved product page. debix.io index fetches returned HTTP 403; use per-product https://debix.io/product/ pages. Full writeup in docs/hardware/debix.md.",
+      "approx_products": 25,
+      "best_ingest_path": "Registry only: enumerate SBC and SoM product pages from debix.io. Do not Mouser-pull. Stage Model A Standard, Model B, Model C, R3576-01, T62P-01, SOM A/B/C into the module explorer; skip Lite and Quad Lite when the NPU is the point. See debix.md.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "Banana Pi (Guangdong Bipai)",
+      "area": "boards",
+      "website": "https://www.banana-pi.org/",
+      "catalog_source": "https://www.banana-pi.org/en/products/ ; docs https://docs.banana-pi.org/en/home ; wiki http://wiki.banana-pi.org/Main_Page ; GitHub https://github.com/bpi-sinovoip",
+      "source_type": "product-listing",
+      "access_notes": "Open-source hardware community led by Guangdong Bipai Technology (SinoVoip). Product families: SBC, router, core board, industrial, STEAM. Not a Mouser line. Do not pull every SKU. sbcs.md already notes BPI-M4 Zero, BPI-M6, BPI-R4 Pro, and BPI-WiFi6 as evaluated-only.",
+      "approx_products": "index only",
+      "best_ingest_path": "Registry only: enumerate from banana-pi.org product-family pages plus docs.banana-pi.org and wiki.banana-pi.org. Do not ingest the full board list.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "Akizuki Denshi",
+      "area": "shops",
+      "website": "https://akizukidenshi.com/",
+      "catalog_source": "https://akizukidenshi.com/catalog/g/g{code}/ ; sensors https://akizukidenshi.com/catalog/c/csensor/ ; timing https://akizukidenshi.com/catalog/r/rtimeric/ ; clock ICs https://akizukidenshi.com/catalog/r/rclockic/",
+      "source_type": "retailer",
+      "access_notes": "Akihabara electronics retailer, not a single manufacturer. Stable part URL is /catalog/g/g{sale code}/. One part staged 2026-10-06: Seiko Epson RX8130CE, sale code 132109, https://akizukidenshi.com/catalog/g/g132109/ , datasheet https://akizukidenshi.com/goodsaffix/RX8130CE_ja.pdf .",
+      "approx_products": "not enumerated",
+      "best_ingest_path": "Pull one sale-code page at a time. Do not ingest the shop. The RX8130CE is catalog chip epson-rx8130ce.",
+      "status": "found"
+    },
+    {
+      "manufacturer": "sensiBel",
+      "area": "optical-audio",
+      "website": "https://www.sensibel.com/",
+      "catalog_source": "https://www.sensibel.com/products/microphones ; documents at https://www.sensibel.com/documents",
+      "source_type": "product-listing",
+      "access_notes": "Oslo optical MEMS microphones. A VCSEL and photodetector read diaphragm displacement. SBM100B is shipping (80 dBA SNR, 146 dB SPL AOP, PDM/I2S/TDM). SBM140B was announced 2026-08-31 (84 dBA SNR, 136 dB dynamic range, 24-bit) with production aimed at Q1 2027; the product page says full specifications are coming. Datasheets are requested from the documents page, not posted. Eval kits AURORA (stereo), POLARIS (8-mic array), and NOVA32 are not staged.",
+      "approx_products": 2,
+      "best_ingest_path": "Stage chips sensibel-sbm100b and sensibel-sbm140b only. Do not split PDM, I2S, and TDM into separate rows. Do not pull the eval kits until a board is chosen.",
       "status": "found"
     }
   ]

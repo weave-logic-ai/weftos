@@ -16,7 +16,8 @@ pub use revoked::{RevokedKeys, SUBJECTS_FILE_NAME};
 
 /// The pinned WeaveLogic release public key (raw Ed25519, hex). The matching private key lives
 /// in the dashboard/CI secret `WEAVELOGIC_RELEASE_KEY`, never in this repo.
-pub const WEAVELOGIC_PUBKEY_HEX: &str = "6aae63e067488f1e5414ad4a6b9536bef0407db210fb33a3b378e8d6d12eca15";
+pub const WEAVELOGIC_PUBKEY_HEX: &str =
+    "6aae63e067488f1e5414ad4a6b9536bef0407db210fb33a3b378e8d6d12eca15";
 
 pub const SCHEMA: u32 = 1;
 
@@ -40,9 +41,14 @@ pub struct CogEntry {
     pub description: String,
     #[serde(default)]
     pub hardware_requirement: Vec<String>,
-    /// arch ("arm" | "arm64") -> artifact
+    /// Registry key (`arm`, `arm64`, or `x86_64`) -> artifact. See [`COG_ARCHES`].
     pub artifacts: BTreeMap<String, Artifact>,
 }
+
+/// Dist filename suffix for each COG-008 registry key.
+/// `arm` and `arm64` are Seed sideload binaries. `x86_64` is a glibc Linux host binary.
+pub const COG_ARCHES: &[(&str, &str)] =
+    &[("arm", "-arm"), ("arm64", "-arm64"), ("x86_64", "-x86_64")];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Artifact {
@@ -89,21 +95,32 @@ pub fn check_signable(bytes: &[u8]) -> Result<(), String> {
         return Err("payload starts with the reserved \"weftos-release-\" prefix; refusing to sign it as a cog".into());
     }
     if !COG_MAGICS.iter().any(|m| bytes.starts_with(m)) {
-        return Err("payload is not an ELF, Mach-O or wasm binary; refusing to sign it as a cog".into());
+        return Err(
+            "payload is not an ELF, Mach-O or wasm binary; refusing to sign it as a cog".into(),
+        );
     }
     Ok(())
 }
 
 /// The pinned verifying key.
 pub fn weavelogic_key() -> VerifyingKey {
-    let raw: [u8; 32] = hex::decode(WEAVELOGIC_PUBKEY_HEX).expect("pinned pubkey hex").try_into().expect("32 bytes");
+    let raw: [u8; 32] = hex::decode(WEAVELOGIC_PUBKEY_HEX)
+        .expect("pinned pubkey hex")
+        .try_into()
+        .expect("32 bytes");
     VerifyingKey::from_bytes(&raw).expect("pinned pubkey is a valid Ed25519 key")
 }
 
 #[derive(Debug, PartialEq)]
 pub enum VerifyError {
-    SizeMismatch { want: u64, got: u64 },
-    Sha256Mismatch { want: String, got: String },
+    SizeMismatch {
+        want: u64,
+        got: u64,
+    },
+    Sha256Mismatch {
+        want: String,
+        got: String,
+    },
     BadSignatureHex(String),
     SignatureRejected,
     /// The verifying key is on the operator's signer-key revocation list.
@@ -114,9 +131,14 @@ impl std::fmt::Display for VerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VerifyError::SizeMismatch { want, got } => write!(f, "size {got} != registry {want}"),
-            VerifyError::Sha256Mismatch { want, got } => write!(f, "sha256 {got} != registry {want}"),
+            VerifyError::Sha256Mismatch { want, got } => {
+                write!(f, "sha256 {got} != registry {want}")
+            }
             VerifyError::BadSignatureHex(e) => write!(f, "signature not valid hex/length: {e}"),
-            VerifyError::SignatureRejected => write!(f, "Ed25519 signature rejected (not signed by a key pinned for this repository)"),
+            VerifyError::SignatureRejected => write!(
+                f,
+                "Ed25519 signature rejected (not signed by a key pinned for this repository)"
+            ),
             VerifyError::KeyRevoked => write!(f, "the signing key is revoked"),
         }
     }
@@ -124,25 +146,41 @@ impl std::fmt::Display for VerifyError {
 
 /// Verifies a downloaded binary against its artifact record using the pinned key. Checks size,
 /// sha256, and the Ed25519 signature over the bytes. All three must pass — there is no bypass.
-pub fn verify_artifact(bytes: &[u8], art: &Artifact, key: &VerifyingKey) -> Result<(), VerifyError> {
+pub fn verify_artifact(
+    bytes: &[u8],
+    art: &Artifact,
+    key: &VerifyingKey,
+) -> Result<(), VerifyError> {
     if bytes.len() as u64 != art.size {
-        return Err(VerifyError::SizeMismatch { want: art.size, got: bytes.len() as u64 });
+        return Err(VerifyError::SizeMismatch {
+            want: art.size,
+            got: bytes.len() as u64,
+        });
     }
     let got = sha256_hex(bytes);
     if got != art.sha256 {
-        return Err(VerifyError::Sha256Mismatch { want: art.sha256.clone(), got });
+        return Err(VerifyError::Sha256Mismatch {
+            want: art.sha256.clone(),
+            got,
+        });
     }
     let sig_bytes: [u8; 64] = hex::decode(&art.sig)
         .map_err(|e| VerifyError::BadSignatureHex(e.to_string()))?
         .try_into()
         .map_err(|_| VerifyError::BadSignatureHex("not 64 bytes".into()))?;
     let sig = Signature::from_bytes(&sig_bytes);
-    key.verify(bytes, &sig).map_err(|_| VerifyError::SignatureRejected)
+    key.verify(bytes, &sig)
+        .map_err(|_| VerifyError::SignatureRejected)
 }
 
 /// [`verify_artifact`], but refuses first when `key` is revoked. A revoked key never verifies,
 /// whatever it signed.
-pub fn verify_artifact_unrevoked(bytes: &[u8], art: &Artifact, key: &VerifyingKey, revoked: &RevokedKeys) -> Result<(), VerifyError> {
+pub fn verify_artifact_unrevoked(
+    bytes: &[u8],
+    art: &Artifact,
+    key: &VerifyingKey,
+    revoked: &RevokedKeys,
+) -> Result<(), VerifyError> {
     if revoked.contains(&hex::encode(key.to_bytes())) {
         return Err(VerifyError::KeyRevoked);
     }
@@ -175,9 +213,16 @@ mod tests {
         let e = check_signable(b"weftos-release-v1\n{\"schema\":1}").unwrap_err();
         assert!(e.contains("reserved"), "{e}");
         assert!(check_signable(b"weftos-release-v2 anything").is_err());
-        assert!(check_signable(b"#!/bin/sh\necho hi").unwrap_err().contains("not an ELF"));
+        assert!(check_signable(b"#!/bin/sh\necho hi")
+            .unwrap_err()
+            .contains("not an ELF"));
         assert!(check_signable(b"").is_err());
-        for ok in [&b"\x7fELF\x02\x01"[..], b"\0asm\x01\0\0\0", &[0xcf, 0xfa, 0xed, 0xfe, 7], &[0xca, 0xfe, 0xba, 0xbe, 0]] {
+        for ok in [
+            &b"\x7fELF\x02\x01"[..],
+            b"\0asm\x01\0\0\0",
+            &[0xcf, 0xfa, 0xed, 0xfe, 7],
+            &[0xca, 0xfe, 0xba, 0xbe, 0],
+        ] {
             assert!(check_signable(ok).is_ok(), "{ok:?}");
         }
     }
@@ -197,16 +242,32 @@ mod tests {
         // one flipped byte -> sha256 mismatch
         let mut bad = bytes.clone();
         bad[3] ^= 1;
-        assert!(matches!(verify_artifact(&bad, &art, &vk), Err(VerifyError::SizeMismatch { .. }) | Err(VerifyError::Sha256Mismatch { .. })));
+        assert!(matches!(
+            verify_artifact(&bad, &art, &vk),
+            Err(VerifyError::SizeMismatch { .. }) | Err(VerifyError::Sha256Mismatch { .. })
+        ));
 
         // right bytes, but signed by a different key -> rejected (even if we also fix sha)
         let other = SigningKey::from_bytes(&[9u8; 32]);
-        let forged = Artifact { sig: hex::encode(other.sign(&bytes).to_bytes()), ..art.clone() };
-        assert_eq!(verify_artifact(&bytes, &forged, &vk), Err(VerifyError::SignatureRejected));
+        let forged = Artifact {
+            sig: hex::encode(other.sign(&bytes).to_bytes()),
+            ..art.clone()
+        };
+        assert_eq!(
+            verify_artifact(&bytes, &forged, &vk),
+            Err(VerifyError::SignatureRejected)
+        );
 
         // a tampered binary whose sha we "fix" in the record still fails the signature
-        let fixed_sha = Artifact { size: bad.len() as u64, sha256: sha256_hex(&bad), ..art };
-        assert_eq!(verify_artifact(&bad, &fixed_sha, &vk), Err(VerifyError::SignatureRejected));
+        let fixed_sha = Artifact {
+            size: bad.len() as u64,
+            sha256: sha256_hex(&bad),
+            ..art
+        };
+        assert_eq!(
+            verify_artifact(&bad, &fixed_sha, &vk),
+            Err(VerifyError::SignatureRejected)
+        );
     }
 
     #[test]
@@ -216,7 +277,10 @@ mod tests {
         let art = artifact_for(&sk, &bytes);
         assert!(verify_artifact_unrevoked(&bytes, &art, &vk, &RevokedKeys::none()).is_ok());
         let revoked = RevokedKeys::from_keys([hex::encode(vk.to_bytes())]);
-        assert_eq!(verify_artifact_unrevoked(&bytes, &art, &vk, &revoked), Err(VerifyError::KeyRevoked));
+        assert_eq!(
+            verify_artifact_unrevoked(&bytes, &art, &vk, &revoked),
+            Err(VerifyError::KeyRevoked)
+        );
     }
 
     #[test]

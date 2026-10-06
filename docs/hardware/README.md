@@ -47,3 +47,4 @@ crate tests) checks the link shape.
 - Cogs/sensors: `~/Clients/cognitum/cogs-*` (COG-007 bridge, COG-009 host/console, COG-010 Fleet).
 - Firmware substrate: `crates/clawft-edge-pad*` (no_std/std ESP32).
 - Placement direction: WeftOS ADR-099 (placement), the mesh-workload-placement memory.
+- Vendor writeups: [sipeed.md](sipeed.md), [pololu.md](pololu.md), [toradex.md](toradex.md), [debix.md](debix.md).

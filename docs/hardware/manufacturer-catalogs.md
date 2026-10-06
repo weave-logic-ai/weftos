@@ -1,6 +1,6 @@
 # Manufacturer catalog sources
 
-Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 74 manufacturers across 5 areas. Generated 2026-10-03 by the catalog-source sweep (Sipeed, Pololu, Toradex added 2026-10-04).
+Where to find each manufacturer's full sensor/board catalog, and how to bulk-pull it into the parts pool. 77 manufacturers and 1 shop across 6 areas. Generated 2026-10-03 by the catalog-source sweep (Sipeed, Pololu, Toradex added 2026-10-04; DEBIX added 2026-10-05; Banana Pi and Akizuki Denshi added 2026-10-06; sensiBel added 2026-10-06).
 
 > `best_ingest_path` is how WE pull it today (Mouser API by manufacturer+category) and the authoritative fuller source (parametric CSV export / Octopart-Nexar / first-party scrape). Many first-party selectors are bot-walled; the distributor/CSV paths are the practical ones.
 
@@ -51,7 +51,7 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **u-blox** | https://www.u-blox.com/en/positioning-chips-and-modules (positioning product list) + https://www.u-blox.com/en/products | product-listing | GNSS modules ~40-60 SKUs; total portfolio hundreds | Mouser keyword 'u-blox GNSS module' / 'u-blox ZED-F9P'; distributor filter manufacturer=u-blox | found |
 | **Vayyar Imaging** | https://vayyar.com/technology/ (platform/RoC pages: 60GHz in-cabin, 79GHz automotive XRR) | product-listing | few RoC platform SKUs + eval kits (not retail-distributed at scale) | Record platform pages in registry; direct/solution sales, not Mouser pull | partial |
 
-## optical-audio  (19)
+## optical-audio  (20)
 
 | Manufacturer | Catalog source | Type | ~SKUs | Best ingest path | Status |
 |---|---|---|---|---|---|
@@ -71,11 +71,12 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **Orbbec** | https://www.orbbec.com/products/ + store.orbbec.com (3D depth cameras: ToF Femto/Femto Bolt/Mega/Mega I, stereo-vision Gemini 2/330-series/335Le, structured-light; NVIDIA Jetson-ready) | product-listing | 60 | Scrape orbbec.com product pages + store.orbbec.com; DigiKey for orderable SKUs; mostly direct store, no Mouser pull. | found |
 | **Partron** | https://partron.co.kr/en/business/ (product/business pages: camera modules, MEMS microphone sensors, biosensors, antennas, sensors) | product-listing | 50 | Scrape partron.co.kr/partron.eu product pages for family descriptions; design-win supplier, no distributor pull. | partial |
 | **Sharp (Sharp Devices Europe / Sharp Microelectronics)** | https://www.sharpsde.com/products/optoelectronic-components/ (optoelectronic components product listing: distance measuring sensors GP2Y series, proximity sensors, photointerrupters, IR devices) | product-listing | 150 | Mouser keyword pull (Sharp distance sensor / photointerrupter) + sharpsde.com product list. | found |
+| **sensiBel** | https://www.sensibel.com/products/microphones (SBM100B shipping; SBM140B announced) ; briefs at https://www.sensibel.com/documents | product-listing | 2 | Stage the two microphone chips only. SBM100B is one acoustic part in PDM, I2S, and TDM. SBM140B full specifications are not published. Eval kits AURORA, POLARIS, and NOVA32 stay off the parts list until a board is chosen. Datasheets are requested, not posted. Not a Mouser line. | found |
 | **Sony Semiconductor Solutions (image sensors / IMX)** | https://www.sony-semicon.com/en/products/is/index.html (Industrial, Consumer, Automotive, SPAD/ToF, polarization, SWIR/UV image sensor lineup pages) | product-listing | 300 | Scrape sony-semicon.com industrial/automotive/consumer lineup pages; Framos distributor catalog for orderable industrial modules. | found |
 | **Teledyne FLIR (OEM thermal camera cores)** | https://oem.flir.com/categories/infrared-camera-cores/modelselector (model selector for LWIR cores: Boson, Boson+, Lepton, Tau 2, Hadron, Tura) | parametric-selector | 60 | Scrape oem.flir.com model selector pages; DigiKey/GroupGets for Lepton breakout/orderable variants. | found |
 | **Vishay Intertechnology** | https://www.vishay.com/en/optoelectronics/ (interactive parametric product tables: IR emitters, PIN photodiodes, phototransistors, reflective/transmissive optical sensors, ambient light/proximity sensors, optocouplers) + selector guide PDFs (sg2123, sg2166) | parametric-selector | 2000 | Mouser keyword pull (Vishay photodiode / phototransistor / IR emitter / proximity sensor) + Vishay parametric table scrape. | found |
 
-## boards  (23)
+## boards  (25)
 
 | Manufacturer | Catalog source | Type | ~SKUs | Best ingest path | Status |
 |---|---|---|---|---|---|
@@ -83,12 +84,13 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **Ai-Thinker** | https://en.ai-thinker.com/ (product categories); docs at https://docs.ai-thinker.com | product-listing | 150 | Scrape en.ai-thinker.com product pages + docs.ai-thinker.com datasheets. LCSC is the cleanest distributor source if needed; not reliably on Mouser. | found |
 | **Arduino** | https://store.arduino.cc/collections/boards (store board collections); hardware specs at github.com/arduino + docs.arduino.cc | product-listing | 60 | Mouser pull for official Arduino board SKUs; supplement specs from docs.arduino.cc per-board pages. | found |
 | **DFRobot** | https://www.dfrobot.com/category-* (store category pages, e.g. https://www.dfrobot.com/category-156.html Boards) | product-listing | 300 | Mouser pull for Gravity/FireBeetle/Beetle SKUs; scrape store category pages for LattePanda and boards not on Mouser. | found |
+| **DEBIX (Polyhex)** | https://debix.io/products/single-board-computer/ and https://debix.io/products/system-on-module/; per-board pages at https://debix.io/product/ | product-listing | 25 | Registry only: enumerate SBC and SoM product pages on debix.io. Sells direct, not a Mouser line. Index pages returned HTTP 403 to a plain fetch; product URLs are the spec source. See [debix.md](debix.md). | found |
 | **Elecrow** | https://www.elecrow.com/ (store category pages, e.g. CrowPanel displays, HMI, Lora boards) | product-listing | 250 | Scrape store category pages. Not on Mouser. | found |
 | **Espressif** | https://products.espressif.com/#/product-selector | parametric-selector | 150 | Mouser pull (DONE: 99 Espressif parts staged) for the module/DevKit SKUs; supplement chip-level specs from the product-selector JSON backend. | found |
 | **FriendlyELEC (NanoPi)** | https://www.friendlyelec.com/index.php?route=product/category (OpenCart store categories); wiki at https://wiki.friendlyelec.com | product-listing | 70 | Scrape friendlyelec.com OpenCart category pages + wiki.friendlyelec.com specs. Not on Mouser. | found |
 | **Hardkernel (ODROID)** | https://www.hardkernel.com/product-category/ (store category pages: SBC, accessories) | product-listing | 80 | Scrape hardkernel.com store category pages + wiki.odroid.com for specs. Not on Mouser. | found |
 | **Heltec** | https://heltec.org/proucts/ (product listing; note vendor's own spelling 'proucts'); Chinese store heltec.cn | product-listing | 80 | Scrape heltec.org product listing + docs.heltec.org per-board specs. Not on Mouser. | found |
-| **Hi-Link (Shenzhen Hilink Electronic)** | https://www.hlktech.com/en/Product/ (English product tree); alt domain https://www.hlktech.net/index.php?id=product | product-listing | 200 | Scrape hlktech.com/en/Product tree + download-center datasheet PDFs. Not on Mouser; mmWave modules overlap with the RF/radar agent's scope. | found |
+| **Hi-Link (Shenzhen Hilink Electronic)** | https://www.hlktech.com/en/Product/ (English product tree); alt domain https://www.hlktech.net/index.php?id=product | product-listing | 543 unique pages, 532 new rows | Ingested 2026-10-05 from the hlktech.net product index (pageid 1–61) and category pages. One product page is one catalog module. Specs are vendor listing text. Live Sensor Explorer D1 was not updated. See [hi-link.md](hi-link.md). | ingested |
 | **Intel** | https://ark.intel.com (ARK spec database for processors); dev kits/Movidius under intel.com products | parametric-selector | 200 | ARK for CPU/SoC specs (reference); Mouser for any Altera/FPGA eval kits. Limited board/module relevance — scope to AI-edge (Movidius) + eval kits only. | partial |
 | **MediaTek** | https://www.mediatek.com/products (product families); Genio IoT dev boards at https://www.mediatek.com/products/iot | product-listing | 100 | Scrape mediatek.com Genio/IoT product pages for EVK metadata (reference). No clean distribution parts feed; Genio EVKs sold via partners (ADLINK, etc.). Limited board pool relevance. | partial |
 | **Microchip** | https://www.microchip.com/en-us/products (parametric product pages); dev tools at https://www.microchip.com/en-us/tools-resources | parametric-selector | 10000 | Mouser pull for MCU/dev-board SKUs (board-relevant: Curiosity, Explorer, SAM-D/E eval, ATmega/SAMD boards); use parametric pages for family-level metadata. Scope to dev boards + common MCUs to stay bounded. | found |
@@ -102,3 +104,10 @@ Where to find each manufacturer's full sensor/board catalog, and how to bulk-pul
 | **SparkFun** | https://www.sparkfun.com/categories (category tree); products under /products | product-listing | 2500 | Mouser pull for Qwiic/breakout SKUs; supplement via store category scrape + github.com/sparkfun for OSHW board metadata. | found |
 | **Waveshare** | https://www.waveshare.com/product/ (full product tree by category) | product-listing | 2000 | Scrape https://www.waveshare.com/product/ category tree + per-product wiki pages. Not on Mouser. | found |
 | **Xunlong (Orange Pi)** | http://www.orangepi.org/html/hardWare/computerAndMicrocontrollers/index.html (board index); global store orangepi.org / AliExpress | product-listing | 90 | Scrape orangepi.org hardware board index + per-board download pages. Not on Mouser. | found |
+| **Banana Pi (Guangdong Bipai)** | https://www.banana-pi.org/en/products/ ; docs https://docs.banana-pi.org/en/home ; wiki http://wiki.banana-pi.org/Main_Page ; GitHub https://github.com/bpi-sinovoip | product-listing | index only | Registry only. Families on the site: SBC, router, core board, industrial, STEAM. Do not pull every SKU. Not a Mouser line. [sbcs.md](sbcs.md) already notes BPI-M4 Zero, BPI-M6, BPI-R4 Pro, and BPI-WiFi6 as evaluated-only. | found |
+
+## shops  (1)
+
+| Manufacturer | Catalog source | Type | ~SKUs | Best ingest path | Status |
+|---|---|---|---|---|---|
+| **Akizuki Denshi** | https://akizukidenshi.com/ ; part pages `https://akizukidenshi.com/catalog/g/g{code}/` ; sensors https://akizukidenshi.com/catalog/c/csensor/ ; timing https://akizukidenshi.com/catalog/r/rtimeric/ ; clock ICs https://akizukidenshi.com/catalog/r/rclockic/ | retailer | not enumerated | Akihabara retailer, not a manufacturer. Pull one sale-code page at a time. Staged chip: Epson RX8130CE, sale code 132109, https://akizukidenshi.com/catalog/g/g132109/ . Do not ingest the shop. | found |

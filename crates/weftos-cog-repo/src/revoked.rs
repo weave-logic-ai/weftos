@@ -29,12 +29,19 @@ struct Entry {
 impl RevokedKeys {
     /// No revocations.
     pub const fn none() -> Self {
-        Self { keys: BTreeSet::new() }
+        Self {
+            keys: BTreeSet::new(),
+        }
     }
 
     /// From explicit keys (hex, any case).
     pub fn from_keys<I: IntoIterator<Item = S>, S: AsRef<str>>(keys: I) -> Self {
-        Self { keys: keys.into_iter().map(|k| k.as_ref().to_ascii_lowercase()).collect() }
+        Self {
+            keys: keys
+                .into_iter()
+                .map(|k| k.as_ref().to_ascii_lowercase())
+                .collect(),
+        }
     }
 
     /// Load `path`. A missing file is an empty list; an unreadable or malformed one is an error.
@@ -42,9 +49,16 @@ impl RevokedKeys {
         if !path.exists() {
             return Ok(Self::none());
         }
-        let data = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        let entries: Vec<Entry> = serde_json::from_str(&data).map_err(|e| format!("parse {}: {e}", path.display()))?;
-        Ok(Self::from_keys(entries.iter().filter(|e| e.kind == "signer_key").map(|e| e.id.as_str())))
+        let data =
+            std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let entries: Vec<Entry> =
+            serde_json::from_str(&data).map_err(|e| format!("parse {}: {e}", path.display()))?;
+        Ok(Self::from_keys(
+            entries
+                .iter()
+                .filter(|e| e.kind == "signer_key")
+                .map(|e| e.id.as_str()),
+        ))
     }
 
     /// Where the kernel keeps the list: the runtime dir `weaver` resolves
@@ -116,7 +130,9 @@ mod tests {
     #[test]
     fn missing_is_empty_and_malformed_fails_closed() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(RevokedKeys::load(&dir.path().join("nope.json")).unwrap().is_empty());
+        assert!(RevokedKeys::load(&dir.path().join("nope.json"))
+            .unwrap()
+            .is_empty());
         let p = dir.path().join(SUBJECTS_FILE_NAME);
         std::fs::write(&p, "{not json").unwrap();
         assert!(RevokedKeys::load(&p).is_err());

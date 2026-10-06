@@ -485,6 +485,27 @@ cmd_scope_web() {
     fi
 }
 
+cmd_guide_web() {
+    local profile="${PROFILE:-release-wasm}"
+    header "Building weftos-guide-view for the browser (wasm32-unknown-unknown, profile: $profile)"
+    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
+    timer_start
+    run_cmd cargo build --target wasm32-unknown-unknown -p weftos-guide-view --lib --profile "$profile"
+    timer_end
+    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_guide_view.wasm"
+    report_binary_size "$wasm_file" "guide-view WASM (raw)"
+    local pkg_dir="$ROOT/crates/weftos-guide-view/www/pkg"
+    if command -v wasm-bindgen >/dev/null 2>&1; then
+        info "Running wasm-bindgen → $pkg_dir"
+        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
+        report_binary_size "$pkg_dir/weftos_guide_view_bg.wasm" "guide-view WASM (bindgen)"
+        pass "pkg/ ready — Sensor Explorer loads /guide-view/weftos_guide_view.js"
+    else
+        skip "wasm-bindgen CLI not found — pkg/ not generated"
+        info "Install with: cargo install wasm-bindgen-cli"
+    fi
+}
+
 cmd_manager() {
     local profile="${PROFILE:-release}"
     header "Building Weave Manager (appliance console, native, profile: $profile)"
@@ -2395,6 +2416,7 @@ ${BOLD}Commands:${NC}
   browser         Build WASM for browser (wasm32-unknown-unknown)
   scope <name>    Build a sensor-cog companion app crates/weftos-<name>-scope (ecg, tof); ADR-104
   scope-web <name> Same for the browser (wasm + wasm-bindgen into crates/weftos-<name>-scope/www/pkg)
+  guide-web       Browser popup for one sensor guide (wasm into crates/weftos-guide-view/www/pkg)
   ecg-scope[-web] Aliases for scope ecg / scope-web ecg
   ui              Build React frontend (tsc + vite)
   ui-docker       Build the clawft-ui multi-stage Docker image (WEFT-317).
@@ -2759,6 +2781,7 @@ main() {
         browser)      cmd_browser ;;
         scope)        cmd_scope "$SCOPE_NAME" ;;
         scope-web)    cmd_scope_web "$SCOPE_NAME" ;;
+        guide-web)    cmd_guide_web ;;
         ecg-scope)    cmd_scope ecg ;;
         ecg-scope-web) cmd_scope_web ecg ;;
         sound-scope)  cmd_scope sound ;;
