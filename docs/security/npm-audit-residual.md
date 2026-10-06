@@ -1,6 +1,13 @@
 # npm audit residual risk (WEFT-598)
 
-Last triage: 2026-09-28 on `0.8-metaharness` (v0.8.1 release gate). Prior triage:
+Last triage: 2026-10-05 on `target-0.8.3` (v0.8.3 release gate): new critical/high
+cleared without breaking upgrades — root `proxy-addr` 2.0.7→2.0.8 (override; critical
+GHSA-jqcg-44mw-7w3h via the pinned `@claude-flow/cli` → express), `clawft-ui` `seroval`
+(critical GHSA-p6vx-979v-rg4c, high GHSA-jp82-f5mq-hwhp) and `source-map-js` <1.2.2
+(high GHSA-68fv-2mgg-jv7q) in `clawft-ui`, `docs/src` and `gui` via `npm audit fix`.
+The ruflo pin (3.42.4) and `agentic-flow` 2.1.x are unchanged; braces stays allowlisted.
+
+Previous triage: 2026-09-28 on `0.8-metaharness` (v0.8.1 release gate). Prior triage:
 2026-07-31 on `release/0.8-staging` (branch `fix/weft-598-npm-audit`) — see
 "2026-07-31 triage" below for that round's detail.
 
