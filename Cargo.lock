@@ -10832,6 +10832,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-cog-protocol"
+version = "0.8.3"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "weftos-cog-repo"
 version = "0.8.3"
 dependencies = [
