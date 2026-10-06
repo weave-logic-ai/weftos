@@ -30,6 +30,7 @@ pub mod restart;
 pub mod sandbox;
 pub mod state;
 mod types;
+mod wasmtime;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,7 @@ pub struct Supervisor {
     deps: Deps,
     launcher: Arc<Launcher>,
     host: WorkloadHost,
+    wasm_host: WorkloadHost,
     slots: Mutex<HashMap<String, Arc<Slot>>>,
     leftovers: Mutex<Vec<Found>>,
 }
@@ -170,13 +172,19 @@ impl Supervisor {
         let runtime = Arc::new(LogicalRuntime::new(
             Arc::clone(&launcher) as Arc<dyn ChildLauncher>
         ));
-        let host = WorkloadHost::new(runtime, gate, SUPERVISOR_PRINCIPAL, NodeTrustTier::Paired)
+        let host = WorkloadHost::new(runtime, Arc::clone(&gate), SUPERVISOR_PRINCIPAL, NodeTrustTier::Paired)
+            .with_chain(Arc::clone(&deps.cert_env.chain));
+        let wasm_runtime = Arc::new(LogicalRuntime::wasmtime_project(
+            Arc::clone(&launcher) as Arc<dyn ChildLauncher>
+        ));
+        let wasm_host = WorkloadHost::new(wasm_runtime, gate, SUPERVISOR_PRINCIPAL, NodeTrustTier::Paired)
             .with_chain(Arc::clone(&deps.cert_env.chain));
         Arc::new(Self {
             cfg,
             deps,
             launcher,
             host,
+            wasm_host,
             slots: Mutex::new(HashMap::new()),
             leftovers: Mutex::new(Vec::new()),
         })
@@ -318,10 +326,17 @@ impl Supervisor {
             root: &canon,
             policy_hash: "",
         };
-        let w = prepare_project(&facts).map_err(|e| match e {
+        let mut w = prepare_project(&facts).map_err(|e| match e {
             ProjectPrepareError::Identity(m) => SupError::Identity(m),
             other => SupError::Identity(other.to_string()),
         })?;
+        let adapter = wasmtime::selected(&manifest, &self.run_dir(id)).map_err(SupError::Identity)?;
+        if adapter == wasmtime::ADAPTER {
+            wasmtime::OperatorConfig::load(&self.cfg, &canon).map_err(SupError::Identity)?;
+        }
+        if let clawft_kernel::workload_runtime::WorkloadSource::Project(p) = &mut w.source {
+            p.adapter = adapter.into();
+        }
         Ok((w, manifest))
     }
 
@@ -413,6 +428,10 @@ impl Supervisor {
         clawft_types::project::validate_id(id).map_err(|e| SupError::InvalidId(e.to_string()))?;
         let slot = self.slot(id);
         let _g = slot.gate.lock().await;
+        let selected = self.selected_adapter(id)?;
+        if slot.st().handle.as_ref().is_some_and(|h| h.runtime != selected) {
+            return Err(SupError::Identity("running project adapter differs from manifest".into()));
+        }
         let observed = match self.launcher.probe(id).await {
             ChildProbe::Running { identity } => Some(identity.host_pid()),
             ChildProbe::Unverifiable { reason } => return Err(SupError::LiveLeftover(reason)),
@@ -422,6 +441,9 @@ impl Supervisor {
         if let Some(pid) = observed {
             match current {
                 ChildState::Running => {
+                    if selected == wasmtime::ADAPTER {
+                        self.wasm_proof(id, pid).await.map_err(SupError::Identity)?;
+                    }
                     return Ok(Running {
                         socket: self.socket(id),
                         pid,
@@ -489,9 +511,7 @@ impl Supervisor {
         }
         // A live verified kernel that nobody supervises (an adoption that
         // was skipped, a restarted daemon) is taken over, never duplicated.
-        if let Some(found) =
-            adopt::scan_one(&self.run_dir(id), id, &self.cfg.exe, self.deps.io.as_ref()).await
-        {
+        if let Some(found) = self.scan_project(id).await {
             match found {
                 Found::Adopted { pid, .. } => {
                     return match self.adopt_one(id, pid, &slot).await {
@@ -545,9 +565,19 @@ impl Supervisor {
             st.handle.clone()
         };
         let handle = match existing {
-            Some(h) => h,
+            Some(h) => {
+                if h.runtime != self.selected_adapter(id)? {
+                    return Err(SupError::Identity(
+                        "loaded project adapter changed; unload before switching".into(),
+                    ));
+                }
+                h
+            }
             None => {
-                let h = self.host.load(&w, &Self::host_cfg(id)).await?;
+                let h = self
+                    .driver_host(self.selected_adapter(id)?)?
+                    .load(&w, &Self::host_cfg(id))
+                    .await?;
                 slot.st().handle = Some(h.clone());
                 h
             }
@@ -559,7 +589,7 @@ impl Supervisor {
             st.state = ChildState::Starting;
             st.generation
         };
-        if let Err(e) = self.host.start(&handle).await {
+        if let Err(e) = self.driver_host(&handle.runtime)?.start(&handle).await {
             self.set_state(id, slot, ChildState::Stopped);
             return Err(e.into());
         }
@@ -592,6 +622,10 @@ impl Supervisor {
     /// manifest's `[serve]` (`kernel_version`, `kernel_sha`; supervisor-written,
     /// never by the owner), only when they changed.
     async fn record_kernel_build(&self, id: &str) {
+        // A runner/guest stamp is not the native weaver build stamp.
+        if self.selected_adapter(id).ok() != Some("logical") {
+            return;
+        }
         let (dir, id) = (self.cfg.manifests_dir.clone(), id.to_owned());
         let r = tokio::task::spawn_blocking(move || {
             clawft_types::project::update_manifest(&dir, &id, |m| {
@@ -611,6 +645,15 @@ impl Supervisor {
     /// doctor compare it with this daemon's build (a child outlives
     /// `weaver update`; adoption never replaces it).
     pub(super) async fn note_build(&self, id: &str) {
+        if self.selected_adapter(id).ok() == Some(wasmtime::ADAPTER) {
+            let Some(pid) = self.launcher.pid_of(id) else { return };
+            let Ok(h) = self.wasm_proof(id, pid).await else { return };
+            state::update(&self.run_dir(id), |s| {
+                s.kernel_sha = h["sha"].as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+                s.kernel_version = h["version"].as_str().map(str::to_owned);
+            });
+            return;
+        }
         let Some(h) = self.deps.io.handshake(&self.socket(id)).await else {
             return;
         };
@@ -639,7 +682,11 @@ impl Supervisor {
             };
             // The answer must come from the process we launched: a stale
             // socket or a squatter answering for the project is not it.
-            if let Some(h) = self.deps.io.handshake(&sock).await
+            if self.selected_adapter(id).ok() == Some(wasmtime::ADAPTER) {
+                if self.wasm_proof(id, pid).await.is_ok() {
+                    return Ok(pid);
+                }
+            } else if let Some(h) = self.deps.io.handshake(&sock).await
                 && h.project_id.as_deref() == Some(id)
             {
                 let container = state::read(&self.run_dir(id)).and_then(|s| s.container);
@@ -774,7 +821,7 @@ impl Supervisor {
             .handle
             .clone()
             .ok_or_else(|| SupError::Identity("project kernel was unloaded".into()))?;
-        self.host.start(&handle).await?;
+        self.driver_host(&handle.runtime)?.start(&handle).await?;
         let g = {
             let mut st = slot.st();
             st.generation += 1;
@@ -834,7 +881,7 @@ impl Supervisor {
                 self.set_state(id, slot, ChildState::IdleStopping);
             }
             if let Some(h) = handle
-                && let Err(e) = self.host.stop(&h, self.cfg.term_grace).await
+                && let Err(e) = self.driver_host(&h.runtime)?.stop(&h, self.cfg.term_grace).await
             {
                 stop_err = Some(e.to_string());
             }

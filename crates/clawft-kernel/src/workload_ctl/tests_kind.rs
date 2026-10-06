@@ -198,6 +198,7 @@ fn project_sources_are_refused_by_signed() {
         id: "p".into(),
         version: "1".into(),
         source: WorkloadSource::Project(ProjectPayload {
+            adapter: "logical".into(),
             project_id: "p".into(),
             key_id: "k".into(),
             cert_serial: 1,

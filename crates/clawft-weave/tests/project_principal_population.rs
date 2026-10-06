@@ -259,8 +259,15 @@ fn every_exempt_test_file_is_declared_by_a_cfg_test_mod_or_path() {
 
 #[test]
 fn from_verified_is_called_only_by_verified_project_attest() {
+    // The Wasmtime project guest cannot link clawft-weave. It mints exactly one
+    // attestation, as `BoundKernel`, after `cert_check`/`ack_check` verified its
+    // certificate against the pinned user key and its own project key.
     let hits = files_with(&sources(), "ProjectAttestation::from_verified(");
-    assert_eq!(hits, ["clawft-weave/src/verified_project.rs"], "attestations are minted only by VerifiedProject::attest");
+    assert_eq!(
+        hits,
+        ["clawft-wasm/src/project_kernel/supervisor.rs", "clawft-weave/src/verified_project.rs"],
+        "attestations are minted only by VerifiedProject::attest and the certificate-verifying Wasmtime guest"
+    );
 }
 
 #[test]

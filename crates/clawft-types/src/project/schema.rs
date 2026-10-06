@@ -141,6 +141,8 @@ pub enum ProjectSandbox {
     /// macOS Seatbelt, installed in the child before exec.
     Seatbelt,
     LinuxContainer,
+    /// Persistent Wasmtime project-kernel runner (ADR-103 D9).
+    Wasmtime,
 }
 
 fn is_logical_sandbox(value: &ProjectSandbox) -> bool {
@@ -169,6 +171,9 @@ pub enum ChildState {
 /// `[serve]`: read by the resolver (D14).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServeSection {
+    /// Required explicit ABI adapter when sandbox is wasmtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
     #[serde(default)]
     pub via: ServeVia,
     /// Boundary for a child kernel. Unsupported drivers fail at start.

@@ -123,7 +123,12 @@ impl Supervisor {
             Err(e) => return Err(self.refuse_adopted(id, pid, e).await),
         };
         self.launcher.adopt(id, pid);
-        let handle = match self.host.load(&w, &Self::host_cfg(id)).await {
+        let handle = match self
+            .driver_host(self.selected_adapter(id).map_err(|e| adopt::Skip::Refused(e.to_string()))?)
+            .map_err(|e| adopt::Skip::Refused(e.to_string()))?
+            .load(&w, &Self::host_cfg(id))
+            .await
+        {
             Ok(h) => h,
             Err(e) => {
                 self.launcher.forget(id);
@@ -172,7 +177,12 @@ impl Supervisor {
 
     /// Verify and adopt children left by an earlier daemon (see [`adopt`]).
     pub async fn adopt_on_boot(self: &Arc<Self>) -> Vec<Found> {
-        let mut found = adopt::scan(&self.cfg.run_root, &self.cfg.exe, self.deps.io.as_ref()).await;
+        let mut found = Vec::new();
+        for id in self.run_ids() {
+            if let Some(one) = self.scan_project(&id).await {
+                found.push(one);
+            }
+        }
         if let Ok(dirs) = std::fs::read_dir(&self.cfg.run_root) {
             for dir in dirs.flatten() {
                 let id = dir.file_name().to_string_lossy().into_owned();
@@ -229,7 +239,7 @@ impl Supervisor {
             for f in found.iter_mut().filter(|f| waiting(f)) {
                 let Found::Unverifiable { id, .. } = f else { continue };
                 let id = id.clone();
-                let rescan = adopt::scan_one(&self.run_dir(&id), &id, &self.cfg.exe, self.deps.io.as_ref()).await;
+                let rescan = self.scan_project(&id).await;
                 match rescan {
                     Some(Found::Adopted { id, pid }) => {
                         let slot = self.slot(&id);

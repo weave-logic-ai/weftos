@@ -34,6 +34,11 @@ pub struct ChildHandshake {
 /// Calls to a child kernel.
 #[async_trait]
 pub trait ChildIo: Send + Sync {
+    /// Full challenge-bound Wasmtime identity; unsupported transports fail closed.
+    async fn wasm_handshake(&self, _socket: &Path, _challenge: &str) -> Option<serde_json::Value> {
+        None
+    }
+
     /// `kernel.handshake` at `socket`; `None` when nothing answers.
     async fn handshake(&self, socket: &Path) -> Option<ChildHandshake>;
     /// Signature over a parent-chosen challenge from the certified project
@@ -66,6 +71,21 @@ impl RpcChildIo {
 
 #[async_trait]
 impl ChildIo for RpcChildIo {
+    async fn wasm_handshake(&self, socket: &Path, challenge: &str) -> Option<serde_json::Value> {
+        let call = async {
+            let mut client = DaemonClient::connect_path(socket).await?;
+            let reply = client
+                .call(Request::with_params("kernel.handshake", serde_json::json!({"challenge": challenge})))
+                .await
+                .ok()?;
+            if !reply.ok {
+                return None;
+            }
+            reply.result
+        };
+        tokio::time::timeout(CALL_TIMEOUT, call).await.ok().flatten()
+    }
+
     async fn handshake(&self, socket: &Path) -> Option<ChildHandshake> {
         let call = async {
             let mut client = DaemonClient::connect_path(socket).await?;

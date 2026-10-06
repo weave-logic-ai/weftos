@@ -46,6 +46,9 @@ pub(super) fn configure(
         ProjectSandbox::LinuxContainer => {
             Err("container driver requires the container launcher".into())
         }
+        ProjectSandbox::Wasmtime => {
+            Err("the Wasmtime driver launches its own pinned runner, never the native helper".into())
+        }
         ProjectSandbox::Seatbelt => {
             #[cfg(target_os = "macos")]
             {

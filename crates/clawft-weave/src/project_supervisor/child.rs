@@ -607,7 +607,13 @@ impl Launcher {
             nonce,
             pid: None,
             container: None,
-            exe_sha: self.exe_sha(),
+            exe_sha: if spec.adapter == super::wasmtime::ADAPTER {
+                super::wasmtime::OperatorConfig::load(&self.cfg, &spec.root)
+                    .map_err(backend)?
+                    .runner_sha256
+            } else {
+                self.exe_sha()
+            },
             root: spec.root.clone(),
             expires_unix: spawn.expires_unix,
         })
@@ -734,14 +740,21 @@ impl ChildLauncher for Launcher {
             }
         }
         self.forget(id);
+        let manifest = clawft_types::project::find_by_id(&self.cfg.manifests_dir, id)
+            .map_err(backend)?
+            .ok_or_else(|| backend("missing project manifest"))?;
+        let adapter = super::wasmtime::selected(&manifest, &self.run_dir(id)).map_err(backend)?;
+        if adapter != spec.adapter {
+            return Err(backend("loaded adapter differs from manifest"));
+        }
+        if adapter == super::wasmtime::ADAPTER {
+            super::wasmtime::preflight(&self.cfg, &spec.root, &self.run_dir(id)).map_err(backend)?;
+        }
         let token = self.issue_token(id)?;
         let run_dir = self.run_dir(id);
-        let sandbox = clawft_types::project::find_by_id(&self.cfg.manifests_dir, id)
-            .map_err(backend)?
-            .and_then(|m| m.serve)
-            .map_or(ProjectSandbox::Logical, |s| s.sandbox);
+        let sandbox = manifest.serve.map_or(ProjectSandbox::Logical, |s| s.sandbox);
         let started = match sandbox {
-            ProjectSandbox::Logical | ProjectSandbox::Seatbelt => {
+            ProjectSandbox::Logical | ProjectSandbox::Seatbelt | ProjectSandbox::Wasmtime => {
                 match self.write_run_files(spec, &token) {
                     Ok(()) => self.launch(spec, &run_dir).await,
                     Err(e) => Err(e),
@@ -992,6 +1005,20 @@ impl Launcher {
             .open(run_dir.join(LOG_FILE_NAME))
             .map_err(|e| backend(format!("kernel.log: {e}")))?;
         let log2 = log.try_clone().map_err(backend)?;
+        if sandbox == ProjectSandbox::Wasmtime {
+            super::wasmtime::validate_log(run_dir).map_err(backend)?;
+            let user = clawft_types::project::canon::hex_encode(&self.parts.user_key.verifying_key().to_bytes());
+            let (exe, config) = super::wasmtime::launch(&self.cfg, spec, run_dir, &user).map_err(backend)?;
+            let mut cmd = std::process::Command::new(&exe);
+            cmd.arg(config)
+                .env_clear()
+                .current_dir(run_dir)
+                .stdin(std::process::Stdio::null())
+                .stdout(log)
+                .stderr(log2)
+                .process_group(0);
+            return self.spawn_owned(id, run_dir, cmd, &exe);
+        }
         let tmp = spec.root.join(".weftos/tmp");
         std::fs::create_dir_all(&tmp).map_err(|e| backend(format!("project tmp: {e}")))?;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o700))
@@ -1050,9 +1077,21 @@ impl Launcher {
             &self.cfg.exe,
         )
         .map_err(|e| RuntimeError::AdmissionRefused(format!("project sandbox: {e}")))?;
+        self.spawn_owned(id, run_dir, cmd, &self.cfg.exe)
+    }
+
+    /// Start `cmd` as an owned, supervised child process: waiter thread,
+    /// process-group bookkeeping, registry pid and `state.json`.
+    fn spawn_owned(
+        &self,
+        id: &str,
+        run_dir: &Path,
+        mut cmd: std::process::Command,
+        exe: &Path,
+    ) -> Result<ChildRef, RuntimeError> {
         let mut child = cmd
             .spawn()
-            .map_err(|e| backend(format!("cannot start {}: {e}", self.cfg.exe.display())))?;
+            .map_err(|e| backend(format!("cannot start {}: {e}", exe.display())))?;
         let pid = child.id();
         registry().note_pid(id, pid);
         self.spawns.fetch_add(1, Ordering::SeqCst);
@@ -1081,7 +1120,7 @@ impl Launcher {
             st.state = clawft_types::project::ChildState::Starting;
             st.pid = Some(pid);
             st.container = None;
-            st.exe = Some(self.cfg.exe.display().to_string());
+            st.exe = Some(exe.display().to_string());
             st.started_unix = Some(state::now_unix());
             // The new process has not said which build it is yet.
             st.kernel_sha = None;
@@ -1237,6 +1276,9 @@ impl Launcher {
         let Some(pid) = self.pid_of(id) else {
             return false;
         };
+        if super::wasmtime::is_wasm_run(&self.run_dir(id)) {
+            return super::wasmtime::identity(&self.run_dir(id), pid);
+        }
         super::adopt::identity_ok(&self.run_dir(id), pid, &self.cfg.exe)
     }
 
@@ -1251,7 +1293,7 @@ impl Launcher {
         // An adopted pid is signalled only while it still verifies as ours,
         // and as a group only when it really leads one (a recycled pid that
         // leads nothing is never group-killed).
-        if !super::adopt::identity_ok(&self.run_dir(id), pid, &self.cfg.exe) {
+        if !self.adopted_still_ours(id) {
             return;
         }
         let leads_group = nix::unistd::getpgid(Some(target)).is_ok_and(|g| g == target);

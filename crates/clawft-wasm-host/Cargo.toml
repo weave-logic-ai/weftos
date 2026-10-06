@@ -22,6 +22,7 @@ crate-type = ["rlib"]
 
 [features]
 default = []
+project-kernel = ["dep:wasmtime-wasi", "dep:sha2", "dep:libc", "dep:clawft-types", "dep:ed25519-dalek"]
 # Reserved for future optional host surfaces (e.g. WASI component model).
 # The crate always includes sandbox + engine + audit + permission_store.
 
@@ -41,3 +42,30 @@ wasmtime = { workspace = true }
 
 [dev-dependencies]
 wat = "1"
+tempfile = { workspace = true }
+
+[[bin]]
+name = "weftos-wasm-project-runner"
+path = "src/project_kernel/main.rs"
+required-features = ["project-kernel"]
+
+[dependencies.wasmtime-wasi]
+workspace = true
+optional = true
+
+[dependencies.sha2]
+workspace = true
+optional = true
+
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
+
+[dependencies.clawft-types]
+workspace = true
+features = ["native"]
+optional = true
+
+[dependencies.ed25519-dalek]
+workspace = true
+optional = true
