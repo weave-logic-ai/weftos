@@ -2,9 +2,9 @@
 
 This checkout contains the committed native Phase 4 and certified-leaf
 integration on top of completed Phases 0–3. The native child-endpoint path is
-green. The remaining completion work is the semantic import and execution of
-the Wasmtime slice, real Linux-container driver acceptance, final adversarial
-review, and a full gate. This document also inventories every operator migration
+green. The Wasmtime slice is integrated behind an off-by-default feature (2026-10-06).
+The remaining completion work is running it under a real user daemon, real
+Linux-container driver acceptance, final adversarial review, and a full gate. This document also inventories every operator migration
 that the topology work introduced so the implementation status is not confused
 with migrations performed on a real machine.
 
@@ -43,7 +43,7 @@ with migrations performed on a real machine.
 | ESP-IDF leaf firmware | Pass build only | release r4, 56.30s; all 50 source hashes matched; no device flashed |
 | Native weaver build | Pass | `completion-runs/p4-weaver-build-r2.log`, 2m10s |
 | Real user-daemon/child smoke | Pass | `completion-runs/p4-child-smoke-merged-r1.log`: owner RPC, child method ceiling, bootstrap dispatch, cleanup |
-| Wasmtime project kernel | Source only | review fixes written and frozen; never compiled or run |
+| Wasmtime project kernel | Integrated, off by default (updated 2026-10-06) | compiled and unit-tested; real guest and runner pass `scripts/build.sh test-wasm-project`; not run under a real user daemon (`adr103-wasm-project-slice.md`) |
 | Linux-container driver | Source and acceptance runner only | production driver tests passed before integration; real DinD gate never run |
 
 The first combined run's ten failures were triaged and the focused r5 run is
@@ -148,20 +148,16 @@ ledger is `docs/research/pg-source-intake.md`.
 
 ## Open threads, in order
 
-1. **Integrate Wasmtime semantically.** Source is frozen in
-   `~/.codex/worktrees/wasm-project/weftos`. Verify hashes in
-   `docs/research/daemon-topology/adr103-wasm-project-freeze.json`, copy new files,
-   and three-way merge tracked files. Never overwrite main's shared schema,
-   supervisor, logical runtime, or `Cargo.lock`. The merge map and exact build
-   sequence are in `adr103-wasm-project-slice.md` in that worktree.
-2. **Compile and exercise Wasmtime.** Build the `wasm32-wasip1` guest and native
-   Wasmtime 48.0.5 runner, run its focused tests, then the actual lifecycle
-   fixture. The source includes fixes for authenticated checkpoint restoration,
-   absolute socket deadlines, parent adoption after session loss, and graceful
-   shutdown, but none has runtime evidence. Full native-kernel parity is not
-   claimed: agents/workloads, shared ParentLink services, subscriptions, nested
-   Wasmtime, key rotation, quotas, packaging, and power-loss validation remain
-   outside this slice.
+1. **Exercise Wasmtime under a real user daemon.** The driver is integrated behind
+   the off-by-default `clawft-weave/wasmtime-project` feature and the guest and
+   runner are built by `scripts/build.sh wasm-project`; `test-wasm-project` drives
+   them with a signing-parent fixture. What remains is an isolated user-daemon run
+   with operator pins, the dedicated child socket and a daemon restart (adoption).
+   Full native-kernel parity is not claimed: agents/workloads, shared ParentLink
+   services, subscriptions, nested Wasmtime, key rotation, quotas, packaging, and
+   power-loss validation remain outside this slice
+   (`docs/research/daemon-topology/adr103-wasm-project-slice.md`, "Not done").
+2. **Do not enable `wasmtime-project` in a release build** until item 1 is done.
 3. **Run actual Linux-container driver acceptance.** The implemented runner is
    `scripts/dev/p4-container-driver.py`; its contract is documented in
    `completion-runs/container-lifecycle-plan.md`. It requires a disposable,
@@ -191,31 +187,27 @@ ledger is `docs/research/pg-source-intake.md`.
 Run from `~/weftos`. Long jobs must be detached and polled.
 
 ```bash
-# 1. Confirm the committed native tree is clean before importing Wasmtime.
+# 1. Confirm the committed native tree is clean.
 git diff --check
 
-# 2. Inspect the Wasmtime handoff before importing anything.
-sed -n '1,260p' \
-  ~/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-slice.md
-python3 -m json.tool \
-  ~/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-freeze.json \
-  > /dev/null
+# 2. Build and exercise the Wasmtime guest and runner (release; needs python3
+# cryptography and the wasm32-wasip1 target; never installs targets).
+scripts/build.sh wasm-project
+scripts/build.sh test-wasm-project
 
-# 3. After the semantic Wasmtime import, follow that handoff's sequential
-# guest/runner/test commands. Keep every long command detached and log it under
-# docs/research/daemon-topology/completion-runs/.
+# 3. Wasmtime driver tests in the weaver crate.
+scripts/build.sh test clawft-weave --features wasmtime-project
 
 # 4. Container gate starts in plan-only mode. Read its --help before --run.
 python3 scripts/dev/p4-container-driver.py --help
 
-# 5. After Wasmtime and real-container acceptance plus adversarial review:
+# 5. After real-daemon Wasmtime and real-container acceptance plus adversarial review:
 nohup env CARGO_INCREMENTAL=0 scripts/build.sh gate \
   > docs/research/daemon-topology/completion-runs/final-gate.log 2>&1 < /dev/null &
 ```
 
-The Wasmtime handoff contains its own sequential guest/runner/test commands.
-Use them only after semantic integration and continue to use the existing Cargo
-cache; disk space was about 19 GiB at the final check.
+Keep long jobs detached and polled; a release build of the guest and runner
+adds several GiB of `target/`.
 
 ## Dead ends — do not retry
 
@@ -265,8 +257,7 @@ cache; disk space was about 19 GiB at the final check.
   UID isolation, dashboard binding and fleet-enrollment plan.
 - `docs/research/pg-source-intake.md` — live development/client source inventory
   and transfer status ledger.
-- `~/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-slice.md` — Wasmtime source handoff and semantic merge map.
-- `~/.codex/worktrees/wasm-project/weftos/docs/research/daemon-topology/adr103-wasm-project-freeze.json` — file hashes and import actions.
+- `docs/research/daemon-topology/adr103-wasm-project-slice.md` — Wasmtime project kernel: boundary, integration with the other drivers, verification and what is not done.
 
 ## Gotchas
 
