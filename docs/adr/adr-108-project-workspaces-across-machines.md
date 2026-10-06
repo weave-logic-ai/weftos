@@ -1,6 +1,6 @@
 # ADR-108: Install projects locally (discover, install and configure working copies over the mesh)
 
-- **Status**: Proposed (2026-10-05)
+- **Status**: Accepted (2026-10-05; scope and open questions decided by the owner the same day; implementation tracked on the board)
 - **Deciders**: owner
 - **Builds on**: ADR-103 (projects as identities, project kernels, user daemon, machine mesh),
   ADR-099 (signed `workload.ctl` node-admin channel, amended 2026-10-05 for dashboard
@@ -44,8 +44,8 @@ operator requests between nodes with expiry, replay guard and chain records.
    - git repositories through a git remote helper (`git-remote-weftos`, URLs
      `weftos://<node>/<ULID>/<repo>`), so clone and later pulls are incremental;
    - non-git folders as a streamed, checksummed tar.
-   The serving node answers only nodes on the project's access list (owner-set; members of the
-   workspace may request access, which the owner approves). Each fetch is chained on both nodes.
+   The serving node answers paired nodes of WeaveLogic members (D-A below); the owner can revoke
+   a machine. Each fetch is chained on both nodes.
    All bytes travel inside the mesh's Noise XX session between the two node keys (mutually
    authenticated, encrypted end to end, forward-secret): no SSH, no separate tunnel, no shared
    secret.
@@ -88,11 +88,14 @@ operator requests between nodes with expiry, replay guard and chain records.
 - Moving a project's primary home between machines. The primary stays put; local installs are
   working copies that pull from it (and push back through the project's normal git remotes).
 
-## Open questions
+## Owner decisions (2026-10-05)
 
-- Access model: owner approves each member per project, or "all WeaveLogic members may fetch
-  any project" (mirrors dashboard access)?
-- Should large non-git trees (datasets, model files) transfer at all, or stay server-only with a
-  manifest?
-- Local root convention for installs (`~/Clients/<company>/<project>`, `~/Projects/<slug>`, or
-  member's choice per install)?
+- **D-A Access:** any confirmed WeaveLogic member's paired machine may install any project
+  locally (mirrors dashboard access). Revoking a machine removes it on the next beat.
+- **D-B Default path:** `~/Projects/<slug>`; the member may choose another path per install.
+- **D-C What installs:** a local install fetches everything in the project. Content that should
+  not be downloaded must be **marked for archiving** in the project manifest
+  (`.weftos/archive.toml`: paths with a reason); marked paths move to the project's archive
+  area on the primary (`<data_dir>/archive/`), are listed (name, size, reason) in the dashboard,
+  and are never fetched by local installs. Nothing is silently skipped: an install of a project
+  with unmarked very large content warns before fetching.
