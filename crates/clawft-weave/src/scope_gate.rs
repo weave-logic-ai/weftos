@@ -142,6 +142,7 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     // The node's dashboard credential and reporter belong to the machine, not
     // one project (a `node` param sends it to a peer over the signed mesh wire).
     "dashboard.status",
+    "dashboard.actions",
     "dashboard.token.rotate",
     "project.register",
     "project.cert.show",

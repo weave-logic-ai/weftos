@@ -1,6 +1,8 @@
 //! `weaver dashboard` subcommand: the daemon-native dashboard reporter.
 //!
 //! - `weaver dashboard status [--node <id>] [--json]`: reporter state, no token material.
+//! - `weaver dashboard actions [--json]`: recent actions the dashboard queued for
+//!   this node and their outcomes (local; no payloads). Read.
 //! - `weaver dashboard rotate-token [--node <id>]`: rotate the node's dashboard
 //!   token. Local by default; `--node` sends it to that peer over the signed
 //!   mesh wire (the peer must be a pinned operator peer that lists this node's
@@ -27,6 +29,12 @@ pub enum DashboardAction {
         /// Ask this peer instead of the local daemon (mesh node id).
         #[arg(long)]
         node: Option<String>,
+        /// Print the raw JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List recent dashboard actions (install, update, remove, pair) and how they ended.
+    Actions {
         /// Print the raw JSON.
         #[arg(long)]
         json: bool,
@@ -65,6 +73,26 @@ pub fn render_status(v: &Value) -> String {
     out
 }
 
+/// The actions document as lines.
+pub fn render_actions(v: &Value) -> String {
+    let list = v["actions"].as_array().cloned().unwrap_or_default();
+    if v["enabled"] == false {
+        return "dashboard reporter: off ([dashboard] enabled = true in ~/.weftos/weave.toml to turn it on)\n".into();
+    }
+    if list.is_empty() {
+        return "no dashboard actions received yet\n".into();
+    }
+    let mut out = format!("{} recorded, {} queued\n", v["recorded"], v["queued"]);
+    for a in list {
+        let s = |k: &str| a[k].as_str().unwrap_or("-").to_owned();
+        out += &format!("  {}  {:<8} {:<10} {}{}\n", s("received_at"), s("kind"), s("status"), s("id"), if a["acked"] == true { "" } else { "  (not yet acknowledged)" });
+        if let Some(e) = a["result"]["error"].as_str() {
+            out += &format!("      {e}\n");
+        }
+    }
+    out
+}
+
 /// Run the dashboard subcommand.
 pub async fn run(args: DashboardArgs) -> anyhow::Result<()> {
     let mut client = clawft_rpc::connect_or_bail().await?;
@@ -79,6 +107,18 @@ pub async fn run(args: DashboardArgs) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 print!("{}", render_status(&v));
+            }
+        }
+        DashboardAction::Actions { json } => {
+            let resp = client.call(protocol::Request::with_params("dashboard.actions", json!({}))).await?;
+            if !resp.ok {
+                anyhow::bail!(resp.error.unwrap_or_else(|| "unknown error".into()));
+            }
+            let v = resp.result.unwrap_or_default();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                print!("{}", render_actions(&v));
             }
         }
         DashboardAction::RotateToken { node } => {
@@ -107,6 +147,15 @@ mod tests {
             "last_heartbeat_at": "now", "consecutive_failures": 0, "token_unpersisted": true
         }));
         assert!(t.contains("every 60s") && t.contains("last heartbeat  ok") && t.contains("WARNING"), "{t}");
+    }
+
+    #[test]
+    fn actions_render_outcomes_and_errors() {
+        let t = render_actions(&json!({"queued": 0, "recorded": 1, "actions": [
+            {"id": "a1", "kind": "install", "status": "failed", "received_at": "t", "acked": true,
+             "result": {"error": "not implemented in this build (ADR-108 P3/P4)"}}]}));
+        assert!(t.contains("install") && t.contains("failed") && t.contains("not implemented"), "{t}");
+        assert!(render_actions(&json!({"queued": 0, "recorded": 0, "actions": []})).contains("no dashboard actions"));
     }
 
     #[test]

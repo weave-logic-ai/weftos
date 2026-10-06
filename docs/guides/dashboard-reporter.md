@@ -19,6 +19,7 @@ interval_secs = 60                   # 5..=3600
 # gateway_url = "http://127.0.0.1:8080"             # else derived from [gateway] when its API is on
 # units = ["weftos.service", "weftos-gateway.service"]   # systemctl --user units to report (Linux)
 # allow_remote_rotate = true         # accept a rotate sent over the mesh (see below)
+# report_workspaces = true           # report project checkouts and git state (default on)
 ```
 
 Rules the daemon enforces at start (it logs why and keeps running if one fails):
@@ -45,6 +46,78 @@ Failures back off (doubling, capped at 15 minutes). A 401 or 403 logs
 `dashboard token rejected` and the reporter keeps running; write a fresh token
 to the file and the next beat picks it up. The token is read on every beat and is
 never logged.
+
+## Workspaces (ADR-108 P1)
+
+Unless `report_workspaces = false`, every beat also carries `report.workspaces`:
+one entry per project in this daemon's manifest index (`~/.weftos/projects`),
+so the dashboard can show where a project is checked out on each machine.
+
+```json
+"workspaces": [{"ulid": "<project ULID>", "root": "/home/me/code/proj",
+  "git": [{"path": ".", "remote": "https://github.com/org/proj.git", "branch": "main",
+           "head": "1a2b3c4d", "dirty": 2, "ahead": 1, "behind": 0}],
+  "last_activity": "2026-10-05T11:58:02+00:00"}],
+"workspaces_truncated": false
+```
+
+- `git` lists each repository at the project root (`path` `.`) or one directory
+  below it (`path` relative to the root). Symlinked and hidden directories are not
+  followed.
+- `remote` is the `origin` URL with any userinfo, query and fragment removed
+  (`https://user:token@host/x` is sent as `https://host/x`; `git@host:org/x` as
+  `host:org/x`). `branch` is null when detached; `head` is the first 8 characters
+  of the commit id, null on an unborn branch. `dirty` is the number of entries in
+  `git status --porcelain` (untracked included). `ahead`/`behind` are null without
+  an upstream. `last_activity` is the newest mtime of any repository's `HEAD` or
+  `index` (null when there are none).
+- Only counts and refnames leave the machine: never file contents, diffs or
+  untracked file names.
+- Caps: 50 projects, 8 repositories per project, 16 KiB for the whole `report`,
+  and a 15 second budget per beat for git. Past a cap the list is cut from the end
+  and `workspaces_truncated` is `true`.
+- Facts come from the `git` CLI (no shell, 10 s timeout and 1 MiB output limit per
+  call, no terminal prompt, no optional index lock, `core.fsmonitor` forced off).
+  A repository git cannot read (not installed, `safe.directory`, timeout) is left
+  out of `git`.
+
+## Actions (ADR-108 P2)
+
+The dashboard's answer to a heartbeat may carry work for this node:
+
+```json
+{"ok": true, "actions": [{"id": "<id>", "kind": "install", "payload": {}, "created_at": "..."}]}
+```
+
+Kinds are `install`, `update`, `remove` and `pair`. An answer without `actions`
+(or with a malformed one) is fine. The reporter keeps at most 64 queued actions
+and 128 recorded ones in memory (a restart forgets them; the dashboard repeats an
+action until it has a final result). Ids are limited to `[A-Za-z0-9_-]{1,64}`; any
+other action is dropped. After a successful beat each queued action is
+acknowledged with `POST <url>/api/nodes/actions/{id}/result` (node token as the
+bearer):
+
+1. `{"status": "running"}`
+2. the handler's outcome: `{"status": "failed" | "succeeded", "result": {...}}`.
+
+A final result the dashboard did not accept is re-sent on the next beat without
+running the handler again.
+
+This build does not run anything from an action. `install`, `update`, `remove`
+and `pair` answer `failed` with `{"error": "not implemented in this build (ADR-108
+P3/P4)", "kind": "<kind>"}`, and an unknown kind answers `failed` with
+`{"error": "unknown action kind \"<kind>\"", "kind": "<kind>"}`. The seam for the
+real ones is the `ActionHandler` trait in `crates/clawft-weave/src/dashboard_actions.rs`
+(`Dashboard::set_action_handler`). Handlers must not trust `payload`: it is
+whatever the dashboard sent, and it is never logged or kept in the action log.
+
+```bash
+weaver dashboard actions          # recent actions and their outcomes (local, Read)
+weaver dashboard actions --json
+```
+
+RPC: `dashboard.actions` (Read, local only). `dashboard.status` adds
+`actions_recorded` and `actions_queued`.
 
 ## Status and rotation
 

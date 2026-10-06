@@ -219,10 +219,12 @@ pub fn required_capability(method: &str) -> Capability {
         | "fleet.snapshot"
         // Reporter state without token material; a `node` that is another
         // peer needs Admin inside the handler (it contacts that peer).
-        | "dashboard.status" => Capability::Read,
+        | "dashboard.status"
+        // Recent dashboard actions and their outcomes (no payloads); local only.
+        | "dashboard.actions" => Capability::Read,
 
         // An unclassified `dashboard.*` verb is a mutation, never anonymous Read.
-        m if m.starts_with("dashboard.") && m != "dashboard.status" => Capability::Admin,
+        m if m.starts_with("dashboard.") && m != "dashboard.status" && m != "dashboard.actions" => Capability::Admin,
 
         // An unclassified `fleet.*` verb is a mutation, never anonymous Read.
         m if m.starts_with("fleet.") => Capability::Admin,
