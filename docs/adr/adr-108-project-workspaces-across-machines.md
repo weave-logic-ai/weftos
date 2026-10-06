@@ -1,4 +1,4 @@
-# ADR-108: Project workspaces across machines (discover, install, configure, migrate over the mesh)
+# ADR-108: Install projects locally (discover, install and configure working copies over the mesh)
 
 - **Status**: Proposed (2026-10-05)
 - **Deciders**: owner
@@ -12,8 +12,9 @@
 A project can now live on more than one machine: its canonical home on a server (for example
 photo-gallery, one Linux account per project) and working copies on members' laptops. Today the
 dashboard only knows installations that Terraform declares on servers. It does not know where a
-member has a project checked out, it cannot put a project onto a member's machine, and there is
-no supported way to move a project's primary home between machines.
+member has a project checked out, and it cannot put a project onto a member's machine and set it
+up there. This ADR is about **installing a project locally** next to its canonical home; it does
+not move the project (owner, 2026-10-05: "install locally, not move").
 
 Members' machines are mesh nodes (the user daemon with its own node key, pinned peers) and can
 run the dashboard reporter. The signed `workload.ctl` node-admin channel already carries
@@ -24,7 +25,7 @@ operator requests between nodes with expiry, replay guard and chain records.
 1. **One project identity, many installations.** A project keeps one ULID everywhere. Each
    machine holding it is an *installation* (project × host), with a role:
    - `primary` — the canonical home that runs the project's services and holds its chain;
-     exactly one per project.
+     exactly one per project, and it stays where it is (normally the server).
    - `workspace` — a member's working copy (source + local state), any number.
    A copy is never a fork: `weft project init --adopt <ULID>` registers an existing identity on
    another machine. Forks keep using `--fork`.
@@ -34,8 +35,8 @@ operator requests between nodes with expiry, replay guard and chain records.
    `workspace` installation per (project, host) from that. Nothing is reported for projects the
    daemon does not have registered.
 3. **Commands go dashboard → node through the heartbeat; data goes node ↔ node over the mesh.**
-   The dashboard cannot reach the tailnet, so a member's action ("install here", "update",
-   "migrate primary") is queued as a `node_action` addressed to that member's node and delivered
+   The dashboard cannot reach the tailnet, so a member's action ("install locally", "update",
+   "remove") is queued as a `node_action` addressed to that member's node and delivered
    in the heartbeat response. The node acknowledges and reports results on later beats. Source
    and state never pass through the dashboard.
 4. **Transfer over the mesh, authorised per project.** The node that owns the primary serves
@@ -48,7 +49,11 @@ operator requests between nodes with expiry, replay guard and chain records.
    All bytes travel inside the mesh's Noise XX session between the two node keys (mutually
    authenticated, encrypted end to end, forward-secret): no SSH, no separate tunnel, no shared
    secret.
-7. **Key exchange over the mesh, approved in the dashboard.** Pairing two nodes for project
+5. **Configure from the project, with consent.** A project may declare `.weftos/setup.toml`
+   (toolchain checks, env templates, post-install commands). The installing node shows the plan
+   in the dashboard and runs it only after the member confirms. Secrets are never copied; the
+   setup declares which secrets it needs and where the member supplies them.
+6. **Key exchange over the mesh, approved in the dashboard.** Pairing two nodes for project
    work must not mean hand-editing `workload-peers.json` and `workload-host.json` on each side.
    A node asks to pair (`mesh.pair.request`, carrying its node key and the member's identity);
    the dashboard shows the request with the key fingerprint and project scope; on approval the
@@ -57,14 +62,6 @@ operator requests between nodes with expiry, replay guard and chain records.
    machines, controller entries scoped to the approved projects). Revocation is the same path
    in reverse and takes effect on the next beat. The fingerprint is shown on both machines so a
    member can compare it out of band.
-5. **Configure from the project, with consent.** A project may declare `.weftos/setup.toml`
-   (toolchain checks, env templates, post-install commands). The installing node shows the plan
-   in the dashboard and runs it only after the member confirms. Secrets are never copied; the
-   setup declares which secrets it needs and where the member supplies them.
-6. **Migrate the primary as a handover.** Moving `primary` from host A to host B: B fetches the
-   latest state, A stops and seals its chain head, B adopts the project kernel with a chain
-   record linking to A's head (reusing ADR-103's migration and anchor rules), roles swap, A
-   becomes a `workspace` or is retired. Never two primaries; a failed handover leaves A primary.
 
 ## Phases
 
@@ -75,7 +72,6 @@ operator requests between nodes with expiry, replay guard and chain records.
 | P2b Pairing | `mesh.pair.request`, dashboard approval with fingerprints, trust files written on both nodes, revocation. | A new member Mac pairs with the primary's node from the dashboard with no file edits; revoking it stops `project.fetch` on the next beat. |
 | P3 Install | `project.fetch` node-admin method, `git-remote-weftos`, tar stream, per-project access list, `weft project init --adopt`. | "Install on my machine" clones every repo of a project from its primary over the mesh into a chosen path and registers the same ULID; the panel shows the new workspace. |
 | P4 Configure | `.weftos/setup.toml`, plan preview and confirm in the dashboard, secret placeholders. | A project with a setup file installs and configures end to end after one confirmation; no secret leaves its machine. |
-| P5 Migrate | Primary handover with chain linkage; role swap in the dashboard. | Moving primary between two nodes keeps one primary at every point, links the chains, and is reversible. |
 
 ## Consequences
 
@@ -86,6 +82,11 @@ operator requests between nodes with expiry, replay guard and chain records.
 - New surface: `project.fetch` and the remote helper are data-exfiltration paths if access lists
   are wrong; they default to deny and need negative tests (unlisted node, revoked node, other
   project's ULID).
+
+## Out of scope
+
+- Moving a project's primary home between machines. The primary stays put; local installs are
+  working copies that pull from it (and push back through the project's normal git remotes).
 
 ## Open questions
 
