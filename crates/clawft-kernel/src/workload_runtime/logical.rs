@@ -31,6 +31,8 @@ pub const CAP_PROJECT_LOGICAL: &str = "runtime.project.logical";
 /// What a launcher needs to start one child kernel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildSpec {
+    /// Immutable adapter selection; restart cannot reinterpret the manifest.
+    pub adapter: String,
     /// Project id (ULID).
     pub project_id: String,
     /// Canonical project root.
@@ -104,14 +106,30 @@ struct Instance {
 
 /// The adapter.
 pub struct LogicalRuntime {
+    adapter: &'static str,
+    capability: &'static str,
     launcher: Arc<dyn ChildLauncher>,
     instances: Mutex<HashMap<String, Instance>>,
 }
 
 impl LogicalRuntime {
+    /// Persistent Wasmtime project lifecycle, using a dedicated runner launcher.
+    /// Shares process bookkeeping only; admission, capability and evidence carry
+    /// the explicit Wasmtime identity and reject logical payloads.
+    pub fn wasmtime_project(launcher: Arc<dyn ChildLauncher>) -> Self {
+        Self {
+            adapter: "wasmtime-project-v1",
+            capability: "runtime.project.wasmtime",
+            launcher,
+            instances: Mutex::new(HashMap::new()),
+        }
+    }
+
     /// An adapter over `launcher`.
     pub fn new(launcher: Arc<dyn ChildLauncher>) -> Self {
         Self {
+            adapter: LOGICAL_ID,
+            capability: CAP_PROJECT_LOGICAL,
             launcher,
             instances: Mutex::new(HashMap::new()),
         }
@@ -125,6 +143,7 @@ fn instance_id(project_id: &str) -> String {
 fn spec_of(w: &VerifiedWorkload) -> Result<ChildSpec, RuntimeError> {
     match &w.source {
         WorkloadSource::Project(p) => Ok(ChildSpec {
+            adapter: p.adapter.clone(),
             project_id: p.project_id.clone(),
             root: p.root.clone(),
             key_id: p.key_id.clone(),
@@ -139,11 +158,11 @@ fn spec_of(w: &VerifiedWorkload) -> Result<ChildSpec, RuntimeError> {
 #[async_trait]
 impl WorkloadRuntime for LogicalRuntime {
     fn id(&self) -> &str {
-        LOGICAL_ID
+        self.adapter
     }
 
     fn provides(&self) -> Vec<Capability> {
-        let Ok(id) = CapabilityId::new(CAP_PROJECT_LOGICAL) else {
+        let Ok(id) = CapabilityId::new(self.capability) else {
             return Vec::new();
         };
         vec![Capability::new(id, Provenance::Probed).with_attr("os", AttrValue::from(std::env::consts::OS))]
@@ -151,6 +170,9 @@ impl WorkloadRuntime for LogicalRuntime {
 
     async fn admit(&self, w: &VerifiedWorkload) -> Result<Admission, RuntimeError> {
         let spec = spec_of(w)?;
+        if spec.adapter != self.adapter {
+            return Err(RuntimeError::AdmissionRefused("project adapter mismatch".into()));
+        }
         if !spec.root.is_dir() {
             return Err(RuntimeError::AdmissionRefused(format!(
                 "project root {} is gone",
@@ -158,8 +180,13 @@ impl WorkloadRuntime for LogicalRuntime {
             )));
         }
         Ok(Admission {
-            runtime: LOGICAL_ID.into(),
-            arch: std::env::consts::ARCH.into(),
+            runtime: self.adapter.into(),
+            arch: if self.adapter == LOGICAL_ID {
+                std::env::consts::ARCH
+            } else {
+                "wasm32-wasip1"
+            }
+            .into(),
             emulated: false,
             notes: vec![format!("project {} root {}", spec.project_id, spec.root.display())],
         })
@@ -180,7 +207,7 @@ impl WorkloadRuntime for LogicalRuntime {
         let workload_id = spec.project_id.clone();
         map.insert(iid.clone(), Instance { spec, child: None });
         Ok(InstanceHandle {
-            runtime: LOGICAL_ID.into(),
+            runtime: self.adapter.into(),
             instance_id: iid,
             workload_id,
             store_installed: false,
@@ -215,7 +242,7 @@ impl WorkloadRuntime for LogicalRuntime {
             .ok_or_else(|| RuntimeError::UnknownInstance(h.instance_id.clone()))?;
         let started = std::time::Instant::now();
         let mut ev = RunEvidence {
-            runtime: LOGICAL_ID.into(),
+            runtime: self.adapter.into(),
             instance_id: h.instance_id.clone(),
             ..RunEvidence::default()
         };

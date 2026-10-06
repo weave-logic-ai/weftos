@@ -92,6 +92,8 @@ pub struct InferencePayload {
 /// Identity of the project a [`WorkloadSource::Project`] workload belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectPayload {
+    /// Explicit adapter selected by the certificate-verifying supervisor.
+    pub adapter: String,
     /// Project id.
     pub project_id: String,
     /// Key id of the project signing key.

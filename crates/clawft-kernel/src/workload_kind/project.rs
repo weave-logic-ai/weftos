@@ -78,7 +78,12 @@ impl WorkloadKind for ProjectKind {
 
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
     fn spec(&self, workload: &VerifiedWorkload) -> Result<WorkloadSpec, String> {
-        let id = CapabilityId::new(CAP_PROJECT_LOGICAL).map_err(|e| e.to_string())?;
+        let capability = match &workload.source {
+            WorkloadSource::Project(p) if p.adapter == "wasmtime-project-v1" => "runtime.project.wasmtime",
+            WorkloadSource::Project(p) if p.adapter == "logical" => CAP_PROJECT_LOGICAL,
+            _ => return Err("unsupported project adapter".into()),
+        };
+        let id = CapabilityId::new(capability).map_err(|e| e.to_string())?;
         let spec = WorkloadSpec {
             kind: workload.kind.clone(),
             name: workload.id.clone(),
@@ -95,7 +100,7 @@ impl WorkloadKind for ProjectKind {
 
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
     fn adapters(&self) -> &'static [&'static str] {
-        &["logical"]
+        &["logical", "wasmtime-project-v1"]
     }
 }
 
@@ -182,6 +187,7 @@ pub fn prepare_project(f: &ProjectFacts<'_>) -> Result<VerifiedWorkload, Project
         id: project_id.clone(),
         version: format!("cert-{serial}"),
         source: WorkloadSource::Project(ProjectPayload {
+            adapter: "logical".into(),
             project_id,
             key_id,
             cert_serial: serial,

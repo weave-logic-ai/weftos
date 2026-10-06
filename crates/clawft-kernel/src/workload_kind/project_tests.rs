@@ -66,7 +66,8 @@ fn the_kind_is_builtin_has_no_package_and_runs_on_logical_only() {
     let r = KindRegistry::builtin();
     assert_eq!(r.ids(), vec![KIND_COG, KIND_PROJECT]);
     let k = r.require(KIND_PROJECT).unwrap();
-    assert_eq!(k.adapters(), ["logical"]);
+    // `logical` (also fronting Seatbelt and container drivers) and the explicit Wasmtime adapter.
+    assert_eq!(k.adapters(), ["logical", "wasmtime-project-v1"]);
     // No signed package, ever: a manifest claiming the kind is refused and
     // the package loader refuses too.
     assert!(k.validate(&ManifestEnvelope::new(KIND_PROJECT, json!({}))).is_err());
@@ -309,4 +310,22 @@ async fn unload_refuses_while_the_child_runs() {
     assert!(matches!(rt.unload(h.clone()).await, Err(RuntimeError::InvalidState(_))));
     rt.stop(&h, Duration::from_millis(1)).await.unwrap();
     rt.unload(h).await.unwrap();
+}
+
+#[test]
+fn the_spec_requires_the_capability_of_the_selected_adapter_and_refuses_unknown_ones() {
+    let (upub, tmp) = (user_key().verifying_key().to_bytes(), tempfile::tempdir().unwrap());
+    let cert = cert_for(ID, 2);
+    let v = view(&[JournalRecord::Register { cert: cert.clone() }], &[]);
+    let mut w = prepare_project(&facts(Some(&cert), &v, &upub, tmp.path(), ID)).unwrap();
+    let WorkloadSource::Project(p) = &mut w.source else { panic!("{w:?}") };
+    assert_eq!(p.adapter, "logical", "prepare_project defaults to the native adapter");
+    p.adapter = "wasmtime-project-v1".into();
+    let spec = ProjectKind.spec(&w).unwrap();
+    assert!(format!("{:?}", spec.requirements.common).contains("runtime.project.wasmtime"));
+    for bad in ["", "wasmtime", "wasmtime-project-v2", "container"] {
+        let WorkloadSource::Project(p) = &mut w.source else { unreachable!() };
+        p.adapter = bad.into();
+        assert!(ProjectKind.spec(&w).is_err(), "adapter {bad:?} must be refused");
+    }
 }
