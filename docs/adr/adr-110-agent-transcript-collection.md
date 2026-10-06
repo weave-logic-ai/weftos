@@ -1,6 +1,6 @@
 # ADR-110: Agent transcript collection for shared memory and training
 
-- **Status**: Proposed (2026-10-05)
+- **Status**: Accepted (2026-10-05; open questions decided by the owner the same day)
 - **Deciders**: owner
 - **Builds on**: ADR-108 (pairing, node actions), ADR-109 (agent environment profiles; local
   doctor), the daemon `[dashboard]` reporter, the mesh (Noise XX between node keys),
@@ -34,16 +34,21 @@ pasted credentials, personal notes.
    - Storage and access are partitioned by project and company.
    - Client transcripts are never pooled across clients by default.
 4. **Consent and control per member.**
-   - Collection is opt-in per member machine, with pause and per-project exclusion.
+   - Collection is **on by default** for WeaveLogic member machines (owner decision). Each
+     member gets a clear notice when their machine is enrolled: what is collected, where it
+     goes, who can read it, and how to pause it or exclude projects.
+   - Members can pause collection and exclude projects at any time.
    - A member can list, export and delete their own transcripts from the dashboard.
-   - The dashboard shows what is collected (counts, projects, last sync), never content
-     except to the member and the owner.
+   - Raw transcripts of a project are readable by that project's members (owner decision).
+     The dashboard shows collection status (counts, projects, last sync) to everyone with
+     access.
 5. **Two uses, two gates.**
    - *Shared memory*: indexed per project into the project's knowledge store (RVF/ruvector,
      following the existing brain conventions). It is searchable by members with access to
      that project.
    - *Training/evaluation*: a separate, explicit opt-in per project. Client projects are
-     excluded unless the owner records that the client permits it. A training export is a
+     **excluded until the owner records, per company, that the client permits it** (owner
+     decision). Internal projects may opt in. A training export is a
      dated, versioned snapshot with its inclusion rules recorded.
 6. **Retention.** Configurable per project. Deleting a project's transcripts removes them
    from the store and its memory index.
@@ -65,11 +70,3 @@ pasted credentials, personal notes.
   mesh-only transport, project partitioning, per-member consent, per-project training gates,
   and deletion. Negative tests are required: planted secrets, excluded projects, other
   members' sessions and revoked machines.
-
-## Open questions
-
-- Consent model: opt-in per member (recommended) or on by default for WeaveLogic machines?
-- Client transcripts and training: excluded by default until the owner records client
-  permission per company (recommended), or included?
-- Who can read another member's transcripts: the owner only, members with access to the
-  project, or the member alone (others see only memory search results)?
