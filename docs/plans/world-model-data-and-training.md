@@ -1,10 +1,13 @@
 # World model: data, labels and weights (plan)
 
-- **Status:** Proposed 2026-10-07. Needs the owner's decisions in §8 before any phase starts.
+- **Status:** Proposed 2026-10-07. Revised the same day to build on RuView ADR-384 and the
+  sensor-contracts plan (§1a). Needs the owner's decisions in §8 before any phase starts.
 - **Asks:** "Do we have a plan to build the weights and labels we need, and does H-JEPA add
   anything?" Short answers: **no plan existed**, and **yes, H-JEPA helps**, mainly as the
   reference trainer and evidence for a two-level predictor. It does not solve our data problem.
-- **Builds on:** ADR-090 (LeWM / ECC decoupling, Accepted), the LeWM crates
+- **Builds on:** RuView ADR-384 (external sensor evidence and readings ingest, Proposed
+  2026-10-05) and `docs/design/sensor-contracts-plan.md` on aepod/RuView branch
+  `docs/adr-384-sensor-contracts`, ADR-090 (LeWM / ECC decoupling, Accepted), the LeWM crates
   `weftos-worldmodel-core` / `-impls` / `weftos-worldmodel` / `clawft-worldmodel-service`
   (WEFT-519..532), ADR-107 (spatial evidence engine), ADR-110 (agent transcripts),
   RuView's own training ADRs (070, 071, 079), and the research notes
@@ -19,9 +22,47 @@
 | Recorded sensor data | **None.** RuView `data/recordings` and `v2/data/recordings` are empty; the spatial workspace ships only `demo-room.synthetic.jsonl`. The first real room capture and the first hardware-backed live frame are still open cards (61020daa, f491f12e). |
 | Long-running logs we do have | ExoChain (51 MB on the Mac, about 89 k events), agent sessions (ADR-110 will collect them), governance `TrajectoryRecorder`. |
 | Labels | None recorded. |
-| Sensor classes in code | `SensorClass` = generic, RGB-D, IMU, proprio, LiDAR, audio. **Our real sensors are missing:** mmWave radar (LD2450, LD6002), Wi-Fi CSI (RuView), ToF, ECG / biopotential, environmental. |
+| Sensor classes in code | `SensorClass` = generic, RGB-D, IMU, proprio, LiDAR, audio. **Our real sensors are missing:** mmWave radar (LD2450, LD6002), Wi-Fi CSI (RuView), ToF, ECG / biopotential, environmental. Fix by following ADR-384's HAL mapping (§1a), not new names. |
+| RuView ingest (ADR-384) | Proposed; steps 1-3 are planned PRs on aepod/RuView, nothing merged. Today the server accepts only `rf_gaussian` / `rf_link_observation` and depends on none of the evidence, HAL, fusion or labeller crates. |
 | Training hardware | MacBook M5 Max, 128 GB (Metal/MPS). photo-gallery: 16 cores, 188 GB, **no GPU** (storage and CPU preprocessing only). RuView ships `gcloud-train.sh` and `mac-mini-train.sh`. |
 | RuView training pipeline | Designed, unused: ADR-070 self-supervised pretraining and collection protocol, ADR-071 training pipeline (Proposed), ADR-079 camera ground truth (Accepted); `scripts/collect-training-data.py`, `collect-ground-truth.py`, `align-ground-truth.js`; crates `homecore-recorder`, `wifi-densepose-train`. |
+
+## 1a. Who owns what (RuView ADR-384 and the cog plan)
+
+ADR-384 §1 already splits the work, and this plan follows it rather than building a parallel
+pipeline:
+
+| Owner | Role in the world-model data path |
+|---|---|
+| **Cogs** (producers, moving out of weftos into the cog repo) | Read sensors. Radar cogs write `spatial.evidence.v1` (`ld2450-radar --spatial-out file|export`, `GET /spatial`; `ld6002-radar` file only); non-spatial readings go out as **SenML** (RFC 8428) with `proof_`. Later shipped as signed RVF producers (planned ADR-386). |
+| **RuView** | Ingests evidence and readings by push, pull or file (ADR-384 §6), keeps a bounded store, fuses people, objects and geometry into **its** world model (ADR-306, symbolic, with evidence levels), and **records sessions**: `<data-dir>/recordings/<session>.evidence.jsonl` next to the CSI recording (§8). Its labeller (`ruview_groundtruth::auto_label` over `windows_from_evidence`) and calibration-status diagnostics are the first consumers (§9). |
+| **WeftOS** | Owns the evidence schema (ADR-107) and **long-term history** (out of RuView's scope by ADR-384 §1). For training that means: archive finished sessions on photo-gallery as a versioned dataset, and own the learned model (**LeWM**). |
+
+Two things called "world model" now exist and must stay distinct: RuView's fused, symbolic
+world model of a space, and WeftOS's **learned latent predictor** (LeWM). LeWM consumes the
+same evidence, readings and CSI that RuView ingests, and RuView's fused output as further
+observations. Its predictions are model output: they carry proof `CODE`, so under ADR-384 §7
+they can never become ground truth, calibration input or training labels, and under ADR-090
+they never override ECC.
+
+Consequences for this plan:
+
+- **No new WeftOS recorder.** Recording is ADR-384 step 2. WeftOS adds only a dataset
+  archiver (session → manifest → photo-gallery) and the training side.
+- **Observations are the contracts, not ad-hoc sensor classes.** LeWM's inputs are
+  `spatial.evidence.v1` record types, SenML readings by quantity, and CSI frames (ADR-385
+  frame contract). `SensorClass` is extended to match ADR-384's HAL mapping (mmWave, UWB,
+  IMU, ToF, CSI, reading) instead of inventing names.
+- **Labels follow ADR-384's rules.** Only `MEASURED` records may label; `human_confirm` is the
+  operator label; vitals are about an anonymous track, never an object, and stay behind the
+  vitals gate; privacy mode stops position and reading recording, so training sessions run
+  in a consented test room with privacy mode off.
+- **The first dataset is ADR-384 step 4,** lengthened. Step 4 already specifies the measured
+  room, empty / walking / seated phases and `human_confirm` labels.
+- **Clock alignment is a WeftOS deliverable.** ADR-384 keeps producer and receive times and
+  applies published clock corrections, but the correction record does not exist yet. The
+  sensor-contracts plan (§9 Q9) asks WeftOS to add three types to ADR-107: acoustic range,
+  cooperative radio delay, and **clock correction**. Multi-node training needs the last one.
 
 ## 2. What H-JEPA adds
 
@@ -63,9 +104,9 @@ with an observed outcome, the one place we already have actions at scale.
 | Phase | Delivers | Done when |
 |---|---|---|
 | **W0 Decide** | Owner lifts the hold for the sensor world model; picks the training stack and the camera rule (§8). | Decisions recorded here and on the board. |
-| **W1 Recorder** | A WeftOS capture session: cog outputs, spatial evidence (`spatial.evidence.v1`), CSI `.csi.jsonl`, actions and protocol steps written with one clock to a session manifest (room, node poses, protocol, consent, proof tag) and stored on photo-gallery under the `ruview-demo` project. Reuse RuView's collector and `homecore-recorder` rather than writing a new one. Add the missing `SensorClass` variants (radar, Wi-Fi CSI, ToF, biopotential, environmental). | A 10-minute session replays bit-for-bit from PG, with every record carrying `MEASURED` / `CODE` / `SYNTHETIC`. |
-| **W2 First real dataset** | The test room (6.40 × 3.66 m): empty room, one person on scripted paths, sit/stand, two people, at least 3 hours over several days; CSI + LD2450 + LD6002 + ToF + camera teacher + tape shell + ECG during vitals runs. Closes cards 61020daa and f491f12e on the way. | Dataset card: hours per condition, held-out split by day, checksums. |
-| **W3 Labels** | Automatic label tracks from §3, aligned to the session clock, stored separately from observations, each with provenance. | Held-out probe set exists; label agreement report. |
+| **W1 Data path** | Depends on RuView ADR-384 steps 1, 2 and 2b (inbound parsing, server ingest with recording, SenML readings). WeftOS side: amend ADR-107 with the clock-correction record (and the two ranging types the RuView plan asks for); get `ld2450-radar` built for the Mac or x86 (plan §9 Q6); settle the shared SenML quantity-vocabulary file (Q8); extend `SensorClass` to the ADR-384 HAL mapping; build the dataset archiver that copies a finished RuView session (`.evidence.jsonl`, CSI recording, readings) with a manifest (room, `shell_measure`, node `pose`s, protocol, consent, proof counts) to photo-gallery under the `ruview-demo` project. | A recorded session replays through RuView's file transport with identical counts, and the archived copy on PG checksums identical. |
+| **W2 First real dataset** | ADR-384 step 4, extended for training: the measured test room, empty / walking / seated / two-person phases with `human_confirm` per phase, at least 3 hours over several days, CSI + LD2450 + LD6002 + ToF + readings, plus the camera teacher and ECG where §8 allows. Closes cards 61020daa and f491f12e. Note: ADR-107 describes the test room as 6.40 × 3.66 m and the RuView plan as 12 × 12 ft; confirm which room. | Dataset card: hours per phase, held-out split by day, proof-tag counts, checksums; ADR-384 step 4 validation record filed. |
+| **W3 Labels** | RuView's labeller over the recordings (`auto_label`, `verified` only for `MEASURED`), `human_confirm` phases, the tape shell, camera-teacher positions (RuView ADR-079), ECG for vitals bound to an anonymous track; all as label tracks separate from observations, never from `CODE`/`SYNTHETIC` records. | Held-out probe set; label agreement report alongside RuView's calibration-status diagnostics. |
 | **W4 Evaluation harness** | Matched baseline (copy-last and linear `pred_φ`), held-out probe, VoE diff, the activity-floor collapse alarm and geometry audit from jepa-anything.md, wired into the existing rollback gate and SIGReg monitor. | The gate can say no to a model on real data. |
 | **W5 Flat LeWM** | Train encoder + `pred_φ` on W2 (Mac first), export weights to the RVF model segment, load through the candle path, swap at a tick. | Beats the matched baseline on held-out days, passes the gate, runs at 10 Hz on the Mac. |
 | **W6 H-JEPA two-level** | 2-level vs flat on the same data, action-free first, then with protocol steps as actions. | Long-horizon prediction or planning improves over W5, or we record that it does not. |
@@ -95,6 +136,8 @@ leave it, raw frames have a retention date, and only people who consent are reco
 data is labelled with the subject's consent and never published.
 
 ## 8. Owner decisions
+
+0. Sequencing: W1 waits on RuView ADR-384 steps 1-2b. Do we push those PRs first (recommended), or start the WeftOS side (ADR-107 record types, archiver, `SensorClass`) in parallel?
 
 1. Lift the training hold for the sensor world model (W1-W6)? Skill-3D stays held.
 2. Training stack: PyTorch on the Mac → safetensors → candle (recommended), or another.
