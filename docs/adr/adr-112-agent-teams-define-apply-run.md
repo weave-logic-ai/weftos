@@ -1,6 +1,6 @@
 # ADR-112: Agent teams: define them once, apply them to projects, and run them
 
-- **Status**: Proposed (2026-10-07). Owner decisions needed in §7.
+- **Status**: Accepted (2026-10-07; owner decisions in §7). TM1-TM3 start now.
 - **Deciders**: owner
 - **Extends**: the Agent Directory decision
   ([`docs/research/agent-directory/adr-draft-agent-directory.md`](../research/agent-directory/adr-draft-agent-directory.md),
@@ -10,8 +10,9 @@
   heartbeat), ADR-109 (agent environment profiles and the local doctor), ADR-110 (transcript
   collection), ADR-090-style decoupling for anything a team writes into the kernel.
 - **Inputs**: an analysis of OpenRig (github.com/mvschwarz/openrig, Apache-2.0, v0.6.6) and a
-  structural analysis of the most developed team in use today, a client engagement team and
-  the engagement factory it came from. The client's content is not reproduced here.
+  structural analysis of the owner's own agent team (Stew, Doc/Gus, Liber, Mo, the lead
+  doctrine and the build lanes), which the owner built and runs while working on a client
+  engagement. The team is the owner's; nothing from the client project is reproduced here.
 
 ## Context
 
@@ -31,12 +32,13 @@ person launch a team against a repository.
   the first reviewed delivery (AD-7), change-set review and apply from the dashboard
   (AD-8..11), the team editor (AD-12), drift and upgrades (AD-13..14).
 
-**What the engagement team shows a real team contains** (patterns only):
+**What the owner's team shows a real team contains** (patterns only, as run on one project):
 
-- Three layers: build lanes (developer, tester, reviewer, measurer, documenter), specialist
-  lanes (a steward that alone writes the board, a docs owner that alone writes per-card
-  history, a memory router, a consult-only purpose advisor), and domain experts; plus a
-  lead that is the main session and is deliberately not spawnable.
+- Layers: build lanes (developer, tester, reviewer, measurer, documenter), specialist lanes
+  (Stew, the steward that alone writes the board; Doc/Gus, the docs owner that alone writes
+  per-card history; Liber, the memory router; Mo, a consult-only purpose advisor), plus
+  project-specific domain experts; and a lead that is the main session and is deliberately
+  not spawnable. Most of these are already packaged in `agents/` as the `weftos-core` team.
 - **Write authority is partitioned:** every shared resource (board rows, card history files,
   production reads, code, docs) has exactly one holder; read-only roles get no edit tools.
 - **Model policy** is part of the team: spawned lanes run a mid-tier model on one bounded
@@ -50,10 +52,11 @@ person launch a team against a repository.
 - **Project facts stay in the project:** one keyed `project-context.md` (gate path, board
   commands, docs root, memory store, confidentiality tiers) that agents ask to fill and that is
   never overwritten. Agents hold method; the project holds facts.
-- **Spawning for a new engagement** goes through a human-gated pipeline (intake interview,
-  document register, workflow map, roster design with no-go zones first, then assembly), and
-  a proposed "spawn into an existing repo" mode that copies only what is absent and reports
-  collisions.
+- **Memory belongs to the project, not the agent.** Liber routes lessons into the project's
+  own stores; nothing an agent learned on one project travels with it.
+- A separate engagement factory (intake interview → document register → workflow map →
+  roster → assembly) exists for consulting work; it is out of scope here, except for its
+  "spawn into an existing repo" rule: copy only what is absent and report collisions.
 - **Gaps there:** no version pin or upgrade path for copied process documents, no drift
   check on hand-written lanes, Grok has only one hook.
 
@@ -133,8 +136,9 @@ WeftOS-native, opt-in, after §2 and §3 work:
   members recycle after one bounded task; the handoff document carries continuity; session
   transcripts flow to ADR-110 collection.
 - Permissions are passed per launch, never written to global settings; no bypass mode.
-- `weaver team down` stops members; `weaver team ps` and the dashboard show who is running,
-  on which model, holding which card.
+- `weaver team down` stops members; `weaver team ps`, **Weave Manager** (the egui binary,
+  launchable from the control plane) and the dashboard show who is running, on which model,
+  holding which card, and can start and stop the team.
 
 ### 5. Distribution and trust
 
@@ -145,13 +149,23 @@ WeftOS-native, opt-in, after §2 and §3 work:
 - Public teams live in weftos `agents/`; client teams live in that client's private
   `weftos-<slug>` repository and are never published.
 
-### 6. Engagement packs
+### 6. The owner's team, deployable anywhere, with fresh memory
 
-The engagement factory's pipeline (intake → roster → spawn) becomes a team template with an
-intake step: a pack declares its intake questions and produces `project-context.md`, the
-roster and the collision and birth reports. Process documents ship versioned with the pack
-and get an upgrade path through the lock. The first engagement pack is generalised from the
-existing engagement team and lives in the client's private repository (AD-22).
+The owner's agents (Stew, Doc/Gus, Liber, Mo, the lead doctrine, developer, reviewer, tester,
+documenter, measurer) are modelled as one deployable team, evolving `weftos-core` to team
+spec v1. They carry **method only**:
+
+- **No memory travels.** Applying the team copies no memory, history, card files, brain
+  corpus or learned patterns from any other project. Every project starts empty.
+- **Memory is built in place.** Apply creates the project's own stores and binds them in
+  `project-context.md` (memory store path, card-history root, board adapter, docs root);
+  Liber routes new lessons into them and Doc/Gus starts the project's card histories. ADR-110
+  transcripts stay partitioned by project.
+- **No project facts in agent files.** Anything project-specific found in the current copies
+  (board id prefixes, tool names, quotes) becomes a `project-context` key or is dropped; the
+  leak check enforces it.
+- Domain experts stay per project; the team ships the template (`agents/templates/
+  domain-expert`), not a filled-in expert.
 
 ## Phases
 
@@ -159,8 +173,8 @@ existing engagement team and lives in the client's private repository (AD-22).
 |---|---|---|
 | TM1 Team spec v1 | Schema, gate lints (authority table, one-job, edges, presets, leak check), `weftos-core` migrated | A seeded authority conflict, client name or undeclared preset fails the gate; `weftos-core` passes |
 | TM2 Project apply | `project-context.md`, lock with per-file digests, collision and birth reports, uninstall, project-scoped only (finishes AD-4/AD-7) | Applying `weftos-core` to WeftOS and Shasta on three hosts is deterministic; a re-apply is empty; uninstall leaves only project facts |
-| TM3 Dashboard apply | Team assignment, change-set review, `team.apply` node action (AD-8..11 with ADR-108) | A team assigned in the dashboard lands on the workspace machine after one confirmation, and its lock shows on the project panel |
-| TM4 Engagement pack | Generalised engagement team in its private repo; intake → context; versioned process docs (AD-22) | A new engagement repository is born from the pack with a birth report and no client facts in any agent file |
+| TM3 Apply surfaces | Team assignment and change-set review in the dashboard and in Weave Manager (egui), delivered as the `team.apply` node action (AD-8..11 with ADR-108) | A team assigned from either surface lands on the workspace machine after one confirmation, and its lock shows on the project panel |
+| TM4 Owner team v1 | Stew, Doc/Gus, Liber, Mo, lead doctrine and the lanes as one team-spec-v1 team; project-specific details lifted into `project-context` keys; fresh per-project memory created and bound on apply | Applied to a new project, the team runs with empty memory stores bound in `project-context.md`, writes its first lesson and card history there, and no file carries another project's facts or memory |
 | TM5 Team runtime | `weaver team up/down/ps`, agent bus with MCP tools, board claims, recycle, handoff | A three-member team runs a card end to end on Claude and Codex, with messages on the bus and the card history written by its owner |
 | TM6 Bundles and signing | Signed, content-addressed bundles, commit-pinned import, scanner | An unsigned or tampered bundle is refused; an import shows provenance and digests |
 
@@ -172,12 +186,11 @@ existing engagement team and lives in the client's private repository (AD-22).
 - New surface: the runtime starts processes and the bus carries instructions between agents;
   §4 keeps permissions per launch and the stop-the-line rule applies on the bus.
 
-## Owner decisions (§7)
+## 7. Owner decisions (2026-10-07)
 
-1. Accept the direction: extend the Agent Directory with team spec v1 and project apply first
-   (TM1-TM3), the runtime (TM5) after.
-2. The runtime: build it WeftOS-native as in §4 (recommended), or run OpenRig itself as the
-   runtime and only render to its format.
-3. Which project gets a team first after WeftOS itself: Shasta (as AD-7 planned) or another.
-4. Whether the engagement pack (TM4) starts now in parallel, given it lives in the client's
-   private repository.
+| # | Decision |
+|---|---|
+| 1 | Direction accepted. Team spec v1 and project apply first (TM1-TM3), the runtime after. |
+| 2 | **The runtime is WeftOS-native.** WeftOS already has the surfaces: the daemon and mesh, the dashboard control plane, and Weave Manager (egui, builds as a binary and runs from the control plane). OpenRig is a design source only. |
+| 3 | **First project after WeftOS itself: the Cogs project** (`weave-logic-ai/weftos-cogs`), now its own product extracted from WeftOS. Its extraction rules apply: changes go through its integration branch and nothing is pushed there without the owner's approval. |
+| 4 | **The team is the owner's own** (Stew, Doc/Gus, Liber, Mo and the rest), not a client's. It is modelled as a deployable team that carries no memory from any project and builds new memories on each project it joins (§6). |
