@@ -117,6 +117,118 @@ pub fn adopt_or_init(
     register(manifests_dir, &pt, root)
 }
 
+/// Register `project_root` as an ADR-108 workspace of the existing project
+/// `id` (its primary lives on another machine). Writes `project.toml` and a
+/// manifest carrying `role = "workspace"`, and nothing else: no key, chain,
+/// certificate, runtime dir or `[serve]` section, so no kernel is ever
+/// served for it here.
+///
+/// Idempotent for the same id at the same root. Refuses when the tree's
+/// `project.toml` names another project, when a manifest for this root is
+/// another project, or ([`ProjectError::RootConflict`]) when `id` is already
+/// registered at a different live root on this machine.
+pub fn adopt_workspace(
+    project_root: &Path,
+    manifests_dir: &Path,
+    id: &str,
+    name: Option<&str>,
+    repos: &[PathBuf],
+) -> Result<ProjectManifest, ProjectError> {
+    super::validate_id(id)?;
+    let root = canonical_root(project_root)?;
+    let refused = |reason: &str| ProjectError::AdoptRefused {
+        id: id.to_owned(),
+        root: root.clone(),
+        reason: reason.to_owned(),
+    };
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _flock = lock_manifests(manifests_dir)?;
+    reap_orphans(manifests_dir);
+
+    if let Some(seeded) = find_by_root(manifests_dir, &root)?
+        && seeded.id != id
+    {
+        return Err(refused(&format!("this root is already registered as project {}", seeded.id)));
+    }
+    if let Some(r) = repos.iter().find(|r| !r.is_absolute() || r.starts_with(&root)) {
+        return Err(refused(&format!("extra repository {} must be an absolute path outside the root", r.display())));
+    }
+    let role = || {
+        let mut t = toml::Table::new();
+        t.insert("role".into(), toml::Value::String(super::WORKSPACE_ROLE.into()));
+        t
+    };
+    let pt = match read_project_toml(&root)? {
+        Some(pt) if pt.id != id => {
+            return Err(refused(&format!("its project.toml already names project {}", pt.id)));
+        }
+        Some(pt) if !pt.is_workspace() => {
+            return Err(refused("its project.toml is this project's primary identity, not a workspace"));
+        }
+        Some(pt) => pt,
+        None => {
+            let candidate = ProjectToml {
+                schema_version: SCHEMA_VERSION,
+                id: id.to_owned(),
+                name: name.map_or_else(|| default_name(&root), str::to_string),
+                created: now(),
+                parent: None,
+                governance: None,
+                weave: None,
+                extra: role(),
+            };
+            if !create_project_toml(&root, &candidate)? {
+                return Err(refused("another process created project.toml first"));
+            }
+            candidate
+        }
+    };
+    let mut extra_repos: Vec<String> = Vec::new();
+    if let Some(m) = read_manifest(manifests_dir, id)? {
+        if m.root != root && m.state != ProjectState::Missing && m.root.exists() {
+            return Err(ProjectError::RootConflict { id: id.to_owned(), root, existing: m.root });
+        }
+        extra_repos = m.workspace_repos().iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let adds_nothing = repos.iter().all(|r| extra_repos.iter().any(|e| Path::new(e) == r));
+        if m.root == root && m.is_workspace() && m.state == ProjectState::Active && adds_nothing {
+            return Ok(m);
+        }
+    }
+    for r in repos {
+        let s = r.to_string_lossy().into_owned();
+        if !extra_repos.contains(&s) {
+            extra_repos.push(s);
+        }
+    }
+    let m = ProjectManifest {
+        schema_version: SCHEMA_VERSION,
+        id: pt.id.clone(),
+        name: pt.name.clone(),
+        root,
+        state: ProjectState::Active,
+        created: pt.created,
+        last_seen: now(),
+        project_toml: ProjectTomlPresence::Present,
+        seed: Some(SeedSection { source: "project-adopt".into(), legacy_name: None }),
+        legacy: None,
+        serve: None,
+        chain: None,
+        binary: None,
+        extra: {
+            let mut t = role();
+            if !extra_repos.is_empty() {
+                t.insert(
+                    "repos".into(),
+                    toml::Value::Array(extra_repos.into_iter().map(toml::Value::String).collect()),
+                );
+            }
+            t
+        },
+    };
+    write_manifest(manifests_dir, &m)?;
+    Ok(m)
+}
+
 /// Register an existing child identity under a registered active master.
 /// All manifest validation and the write use the same cross-process store
 /// lock; a different project.toml id cannot be adopted between validation

@@ -243,6 +243,9 @@ impl Supervisor {
         let manifest = clawft_types::project::find_by_id(&self.cfg.manifests_dir, id)
             .map_err(|e| SupError::Identity(e.to_string()))?
             .ok_or_else(|| SupError::NotRegistered(id.to_owned()))?;
+        if manifest.is_workspace() {
+            return Err(SupError::Workspace(id.to_owned()));
+        }
         let root = manifest.root.clone();
         let home = self
             .cfg

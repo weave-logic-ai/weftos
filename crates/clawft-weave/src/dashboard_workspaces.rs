@@ -90,27 +90,56 @@ impl WorkspaceSource for ManifestWorkspaces {
         let dir = self.manifests_dir.clone();
         tokio::task::spawn_blocking(move || {
             let list = clawft_types::project::list_manifests(&dir).map(|l| l.manifests).unwrap_or_default();
-            let projects: Vec<(String, PathBuf)> = list.into_iter().map(|m| (m.id, m.root)).collect();
-            gather(&projects)
+            let projects: Vec<ProjectScan> = list
+                .into_iter()
+                .map(|m| ProjectScan { extra: m.workspace_repos(), ulid: m.id, root: m.root })
+                .collect();
+            gather_projects(&projects)
         })
         .await
         .unwrap_or_default()
     }
 }
 
+/// One project to scan: its root and, for an ADR-108 workspace, the extra
+/// repository directories its manifest lists (`repos`).
+#[derive(Debug, Clone)]
+pub struct ProjectScan {
+    pub ulid: String,
+    pub root: PathBuf,
+    pub extra: Vec<PathBuf>,
+}
+
 /// Facts for `(ulid, root)` projects, capped at [`MAX_PROJECTS`] and the time budget.
 pub fn gather(projects: &[(String, PathBuf)]) -> WorkspaceReport {
+    let scans: Vec<ProjectScan> = projects
+        .iter()
+        .map(|(ulid, root)| ProjectScan { ulid: ulid.clone(), root: root.clone(), extra: Vec::new() })
+        .collect();
+    gather_projects(&scans)
+}
+
+/// [`gather`] with each project's extra repository directories.
+pub fn gather_projects(projects: &[ProjectScan]) -> WorkspaceReport {
     let started = Instant::now();
     let mut out = WorkspaceReport::default();
     if projects.len() > MAX_PROJECTS {
         out.truncated = true;
     }
-    for (ulid, root) in projects.iter().take(MAX_PROJECTS) {
+    for ProjectScan { ulid, root, extra } in projects.iter().take(MAX_PROJECTS) {
         if started.elapsed() > GATHER_BUDGET {
             out.truncated = true;
             break;
         }
-        let (repos, repo_cap) = find_repos(root);
+        let (mut repos, mut repo_cap) = find_repos(root);
+        for dir in extra {
+            let Some(g) = extra_repo(dir) else { continue };
+            if repos.len() >= MAX_REPOS {
+                repo_cap = true;
+                break;
+            }
+            repos.push((relative_label(root, dir), g));
+        }
         out.truncated |= repo_cap;
         let mut git = Vec::new();
         let mut newest: Option<SystemTime> = None;
@@ -119,7 +148,7 @@ pub fn gather(projects: &[(String, PathBuf)]) -> WorkspaceReport {
                 out.truncated = true;
                 break;
             }
-            let dir = if rel == "." { root.clone() } else { root.join(&rel) };
+            let dir = if rel == "." { root.clone() } else { resolve_rel(root, &rel) };
             if let Some(f) = repo_facts(&dir, rel) {
                 git.push(f);
             }
@@ -166,6 +195,33 @@ fn find_repos(root: &Path) -> (Vec<(String, PathBuf)>, bool) {
         }
     }
     (found, capped)
+}
+
+/// An extra repository directory from a workspace manifest: absolute, a real
+/// directory (not a symlink) and a repository, else ignored.
+fn extra_repo(dir: &Path) -> Option<PathBuf> {
+    if !dir.is_absolute() || !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return None;
+    }
+    git_dir_of(dir)
+}
+
+/// `dir` as reported relative to `root`: `../<name>` for a sibling, the
+/// absolute path otherwise.
+fn relative_label(root: &Path, dir: &Path) -> String {
+    match (root.parent(), dir.parent(), dir.file_name().and_then(|n| n.to_str())) {
+        (Some(a), Some(b), Some(name)) if a == b => format!("../{name}"),
+        _ => dir.to_string_lossy().into_owned(),
+    }
+}
+
+/// The directory a reported relative path names.
+fn resolve_rel(root: &Path, rel: &str) -> PathBuf {
+    match rel.strip_prefix("../") {
+        Some(name) => root.parent().map_or_else(|| root.join(rel), |p| p.join(name)),
+        None if Path::new(rel).is_absolute() => PathBuf::from(rel),
+        None => root.join(rel),
+    }
 }
 
 /// The git directory of a repository at `dir` (`.git` directory, or the target

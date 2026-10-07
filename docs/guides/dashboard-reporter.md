@@ -64,6 +64,11 @@ so the dashboard can show where a project is checked out on each machine.
 - `git` lists each repository at the project root (`path` `.`) or one directory
   below it (`path` relative to the root). Symlinked and hidden directories are not
   followed.
+- An ADR-108 workspace (`weft project init --adopt <ULID> [--repo DIR ...]`) may
+  list extra repository directories outside its root in its manifest (`repos`):
+  each is reported after the root's own, as `../<name>` for a sibling of the root
+  or its absolute path otherwise. Entries that are not absolute, are symlinks, are
+  missing or are not repositories are skipped. The 8-repository cap covers both.
 - `remote` is the `origin` URL with any userinfo, query and fragment removed
   (`https://user:token@host/x` is sent as `https://host/x`; `git@host:org/x` as
   `host:org/x`). `branch` is null when detached; `head` is the first 8 characters

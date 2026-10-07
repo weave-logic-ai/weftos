@@ -322,3 +322,71 @@ fn init_from_a_subdirectory_says_it_used_the_enclosing_root() {
     assert!(o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("enclosing project root"));
 }
+
+/// ADR-108: `--adopt` registers an existing project ULID as a workspace here,
+/// hides `.weftos/` in `.git/info/exclude`, leaves `.gitignore` alone, and
+/// refuses a nested root or a second root for the same id.
+#[test]
+fn adopt_registers_a_workspace_without_touching_tracked_files() {
+    let sb = Sandbox::new();
+    let id = "01K9Z00000000000000000AAAA";
+    let repo = sb.dir("app");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+    let out = sb.ok(&repo, &["project", "init", "--adopt", id, "--name", "app"]);
+    assert!(out.contains("(workspace)") && out.contains(id), "{out}");
+    assert_eq!(std::fs::read_to_string(repo.join(".gitignore")).unwrap(), "target/\n");
+    let exclude = std::fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
+    assert!(exclude.lines().any(|l| l == ".weftos/"), "{exclude}");
+    // Only project.toml under .weftos: no key, chain or certificate.
+    let names: Vec<_> = std::fs::read_dir(repo.join(".weftos"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, ["project.toml"]);
+    // Listed under the same id; idempotent.
+    let listed = sb.ok(&repo, &["project", "list", "--json"]);
+    assert_eq!(id_of(&listed), id);
+    sb.ok(&repo, &["project", "init", "--adopt", id]);
+    // A second root for the same id is refused.
+    let other = sb.dir("app-copy");
+    let e = sb.err(&other, &["project", "init", "--adopt", id]);
+    assert!(e.contains("already registered"), "{e}");
+    // A nested root is refused.
+    let nested = sb.dir("app/sub");
+    let e = sb.err(&nested, &["project", "init", "--adopt", "01K9Z00000000000000000BBBB"]);
+    assert!(e.contains("cannot be nested"), "{e}");
+    // --adopt and --fork do not mix.
+    let e = sb.err(&repo, &["project", "init", "--adopt", id, "--fork"]);
+    assert!(e.contains("cannot be used with"), "{e}");
+}
+
+/// `--repo` records sibling repositories of a workspace (absolute, inside
+/// HOME, outside the root, a repository) and adds to the list on a rerun.
+#[test]
+fn adopt_records_sibling_repositories() {
+    let sb = Sandbox::new();
+    let id = "01K9Z00000000000000000CCCC";
+    let root = sb.dir("client/app");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let brain = sb.dir("client/brain");
+    std::fs::create_dir_all(brain.join(".git")).unwrap();
+    let docs = sb.dir("client/docs");
+    std::fs::create_dir_all(docs.join(".git")).unwrap();
+    let plain = sb.dir("client/plain");
+    let out = sb.ok(&root, &["project", "init", "--adopt", id, "--repo", "../brain"]);
+    assert!(out.contains(&format!("repo:     {}", brain.display())), "{out}");
+    let out = sb.ok(&root, &["project", "init", "--adopt", id, "--repo", "../docs", "--repo", "../brain"]);
+    assert_eq!(out.matches("repo:     ").count(), 2, "{out}");
+    let m = std::fs::read_to_string(sb.home.path().join("manifests").join(format!("{id}.toml"))).unwrap();
+    assert!(m.contains(&brain.display().to_string()) && m.contains(&docs.display().to_string()), "{m}");
+    // Refused: not a repository, inside the root, outside HOME.
+    assert!(sb.err(&root, &["project", "init", "--adopt", id, "--repo", plain.to_str().unwrap()]).contains("not a git repository"));
+    std::fs::create_dir_all(root.join("sub/.git")).unwrap();
+    assert!(sb.err(&root, &["project", "init", "--adopt", id, "--repo", "sub"]).contains("inside the project root"));
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join(".git")).unwrap();
+    assert!(sb.err(&root, &["project", "init", "--adopt", id, "--repo", outside.path().to_str().unwrap()]).contains("inside your home"));
+    // --repo needs --adopt.
+    assert!(sb.err(&root, &["project", "init", "--repo", "../docs"]).contains("--adopt"));
+}

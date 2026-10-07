@@ -54,6 +54,14 @@ pub enum ProjectError {
         root: PathBuf,
         existing: PathBuf,
     },
+    /// `adopt_workspace` refused: the tree already has a different identity, or
+    /// a manifest for this root names another project.
+    #[error("cannot adopt {id} at {root}: {reason}")]
+    AdoptRefused {
+        id: String,
+        root: PathBuf,
+        reason: String,
+    },
 }
 
 impl ProjectError {

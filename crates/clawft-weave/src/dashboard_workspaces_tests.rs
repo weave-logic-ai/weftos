@@ -245,3 +245,46 @@ async fn manifest_index_projects_are_found_from_a_temp_manifests_dir() {
     assert_eq!(r.workspaces.len(), 1, "{r:?}");
     assert_eq!(r.workspaces[0].git[0].branch.as_deref(), Some("main"));
 }
+
+#[test]
+fn a_workspace_reports_its_sibling_repositories() {
+    let d = tempfile::tempdir().unwrap();
+    let base = d.path().canonicalize().unwrap();
+    let root = base.join("app");
+    repo(&root, None);
+    repo(&base.join("brain"), Some("https://example.com/org/brain.git"));
+    std::fs::create_dir_all(base.join("plain")).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    repo(outside.path(), None);
+    let scans = [ProjectScan {
+        ulid: ULID.to_owned(),
+        root: root.clone(),
+        extra: vec![
+            base.join("brain"),
+            base.join("plain"),          // not a repository: ignored
+            base.join("missing"),        // gone: ignored
+            std::path::PathBuf::from("relative"), // not absolute: ignored
+            outside.path().canonicalize().unwrap(), // not a sibling: reported by absolute path
+        ],
+    }];
+    let r = gather_projects(&scans);
+    let paths: Vec<&str> = r.workspaces[0].git.iter().map(|g| g.path.as_str()).collect();
+    let abs = outside.path().canonicalize().unwrap().to_string_lossy().into_owned();
+    assert_eq!(paths, [".", "../brain", abs.as_str()]);
+    let brain = &r.workspaces[0].git[1];
+    assert_eq!(brain.remote.as_deref(), Some("https://example.com/org/brain.git"));
+    assert_eq!(brain.branch.as_deref(), Some("main"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_extra_repository_is_not_followed() {
+    let d = tempfile::tempdir().unwrap();
+    let base = d.path().canonicalize().unwrap();
+    let root = base.join("p");
+    repo(&root, None);
+    repo(&base.join("real"), None);
+    std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
+    let r = gather_projects(&[ProjectScan { ulid: ULID.to_owned(), root, extra: vec![base.join("link")] }]);
+    assert_eq!(r.workspaces[0].git.len(), 1, "only the root repository");
+}

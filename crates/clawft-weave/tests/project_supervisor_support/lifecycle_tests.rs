@@ -142,6 +142,14 @@ pub fn spawn_refusal_cases() {
         assert_eq!(refused(sup.ensure_running(&fx.id).await.unwrap_err()), "root_missing");
         m.root = real_root;
         clawft_types::project::write_manifest(&fx.mdir, &m).unwrap();
+        // An ADR-108 workspace: its primary is on another machine.
+        let mpath = clawft_types::project::manifest_path(&fx.mdir, &fx.id).unwrap();
+        let text = std::fs::read_to_string(&mpath).unwrap();
+        let role = format!("role = \"{}\"\n", clawft_types::project::WORKSPACE_ROLE);
+        std::fs::write(&mpath, format!("{role}{text}")).unwrap();
+        assert!(clawft_types::project::find_by_id(&fx.mdir, &fx.id).unwrap().unwrap().is_workspace());
+        assert_eq!(refused(sup.ensure_running(&fx.id).await.unwrap_err()), "project_is_workspace");
+        clawft_types::project::write_manifest(&fx.mdir, &m).unwrap();
         // A run root so deep the child's socket cannot bind.
         let mut deep = fx.cfg();
         deep.run_root = fx.tmp.path().join("d".repeat(90)).join("run");

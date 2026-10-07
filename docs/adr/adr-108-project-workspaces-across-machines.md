@@ -1,6 +1,14 @@
 # ADR-108: Install projects locally (discover, install and configure working copies over the mesh)
 
 - **Status**: Accepted (2026-10-05; scope and open questions decided by the owner the same day; implementation tracked on the board)
+- **Updated**: 2026-10-06. P1 and P2 shipped in v0.8.3. Decision 1's `weft project init --adopt <ULID>`
+  is built (ahead of the rest of P3): it writes `project.toml` and a manifest with
+  `role = "workspace"` and no key, chain, certificate or `[serve]`, hides `.weftos/` in the
+  repository's `.git/info/exclude` (never a tracked `.gitignore`), refuses a nested root or a
+  second root for the same ULID, and the project supervisor refuses to serve a workspace
+  (`project_is_workspace`). `--repo DIR` (repeatable) records sibling repositories of a
+  workspace, which the reporter includes. `project.fetch`, the remote helper and pairing are
+  still open.
 - **Deciders**: owner
 - **Builds on**: ADR-103 (projects as identities, project kernels, user daemon, machine mesh),
   ADR-099 (signed `workload.ctl` node-admin channel, amended 2026-10-05 for dashboard

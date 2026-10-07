@@ -50,6 +50,19 @@ pub enum ProjectAction {
         /// of its id (archives that manifest).
         #[arg(long, requires = "fork")]
         force: bool,
+
+        /// Register this tree as a working copy (ADR-108 workspace) of the
+        /// existing project ULID, whose primary lives on another machine.
+        /// Writes no key or chain and never serves a kernel here; hides
+        /// `.weftos/` with the repository's `.git/info/exclude`.
+        #[arg(long, value_name = "ULID", conflicts_with = "fork")]
+        adopt: Option<String>,
+
+        /// With --adopt: another repository directory of this project outside
+        /// the root (for example a sibling `../docs`), reported with it.
+        /// Repeatable; adds to the list already registered.
+        #[arg(long = "repo", value_name = "DIR", requires = "adopt")]
+        repos: Vec<PathBuf>,
     },
 
     /// List registered projects.
@@ -105,7 +118,10 @@ impl Env {
 pub async fn run(args: ProjectArgs) -> anyhow::Result<()> {
     let env = Env::from_process()?;
     let out = match args.action {
-        ProjectAction::Init { name, fork, force } => init(&env, name.as_deref(), fork, force)?,
+        ProjectAction::Init { name, adopt: Some(id), repos, .. } => {
+            super::project_adopt::adopt(&env, &id, name.as_deref(), &repos)?
+        }
+        ProjectAction::Init { name, fork, force, adopt: None, .. } => init(&env, name.as_deref(), fork, force)?,
         ProjectAction::List { json } => list(&env, json)?,
         ProjectAction::Show { target, here, json } => {
             let m = lookup(&env, target.as_deref(), here)?;
@@ -145,7 +161,7 @@ fn forbidden_root(root: &Path, home: &Path) -> Option<String> {
 
 /// Root of the project containing `cwd`, or `cwd` itself when none exists,
 /// plus a note when that root is an ancestor of the cwd.
-fn project_root(env: &Env) -> anyhow::Result<(PathBuf, Option<String>)> {
+pub(crate) fn project_root(env: &Env) -> anyhow::Result<(PathBuf, Option<String>)> {
     let home = canon(&env.home);
     let cwd = canon(&env.cwd);
     let found = find_project_toml(&env.cwd, Some(&home));

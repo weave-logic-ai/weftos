@@ -26,14 +26,14 @@ pub mod spawn;
 pub mod token_consts;
 mod store;
 
-pub use adopt::{adopt_or_init, register_existing_nested, reinit_fork};
+pub use adopt::{adopt_or_init, adopt_workspace, register_existing_nested, reinit_fork};
 pub use cert::{CertError, CertRequest, ProjectAnchorStmt, ProjectCert};
 pub use error::ProjectError;
 pub use ids::{new_id, validate_id};
 pub use schema::{
     BinaryInfo, ChainSection, ChildState, DEFAULT_IDLE_STOP_SECS, DEFAULT_RESTART_MAX, DEFAULT_RESTART_WINDOW_SECS,
     LegacySection, ProjectManifest, ProjectState, ProjectToml,
-    ProjectTomlPresence, ProjectSandbox, SCHEMA_VERSION, SeedSection, ServeSection, ServeVia, WeaveSection,
+    ProjectTomlPresence, ProjectSandbox, SCHEMA_VERSION, SeedSection, ServeSection, ServeVia, WORKSPACE_ROLE, WeaveSection,
 };
 pub use spawn::{ContainerTransport, SPAWN_TTL_SECS, SpawnError, SpawnFile};
 pub use seed::{SeedReport, seed_from_registry, seed_from_workspaces};
@@ -49,3 +49,5 @@ mod cert_tests;
 mod tests;
 #[cfg(test)]
 mod tests_identity;
+#[cfg(test)]
+mod tests_workspace;

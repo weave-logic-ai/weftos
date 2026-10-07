@@ -144,6 +144,9 @@ pub enum SupError {
     LiveLeftover(String),
     /// The adapter or gate refused or failed.
     Runtime(RuntimeError),
+    /// An ADR-108 workspace (`role = "workspace"`): its primary is on another
+    /// machine and no kernel is served for it here.
+    Workspace(String),
 }
 
 impl SupError {
@@ -163,6 +166,7 @@ impl SupError {
             Self::Failed(_) => "project_failed",
             Self::NotReady(_) => "project_not_ready",
             Self::LiveLeftover(_) => "leftover_kernel",
+            Self::Workspace(_) => "project_is_workspace",
             Self::Runtime(RuntimeError::Governance(_)) => "governance_denied",
             Self::Runtime(e) => match e.code() {
                 "admission-refused" => "admission_refused",
@@ -216,6 +220,7 @@ impl std::fmt::Display for SupError {
             ),
             Self::NotReady(m) => write!(f, "project kernel did not become ready: {m}"),
             Self::LiveLeftover(m) => write!(f, "a live project kernel is already there and cannot be adopted: {m}"),
+            Self::Workspace(id) => write!(f, "project {id} is a workspace here (its primary is on another machine); no kernel is served for it"),
             Self::Runtime(e) => write!(f, "{e}"),
         }
     }

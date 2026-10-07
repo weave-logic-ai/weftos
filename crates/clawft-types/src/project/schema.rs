@@ -76,10 +76,23 @@ pub struct ProjectToml {
     pub extra: toml::Table,
 }
 
+/// `role` value marking a working copy of a project whose primary lives on
+/// another machine (ADR-108). A workspace has no key, chain or kernel here.
+pub const WORKSPACE_ROLE: &str = "workspace";
+
+fn role_is_workspace(extra: &toml::Table) -> bool {
+    extra.get("role").and_then(|v| v.as_str()) == Some(WORKSPACE_ROLE)
+}
+
 impl ProjectToml {
     /// True when `[weave] master = true`.
     pub fn is_weave_master(&self) -> bool {
         self.weave.as_ref().is_some_and(|w| w.master)
+    }
+
+    /// True for an ADR-108 workspace (`role = "workspace"`).
+    pub fn is_workspace(&self) -> bool {
+        role_is_workspace(&self.extra)
     }
 }
 
@@ -286,6 +299,24 @@ pub struct ProjectManifest {
 }
 
 impl ProjectManifest {
+    /// True for an ADR-108 workspace (`role = "workspace"`): reported, never served.
+    pub fn is_workspace(&self) -> bool {
+        role_is_workspace(&self.extra)
+    }
+
+    /// Extra repository directories of a workspace (`repos = [...]`, absolute
+    /// paths), reported next to the root's own repositories. Empty otherwise.
+    pub fn workspace_repos(&self) -> Vec<PathBuf> {
+        if !self.is_workspace() {
+            return Vec::new();
+        }
+        self.extra
+            .get("repos")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).map(PathBuf::from).collect())
+            .unwrap_or_default()
+    }
+
     /// Runtime dir override from `[serve]`, if any.
     pub fn runtime_dir_override(&self) -> Option<&std::path::Path> {
         self.serve.as_ref().and_then(|s| s.runtime_dir.as_deref())
