@@ -101,6 +101,7 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-109](adr-109-agent-environment-profiles-and-local-doctor.md) | Agent environment profiles (credential-free) and a local doctor that reports to the dashboard | Accepted | Platform / Agents | ADR-108; profile store `weftos-weavelogic` |
 | [ADR-110](adr-110-agent-transcript-collection.md) | Agent transcript collection for shared memory and training: redact before transport, mesh-only, per-project access | Accepted | Platform / Agents | ADR-108 / ADR-109 |
 | [ADR-111](adr-111-sensor-evidence-and-readings-contracts.md) | Sensor evidence and readings contracts: `spatial.evidence.v1` (with acoustic range, radio delay, clock correction) and the SenML readings profile and vocabulary | Accepted | Contracts / Sensors | `contracts/sensors/`; consumed by RuView ADR-384 and the sensor cogs |
+| [ADR-112](adr-112-agent-teams-define-apply-run.md) | Agent teams: team spec v1 (roster, edges, write-authority table, presets, hosts), project-scoped apply with lock and birth report, dashboard apply over the mesh, and a WeftOS team runtime | Proposed | Platform / Agents | Extends the Agent Directory (AD-1..23); ADR-108 / ADR-109 / ADR-110 |
 
 
 ## Categories
