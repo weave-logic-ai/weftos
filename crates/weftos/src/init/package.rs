@@ -214,7 +214,9 @@ pub fn team_members(src: &AgentSource, team: &str) -> Result<Option<TeamMembers>
             other => ["agent", "id", "package", "skill"]
                 .iter()
                 .find_map(|k| other.get(*k).and_then(Value::as_str).map(str::to_string)),
-        };
+        }
+        // Team spec v1 members may pin a catalog version: `agent: steward@0.8.3`.
+        .map(|id| id.split('@').next().unwrap_or_default().to_string());
         let active = item.get("active").and_then(Value::as_bool).unwrap_or(true);
         let list = if active {
             &mut members.active
@@ -262,5 +264,40 @@ mod tests {
     fn tools_accepts_comma_string() {
         let v: Value = serde_yaml::from_str("tools: Read, Grep").unwrap();
         assert_eq!(list_field(&v, "tools"), vec!["Read", "Grep"]);
+    }
+
+    fn source_with_team(yaml: &str) -> AgentSource {
+        let mut files = std::collections::BTreeMap::new();
+        files.insert(
+            "teams/t/team.yaml".to_string(),
+            std::borrow::Cow::Owned(yaml.as_bytes().to_vec()),
+        );
+        AgentSource {
+            files,
+            origin: "test".into(),
+            commit: "test".into(),
+        }
+    }
+
+    #[test]
+    fn team_v1_pinned_members_resolve_to_package_ids() {
+        let src = source_with_team(
+            "schema: 1\nlead: null\nshared_skills:\n  - lead-doctrine\nmembers:\n  - agent: steward@0.8.3\n    active: true\n  - agent: measurer@0.8.3\n    active: false\n    phase: 2\nedges:\n  - from: steward\n    to: mo\n    kind: consults\n",
+        );
+        let m = team_members(&src, "t").unwrap().unwrap();
+        assert_eq!(m.active, vec!["steward", "lead-doctrine"]);
+        assert_eq!(m.inactive, vec!["measurer"]);
+    }
+
+    #[test]
+    fn embedded_weftos_core_is_a_v1_team_with_the_same_members() {
+        let m = team_members(&AgentSource::embedded(), "weftos-core")
+            .unwrap()
+            .unwrap();
+        for id in ["steward", "doc-gardener", "liber", "mo", "developer", "reviewer", "tester"] {
+            assert!(m.active.iter().any(|a| a == id), "{id} not active");
+        }
+        assert_eq!(m.inactive, vec!["documenter", "measurer"]);
+        assert!(m.active.iter().all(|a| !a.contains('@')));
     }
 }

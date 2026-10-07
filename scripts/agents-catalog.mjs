@@ -68,6 +68,16 @@ function buildCatalog(results, teams) {
       lead: t.team.lead ?? null,
       shared_skills: Array.isArray(t.team.shared_skills) ? t.team.shared_skills : [],
       members: Array.isArray(t.team.members) ? t.team.members : [],
+      ...(t.team.schema === 1
+        ? {
+            schema: 1,
+            edges: t.team.edges ?? [],
+            write_authority: t.team.write_authority ?? {},
+            team_rules: t.team.team_rules ?? [],
+            presets: t.team.presets ?? {},
+            hosts: t.team.hosts ?? {},
+          }
+        : {}),
       path: t.path,
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
