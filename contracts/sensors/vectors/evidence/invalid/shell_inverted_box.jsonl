@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"shell_measure","t_ns":1759500000000000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"tape-1","uncertainty_m":0.01,"provenance":{"receipt":"shell-2026-10-03-a","producer":"manual-entry@0.1","proof":"MEASURED"},"min":[0,0,3.0],"max":[6.4,3.66,2.44]}

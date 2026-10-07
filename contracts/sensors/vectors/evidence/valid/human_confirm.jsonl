@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"human_confirm","t_ns":1759500003000000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"operator-console","uncertainty_m":0.05,"provenance":{"receipt":"confirm-0001","producer":"workspace@0.1","proof":"MEASURED"},"min":[0.0,3.3,0.0],"max":[0.9,3.66,2.0],"label":"bookshelf","occupied":true}

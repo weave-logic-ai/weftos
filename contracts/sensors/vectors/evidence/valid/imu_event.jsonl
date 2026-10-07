@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"imu_event","t_ns":1759500002200000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"node-3","uncertainty_m":0.05,"provenance":{"receipt":"imu-node3:0007","producer":"ruview-adapter@0.1","proof":"MEASURED"},"node_id":"node-3","event":"moved","magnitude":4.1}

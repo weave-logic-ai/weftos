@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"acoustic_range","t_ns":1759500005000000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"sonar-1","uncertainty_m":0.02,"provenance":{"receipt":"sonar-1:000311","producer":"jsn-sr04t@0.1.0","proof":"MEASURED"},"position":[0.1,1.83,1.0],"yaw_deg":0.0,"beam_deg":[60.0,60.0],"range_m":6.31}

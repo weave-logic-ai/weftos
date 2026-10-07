@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"radar_range","t_ns":1759500004100000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"rd03e-1","uncertainty_m":0.3,"provenance":{"receipt":"rd03e-1:000007","producer":"rd-03e@0.1.0","proof":"MEASURED"},"position":[0.1,1.83,1.0],"yaw_deg":0.0,"fov_deg":[90.0,60.0],"range_m":2.45,"targets":1}

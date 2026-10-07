@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"uwb_echo","t_ns":1759500002100000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"uwb-anchor-1","uncertainty_m":0.3,"provenance":{"receipt":"uwb-1:0042","producer":"uwb-adapter@0.1","proof":"MEASURED"},"anchor":[0.2,0.2,1.1],"range_m":2.75}

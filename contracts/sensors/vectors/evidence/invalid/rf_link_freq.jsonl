@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"rf_link_observation","t_ns":1759500001300000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"node-2","uncertainty_m":1.0,"provenance":{"receipt":"csi:node1-node2:000881","producer":"ruview-adapter@0.1","proof":"MEASURED"},"tx":[6.2,3.5,1.1],"rx":[0.2,0.2,1.1],"freq_hz":10.0,"excess_loss_db":4.2}

@@ -97,6 +97,10 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-105](adr-105-cog-sources.md) | Cog sources: per-project multi-repo cog catalog (WeftOS, Cognitum with licence, private signed repo), namespaced resolution, package trust fixes | Accepted | Architecture / Integration | `docs/cogs/cog-sources.md`; ADR-099 / ADR-100 / COG-008 |
 | [ADR-106](adr-106-seed-licence-proxy.md) | Cognitum Seed as licence proxy for its WeftOS mesh: per-mesh checkout grants, operator hash approval, mesh-scoped redistribution | Proposed (review complete) | Architecture / Integration | ADR-099 / ADR-100 / ADR-103 / ADR-105; Phase 1a awaiting go |
 | [ADR-107](adr-107-catalog-hardware-software-link.md) | Hardware catalog links modules to cogs (`Module::cogs`, firmware, docs); sensor detail panel in the console | Accepted | Platform / Console | ADR-104 / ADR-105 / COG-009 |
+| [ADR-108](adr-108-project-workspaces-across-machines.md) | Install projects locally: one identity, many installations; workspace discovery and node actions over the heartbeat; `weft project init --adopt` | Accepted | Architecture / Projects | ADR-103 / ADR-099; P1, P2 in v0.8.3, `--adopt` on 0.8.4 |
+| [ADR-109](adr-109-agent-environment-profiles-and-local-doctor.md) | Agent environment profiles (credential-free) and a local doctor that reports to the dashboard | Accepted | Platform / Agents | ADR-108; profile store `weftos-weavelogic` |
+| [ADR-110](adr-110-agent-transcript-collection.md) | Agent transcript collection for shared memory and training: redact before transport, mesh-only, per-project access | Accepted | Platform / Agents | ADR-108 / ADR-109 |
+| [ADR-111](adr-111-sensor-evidence-and-readings-contracts.md) | Sensor evidence and readings contracts: `spatial.evidence.v1` (with acoustic range, radio delay, clock correction) and the SenML readings profile and vocabulary | Accepted | Contracts / Sensors | `contracts/sensors/`; consumed by RuView ADR-384 and the sensor cogs |
 
 
 ## Categories

@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"radar_track_point","t_ns":1759500001250000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"ld6002-1","uncertainty_m":0.15,"provenance":{"receipt":"ld6002-1:000123","producer":"ruview-adapter@0.1","proof":"MEASURED"},"position":[2.1,1.4,0.0],"velocity":[0.4,0.1,0.0]}

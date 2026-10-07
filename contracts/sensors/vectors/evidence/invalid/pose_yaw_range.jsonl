@@ -1,0 +1,1 @@
+{"schema":"spatial.evidence.v1","type":"pose","t_ns":1759500000000000000,"frame":"room_enu","region":"region/urth/meso/test-room","source_id":"tape-1","uncertainty_m":0.02,"provenance":{"receipt":"pose-node1-a","producer":"manual-entry@0.1","proof":"MEASURED"},"node_id":"node-1","position":[6.2,3.5,1.1],"yaw_deg":400.0}

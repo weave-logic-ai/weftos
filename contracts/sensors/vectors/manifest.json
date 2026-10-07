@@ -1,0 +1,790 @@
+{
+ "vectors_version": 1,
+ "evidence_classes": [
+  "version",
+  "unknown_type",
+  "shape",
+  "range",
+  "text",
+  "size"
+ ],
+ "cases": [
+  {
+   "file": "evidence/valid/shell_measure.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical shell_measure line"
+  },
+  {
+   "file": "evidence/valid/pose.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical pose line"
+  },
+  {
+   "file": "evidence/valid/radar_track_point.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical radar_track_point line"
+  },
+  {
+   "file": "evidence/valid/rf_link_observation.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical rf_link_observation line"
+  },
+  {
+   "file": "evidence/valid/rf_gaussian.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical rf_gaussian line"
+  },
+  {
+   "file": "evidence/valid/uwb_echo.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical uwb_echo line"
+  },
+  {
+   "file": "evidence/valid/imu_event.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical imu_event line"
+  },
+  {
+   "file": "evidence/valid/human_confirm.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical human_confirm line"
+  },
+  {
+   "file": "evidence/valid/tof_depth.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical tof_depth line"
+  },
+  {
+   "file": "evidence/valid/radar_range.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical radar_range line"
+  },
+  {
+   "file": "evidence/valid/acoustic_range.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical acoustic_range line"
+  },
+  {
+   "file": "evidence/valid/radio_delay.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical radio_delay line"
+  },
+  {
+   "file": "evidence/valid/clock_correction.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "canonical clock_correction line"
+  },
+  {
+   "file": "evidence/valid/radar_track_point_sensor_block.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "radar_track_point with the optional sensor beam block"
+  },
+  {
+   "file": "evidence/valid/acoustic_range_direct.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "direct arrival names its peer"
+  },
+  {
+   "file": "evidence/valid/acoustic_range_minimal.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "kind defaults to echo; optionals omitted"
+  },
+  {
+   "file": "evidence/valid/radio_delay_one_way_apparent.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "uncorrected one-way delay may be negative (offset-bearing)"
+  },
+  {
+   "file": "evidence/valid/radio_delay_one_way_corrected.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "offset_free one-way is positive"
+  },
+  {
+   "file": "evidence/valid/clock_correction_single_point.jsonl",
+   "kind": "evidence",
+   "expect": "valid",
+   "class": null,
+   "rule": "one row: rate 0, no master"
+  },
+  {
+   "file": "evidence/invalid/env_version_v2.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "version",
+   "rule": "schema must be spatial.evidence.v1"
+  },
+  {
+   "file": "evidence/invalid/env_version_missing.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "version",
+   "rule": "schema is required"
+  },
+  {
+   "file": "evidence/invalid/env_unknown_type.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "unknown_type",
+   "rule": "unknown type is not fatal to a stream but the line is rejected and counted"
+  },
+  {
+   "file": "evidence/invalid/env_unc_zero.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "uncertainty_m in (0, 100]"
+  },
+  {
+   "file": "evidence/invalid/env_unc_too_big.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "uncertainty_m in (0, 100]"
+  },
+  {
+   "file": "evidence/invalid/env_bad_source_id.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "text",
+   "rule": "ids use [A-Za-z0-9._:/@-], 1..128 bytes"
+  },
+  {
+   "file": "evidence/invalid/env_empty_region.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "text",
+   "rule": "region id is required"
+  },
+  {
+   "file": "evidence/invalid/env_bad_frame.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "frame is room_enu only"
+  },
+  {
+   "file": "evidence/invalid/env_missing_provenance.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "provenance is required"
+  },
+  {
+   "file": "evidence/invalid/env_proof_lowercase.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "proof is MEASURED|CODE|SYNTHETIC"
+  },
+  {
+   "file": "evidence/invalid/env_proof_claimed.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "CLAIMED is not a v1 proof tag"
+  },
+  {
+   "file": "evidence/invalid/env_coord_too_far.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "coordinates within +-1000 m"
+  },
+  {
+   "file": "evidence/invalid/env_number_overflow.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "1e999 overflows a JSON number"
+  },
+  {
+   "file": "evidence/invalid/env_line_too_long.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "size",
+   "rule": "lines are at most 16 KiB"
+  },
+  {
+   "file": "evidence/invalid/shell_inverted_box.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "min < max on every axis"
+  },
+  {
+   "file": "evidence/invalid/pose_yaw_range.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "yaw within +-360"
+  },
+  {
+   "file": "evidence/invalid/pose_bad_node_id.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "text",
+   "rule": "node_id follows the id rule"
+  },
+  {
+   "file": "evidence/invalid/radar_track_velocity.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "velocity components within +-50"
+  },
+  {
+   "file": "evidence/invalid/radar_track_missing_track.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "track is required"
+  },
+  {
+   "file": "evidence/invalid/rf_link_freq.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "freq_hz in [1e8, 3e11]"
+  },
+  {
+   "file": "evidence/invalid/rf_gaussian_confidence.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "confidence in [0, 1]"
+  },
+  {
+   "file": "evidence/invalid/rf_gaussian_zero_quaternion.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "orientation is non-zero"
+  },
+  {
+   "file": "evidence/invalid/uwb_range_negative.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "range_m in (0, 1000]"
+  },
+  {
+   "file": "evidence/invalid/imu_event_control_char.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "text",
+   "rule": "labels have no control characters"
+  },
+  {
+   "file": "evidence/invalid/human_confirm_empty_label.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "text",
+   "rule": "label is 1..64 characters"
+  },
+  {
+   "file": "evidence/invalid/tof_zone_count.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "both arrays are exactly columns*rows long"
+  },
+  {
+   "file": "evidence/invalid/tof_grid_side.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "grid sides 1..16"
+  },
+  {
+   "file": "evidence/invalid/radar_range_fov_180.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "fov in (0, 180)"
+  },
+  {
+   "file": "evidence/invalid/radar_range_zero.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "range_m in (0, 1000]"
+  },
+  {
+   "file": "evidence/invalid/acoustic_range_too_far.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "range_m in (0, 200]"
+  },
+  {
+   "file": "evidence/invalid/acoustic_beam_zero.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "beam_deg in (0, 180)"
+  },
+  {
+   "file": "evidence/invalid/acoustic_direct_no_peer.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "text",
+   "rule": "direct requires peer"
+  },
+  {
+   "file": "evidence/invalid/acoustic_echo_with_peer.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "text",
+   "rule": "echo forbids peer"
+  },
+  {
+   "file": "evidence/invalid/acoustic_sound_speed.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "sound_speed_mps in [300, 400]"
+  },
+  {
+   "file": "evidence/invalid/acoustic_peak_rank_zero.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "peak_rank in 1..16"
+  },
+  {
+   "file": "evidence/invalid/acoustic_bad_kind.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "kind is echo|direct"
+  },
+  {
+   "file": "evidence/invalid/radio_delay_same_node.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "text",
+   "rule": "tx_node and rx_node differ"
+  },
+  {
+   "file": "evidence/invalid/radio_delay_mode_direction.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "round_trip requires direction both"
+  },
+  {
+   "file": "evidence/invalid/radio_delay_one_way_both.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "one_way requires forward|reverse"
+  },
+  {
+   "file": "evidence/invalid/radio_delay_round_trip_not_offset_free.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "round_trip is always offset_free"
+  },
+  {
+   "file": "evidence/invalid/radio_delay_corrected_negative.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "offset_free delay in (0, 100000] ns"
+  },
+  {
+   "file": "evidence/invalid/radio_delay_sigma_zero.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "delay_sigma_ns in (0, 100000]"
+  },
+  {
+   "file": "evidence/invalid/radio_delay_missing_offset_free.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "offset_free is required"
+  },
+  {
+   "file": "evidence/invalid/radio_delay_bad_mode.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "mode is one_way|round_trip"
+  },
+  {
+   "file": "evidence/invalid/clock_basis_reflected.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "residual only from a direct path"
+  },
+  {
+   "file": "evidence/invalid/clock_basis_missing.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "basis is required"
+  },
+  {
+   "file": "evidence/invalid/clock_rate_without_rows.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "fit_points < 2 requires rate 0"
+  },
+  {
+   "file": "evidence/invalid/clock_rate_huge.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "|rate| <= 1e-3"
+  },
+  {
+   "file": "evidence/invalid/clock_residual_negative.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "residual_ns >= 0"
+  },
+  {
+   "file": "evidence/invalid/clock_fit_points_zero.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "range",
+   "rule": "fit_points in 1..65535"
+  },
+  {
+   "file": "evidence/invalid/clock_anchor_negative.jsonl",
+   "kind": "evidence",
+   "expect": "invalid",
+   "class": "shape",
+   "rule": "anchor_t_ns is an unsigned integer"
+  },
+  {
+   "file": "senml/valid/temperature.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "known quantity, primary unit, entity, sigma"
+  },
+  {
+   "file": "senml/valid/humidity.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "%RH primary unit"
+  },
+  {
+   "file": "senml/valid/co2_secondary_unit.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "ppm is a secondary unit the profile allows in u"
+  },
+  {
+   "file": "senml/valid/contact_boolean.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "boolean uses vb and no unit"
+  },
+  {
+   "file": "senml/valid/power_object.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "object entity"
+  },
+  {
+   "file": "senml/valid/multi_record_pack.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "several quantities in one pack; proof_ per record"
+  },
+  {
+   "file": "senml/valid/vitals_track.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "vitals bind to an anonymous track"
+  },
+  {
+   "file": "senml/valid/vitals_occupant.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "vitals bind to a space-level occupant slot"
+  },
+  {
+   "file": "senml/valid/unknown_quantity.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "unknown names are accepted, stored and counted"
+  },
+  {
+   "file": "senml/valid/base_unit.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "effective unit may come from bu"
+  },
+  {
+   "file": "senml/valid/absolute_t_no_bt.jsonl",
+   "kind": "senml",
+   "expect": "valid",
+   "class": null,
+   "rule": "absolute t without bt"
+  },
+  {
+   "file": "senml/invalid/missing_bn.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "bn is required"
+  },
+  {
+   "file": "senml/invalid/bn_no_slash.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "bn is the source id followed by one slash"
+  },
+  {
+   "file": "senml/invalid/bn_bad_chars.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "source id follows the evidence id rule"
+  },
+  {
+   "file": "senml/invalid/missing_proof.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "proof_ is required on every measurement record"
+  },
+  {
+   "file": "senml/invalid/proof_bad_value.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "proof_ is MEASURED|CODE|SYNTHETIC"
+  },
+  {
+   "file": "senml/invalid/proof_lowercase.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "proof_ is case sensitive"
+  },
+  {
+   "file": "senml/invalid/unknown_must_understand.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "unknown field ending in _ must be rejected"
+  },
+  {
+   "file": "senml/invalid/wrong_unit.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "unit must equal the vocabulary unit"
+  },
+  {
+   "file": "senml/invalid/missing_unit.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "numeric known quantity needs its unit"
+  },
+  {
+   "file": "senml/invalid/v_and_vb.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "exactly one value field"
+  },
+  {
+   "file": "senml/invalid/no_value.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "a value field is required"
+  },
+  {
+   "file": "senml/invalid/value_out_of_range.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "value within the quantity's physical range"
+  },
+  {
+   "file": "senml/invalid/sigma_negative.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "sigma > 0"
+  },
+  {
+   "file": "senml/invalid/entity_bad_kind.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "entity is space:|object:|track:|occupant: plus an id"
+  },
+  {
+   "file": "senml/invalid/entity_bad_id.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "entity id follows the id rule"
+  },
+  {
+   "file": "senml/invalid/relative_time.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "effective time must be absolute Unix seconds"
+  },
+  {
+   "file": "senml/invalid/bver_old.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "bver absent or 10"
+  },
+  {
+   "file": "senml/invalid/unknown_unit_string.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "unit must be a registry symbol"
+  },
+  {
+   "file": "senml/invalid/contact_numeric.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "contact is boolean (vb)"
+  },
+  {
+   "file": "senml/invalid/contact_with_unit.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "boolean quantities carry no unit"
+  },
+  {
+   "file": "senml/invalid/sigma_on_boolean.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "sigma applies to numeric values only"
+  },
+  {
+   "file": "senml/invalid/vitals_space_entity.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "vitals are about a person track, never a space or object"
+  },
+  {
+   "file": "senml/invalid/vitals_object_entity.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "vitals are about a person track, never a space or object"
+  },
+  {
+   "file": "senml/invalid/vitals_no_entity.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "vitals need an explicit track or occupant entity"
+  },
+  {
+   "file": "senml/invalid/temperature_person_entity.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "person entities are only for person-track quantities"
+  },
+  {
+   "file": "senml/invalid/not_an_array.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "a line is one SenML pack: a JSON array"
+  },
+  {
+   "file": "senml/invalid/empty_pack.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "a pack has at least one record"
+  },
+  {
+   "file": "senml/invalid/not_json.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "a line is valid JSON"
+  },
+  {
+   "file": "senml/invalid/line_too_long.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "lines are at most 16 KiB"
+  },
+  {
+   "file": "senml/invalid/too_many_records.jsonl",
+   "kind": "senml",
+   "expect": "invalid",
+   "class": null,
+   "rule": "at most 256 records per pack"
+  }
+ ]
+}

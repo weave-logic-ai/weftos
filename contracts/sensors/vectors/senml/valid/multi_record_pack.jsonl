@@ -1,0 +1,1 @@
+[{"n":"temperature","v":21.4,"proof_":"MEASURED","u":"Cel","t":0,"bn":"sen-temp-1/","bt":1759500000},{"n":"humidity","v":48.2,"proof_":"MEASURED","u":"%RH","t":0},{"n":"pressure","v":101325.0,"proof_":"CODE","u":"Pa","t":0}]

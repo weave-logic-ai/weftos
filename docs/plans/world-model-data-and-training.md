@@ -1,7 +1,7 @@
 # World model: data, labels and weights (plan)
 
-- **Status:** Proposed 2026-10-07. Revised the same day to build on RuView ADR-384 and the
-  sensor-contracts plan (§1a). Needs the owner's decisions in §8 before any phase starts.
+- **Status:** Accepted 2026-10-07 (owner decisions in §8). Builds on RuView ADR-384 and the
+  sensor-contracts plan (§1a). W7 is undecided.
 - **Asks:** "Do we have a plan to build the weights and labels we need, and does H-JEPA add
   anything?" Short answers: **no plan existed**, and **yes, H-JEPA helps**, mainly as the
   reference trainer and evidence for a two-level predictor. It does not solve our data problem.
@@ -104,8 +104,8 @@ with an observed outcome, the one place we already have actions at scale.
 | Phase | Delivers | Done when |
 |---|---|---|
 | **W0 Decide** | Owner lifts the hold for the sensor world model; picks the training stack and the camera rule (§8). | Decisions recorded here and on the board. |
-| **W1 Data path** | Depends on RuView ADR-384 steps 1, 2 and 2b (inbound parsing, server ingest with recording, SenML readings). WeftOS side: amend ADR-107 with the clock-correction record (and the two ranging types the RuView plan asks for); get `ld2450-radar` built for the Mac or x86 (plan §9 Q6); settle the shared SenML quantity-vocabulary file (Q8); extend `SensorClass` to the ADR-384 HAL mapping; build the dataset archiver that copies a finished RuView session (`.evidence.jsonl`, CSI recording, readings) with a manifest (room, `shell_measure`, node `pose`s, protocol, consent, proof counts) to photo-gallery under the `ruview-demo` project. | A recorded session replays through RuView's file transport with identical counts, and the archived copy on PG checksums identical. |
-| **W2 First real dataset** | ADR-384 step 4, extended for training: the measured test room, empty / walking / seated / two-person phases with `human_confirm` per phase, at least 3 hours over several days, CSI + LD2450 + LD6002 + ToF + readings, plus the camera teacher and ECG where §8 allows. Closes cards 61020daa and f491f12e. Note: ADR-107 describes the test room as 6.40 × 3.66 m and the RuView plan as 12 × 12 ft; confirm which room. | Dataset card: hours per phase, held-out split by day, proof-tag counts, checksums; ADR-384 step 4 validation record filed. |
+| **W1 Data path** | Depends on RuView ADR-384 steps 1, 2 and 2b (inbound parsing, server ingest with recording, SenML readings). WeftOS side: publish the evidence contract as WeftOS ADR-111 with the clock-correction record and the two ranging types the RuView plan asks for; rebuild the cog0 `ld2450-radar` with the `spatial-evidence` feature and serve `GET /spatial` where RuView can pull it (owner: use cog0, no Mac build); publish the shared SenML quantity vocabulary in WeftOS (Q8, ADR-111); extend `SensorClass` to the ADR-384 HAL mapping; build the dataset archiver that copies a finished RuView session (`.evidence.jsonl`, CSI recording, readings) with a manifest (room, `shell_measure`, node `pose`s, protocol, consent, proof counts) to photo-gallery under the `ruview-demo` project. | A recorded session replays through RuView's file transport with identical counts, and the archived copy on PG checksums identical. |
+| **W2 First real dataset** | ADR-384 step 4, extended for training: the measured test room, empty / walking / seated / two-person phases with `human_confirm` per phase, at least 3 hours over several days, CSI + LD2450 + LD6002 + ToF + readings, plus the camera teacher and ECG where §8 allows. Closes cards 61020daa and f491f12e. The room is the 12 × 12 ft room with its own Wi-Fi router (§8). | Dataset card: hours per phase, held-out split by day, proof-tag counts, checksums; ADR-384 step 4 validation record filed. |
 | **W3 Labels** | RuView's labeller over the recordings (`auto_label`, `verified` only for `MEASURED`), `human_confirm` phases, the tape shell, camera-teacher positions (RuView ADR-079), ECG for vitals bound to an anonymous track; all as label tracks separate from observations, never from `CODE`/`SYNTHETIC` records. | Held-out probe set; label agreement report alongside RuView's calibration-status diagnostics. |
 | **W4 Evaluation harness** | Matched baseline (copy-last and linear `pred_φ`), held-out probe, VoE diff, the activity-floor collapse alarm and geometry audit from jepa-anything.md, wired into the existing rollback gate and SIGReg monitor. | The gate can say no to a model on real data. |
 | **W5 Flat LeWM** | Train encoder + `pred_φ` on W2 (Mac first), export weights to the RVF model segment, load through the candle path, swap at a tick. | Beats the matched baseline on held-out days, passes the gate, runs at 10 Hz on the Mac. |
@@ -135,12 +135,15 @@ on photo-gallery under the project's 0700 home, only derived labels (keypoints, 
 leave it, raw frames have a retention date, and only people who consent are recorded. ECG
 data is labelled with the subject's consent and never published.
 
-## 8. Owner decisions
+## 8. Owner decisions (2026-10-07)
 
-0. Sequencing: W1 waits on RuView ADR-384 steps 1-2b. Do we push those PRs first (recommended), or start the WeftOS side (ADR-107 record types, archiver, `SensorClass`) in parallel?
-
-1. Lift the training hold for the sensor world model (W1-W6)? Skill-3D stays held.
-2. Training stack: PyTorch on the Mac → safetensors → candle (recommended), or another.
-3. Camera ground truth: allowed in the test room under §7?
-4. Recording budget: about 3 hours over several days to start; who is recorded.
-5. W7 (agent-domain world model): now, later, or never.
+| # | Decision |
+|---|---|
+| 0 | Start the WeftOS side now; the sensors are being hooked up soon. RuView ADR-384 steps proceed alongside. |
+| 1 | **Training hold lifted for the sensor world model** ("we have disk space, let's get the training we need"). Skill-3D training stays on hold. |
+| 2 | Training stack as recommended in §5 (PyTorch on the Mac → safetensors → candle). |
+| 3 | **Camera ground truth is allowed, except in Whitsentry work.** The §7 handling rule applies. |
+| 4 | **Test room: the 12 × 12 ft room (3.66 × 3.66 m) with its own Wi-Fi router.** The 6.40 × 3.66 m room in the spatial ADR is not the training room. |
+| 5 | Producers: the LD2450 cog already running on cog0 (armv7), rebuilt with the `spatial-evidence` feature and pulled by RuView; no Mac build needed. |
+| 6 | The shared contracts (`spatial.evidence.v1` with the three new record types, and the SenML quantity vocabulary) are **published in WeftOS** as ADR-111 and `contracts/sensors/`. |
+| 7 | W7 (agent-session world model): undecided; revisit after W5. |
