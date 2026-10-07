@@ -1,0 +1,3 @@
+_expect: "lacks capability board_write"
+write_authority:
+  board: developer

@@ -1,0 +1,4 @@
+_expect: "undeclared key"
+presets:
+  lean:
+    model_tier: top

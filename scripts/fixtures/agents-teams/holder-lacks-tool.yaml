@@ -1,0 +1,4 @@
+_expect: "needed to write it"
+_member_patch:
+  developer:
+    tools: [Read, Bash]

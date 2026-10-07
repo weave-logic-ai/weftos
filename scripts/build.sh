@@ -1618,6 +1618,17 @@ cmd_npm_audit() {
 }
 
 # ── Agent Directory (AD-1/AD-2, WEFT agent-directory design) ───────────
+# Team spec v1 (ADR-112 TM1): seeded failing fixtures must each be refused.
+agents_team_tests() {
+    node --test "$ROOT/scripts/agents-team-validate.test.mjs"
+}
+
+# Gate check 17: package + team validation, then the team-spec fixtures.
+agents_validate_gate_impl() {
+    node "$ROOT/scripts/agents-validate.mjs" --quiet || return 1
+    agents_team_tests
+}
+
 cmd_agents_validate() {
     header "Validating agents/ packages (AD-1)"
     timer_start
@@ -1628,6 +1639,10 @@ cmd_agents_validate() {
     fi
     node "$ROOT/scripts/agents-validate.mjs"
     local rc=$?
+    if [ $rc -eq 0 ]; then
+        agents_team_tests
+        rc=$?
+    fi
     timer_end
     return $rc
 }
@@ -2365,8 +2380,8 @@ cmd_gate() {
     # client-identifying content (the repo is public). Soft when node/npm is
     # missing locally; CI always has both.
     if command -v node >/dev/null 2>&1; then
-        run_gate_check 17 "agents/ package validation (AD-1)" \
-            node "$ROOT/scripts/agents-validate.mjs" --quiet
+        run_gate_check 17 "agents/ package + team spec validation (AD-1, ADR-112)" \
+            agents_validate_gate_impl
         run_gate_check 18 "agents/catalog.json up to date (AD-1)" \
             node "$ROOT/scripts/agents-catalog.mjs" --check
     else

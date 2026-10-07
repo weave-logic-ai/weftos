@@ -1,0 +1,4 @@
+_expect: "pins @0.0.1"
+_member_patch:
+  steward:
+    agent: steward@0.0.1

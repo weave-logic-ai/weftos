@@ -1,0 +1,4 @@
+_expect: "must declare the phase"
+_member_patch:
+  measurer:
+    phase:

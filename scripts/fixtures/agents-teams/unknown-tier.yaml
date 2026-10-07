@@ -1,0 +1,4 @@
+_expect: "secret"
+_member_patch:
+  mo:
+    tiers: [secret]

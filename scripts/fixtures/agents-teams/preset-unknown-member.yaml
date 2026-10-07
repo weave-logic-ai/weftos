@@ -1,0 +1,5 @@
+_expect: "names unknown member"
+presets:
+  lean:
+    active:
+      ghost: false

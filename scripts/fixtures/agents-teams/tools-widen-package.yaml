@@ -1,0 +1,4 @@
+_expect: "tools widen the package"
+_member_patch:
+  reviewer:
+    tools: [Read, Bash, Write]

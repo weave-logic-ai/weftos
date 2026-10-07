@@ -1,0 +1,11 @@
+_expect: "spawnable agent package"
+_extra_members:
+  - agent: lead-doctrine
+    one_job: Lead the team.
+    model_tier: top
+    authority: autonomous
+    owner: some-owner
+    must_not:
+      - x
+    tiers: [internal]
+    active: true

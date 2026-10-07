@@ -1,0 +1,5 @@
+_expect: "not a member of this team"
+_extra_edges:
+  - from: developer
+    to: ghost
+    kind: consults

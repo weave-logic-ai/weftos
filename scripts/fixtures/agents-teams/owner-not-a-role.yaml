@@ -1,0 +1,4 @@
+_expect: "owner must be a human role slug"
+_member_patch:
+  steward:
+    owner: Some Person

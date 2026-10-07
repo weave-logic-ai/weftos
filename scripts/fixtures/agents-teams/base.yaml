@@ -1,0 +1,127 @@
+schema: 1
+name: fixture
+lead: null
+shared_skills:
+  - lead-doctrine
+members:
+  - agent: steward
+    one_job: Write the board.
+    model_tier: mid
+    authority: supervised
+    owner: board-owner
+    must_not:
+      - exceed its job
+    tiers: [internal]
+    active: true
+  - agent: doc-gardener
+    one_job: Keep docs true.
+    model_tier: top
+    authority: supervised
+    owner: docs-owner
+    must_not:
+      - exceed its job
+    tiers: [internal]
+    active: true
+  - agent: liber
+    one_job: Route lessons.
+    model_tier: small
+    authority: autonomous
+    owner: memory-owner
+    must_not:
+      - exceed its job
+    tiers: [internal]
+    active: true
+  - agent: mo
+    one_job: Advise read-only.
+    model_tier: small
+    authority: autonomous
+    owner: purpose-owner
+    must_not:
+      - exceed its job
+    tiers: [internal]
+    active: true
+  - agent: developer
+    one_job: Build one change.
+    model_tier: mid
+    authority: supervised
+    owner: engineering-owner
+    must_not:
+      - exceed its job
+    tiers: [internal]
+    active: true
+  - agent: reviewer
+    one_job: Review one change.
+    model_tier: top
+    authority: autonomous
+    owner: engineering-owner
+    must_not:
+      - exceed its job
+    tiers: [internal]
+    active: true
+  - agent: measurer
+    one_job: Measure production read-only.
+    model_tier: mid
+    authority: escalated
+    owner: operations-owner
+    must_not:
+      - mutate anything
+    tiers: [internal]
+    active: false
+    phase: 2
+edges:
+  - from: developer
+    to: steward
+    kind: consumes
+  - from: reviewer
+    to: doc-gardener
+    kind: consumes
+  - from: developer
+    to: mo
+    kind: consults
+write_authority:
+  board: steward
+  card_history: doc-gardener
+  memory: liber
+  docs: doc-gardener
+  code: developer
+  production_read: measurer
+team_rules:
+  - name: board-is-for-humans
+    statement: "board-is-for-humans statement."
+  - name: pickup-is-a-claim
+    statement: "pickup-is-a-claim statement."
+  - name: worktree-per-lane
+    statement: "worktree-per-lane statement."
+  - name: result-header
+    statement: "result-header statement."
+  - name: refuse-not-empty
+    statement: "refuse-not-empty statement."
+  - name: stand-down
+    statement: "stand-down statement."
+  - name: handoff-ritual
+    statement: "handoff-ritual statement."
+  - name: injection-stop-the-line
+    statement: "injection-stop-the-line statement."
+presets:
+  lean:
+    active:
+      mo: false
+  swap:
+    hosts:
+      reviewer: codex
+hosts:
+  claude:
+    tool_map:
+      Task: t
+      SendMessage: s
+      TodoWrite: w
+  codex:
+    tool_map:
+      Task: t
+      SendMessage: s
+      TodoWrite: w
+  grok:
+    tool_map:
+      Task: t
+      SendMessage: s
+      TodoWrite: w

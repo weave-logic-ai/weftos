@@ -1,0 +1,3 @@
+_expect: "2 holders"
+write_authority:
+  board: [steward, developer]

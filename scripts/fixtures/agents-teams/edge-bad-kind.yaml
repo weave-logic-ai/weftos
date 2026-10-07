@@ -1,0 +1,5 @@
+_expect: "blocks"
+_extra_edges:
+  - from: developer
+    to: mo
+    kind: blocks

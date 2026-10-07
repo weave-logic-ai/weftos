@@ -1,0 +1,11 @@
+_expect: "spawnable agent package"
+_extra_members:
+  - agent: nonexistent
+    one_job: Do nothing.
+    model_tier: mid
+    authority: supervised
+    owner: some-owner
+    must_not:
+      - x
+    tiers: [internal]
+    active: true

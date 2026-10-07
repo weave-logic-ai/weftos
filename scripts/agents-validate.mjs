@@ -7,7 +7,9 @@
  * docs/research/agent-directory/design.md §1.1/§1.2 and its ADR (Accepted,
  * D1-D6, D3 = versioned by weftos release — no per-package version field).
  *
- * Also validates each `agents/teams/<team>/team.yaml` team file.
+ * Also validates each `agents/teams/<team>/team.yaml` team file; a team that
+ * declares `schema: 1` is checked against team spec v1 (agents-team-validate.mjs,
+ * agents/teams/SCHEMA.md, ADR-112).
  *
  * Legacy content that predates this standard (agents/clawft/,
  * agents/code-reviewer/, agents/weftos/, agents/weftos-ecc/,
@@ -23,6 +25,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, dirname, relative, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseYaml, splitFrontmatter } from "./lib/yaml-lite.mjs";
+import { validateTeamV1, workspaceVersion } from "./agents-team-validate.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
@@ -340,7 +343,20 @@ function validatePackage(pkgRel, allPackageIds) {
   };
 }
 
-function validateTeams(allPackageIds) {
+function validateTeams(allPackageIds, results = []) {
+  const teamCtx = {
+    version: workspaceVersion(),
+    packages: new Map(
+      results.map((r) => [
+        r.id,
+        {
+          kind: r.pkg.kind,
+          capabilities: Array.isArray(r.pkg.capabilities) ? r.pkg.capabilities : [],
+          tools: Array.isArray(r.agentFrontmatter?.tools) ? r.agentFrontmatter.tools : null,
+        },
+      ]),
+    ),
+  };
   const teamsRoot = join(AGENTS_DIR, "teams");
   if (!existsSync(teamsRoot)) return [];
   const teamDirs = readdirSync(teamsRoot, { withFileTypes: true })
@@ -363,6 +379,9 @@ function validateTeams(allPackageIds) {
       reportFail(teamId, `team.yaml failed to parse: ${e.message}`);
       continue;
     }
+    if (team.schema !== undefined) {
+      for (const msg of validateTeamV1(team, teamCtx)) reportFail(teamId, msg);
+    }
     const members = Array.isArray(team.members) ? team.members : [];
     let activeCount = 0;
     for (const member of members) {
@@ -370,7 +389,7 @@ function validateTeams(allPackageIds) {
         reportFail(teamId, `member entry is malformed: ${JSON.stringify(member)}`);
         continue;
       }
-      if (!allPackageIds.has(member.agent)) {
+      if (!allPackageIds.has(String(member.agent).split("@")[0])) {
         reportFail(teamId, `member.agent "${member.agent}" does not match any known agent package`);
       }
       if (member.active !== false) activeCount++;
@@ -400,7 +419,7 @@ export function runValidation() {
     const result = validatePackage(pkgRel, allPackageIds);
     if (result) results.push(result);
   }
-  const teams = validateTeams(allPackageIds);
+  const teams = validateTeams(allPackageIds, results);
   return { errorCount, packageCount, results, teams };
 }
 
