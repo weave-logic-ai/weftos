@@ -23,7 +23,8 @@ members:
     nickname: Stew
     position: 1
     one_job: Write staged manifests onto the board, deduplicated against the live board.
-    model_tier: mid
+    # The owner runs the steward on a larger model than the lanes (ADR-112 context).
+    model_tier: top
     authority: supervised
     owner: board-owner
     must_not:

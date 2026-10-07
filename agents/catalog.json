@@ -557,7 +557,7 @@
           "nickname": "Stew",
           "position": 1,
           "one_job": "Write staged manifests onto the board, deduplicated against the live board.",
-          "model_tier": "mid",
+          "model_tier": "top",
           "authority": "supervised",
           "owner": "board-owner",
           "must_not": [
