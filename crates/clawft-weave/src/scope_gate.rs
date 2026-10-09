@@ -144,6 +144,10 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "dashboard.status",
     "dashboard.actions",
     "dashboard.token.rotate",
+    // Pairing this machine with another node is a machine-level trust act.
+    "mesh.pair.request",
+    "mesh.pair.list",
+    "mesh.pair.cancel",
     "project.register",
     "project.cert.show",
     "project.cert.challenge",

@@ -24,6 +24,8 @@ use serde_json::{Map, Value, json};
 use crate::dashboard_actions::{ActionBook, ActionHandler};
 use crate::dashboard_cfg::{self, DashboardConfig};
 use crate::dashboard_workspaces::{self, WorkspaceSource};
+use crate::mesh_pair::PairSource;
+use crate::mesh_pair_requests;
 
 /// First heartbeat is sent this long after start.
 pub const FIRST_BEAT: Duration = Duration::from_secs(5);
@@ -145,6 +147,9 @@ pub struct Dashboard {
     children: Arc<dyn ChildSource>,
     /// `report.workspaces` source; `None` leaves the key out.
     workspaces: Option<Arc<dyn WorkspaceSource>>,
+    /// `report.mesh_identity` and `report.pair_requests` source (ADR-108 P2b);
+    /// unset leaves both keys out.
+    pair: OnceLock<Arc<dyn PairSource>>,
     /// Dashboard actions: queue and log (ADR-108 P2).
     pub(crate) book: Mutex<ActionBook>,
     pub(crate) handlers: Mutex<std::collections::HashMap<String, Arc<dyn ActionHandler>>>,
@@ -208,6 +213,7 @@ impl Dashboard {
             ambient,
             children,
             workspaces,
+            pair: OnceLock::new(),
             book: Mutex::new(ActionBook::default()),
             handlers: Mutex::new(crate::dashboard_actions::default_handlers()),
         }))
@@ -216,6 +222,11 @@ impl Dashboard {
     /// The config this reporter runs with.
     pub fn config(&self) -> &DashboardConfig {
         &self.cfg
+    }
+
+    /// Report `mesh_identity` and `pair_requests` from `src` (first call wins).
+    pub fn set_pair_source(&self, src: Arc<dyn PairSource>) -> bool {
+        self.pair.set(src).is_ok()
     }
 
     pub(crate) fn with_state(&self, f: impl FnOnce(&mut DashState)) {
@@ -272,6 +283,12 @@ impl Dashboard {
         let mut report = json!({ "host": self.cfg.installation_id, "weaver_version": version, "observed": observed });
         if let (true, Some(src)) = (self.cfg.report_workspaces, &self.workspaces) {
             dashboard_workspaces::attach(&mut report, src.workspaces().await);
+        }
+        if let Some(src) = self.pair.get() {
+            if let Some(id) = src.mesh_identity().await {
+                report["mesh_identity"] = json!(id);
+            }
+            mesh_pair_requests::attach(&mut report, &src.pair_requests().await);
         }
         json!({
             "node_id": self.cfg.node_id,

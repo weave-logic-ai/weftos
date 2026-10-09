@@ -108,9 +108,8 @@ bearer):
 A final result the dashboard did not accept is re-sent on the next beat without
 running the handler again.
 
-`install`, `update` and `remove` run real handlers (ADR-108 P3a);
-`pair` still answers `failed` with `{"error": "not implemented in this build
-(ADR-108 P3/P4)", "kind": "pair"}`, and an unknown kind answers `failed` with
+`install`, `update` and `remove` run real handlers (ADR-108 P3a), and `pair` is
+handled too (see [Pairing](#pairing-adr-108-p2b)). An unknown kind answers `failed` with
 `{"error": "unknown action kind \"<kind>\"", "kind": "<kind>"}`. The seam is the
 `ActionHandler` trait in `crates/clawft-weave/src/dashboard_actions.rs`
 (`Dashboard::set_action_handler`). Handlers must not trust `payload`: it is
@@ -148,6 +147,89 @@ weaver dashboard actions --json
 
 RPC: `dashboard.actions` (Read, local only). `dashboard.status` adds
 `actions_recorded` and `actions_queued`.
+
+## Pairing (ADR-108 P2b)
+
+Pairing lets a member's machine fetch a project from its primary over the mesh
+without anyone editing `workload-peers.json` by hand (ADR-108 decision 6). The
+wire shapes are fixed in `docs/plans/adr-108-p2b-p3-contract.md`.
+
+**Identity.** When the mesh is on, every beat carries `report.mesh_identity`:
+
+```json
+"mesh_identity": {"node": "<32 hex>", "fingerprint": "<first 16 hex of node>",
+                  "ed25519": "<64 hex>", "advertise": "100.64.0.9:9471"}
+```
+
+`node` is `node_id_from_pubkey` of the key this node's `workload-host` signs
+with: the node key, or the control key in service mode (ADR-106 phase 3). That
+is the id peers address on the signed `workload.ctl` wire and the key they pin.
+`fingerprint` is the first 16 hex of the node id (the first 16 hex of the
+SHA-256 of the key, ADR-025); it is what a member compares between the two
+machines before approving. `advertise` is `workload-host.json`'s `advertise`
+when set, else the bind address (or the kernel mesh listen address) with a
+wildcard host replaced by this machine's tailnet-facing address; it is left out
+when there is only loopback. The identity is omitted while the placement
+control plane is not up.
+
+**Asking.** `weaver mesh pair request --with <mesh node id> [--project <ULID>]...`
+records a pending request (`weaver mesh pair list`, `weaver mesh pair cancel
+<request_id>`) in `pair-requests.json` under the daemon's runtime dir (mode
+0600, at most 32). Each beat carries them as `report.pair_requests` (at most 8,
+oldest first):
+
+```json
+"pair_requests": [{"request_id": "<uuid v4>", "with_node": "<32 hex>",
+                   "projects": ["<ULID>"], "requested_at": "<rfc3339>"}]
+```
+
+The RPCs are `mesh.pair.request` and `mesh.pair.cancel` (Admin) and
+`mesh.pair.list` (Read); `--with` takes the mesh node id (the other node's
+`mesh_identity.node` in the dashboard), not a dashboard name. The install
+handler records a request the same way when its primary is not yet paired
+(`clawft_weave::mesh_pair_requests::record`).
+
+**Approval.** A member approves in the dashboard, which queues one `pair`
+action to each node:
+
+```json
+{"op": "add" | "remove", "request_id": "<uuid>", "peer_node": "<32 hex>",
+ "fingerprint": "<16 hex>", "peer_ed25519": "<64 hex>",
+ "advertise": "<host:port>", "role": "primary" | "member", "projects": ["<ULID>"]}
+```
+
+`role` is the other side's role. Before writing anything the node checks that
+`peer_ed25519` is an Ed25519 key, that it derives `peer_node`, and that
+`fingerprint` is its first 16 hex; a mismatch, an unknown field, a bad address
+or a non-ULID project fails the action with no file touched. A node also
+refuses to pair with itself. On `add`:
+
+- the **member** writes the primary into `workload-peers.json` at tier
+  `pinned`, `addr` = `advertise`, `key` = `peer_ed25519`;
+- the **primary** writes the member at tier `paired` and a grant in
+  `project-fetch.json` (`{"peer_node", "projects", "granted_at", "source":
+  "dashboard-pair:<action id>", "peer_ed25519"}`), which the P3b `project.fetch`
+  gate enforces (default deny: peer listed **and** project granted).
+
+Neither side ever touches `workload-host.json`: a paired peer is never a
+controller. `remove` drops the peer entry and the grant. Both files are written
+atomically (temp file and rename, mode 0600); entries the pairing did not
+write, and keys this build does not know, are kept as they are. A re-add
+updates the one entry and the one grant.
+
+The placement control plane reads `workload-peers.json` on every call
+(`sync_peers`), so an add or remove takes effect on the next placement or
+node-admin call; a `project.fetch` gate reads `project-fetch.json` per
+request. No restart is needed. Each add and remove is chained on the daemon's
+chain as `mesh.pair.add` / `mesh.pair.remove` (source `mesh.pair`) with the
+request id, the action id, the peer's node id, fingerprint, tier, role and
+projects; no key material. The action's result is `{"op", "peer_node",
+"fingerprint", "tier", "projects"}`, and the pending requests for that peer
+are dropped.
+
+Both trust files are refused when group- or world-writable or owned by another
+user, and `weaver mesh pair` needs the placement control plane (a unix build
+with the `placement` feature).
 
 ## Status and rotation
 

@@ -145,3 +145,25 @@ result names the path so the member deletes it by hand.
 
 The negative tests ADR-108 requires: an unlisted peer, a revoked peer, another
 project's ULID, a path outside the project, and an archived path.
+
+## Changes
+
+- **2026-10-08 (P2b lane).** `mesh_identity` gains `ed25519` (the node's
+  signing key, 64 hex) and the `pair` payload gains `peer_ed25519` (the other
+  side's, required). The node id is `node_id_from_pubkey` of the key the node's
+  `workload-host` signs with (the node key, or the control key in service mode,
+  ADR-106 phase 3), and the key is not derivable from the id, while
+  `workload-peers.json` pins a tier to a key. The receiver verifies that
+  `peer_ed25519` derives `peer_node` and that `fingerprint` is its first 16 hex
+  before writing. The dashboard copies `ed25519` from one node's `mesh_identity`
+  into the other node's `pair` payload as `peer_ed25519` (no field name contains
+  `key`). `mesh_identity.advertise` may be absent when the node has no
+  non-loopback address to offer.
+- **2026-10-08 (P2b lane).** The `pair` result also carries `op` (`add` |
+  `remove`) beside `peer_node`, `fingerprint`, `tier`, `projects`.
+- **2026-10-08 (P2b lane).** A `project-fetch.json` grant may carry
+  `peer_ed25519` (the peer's signing key) so the P3b gate can match the signer
+  of a request, not only the node id it derives. Readers must ignore unknown
+  keys; the writer keeps entries and keys it does not know.
+- **2026-10-08 (P2b lane).** `weaver mesh pair request --with` takes the mesh
+  node id only (a dashboard node name cannot be resolved on the node).

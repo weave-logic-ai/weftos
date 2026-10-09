@@ -100,6 +100,13 @@ pub enum MeshCmd {
         #[command(subcommand)]
         cmd: super::mesh_nonce::NonceCmd,
     },
+    /// Ask to pair this node with another for project work (ADR-108 P2b); the
+    /// dashboard approves.
+    #[cfg(feature = "placement")]
+    Pair {
+        #[command(subcommand)]
+        cmd: super::mesh_pair_cmd::PairCmd,
+    },
     /// PRINT a reviewed shell script that installs the service (runs nothing).
     InstallService(super::mesh_install::InstallArgs),
     /// PRINT the inverse script (keeps node.key unless --purge-key; runs nothing).
@@ -230,6 +237,8 @@ pub async fn execute(cmd: MeshCmd, w: &mut dyn Write) -> Result<()> {
         }
         MeshCmd::Trust(t) => trust(w, t).await,
         MeshCmd::Nonce { cmd } => super::mesh_nonce::run(cmd, w),
+        #[cfg(feature = "placement")]
+        MeshCmd::Pair { cmd } => super::mesh_pair_cmd::run(cmd, w).await,
         MeshCmd::InstallService(a) => super::mesh_install::run_install(&a, w),
         MeshCmd::UninstallService(a) => super::mesh_install::run_uninstall(&a, w),
     }

@@ -82,6 +82,7 @@ pub fn default_handlers() -> HashMap<String, Arc<dyn ActionHandler>> {
             m.insert(h.kind().to_owned(), h);
         }
     }
+    m.insert(crate::mesh_pair::KIND.to_owned(), Arc::new(crate::mesh_pair::PairHandler::global()));
     m
 }
 

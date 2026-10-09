@@ -205,6 +205,15 @@ pub mod project_install_handlers;
 pub mod project_install_layout;
 #[cfg(all(test, unix))]
 mod project_install_test_support;
+/// Pairing two nodes for project work from the dashboard (ADR-108 P2b).
+pub mod mesh_pair;
+/// Pending pair requests, reported in the heartbeat (ADR-108 P2b).
+pub mod mesh_pair_requests;
+/// `project-fetch.json`: per-peer fetch grants (ADR-108 P2b writes, P3b enforces).
+pub mod project_fetch_grants;
+/// The daemon's pair source, `mesh.pair.*` RPCs and handler wiring (ADR-108 P2b).
+#[cfg(all(feature = "placement", unix))]
+pub mod mesh_pair_rpc;
 #[cfg(test)]
 pub(crate) mod dashboard_test_support;
 pub mod fleet_labels;

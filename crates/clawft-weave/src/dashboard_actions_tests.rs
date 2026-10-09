@@ -61,7 +61,9 @@ async fn each_known_kind_is_acknowledged_running_then_failed_not_implemented() {
         assert_eq!(st[0], json!({"status": "running"}));
         assert_eq!(st[1]["status"], "failed");
         if *kind == "pair" {
-            assert_eq!(st[1]["result"]["error"], "not implemented in this build (ADR-108 P3/P4)");
+            // `pair` has a real handler (ADR-108 P2b); without the placement
+            // control plane it fails just as clearly.
+            assert_eq!(st[1]["result"]["error"], "pairing is not initialised on this node (no placement control plane)");
         } else {
             // install/update/remove have real handlers; the test payload is malformed for them.
             assert_ne!(st[1]["result"]["error"], "not implemented in this build (ADR-108 P3/P4)");
