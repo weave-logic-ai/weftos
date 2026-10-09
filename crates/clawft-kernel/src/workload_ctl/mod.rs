@@ -33,6 +33,7 @@ pub mod msg;
 pub mod plane;
 pub mod plane_node_admin;
 pub mod plane_peers;
+pub mod plane_session;
 pub mod plane_lifecycle;
 pub mod plane_place;
 mod plane_reschedule;
@@ -104,6 +105,7 @@ pub use plane::{
     PlaneError, TargetInfo,
 };
 pub use plane_peers::OperatorPeer;
+pub use plane_session::CtlSession;
 pub use plane_place::{Attempt, PlaceOrder, PlaceReport, render};
 pub use plane_seed::{SEED_ROUTE, StorePinOrder};
 pub use refusal_budget::RefusalBudget;

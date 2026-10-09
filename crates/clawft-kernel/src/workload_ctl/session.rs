@@ -31,7 +31,7 @@ use crate::mesh_noise::EncryptedChannel;
 use crate::mesh_swarm_state::ServePeer;
 
 use super::host_service::WorkloadHostService;
-use super::msg::{SignedCtl, WORKLOAD_HOST_SERVICE};
+use super::msg::{CtlResponse, SignedCtl, WORKLOAD_HOST_SERVICE};
 
 /// True if a raw frame is an IPC envelope (JSON) rather than an artifact frame.
 pub fn is_envelope(raw: &[u8]) -> bool {
@@ -173,7 +173,7 @@ pub async fn serve_connection(
             Err(e) => return Err(MeshError::Transport(e)),
         };
         peers.links_mut()[0].peer_id = reply_to.clone();
-        let (resp, authenticated) = svc.handle_checked(&method, &signed, Some(&mut peers)).await;
+        let (resp, authenticated, trailer) = svc.handle_checked_raw(&method, &signed, Some(&mut peers)).await;
         let mut msg = KernelMessage::new(
             0,
             MessageTarget::ServiceMethod {
@@ -192,6 +192,14 @@ pub async fn serve_connection(
             return Ok(()); // a failed fetch closed the stream
         }
         link.stream.send(&bytes).await?;
+        if let Some(t) = trailer {
+            // The raw frame a bulk read asked for: a zero byte (never an
+            // envelope's `{`) then the bytes the signed answer hashed.
+            let mut frame = Vec::with_capacity(t.len() + 1);
+            frame.push(0);
+            frame.extend_from_slice(&t);
+            link.stream.send(&frame).await?;
+        }
         if !authenticated {
             // One signed refusal per unauthenticated connection, then drop it.
             let _ = link.stream.close().await;
@@ -259,6 +267,20 @@ impl CtlConnection {
         exchange: Option<&ArtifactExchange>,
         timeout: Duration,
     ) -> Result<SignedCtl, CallError> {
+        self.call_raw(dest, method, signed, exchange, timeout).await.map(|(s, _)| s)
+    }
+
+    /// [`Self::call`], also reading the raw frame a response announces with
+    /// `trailing` (a bulk read asked for in binary). The frame is returned
+    /// unverified; the caller checks it against the signed result.
+    pub async fn call_raw(
+        &mut self,
+        dest: &str,
+        method: &str,
+        signed: &SignedCtl,
+        exchange: Option<&ArtifactExchange>,
+        timeout: Duration,
+    ) -> Result<(SignedCtl, Option<Vec<u8>>), CallError> {
         let req = request_envelope(&self.local_node, dest, method, signed, timeout);
         let bytes = req
             .request
@@ -290,7 +312,15 @@ impl CtlConnection {
                 return Err(CallError::Protocol("uncorrelated response".into()));
             }
             let (_, signed) = ctl_payload(&env).map_err(CallError::Protocol)?;
-            return Ok(signed);
+            let trailing = serde_json::from_str::<CtlResponse>(&signed.payload).ok().and_then(|r| r.trailing);
+            let Some(n) = trailing else { return Ok((signed, None)) };
+            let frame = tokio::time::timeout_at(deadline, self.stream.recv())
+                .await
+                .map_err(|_| CallError::Timeout(timeout))??;
+            if frame.first() != Some(&0) || frame.len() as u64 != n + 1 {
+                return Err(CallError::Protocol("bad raw frame after response".into()));
+            }
+            return Ok((signed, Some(frame[1..].to_vec())));
         }
     }
 

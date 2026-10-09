@@ -117,7 +117,7 @@ impl ProjectFetcher for MeshFetcher {
             return Err(format!("{node} is not a paired peer of this node"));
         }
         let plane = self.plane().ok_or("placement is not initialised on this node")?;
-        let ch = PlaneChannel { plane, node: node.clone() };
+        let ch = PlaneChannel::new(plane, node.clone());
         let project = req.project_ulid.as_str();
         let out = self.fetch_inner(&ch, req, project, dest).await;
         self.record(json!({ "node": node, "project": project, "ok": out.is_ok(), "error": out.as_ref().err(),
@@ -208,4 +208,4 @@ fn checkout(repo: &Path, branch: &str) {
 
 #[cfg(test)]
 #[path = "project_fetch_tests.rs"]
-mod tests;
+pub(crate) mod tests;
