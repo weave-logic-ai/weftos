@@ -8,6 +8,7 @@
   `<runtime>/mesh-aliases.json`), `mesh_pairings.rs` (the member records which primary serves
   which projects). The root repository is named by the project itself, because `.` cannot be a
   segment.
+- **Updated**: 2026-10-09. Owner: projects can be shared across meshes (cross-mesh grants, N5).
 - **Deciders**: owner
 - **Prior art**: rvm ADR-157, "Capability-Governed `ruv://` Context Namespace" (ruvnet/rvm,
   MIT OR Apache-2.0, Proposed 2026-08-22), and ADR-158, its hosted service. This ADR adopts
@@ -38,10 +39,17 @@ else fits.
 
 ### 1. Scope: internal mesh addressing
 
-`weftos://` names exist only inside a mesh. They are never published in the public cog
-catalog, never resolved from outside the mesh, and never routed over the internet. A name
-whose authority is not the resolving node's own mesh is refused with the same uniform error as
-any other refusal (§3).
+`weftos://` names are internal mesh addressing. They are never published in the public cog
+catalog and never routed over the internet. A name's authority is the mesh that owns the
+thing.
+
+**Projects can be shared across meshes** (owner, 2026-10-09), for example a client project
+held in WeaveLogic's mesh and also in the client's own mesh. A name whose authority is
+another mesh resolves only when this mesh holds a **cross-mesh grant** from that mesh for that
+exact thing. The grant is signed by the owning mesh, names the receiving mesh and the
+resource, and is revocable. Without one, the name gets the uniform refusal (§3), the same as
+any other refusal. The name never changes when a project is shared: it keeps its owning
+mesh's authority. N1 implements only same-mesh resolution; cross-mesh grants are phase N5.
 
 Names identify **things**, not locations. Which node holds a project, or serves a cog, is the
 resolver's job (installations, pairing records, placement), so a name stays valid when the
@@ -174,10 +182,21 @@ The mapping will be explicit and recorded on the chain, and it will never be imp
 | N2 | Dashboard twin in TypeScript, using the same vectors; names shown on project, cog and team pages | the dashboard renders and copies `weftos://` names; vectors pass in both languages |
 | N3 | Cog packages and team bundles cited by `rev` (with COG-008 and TM6) | install refuses an unpinned name; the chain records the pinned rev |
 | N4 | A memory resolver with per-scope indexes and uniform refusals | negative tests: unscoped, revoked, other project, nonexistent all return the same error |
+| N5 | Cross-mesh grants: the owning mesh signs a grant naming the receiving mesh and the resource; the receiving mesh resolves the owner's names through it | a project shared from one mesh to another installs and fetches there by its owner's name; revoking the grant stops it on the next call |
 
-## Open questions for the owner
+## Owner decisions
 
-1. **Mesh aliases:** who sets a mesh's alias (the operator at mesh creation, or the dashboard
-   workspace), and is it unique per licence?
-2. **Cross-mesh references:** v1 refuses any name from another mesh. Do we ever need a project
-   shared between two meshes (for example, a client's own mesh)?
+- 2026-10-09: names are internal mesh addressing and cover business concepts and mesh
+  resources; the authority is the mesh.
+- 2026-10-09: projects can be shared across meshes (§1, phase N5).
+
+## Open question for the owner
+
+1. **Mesh aliases.** The canonical authority is the 64-hex MeshId, which is unambiguous but
+   unreadable. An alias is a short name standing in for it, such as `weavelogic`, so a name
+   reads `weftos://weavelogic/projects/...`. With cross-mesh sharing, two meshes could choose the
+   same alias, so an alias can only ever be local: each mesh's own nickname for a MeshId, like
+   a phone contact. **Proposed:** names on the wire, in the chain and in grants always use the
+   MeshId. Aliases are display labels the dashboard shows, mapped per mesh, and they never
+   appear inside a stored or transmitted name. N1's `mesh-aliases.json` input would then be
+   removed.

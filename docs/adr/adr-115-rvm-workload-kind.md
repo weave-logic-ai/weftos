@@ -1,6 +1,9 @@
 # ADR-115: An `rvm` workload kind: rvm's verify-before-load and isolation-claim contract over WeftOS's own engine
 
 - **Status**: Proposed (2026-10-09)
+- **Updated**: 2026-10-09. Owner decisions in the last section: `.rvf` sources are our own signed
+  builds or approved packages whose publisher key we hold; WASM-only isolation is an option, not
+  a requirement.
 - **Deciders**: owner
 - **Evidence**: [`docs/research/rvm-spike-2026-10.md`](../research/rvm-spike-2026-10.md), a hands-on
   spike of ruvnet/rvm at 510a82f (MIT OR Apache-2.0). Everything below about rvm comes from that
@@ -45,13 +48,16 @@ and the chain.
 Placement gains a workload kind `rvm`. Launching one does the following, in order:
 
 1. **Admit.** Resolve a pinned `weftos://<mesh>/agents/<id>?rev=sha256:…` (ADR-114) to the RVF
-   bytes. Verify them with `rvm_rvf::verify`, which writes its witness record. Build a
+   bytes. The package must be signed either by our own release key or by a publisher whose
+   public key is on the mesh's approved-publisher list. An unknown signer is refused. Verify them with `rvm_rvf::verify`, which writes its witness record. Build a
    `VerifiedPackage`. An unverified package, or one declaring a capability class WeftOS cannot
    enforce on that node, is refused before anything is allocated, and the refusal is chained.
 2. **Confine.** Apply WeftOS's own confinement for the node: Seatbelt profile on macOS,
    namespaces, seccomp and landlock through the container driver on Linux. Only after it has
-   taken hold, declare it to rvm (`HostedAdapter::engaging(...)`). A node that cannot confine
-   runs the agent as `wasm-only`, or refuses it if the package requires more.
+   taken hold, declare it to rvm (`HostedAdapter::engaging(...)`). The required isolation is a
+   per-project (or per-agent) policy: `wasm-only` is an allowed choice, not a failure. A node
+   that cannot confine runs the agent as `wasm-only` when the policy allows it, and refuses it
+   when the policy or the package requires more.
 3. **Execute.** WeftOS runs the module in the Wasmtime engine and maps rvm's granted capability
    classes onto host functions. rvm's `Instance` stays the lifecycle record of truth (start,
    suspend, checkpoint, resume, terminate), and WeftOS calls it at each transition.
@@ -98,11 +104,12 @@ upstream PRs or issues; the owner decides if and when to report them.
 | V1 | Admission only behind `--features rvm`: verify, `VerifiedPackage`, refusal of unenforceable classes, witness to chain | a test refuses an unverified package and a package needing an unenforceable class, and both refusals are chained |
 | V2 | Confinement mapping: Seatbelt and the Linux driver engaged, then declared; the claim surfaced to the dashboard | the claim shows `os-sandbox+wasm` only when confinement took hold, and `wasm-only` otherwise |
 | V3 | Execution through the Wasmtime engine with capability-class host functions; full lifecycle including checkpoint and resume | an RVF agent runs, suspends, checkpoints, resumes and terminates, with every step on the chain |
-| V4 | A signed `.rvf` source (RVForge or our own packer) and `weftos://` pinned resolution | a real signed `.rvf` launches end to end from the dashboard |
+| V4 | Our own `.rvf` packer and signer (from WeftOS agent packages, signed with the release key) plus the approved-publisher key list; `weftos://` pinned resolution | an agent we built and signed, and one from an approved publisher, both launch from the dashboard; an unknown signer is refused |
 
-## Open questions for the owner
+## Owner decisions (2026-10-09)
 
-1. **Source of `.rvf` agents:** RVForge (in the RuVector repo), our own packer from WeftOS agent
-   packages, or both?
-2. **Should a `wasm-only` claim be allowed at all** for client projects, or must client agents
-   run with OS confinement?
+1. **Sources of `.rvf` agents:** we build and sign them ourselves, or we use approved packages
+   whose publisher public key we hold. The mesh keeps an approved-publisher key list (managed
+   like the cog repository's pinned key, COG-008); nothing else is admitted.
+2. **Isolation:** WASM-only isolation is an option, not a requirement. The required level is
+   policy, set per project or per agent, and the dashboard always shows the claim rvm derived.
