@@ -387,14 +387,14 @@ pub fn an_adopted_but_refused_leftover_is_reported_as_unmanaged() {
 }
 
 /// A leftover that holds its lock but never answers must not hold up boot or
-/// a stop cascade for the whole `ready_timeout` (10 s here, 30 s in production).
+/// a stop cascade for the whole `ready_timeout` (30 s, as in production).
 /// The bounds (8 s, 7 s) sit above the 3 s and 2 s budgets with room for a
-/// loaded machine and below the 10 s a missing bound would cost.
+/// loaded machine and below the 30 s a missing bound would cost.
 pub fn a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly() {
     let fx = Fixture::new();
     let mut kid = booting_kernel(&fx, 120_000);
     rt().block_on(async {
-        let sup = fx.supervisor(); // ready_timeout is 10 s
+        let sup = fx.supervisor(); // ready_timeout is 30 s
         let t = Instant::now();
         let found = sup.adopt_on_boot().await;
         assert!(t.elapsed() < Duration::from_secs(8), "boot waited {:?}", t.elapsed());

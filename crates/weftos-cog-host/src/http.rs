@@ -673,11 +673,15 @@ mod tests {
     fn install_with_a_path_like_id_is_a_400() {
         let _g = serial();
         let (a, root) = start();
-        let body = r#"{"id":"../x","source":"cognitum","sha256":"00","binary_b64":"eA=="}"#;
-        let (st, _, resp) = send(a, &post("/install", &format!("{JSON}{TOK}"), body));
+        // A name unique to this run: `root` is a direct child of the shared
+        // temp dir, so a fixed `../x` is `$TMPDIR/x`, state other tests and
+        // earlier runs leave behind.
+        let escape = format!("escape-{}-{}", std::process::id(), root.path().file_name().unwrap().to_string_lossy());
+        let body = format!(r#"{{"id":"../{escape}","source":"cognitum","sha256":"00","binary_b64":"eA=="}}"#);
+        let (st, _, resp) = send(a, &post("/install", &format!("{JSON}{TOK}"), &body));
         assert!(st.contains("400"), "{st}");
         assert!(resp.contains("bad cog id"), "{resp}");
-        assert!(!root.path().join("../x").exists());
+        assert!(!root.path().join("..").join(&escape).exists());
     }
 
     #[test]

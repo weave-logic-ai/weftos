@@ -149,6 +149,18 @@ pub fn alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
+/// Wait (up to 20 s, polling) until none of `pids` exists. Death is not
+/// instant on a loaded machine: an orphan is a zombie until init reaps it.
+pub async fn wait_dead(pids: &[i32]) -> bool {
+    for _ in 0..400 {
+        if pids.iter().all(|p| !alive(*p)) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
 /// Kill a process this test's adapter started (simulates a crash).
 pub fn crash(pid: i32) {
     // SAFETY: the pid is the fake launcher the adapter under test spawned.

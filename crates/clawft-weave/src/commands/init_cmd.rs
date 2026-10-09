@@ -251,7 +251,7 @@ ignore = ["target", "node_modules", "dist", ".git"]
 [kernel.mesh]
 enabled = true
 transport = "tcp"
-listen_addr = "0.0.0.0:9489"
+listen_addr = "127.0.0.1:9489"  # set 0.0.0.0:9489 (or an interface) for peers on other machines
 discovery = false
 seed_peers = []
 "#,
