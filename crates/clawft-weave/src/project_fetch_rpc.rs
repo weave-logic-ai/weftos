@@ -98,7 +98,7 @@ async fn handle_inner(params: Value, kernel: &KernelRef) -> Result<Value, String
     let uri = params["uri"].as_str().filter(|u| !u.is_empty() && u.len() <= 1024).ok_or("`uri` must be a weftos:// name")?;
     let mut body = params.get("body").filter(|b| b.is_object()).cloned().ok_or("`body` must be an object")?;
     let runtime_dir = crate::workload_place_rpc::runtime_dir();
-    let names = MeshNames::local(runtime_dir.as_deref());
+    let names = MeshNames::local();
     let (project, dir, node) = resolve(uri, &names, runtime_dir.as_deref())?;
     if crate::workload_place_rpc::local_mesh_node_id().is_some_and(|me| me == node) {
         return Err(UNKNOWN_NAME.into());

@@ -71,7 +71,7 @@ impl MeshFetcher {
     }
 
     fn names(&self) -> MeshNames {
-        self.names.clone().unwrap_or_else(|| MeshNames::local(crate::workload_place_rpc::runtime_dir().as_deref()))
+        self.names.unwrap_or_else(MeshNames::local)
     }
 
     fn chain(&self) -> Option<Arc<ChainManager>> {
@@ -160,7 +160,7 @@ impl MeshFetcher {
                 return Err(format!("{} exists and is not empty", path.display()));
             }
             std::fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let url = WeftosUri::for_project_repo(mesh.clone(), project, dir).to_string();
+            let url = WeftosUri::for_project_repo(mesh, project, dir).to_string();
             git(&path, &["init", "--quiet"], None, GIT_TIMEOUT)?;
             git(&path, &["remote", "add", "origin", &url], None, GIT_TIMEOUT)?;
             let refs = client::refs(ch, project, dir).await?;
