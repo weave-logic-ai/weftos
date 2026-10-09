@@ -104,6 +104,7 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-112](adr-112-agent-teams-define-apply-run.md) | Agent teams: team spec v1 (roster, edges, write-authority table, presets, hosts), project-scoped apply with lock and birth report, dashboard apply over the mesh, and a WeftOS team runtime | Accepted | Platform / Agents | Extends the Agent Directory (AD-1..23); ADR-108 / ADR-109 / ADR-110 |
 | [ADR-113](adr-113-pg-forge-ci-and-package-mirrors.md) | PG forge: Forgejo with Actions, per-project runners, Kellnr / Verdaccio / image-proxy mirrors, pipelines rendered from control-plane templates | Proposed | Platform / Infra | ADR-108 / ADR-112; Terraform environment interface |
 | [ADR-114](adr-114-weftos-uri-naming.md) | `weftos://` names: internal mesh addressing (authority = mesh) for business concepts (companies, projects, goals, tickets, installations, members), mesh resources (nodes, hosts, services) and artifacts (cogs, teams, agents, memory, sensors); a name never grants access | Proposed | Platform / Naming | ADR-108 / ADR-112; prior art rvm ADR-157 (`ruv://`) |
+| [ADR-115](adr-115-rvm-workload-kind.md) | `rvm` workload kind: rvm's verify-before-load and honest isolation claim (rvm-rvf/host/launch, pinned, feature-gated) over WeftOS's Wasmtime engine and OS confinement; rvm bare metal watch-only | Proposed | Platform / Workloads | ADR-114; evidence docs/research/rvm-spike-2026-10.md |
 
 
 ## Categories
