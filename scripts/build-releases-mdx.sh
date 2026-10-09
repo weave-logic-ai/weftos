@@ -89,7 +89,27 @@ out.append('> overwritten on the next docs build. To change a release entry, edi
 out.append('> `CHANGELOG.md` and re-run the script.')
 out.append('')
 
+def mdx_escape(text):
+    # CHANGELOG.md is plain Markdown: a bare `<` (`<1%`, `<pubkey>`) is text,
+    # but MDX reads it as JSX. Escape `<`, `{` and `}` outside code spans and
+    # fenced blocks.
+    lines, fenced = [], False
+    for line in text.split('\n'):
+        if line.lstrip().startswith('```'):
+            fenced = not fenced
+            lines.append(line)
+            continue
+        if fenced:
+            lines.append(line)
+            continue
+        parts = line.split('`')
+        for i in range(0, len(parts), 2):
+            parts[i] = parts[i].replace('<', '&lt;').replace('{', '&#123;').replace('}', '&#125;')
+        lines.append('`'.join(parts))
+    return '\n'.join(lines)
+
 for ver, date, text in sections:
+    text = mdx_escape(text)
     heading = f'## v{ver}'
     out.append(heading)
     out.append('')

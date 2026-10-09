@@ -443,7 +443,7 @@ Release candidate for the project console batch (`target-0.8.3`). Prerelease:
   rotation log does not end at the key in use. A running project kernel fails
   its next `mesh.register` (`pop_failed`) and is restarted by the supervisor's
   liveness pass, not re-certified. Restart children with `weaver kernel restart
-  --project <id>` and run `weaver mesh bind rebind` afterwards (ADR-103 A13).
+  --project &lt;id>` and run `weaver mesh bind rebind` afterwards (ADR-103 A13).
 - **Anchor reset.** `weaver project anchor reset --project <id>` (RPC
   `project.anchor.reset`, Admin, user daemon only) opens a new anchor epoch after
   a project chain was moved aside, so the project's restarted anchors (`seq = 1`)
@@ -491,7 +491,7 @@ Release candidate for the project console batch (`target-0.8.3`). Prerelease:
 ### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
 
 - **Per-project child kernels under the user daemon.** `weaver kernel start
-  --project <id|name>` (never starts the user daemon; it tells you the command),
+  --project &lt;id|name>` (never starts the user daemon; it tells you the command),
   `weaver kernel stop --project | --all-children`, `weaver kernel restart
   --project`, and `project.start|stop|restart|status|ensure_running` on the
   user daemon. A project opts in with `weaver project migrate-kernel <id>
@@ -1084,7 +1084,7 @@ Eight learnable models replace hard-coded constants:
   tests.
 - **weaver leaf push**: CLI command to push audio/display/control to leaf
   devices via kernel daemon IPC. Publishes CBOR payload (base64 wrapped)
-  to mesh.leaf.<pubkey>.push topic. Supports text, chord, scuttle, clear,
+  to mesh.leaf.&lt;pubkey>.push topic. Supports text, chord, scuttle, clear,
   brightness, effect subcommands with --dry-run and named colors.
 
 ---
@@ -1095,7 +1095,7 @@ Eight learnable models replace hard-coded constants:
 
 ### Added
 
-- **MessagePayload::Binary(Vec<u8>)**: raw binary payload variant for
+- **MessagePayload::Binary(Vec&lt;u8>)**: raw binary payload variant for
   mesh transport, sensor data, file transfer, and opaque byte streams.
   Serde roundtrip test included.
 
@@ -1135,7 +1135,7 @@ Eight learnable models replace hard-coded constants:
 - **MeshClockSync**: authority-based time sync piggybacked on heartbeats.
   Clock hierarchy: GPS > TSF > NTP > Mesh > Local. Authority elected
   from best source. EMA smoothing with outlier rejection. Precision
-  targets: <1µs (WiFi TSF), ~100µs (same LAN), ~1-5ms (cross-network).
+  targets: &lt;1µs (WiFi TSF), ~100µs (same LAN), ~1-5ms (cross-network).
 - **ClockSource enum**: Local, Mesh, Ntp, Tsf, Gps with ordering.
 - **mesh_time_us()** on MeshRuntime: returns authority-aligned microseconds.
 - PingRequest/PingResponse carry `mesh_time_us` and `clock_source` fields.
@@ -1362,7 +1362,7 @@ data structure as an interactive, drillable topology graph.
 - 8-session agenda covering schema design, layout algorithms, graph
   nesting, navigator modes, investigative instrument use case
 - Tree calculus + EML dual substrate architecture (ADR): triage for
-  structural dispatch, EML for continuous parameters, pure Rust, <50ms
+  structural dispatch, EML for continuous parameters, pure Rust, &lt;50ms
   for 10K nodes
 - IRI-based identity architecture (ADR): word vs concept, same_as
   mappings, OWL/RDF compatibility
@@ -1376,7 +1376,7 @@ data structure as an interactive, drillable topology graph.
   Document, Visual, Telemetry) producing composable YAML fragments
 - Navigator mode system: Base (Explore/Timeline/Cluster/Wardley) +
   Overlay (Diff/Heatmap/Flow/Search) + Tool (Annotate), with
-  performance budgets (base <300ms, overlay <100ms, tool <16ms)
+  performance budgets (base &lt;300ms, overlay &lt;100ms, tool &lt;16ms)
 - Cold case investigation walkthrough scenario
 - Founder Q&A: 7 decisions (composable schemas, OWL compat, single
   overlay mode, topological distortion for missing nodes, IRI identity)
@@ -1496,7 +1496,7 @@ data structure as an interactive, drillable topology graph.
 - **Single-param coordinate descent plateaus well short of TS-port
   convergence.** At the browser shape (seq_len=4 d_model=8 d_k=4)
   the TS port reaches 95% MSE reduction; Rust currently plateaus at
-  <1%. Root cause: each accepted perturbation changes output by ~1e-6
+  &lt;1%. Root cause: each accepted perturbation changes output by ~1e-6
   when a single param sits among 2800 others in a smooth SafeTree
   landscape. Iteration 3 will add multi-param coordinated perturbation
   (pattern search or small-batch gradient-free) to match TS behavior

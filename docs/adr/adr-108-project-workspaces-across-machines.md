@@ -9,6 +9,19 @@
   (`project_is_workspace`). `--repo DIR` (repeatable) records sibling repositories of a
   workspace, which the reporter includes. `project.fetch`, the remote helper and pairing are
   still open.
+- **Updated**: 2026-10-09. P2b, P3a and P3b are built on `target-0.8.4` (unreleased; not yet run
+  between two real machines). P3a: the `install` action clones from the project's own git
+  remotes (dashboard `source.*` rows) and registers the workspace; `update` fast-forwards;
+  `remove` unregisters and never deletes files. P2b: `report.mesh_identity` and
+  `report.pair_requests`, `weaver mesh pair request|list|cancel`, and the `pair` action, which
+  verifies the peer's Ed25519 key against its node id before writing `workload-peers.json` and
+  `project-fetch.json` (the payload carries `peer_ed25519`). P3b: `project.fetch` on the
+  primary (default deny: paired peer plus a per-project grant, re-checked per chunk),
+  chunked git bundles for clone and incremental pull, the `git-remote-weftos` helper
+  (fetch only, Unix only), and a tar stream of non-git content that never sends `.weftos/`,
+  secrets, symlinks or archived paths. The install handler prefers the mesh and falls back to
+  git remotes; with an unpaired primary it records a pair request. Wire contract:
+  `docs/plans/adr-108-p2b-p3-contract.md`. P4 (configure) is still open.
 - **Deciders**: owner
 - **Builds on**: ADR-103 (projects as identities, project kernels, user daemon, machine mesh),
   ADR-099 (signed `workload.ctl` node-admin channel, amended 2026-10-05 for dashboard
