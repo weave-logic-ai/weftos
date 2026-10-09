@@ -532,6 +532,15 @@ async fn build(
     // Mesh-routed `dashboard.*` calls from an authorised controller key.
     local.set_node_admin(Arc::new(crate::dashboard_rpc::MeshAdmin));
     let _ = HOST.set(local.clone());
+    // ADR-108 P3b: serve `project.fetch` for the projects registered here.
+    match clawft_types::runtime_paths::home_dir() {
+        Some(home) => {
+            let manifests = clawft_rpc::resolve::manifests_dir(&home);
+            let fetch = crate::project_fetch_serve::FetchHost::new(dir.clone(), manifests).with_chain(chain.clone());
+            let _ = crate::project_fetch_serve::install_global(Arc::new(fetch));
+        }
+        None => tracing::warn!("no home directory: project.fetch is not served on this node"),
+    }
     let conn = Arc::new(MeshConnector::new(true));
     let local_addr = conn.register_local("local", local);
     let seeds = load_seeds(dir, gate.clone(), &chain)?;
@@ -874,6 +883,11 @@ async fn ready_plane(
 /// initialised (the key's own id, or the machine's in service mode).
 pub fn local_mesh_node_id() -> Option<String> {
     BOOT.get().map(|b| b.mesh_node_id.clone())
+}
+
+/// The control plane, if it has been built (never builds it).
+pub fn plane_if_built() -> Option<Arc<PlacementControlPlane>> {
+    PLANE.get().cloned()
 }
 
 /// Send node-admin method `m` (`dashboard.status`, `dashboard.token.rotate`)

@@ -20,6 +20,13 @@ path = "src/lib.rs"
 name = "weaver"
 path = "src/main.rs"
 
+# ADR-108 P3b: git's remote helper for `weftos://` URLs; ships next to
+# `weaver` (cargo-dist packages every binary of this crate).
+[[bin]]
+name = "git-remote-weftos"
+path = "src/bin/git-remote-weftos.rs"
+required-features = ["placement"]
+
 [package.metadata.dist]
 dist = true
 
@@ -95,6 +102,8 @@ sha2 = { workspace = true }
 # `weaver update` extracts release archives itself (regular files only, no links).
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
+# ADR-108 P3b: `.weftos/archive.toml`.
+toml = { workspace = true }
 thiserror = { workspace = true }
 dashmap = { workspace = true }
 clawft-service-whisper = { workspace = true }

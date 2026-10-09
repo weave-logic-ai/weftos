@@ -164,6 +164,16 @@ is signed with your node key, expires, is replay-guarded, and is chained on both
 nodes (`node_admin.*`). The answer is `{rotated, rotated_at, token_file}`, never a
 token.
 
+## Mesh install (ADR-108 P3b)
+
+"Install on my machine" for a project whose primary node is a paired peer fetches
+the project over the same signed mesh wire (`project.fetch`, a `git bundle` per
+repository and a checksummed tar of the non-git content) and leaves each clone with
+`origin` on a `weftos://` URL that `git-remote-weftos` serves incrementally. Access
+is per project: the primary's `workload-peers.json` plus `project-fetch.json`,
+default deny. The full description, the exclusion list and the operator steps are in
+[`project-install.md`](project-install.md).
+
 ## Retiring the shell heartbeat
 
 Once a node runs the reporter, remove its `weftos-dashboard-heartbeat.timer` and

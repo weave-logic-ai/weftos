@@ -92,6 +92,8 @@ pub fn required_capability(method: &str) -> Capability {
         "fleet.location.set" => Capability::Admin,
         // Rotating the node's dashboard credential (locally or on a peer).
         "dashboard.token.rotate" => Capability::Admin,
+        // ADR-108 P3b: fetching a project from its primary contacts a peer.
+        "project.fetch" => Capability::Admin,
         // ADR-106 phase 3: an operator hash approval is a trust change, and a
         // checkout spends the Seed's licence and transfer budget.
         "workload.cog.checkout.approve" => Capability::Admin,

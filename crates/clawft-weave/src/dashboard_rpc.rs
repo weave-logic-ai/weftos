@@ -43,6 +43,12 @@ pub struct MeshAdmin;
 #[async_trait]
 impl NodeAdmin for MeshAdmin {
     async fn call(&self, method: &str, requester: &str, body: &Value) -> Result<Value, String> {
+        // ADR-108 P3b: a fetch peer's `project.fetch` (the host already checked
+        // the peer and grant files; the server checks them again per project).
+        if method == clawft_kernel::workload_ctl::msg::method::PROJECT_FETCH {
+            let h = crate::project_fetch_serve::global().ok_or("project fetch is not enabled on this node")?;
+            return h.serve(requester, body).await;
+        }
         let d = dashboard_report::global()
             .ok_or("the dashboard reporter is not enabled on this node ([dashboard] enabled = true)")?;
         DashAdmin(d).call(method, requester, body).await

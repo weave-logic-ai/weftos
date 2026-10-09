@@ -69,9 +69,14 @@ pub mod method {
     /// Rotate the target node's dashboard token (changes state; carries a
     /// decision id and is chained on both nodes).
     pub const DASHBOARD_ROTATE: &str = "dashboard.token.rotate";
+    /// Fetch a project's repositories and non-git content from the node
+    /// holding its primary installation (ADR-108 P3b). Read-only on the
+    /// target; served to a paired peer that holds a fetch grant for the
+    /// project (the node's `project-fetch.json`), not only to controllers.
+    pub const PROJECT_FETCH: &str = "project.fetch";
     /// Node-admin methods: signed like the rest of the set, but answered by
     /// the node's own admin hook rather than a workload adapter.
-    pub const NODE_ADMIN: &[&str] = &[DASHBOARD_STATUS, DASHBOARD_ROTATE];
+    pub const NODE_ADMIN: &[&str] = &[DASHBOARD_STATUS, DASHBOARD_ROTATE, PROJECT_FETCH];
 
     /// True for a node-admin method.
     pub fn is_node_admin(m: &str) -> bool {
@@ -350,6 +355,15 @@ impl NonceGuard {
 pub trait ControllerPolicy: Send + Sync {
     /// True if a request signed by `public_key` may be served.
     fn allows(&self, public_key: &[u8; 32]) -> bool;
+
+    /// True if `public_key` may call `method`. A controller may call
+    /// anything; a policy may admit other keys for named read-only methods
+    /// (a paired peer with a fetch grant calls `workload.describe` and
+    /// `project.fetch`, ADR-108). The default admits controllers only.
+    fn allows_method(&self, public_key: &[u8; 32], method: &str) -> bool {
+        let _ = method;
+        self.allows(public_key)
+    }
 }
 
 impl ControllerPolicy for Vec<[u8; 32]> {
@@ -413,7 +427,7 @@ pub fn verify_request(
             "nonce must be 32 hex",
         ));
     }
-    if !controllers.allows(&pk) {
+    if !controllers.allows_method(&pk, &req.method) {
         return Err(Refusal::new(
             RefusalCode::Unauthorized,
             format!("{derived} is not an authorised controller of this node"),
