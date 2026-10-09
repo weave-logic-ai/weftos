@@ -48,7 +48,7 @@ JSON equivalent (`~/.clawft/config.json`):
 |-------|------|---------|-------|
 | `enabled` | bool | `false` | Start mesh listener at boot (phase 5d). |
 | `transport` | string | `"tcp"` | `"tcp"`, `"ws"` / `"websocket"`, or `"quic"`. |
-| `listen_addr` | string | `0.0.0.0:9489` | Bind address. For QUIC this is a **UDP** port. |
+| `listen_addr` | string | `127.0.0.1:9489` | Bind address. For QUIC this is a **UDP** port. |
 | `noise` | bool | `false` | Wrap every peer stream in Noise XX. |
 | `noise_key_path` | string? | — | 32-byte Ed25519/X25519 private key file. |
 | `seed_peers` | string[] | `[]` | Peer URLs to dial after listen. Prefer `quic://` when `transport = "quic"`. |

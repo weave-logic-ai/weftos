@@ -905,8 +905,9 @@ pub struct MeshConfig {
     #[serde(default = "default_mesh_transport")]
     pub transport: String,
 
-    /// Address to bind the mesh listener on (default port
-    /// [`DEFAULT_MESH_PORT`], "the weave"; ADR-103 D1). `listen` is
+    /// Address to bind the mesh listener on (default `127.0.0.1` on port
+    /// [`DEFAULT_MESH_PORT`], "the weave"; ADR-103 D1). Peers on other
+    /// machines need an explicit non-loopback address. `listen` is
     /// accepted as an alias. When `enabled`, a failed bind aborts boot.
     #[serde(default = "default_mesh_listen_addr", alias = "listen")]
     pub listen_addr: String,
@@ -1043,8 +1044,11 @@ fn default_mesh_first_frame_timeout_secs() -> u64 {
     10
 }
 
+/// Loopback by default (the same rule as `gateway.host`, ADR-102): a node
+/// that peers dial from other machines names the address it listens on
+/// (`listen_addr = "0.0.0.0:9489"` or a specific interface).
 fn default_mesh_listen_addr() -> String {
-    format!("0.0.0.0:{DEFAULT_MESH_PORT}")
+    format!("127.0.0.1:{DEFAULT_MESH_PORT}")
 }
 
 impl Default for MeshConfig {
@@ -1760,6 +1764,15 @@ pub struct SimdDistanceStubConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mesh_listens_on_loopback_unless_configured() {
+        assert_eq!(super::MeshConfig::default().listen_addr, "127.0.0.1:9489");
+        let none: super::MeshConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(none.listen_addr, "127.0.0.1:9489", "an absent key is loopback");
+        let set: super::MeshConfig = serde_json::from_str(r#"{"listen": "0.0.0.0:9489"}"#).unwrap();
+        assert_eq!(set.listen_addr, "0.0.0.0:9489", "explicit config is unchanged");
+    }
+
     #[test]
     fn for_inspection_disables_mesh_listener() {
         let kc = super::KernelConfig {

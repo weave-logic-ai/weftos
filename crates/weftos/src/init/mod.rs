@@ -146,7 +146,7 @@ risk_threshold = 0.9
 
 [mesh]
 enabled = false
-bind_address = "0.0.0.0:9489"
+bind_address = "127.0.0.1:9489"  # set 0.0.0.0:9489 (or an interface) for peers on other machines
 seed_peers = []
 "#
     )
