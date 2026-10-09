@@ -154,9 +154,12 @@ weftos://<mesh>/projects/<ULID>            the project's root repository
 weftos://<mesh>/projects/<ULID>/repos/<dir> a sibling repository
 ```
 
-`<mesh>` is the mesh's id (64 lowercase hex) or a local alias in lowercase DNS
-form that this node maps to its own mesh (`<runtime>/mesh-aliases.json`, a JSON
-array). A name identifies a thing, not a location: the node that serves it is
+`<mesh>` is the mesh's id, 64 lowercase hex, and nothing else: a friendly mesh
+name such as `weavelogic` is a dashboard display label and never part of a
+name that is stored, chained, granted or sent (owner decision, 2026-10-09);
+`weftos://weavelogic/...` is refused as not a name. A node without a mesh id
+cannot mint or resolve names and says so. A name identifies a thing, not a
+location: the node that serves it is
 looked up on the member from `mesh-pairings.json`, which the `pair` action
 writes (the primary and the projects the approval named). A name whose
 authority is not this mesh, whose project has no paired primary, or whose path

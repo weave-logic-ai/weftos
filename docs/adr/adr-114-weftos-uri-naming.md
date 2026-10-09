@@ -4,8 +4,8 @@
 - **Updated**: 2026-10-09. Owner: names are internal mesh addressing and cover companies, projects
   and other business concepts as well as mesh resources; the authority is the mesh, not a node.
   N1 built on `target-0.8.4`: `crates/clawft-weave/src/weftos_uri.rs` (strict parser, round-trip
-  and reject tables), `mesh_names.rs` (accepts this node's MeshId and local aliases from
-  `<runtime>/mesh-aliases.json`), `mesh_pairings.rs` (the member records which primary serves
+  and reject tables), `mesh_names.rs` (accepts this node's MeshId only; friendly mesh names are
+  dashboard labels, never part of a name), `mesh_pairings.rs` (the member records which primary serves
   which projects). The root repository is named by the project itself, because `.` cannot be a
   segment.
 - **Updated**: 2026-10-09. Owner: projects can be shared across meshes (cross-mesh grants, N5).
@@ -63,9 +63,8 @@ resource ever has two names.
 
 ```text
 weftos-uri = "weftos://" authority "/" kind "/" id [ "/" path ] [ "?" query ]
-authority  = mesh-id | mesh-alias
+authority  = mesh-id
 mesh-id    = 64-lowercase-hex                  ; the licence MeshId (weft-licence-wire)
-mesh-alias = lowercase DNS form, labels 1-63    ; a local alias the node maps to its MeshId
 kind       = business-kind | mesh-kind | artifact-kind
 business-kind = "companies" | "projects" | "goals" | "tickets" | "installations" | "members"
 mesh-kind     = "nodes" | "hosts" | "services"
@@ -110,7 +109,7 @@ weftos://<mesh>/teams/weftos-core?rev=sha256:…                     # a pinned 
   - The scheme is exactly lowercase `weftos://`.
   - Every `%` is refused, so there is no percent-encoding at all.
 - **Rejected outright:** fragments, userinfo, ports, and empty, trailing, `.` or `..` segments.
-- **Authority:** the 64-hex MeshId, or a mesh alias in lowercase DNS form (labels of 1–63 characters from `[a-z0-9-]` that do not start or end with `-`).
+- **Authority:** the 64-hex MeshId and nothing else. A friendly mesh name is a dashboard display label and is refused as an authority.
 - **Ids and segments:** each is 1–128 bytes of `[A-Za-z0-9._~-]`, at most 32 segments, and at most 2,048 bytes in total.
 - **Query:**
   - `rev` comes before `view`.
@@ -189,14 +188,9 @@ The mapping will be explicit and recorded on the chain, and it will never be imp
 - 2026-10-09: names are internal mesh addressing and cover business concepts and mesh
   resources; the authority is the mesh.
 - 2026-10-09: projects can be shared across meshes (§1, phase N5).
+- 2026-10-09: aliases are display labels only. Names on the wire, in the chain and in grants
+  always carry the 64-hex MeshId; a short mesh name such as `weavelogic` is something the
+  dashboard shows beside a name, mapped per mesh, and never part of one. Two meshes may pick
+  the same label without ambiguity, because the label is never resolved. N1 refuses
+  `weftos://weavelogic/...` and has no `mesh-aliases.json`.
 
-## Open question for the owner
-
-1. **Mesh aliases.** The canonical authority is the 64-hex MeshId, which is unambiguous but
-   unreadable. An alias is a short name standing in for it, such as `weavelogic`, so a name
-   reads `weftos://weavelogic/projects/...`. With cross-mesh sharing, two meshes could choose the
-   same alias, so an alias can only ever be local: each mesh's own nickname for a MeshId, like
-   a phone contact. **Proposed:** names on the wire, in the chain and in grants always use the
-   MeshId. Aliases are display labels the dashboard shows, mapped per mesh, and they never
-   appear inside a stored or transmitted name. N1's `mesh-aliases.json` input would then be
-   removed.

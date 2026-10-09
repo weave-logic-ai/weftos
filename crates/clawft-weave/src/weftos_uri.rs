@@ -5,9 +5,10 @@
 //! ```
 //!
 //! A name identifies a thing on a mesh, never a location: the authority is
-//! the **mesh** ([`Authority::Mesh`], its `MeshId` as 64 lowercase hex) or a
-//! local alias for it in lowercase DNS form, which the node maps to its own
-//! mesh. One thing has one name; relationships are data, not path.
+//! the **mesh**, its `MeshId` as 64 lowercase hex ([`Authority`]) and nothing
+//! else. Friendly mesh names are dashboard display labels; they never appear
+//! in a name that is stored, chained, granted or sent (owner decision,
+//! 2026-10-09). One thing has one name; relationships are data, not path.
 //!
 //! Parsing is segment by segment and refuses everything the grammar does not
 //! name: any `%` (no percent-encoding), non-ASCII, a fragment, userinfo, a
@@ -27,54 +28,31 @@ use std::fmt;
 
 /// The scheme, lowercase only.
 pub const SCHEME: &str = "weftos://";
-const MAX_AUTHORITY: usize = 253;
-const MAX_LABEL: usize = 63;
 const MAX_SEGMENT: usize = 128;
 /// Segments after the id (ADR-114 §2).
 const MAX_SEGMENTS: usize = 32;
 /// The whole name, in bytes (ADR-114 §2).
 const MAX_TOTAL: usize = 2048;
 
-/// Whose name space the name lives in.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Authority {
-    /// A mesh by id (64 lowercase hex).
-    Mesh([u8; 32]),
-    /// A local alias in DNS form that a node maps to its own mesh.
-    Alias(String),
-}
+/// Whose name space the name lives in: a mesh, by its `MeshId` (64 lowercase
+/// hex on the wire).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Authority(pub [u8; 32]);
 
 impl Authority {
     fn parse(s: &str) -> Result<Self, UriError> {
-        if s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
-            let mut id = [0u8; 32];
-            hex::decode_to_slice(s, &mut id).map_err(|_| UriError::Authority)?;
-            return Ok(Self::Mesh(id));
-        }
-        if s.is_empty() || s.len() > MAX_AUTHORITY {
+        if !hex64(s) {
             return Err(UriError::Authority);
         }
-        let label_ok = |l: &str| {
-            !l.is_empty()
-                && l.len() <= MAX_LABEL
-                && !l.starts_with('-')
-                && !l.ends_with('-')
-                && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        };
-        if s.split('.').all(label_ok) {
-            Ok(Self::Alias(s.to_owned()))
-        } else {
-            Err(UriError::Authority)
-        }
+        let mut id = [0u8; 32];
+        hex::decode_to_slice(s, &mut id).map_err(|_| UriError::Authority)?;
+        Ok(Self(id))
     }
 }
 
 impl fmt::Display for Authority {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Mesh(id) => f.write_str(&hex::encode(id)),
-            Self::Alias(a) => f.write_str(a),
-        }
+        f.write_str(&hex::encode(self.0))
     }
 }
 
@@ -162,7 +140,7 @@ pub enum UriError {
     Characters,
     #[error("name has a fragment, userinfo or port")]
     Structure,
-    #[error("authority is not a mesh id or a lowercase DNS alias")]
+    #[error("authority is not a mesh id (64 lowercase hex)")]
     Authority,
     #[error("unknown kind")]
     Kind,

@@ -38,7 +38,7 @@ pub(crate) const MESH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0
 pub(crate) fn mesh_names() -> MeshNames {
     let mut id = [0u8; 32];
     hex::decode_to_slice(MESH, &mut id).unwrap();
-    MeshNames { mesh: Some(id), aliases: vec![] }
+    MeshNames { mesh: Some(id) }
 }
 const OTHER: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1D";
 const T: Duration = Duration::from_secs(30);
@@ -392,9 +392,9 @@ async fn a_workspace_copy_never_serves_and_a_second_project_is_invisible() {
 
 #[test]
 fn names_and_layout() {
-    let u = WeftosUri::parse(&format!("weftos://lab/projects/{ULID}/repos/tools")).unwrap();
+    let u = WeftosUri::parse(&format!("weftos://{MESH}/projects/{ULID}/repos/tools")).unwrap();
     assert_eq!(u.project_repo(), Some((ULID, "tools")));
-    assert_eq!(WeftosUri::parse(&format!("weftos://lab/projects/{ULID}")).unwrap().project_repo(), Some((ULID, ".")));
+    assert_eq!(WeftosUri::parse(&format!("weftos://{MESH}/projects/{ULID}")).unwrap().project_repo(), Some((ULID, ".")));
     // The old node-addressed form and anything outside the grammar are not names.
     for bad in ["https://x/y", "weftos:///x", &format!("weftos://n/{ULID}/."), &format!("weftos://n/{ULID}/tools"), &format!("weftos://n/projects/{ULID}/"), &format!("weftos://n o/projects/{ULID}")] {
         assert!(WeftosUri::parse(bad).is_err(), "{bad}");
