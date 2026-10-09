@@ -131,10 +131,10 @@ impl InstallRequest {
         if !is_ulid(&self.project_ulid) {
             return Err(InstallRequestError::Ulid);
         }
-        if let Some(slug) = &self.slug {
-            if slug.is_empty() || slug.len() > 64 || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
-                return Err(InstallRequestError::Slug);
-            }
+        if let Some(slug) = &self.slug
+            && (slug.is_empty() || slug.len() > 64 || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+        {
+            return Err(InstallRequestError::Slug);
         }
         if self.sources.len() > MAX_REPOS {
             return Err(InstallRequestError::TooManyRepos);
