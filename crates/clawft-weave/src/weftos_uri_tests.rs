@@ -68,6 +68,20 @@ fn the_reject_table() {
     for (input, want) in cases {
         assert_eq!(WeftosUri::parse(input), Err(want), "{input}");
     }
+    // Size caps: 32 segments after the id and 2,048 bytes in all are the most.
+    let thirty_two = format!("weftos://m/memory/store{}", "/s".repeat(32));
+    assert!(WeftosUri::parse(&thirty_two).is_ok());
+    assert_eq!(WeftosUri::parse(&format!("{thirty_two}/s")), Err(UriError::Segment));
+    assert!(WeftosUri::parse(&format!("weftos://m/memory/{}", "a".repeat(128))).is_ok());
+    assert_eq!(WeftosUri::parse(&format!("weftos://m/memory/{}", "a".repeat(129))), Err(UriError::Segment));
+    let mut big = "weftos://m/memory/x".to_owned();
+    while big.len() + 129 <= 2048 {
+        big.push_str(&format!("/{}", "b".repeat(128)));
+    }
+    let at_cap = format!("{big}/{}", "c".repeat(2048 - big.len() - 1));
+    assert_eq!(at_cap.len(), 2048);
+    assert!(WeftosUri::parse(&at_cap).is_ok(), "exactly 2048 bytes parses");
+    assert_eq!(WeftosUri::parse(&format!("{at_cap}c")), Err(UriError::Segment), "2049 bytes does not");
     // Uppercase hex in rev; a view before rev; an unknown key.
     for q in ["rev=sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef", "view=content&rev=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "x=1"] {
         assert_eq!(WeftosUri::parse(&format!("weftos://m/projects/x?{q}")), Err(UriError::Query), "{q}");
