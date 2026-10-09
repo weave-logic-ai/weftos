@@ -271,8 +271,14 @@ async fn rpc_scoped(socket: &Path, method: &str, params: Value, project: Option<
         .await
         .unwrap();
     let mut line = String::new();
+    // `project.start` answers only once the supervisor has seen the child
+    // kernel ready, and the supervisor's own readiness window is 30 s. A
+    // client deadline shorter than that fires on a loaded machine while the
+    // call is still legitimately in flight, so the reply is waited for past
+    // the server's window; every other method answers immediately.
+    let deadline = if method.starts_with("project.") { 90 } else { 15 };
     tokio::time::timeout(
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(deadline),
         BufReader::new(stream).read_line(&mut line),
     )
     .await

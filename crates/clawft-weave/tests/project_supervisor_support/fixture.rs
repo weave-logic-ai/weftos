@@ -141,7 +141,12 @@ impl Fixture {
         c.backoff_max = Duration::from_millis(80);
         c.term_grace = Duration::from_millis(400);
         c.kill_grace = Duration::from_secs(1);
-        c.ready_timeout = Duration::from_secs(10);
+        // The production window. It is only a ceiling: `ready_poll` returns
+        // the moment the child answers, so a fast machine pays nothing, and a
+        // loaded one (a full-workspace run starting dozens of test binaries)
+        // is not failed by a child that merely started late. Tests that need
+        // a not-ready outcome set their own short timeout.
+        c.ready_timeout = Duration::from_secs(30);
         c.ready_poll = Duration::from_millis(10);
         c.idle_poll = Duration::from_secs(3600);
         c.exit_poll = Duration::from_millis(20);
