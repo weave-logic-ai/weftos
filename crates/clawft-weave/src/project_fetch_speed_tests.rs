@@ -19,7 +19,7 @@ use clawft_types::placement::TrustTier;
 
 use super::*;
 use crate::project_fetch_mesh::MeshFetcher;
-use crate::project_fetch_mesh::tests::{ULID, commit, exchange, g, gate, rig, w};
+use crate::project_fetch_mesh::tests::{ULID, commit, exchange, g, gate, mesh_names, rig, w};
 use crate::project_install::{InstallRequest, PrimaryRef, ProjectFetcher};
 
 const OTHER: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1D";
@@ -220,7 +220,7 @@ async fn bench_clone_of_a_large_tree_before_and_after() {
     }
     // And the whole install path with the default tuning.
     let plane = r.plane().await.unwrap();
-    let f = MeshFetcher::with_plane(plane, None);
+    let f = MeshFetcher::with_plane(plane, None).with_mesh(mesh_names());
     let dest = r.dest();
     let req = InstallRequest { project_ulid: ULID.into(), target_path: Some(dest.to_string_lossy().into_owned()), slug: None, sources: vec![], primary: Some(PrimaryRef { node_id: r.host_id.clone() }) };
     let t0 = Instant::now();

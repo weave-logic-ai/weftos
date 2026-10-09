@@ -145,17 +145,43 @@ result's `warnings` names the size and the biggest top-level entries so the
 member can mark them. The `tar.open` operation itself still serves it when asked
 for explicitly.
 
+## Names (ADR-114)
+
+Each clone is left with `origin` on the repository's `weftos://` name:
+
+```text
+weftos://<mesh>/projects/<ULID>            the project's root repository
+weftos://<mesh>/projects/<ULID>/repos/<dir> a sibling repository
+```
+
+`<mesh>` is the mesh's id (64 lowercase hex) or a local alias in lowercase DNS
+form that this node maps to its own mesh (`<runtime>/mesh-aliases.json`, a JSON
+array). A name identifies a thing, not a location: the node that serves it is
+looked up on the member from `mesh-pairings.json`, which the `pair` action
+writes (the primary and the projects the approval named). A name whose
+authority is not this mesh, whose project has no paired primary, or whose path
+is not a repository gets one and the same refusal, `no such name on this mesh`.
+
+The grammar is `weftos://<authority>/<kind>/<id>[/<segment>...][?rev=sha256:<64 hex>[&view=abstract|overview|content]]`
+with kinds companies, projects, goals, tickets, installations, members, nodes,
+hosts, services, cogs, teams, agents, memory, sensors (only project
+repositories resolve today; nodes are `nodes/<node id>[/services/<name>]`).
+Parsing refuses any `%`, non-ASCII, fragments, userinfo, ports, empty,
+trailing, `.` and `..` segments, uppercase in structural tokens, unknown or
+repeated query keys, and reproduces an accepted name byte for byte
+(`crates/clawft-weave/src/weftos_uri.rs`).
+
 ## The remote helper
 
-Each clone is left with `origin = weftos://<primary mesh node id>/<ULID>/<dir>`.
 `git fetch`/`git pull` run `git-remote-weftos` (shipped next to `weaver`; it
 must be on `PATH`), which speaks git's remote-helper protocol with the `fetch`
 capability only: `list` returns the primary's refs and HEAD, `fetch` sends the
 tips of every local ref as `have`, receives a bundle of what is missing and
 `git bundle unbundle`s it. Push is refused: pushes go to the project's normal
-git remote. The helper talks to the local user daemon over its RPC socket
-(`project.fetch`, Admin, which the local socket owner holds) and the daemon
-forwards to the primary; no network code in the helper.
+git remote. The helper only parses the name; it talks to the local user daemon
+over its RPC socket (`project.fetch` with `{uri, body}`, Admin, which the local
+socket owner holds) and the daemon checks the mesh, resolves the primary and
+forwards; no network code in the helper.
 
 Install layout: the `.` repository goes to the target path, a sibling `dir` to
 `<parent of target>/<dir>`; with no `.` repository every `dir` goes under

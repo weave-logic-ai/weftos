@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use clawft_weave::project_fetch_client::{self as client, BundleMode, DaemonChannel, RemoteUrl};
+use clawft_weave::project_fetch_client::{self as client, BundleMode, DaemonChannel};
 use clawft_weave::project_fetch_repos::{MAX_HAVES, git, is_oid};
+use clawft_weave::weftos_uri::WeftosUri;
 
 fn debug(msg: &str) {
     if std::env::var_os("GIT_TRANSPORT_HELPER_DEBUG").is_some() {
@@ -48,15 +49,19 @@ pub async fn main() -> ExitCode {
     let Some(raw) = args.get(1).or(args.first()) else {
         return fail("usage: git-remote-weftos <remote> <url>");
     };
-    let url = match RemoteUrl::parse(raw) {
-        Ok(u) => u,
+    // `weftos://<mesh>/projects/<ULID>[/repos/<dir>]`; the daemon resolves the
+    // mesh and the project's primary, the helper only names the repository.
+    let (project, dir) = match WeftosUri::parse(raw.trim()).map_err(|e| e.to_string()).and_then(|u| {
+        u.project_repo().map(|(p, d)| (p.to_owned(), d.to_owned())).ok_or_else(|| "not a project repository name (weftos://<mesh>/projects/<ULID>[/repos/<dir>])".to_owned())
+    }) {
+        Ok(x) => x,
         Err(e) => return fail(&e),
     };
     let gitdir = match git_dir() {
         Ok(d) => d,
         Err(e) => return fail(&format!("cannot find the git dir: {e}")),
     };
-    let ch = DaemonChannel::new(url.node.clone(), None);
+    let ch = DaemonChannel::new(raw.trim().to_owned(), None);
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     let mut head: Option<String> = None;
@@ -71,7 +76,7 @@ pub async fn main() -> ExitCode {
         if line == "capabilities" {
             let _ = writeln!(out, "fetch\n");
         } else if line == "list" {
-            match client::refs(&ch, &url.project, &url.dir).await {
+            match client::refs(&ch, &project, &dir).await {
                 Ok(refs) => {
                     for (oid, name) in &refs.refs {
                         let _ = writeln!(out, "{oid} {name}");
@@ -100,7 +105,7 @@ pub async fn main() -> ExitCode {
             let want = std::mem::take(&mut wants);
             let have = haves(&gitdir);
             debug(&format!("fetch {} ref(s), {} have(s)", want.len(), have.len()));
-            match client::fetch_bundle(&ch, &url.project, &url.dir, &want, &have, &gitdir, BundleMode::Unbundle).await {
+            match client::fetch_bundle(&ch, &project, &dir, &want, &have, &gitdir, BundleMode::Unbundle).await {
                 Ok(bytes) => debug(&format!("bundle: {:?} bytes", bytes)),
                 Err(e) => return fail(&format!("fetch: {e}")),
             }

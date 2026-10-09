@@ -1,6 +1,7 @@
-//! The member's side of `project.fetch` (ADR-108 P3b): the `weftos://` URL,
-//! the channel the calls travel on, and the pipelined chunk download with
-//! checksums.
+//! The member's side of `project.fetch` (ADR-108 P3b): the channel the calls
+//! travel on and the pipelined chunk download with checksums. Repository
+//! names are `weftos://<mesh>/projects/<ULID>[/repos/<dir>]`
+//! ([`crate::weftos_uri`]).
 //!
 //! Two channels carry the same request bodies: [`PlaneChannel`] (inside the
 //! user daemon, straight onto the signed `workload.ctl` wire) and
@@ -29,8 +30,6 @@ use sha2::{Digest, Sha256};
 use crate::project_fetch_repos::{Refs, git, is_oid, ref_ok};
 use crate::project_fetch_tar::{Unpacked, unpack_tar};
 
-/// URL scheme of the remote helper.
-pub const SCHEME: &str = "weftos://";
 /// Local daemon RPC verb the helper calls (forwarded as the node-admin method).
 pub const LOCAL_RPC: &str = "project.fetch";
 /// Largest chunk a member accepts (the server caps at the same value).
@@ -51,42 +50,6 @@ pub struct FetchTuning {
 impl Default for FetchTuning {
     fn default() -> Self {
         Self { chunk_bytes: MAX_CHUNK_BYTES, window: 6, reuse: true }
-    }
-}
-
-/// `weftos://<mesh node id>/<ULID>/<dir>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteUrl {
-    pub node: String,
-    pub project: String,
-    pub dir: String,
-}
-
-fn node_ok(n: &str) -> bool {
-    !n.is_empty() && n.len() <= 128 && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
-}
-
-impl RemoteUrl {
-    /// Parse and validate; `dir` defaults to `.`.
-    pub fn parse(url: &str) -> Result<Self, String> {
-        let rest = url.trim().strip_prefix(SCHEME).ok_or("url must start with weftos://")?;
-        let mut it = rest.trim_end_matches('/').splitn(3, '/');
-        let node = it.next().unwrap_or("").to_owned();
-        let project = it.next().unwrap_or("").to_owned();
-        let dir = it.next().filter(|d| !d.is_empty()).unwrap_or(".").to_owned();
-        if !node_ok(&node) {
-            return Err("url: bad node id".into());
-        }
-        clawft_types::project::validate_id(&project).map_err(|_| "url: project must be a ULID".to_string())?;
-        if !crate::project_install::dir_ok(&dir) {
-            return Err("url: dir must be '.' or one plain path segment".into());
-        }
-        Ok(Self { node, project, dir })
-    }
-
-    /// The URL as git keeps it in `remote.origin.url`.
-    pub fn url(&self) -> String {
-        format!("{SCHEME}{}/{}/{}", self.node, self.project, self.dir)
     }
 }
 
@@ -185,18 +148,20 @@ impl FetchChannel for PlaneChannel {
     }
 }
 
-/// From a helper process: the local daemon forwards to the primary (and keeps
-/// a session per link there, see `project_fetch_rpc`).
+/// From a helper process: the local daemon resolves the repository name to
+/// the project's paired primary and forwards (keeping a session per link
+/// there, see `project_fetch_rpc`).
 pub struct DaemonChannel {
-    pub node: String,
+    /// The repository's `weftos://` name, as git holds it.
+    pub uri: String,
     /// Socket path; `None` is the daemon's default.
     pub socket: Option<PathBuf>,
     client: tokio::sync::Mutex<Option<clawft_rpc::DaemonClient>>,
 }
 
 impl DaemonChannel {
-    pub fn new(node: String, socket: Option<PathBuf>) -> Self {
-        Self { node, socket, client: tokio::sync::Mutex::new(None) }
+    pub fn new(uri: String, socket: Option<PathBuf>) -> Self {
+        Self { uri, socket, client: tokio::sync::Mutex::new(None) }
     }
 
     async fn call_once(&self, body: Value) -> Result<Value, String> {
@@ -208,7 +173,7 @@ impl DaemonChannel {
             };
             *guard = Some(c.ok_or("the WeftOS user daemon is not running (weaver kernel boot)")?);
         }
-        let req = clawft_rpc::Request::with_params(LOCAL_RPC, json!({ "node": self.node, "body": body }));
+        let req = clawft_rpc::Request::with_params(LOCAL_RPC, json!({ "uri": self.uri, "body": body }));
         let resp = match guard.as_mut().expect("connected above").call(req).await {
             Ok(r) => r,
             Err(e) => {
@@ -234,7 +199,7 @@ impl FetchChannel for DaemonChannel {
     }
 
     async fn links(&self, n: usize) -> Result<Vec<Box<dyn FetchLink>>, String> {
-        Ok((0..n).map(|_| Box::new(DaemonChannel::new(self.node.clone(), self.socket.clone())) as Box<dyn FetchLink>).collect())
+        Ok((0..n).map(|_| Box::new(DaemonChannel::new(self.uri.clone(), self.socket.clone())) as Box<dyn FetchLink>).collect())
     }
 }
 

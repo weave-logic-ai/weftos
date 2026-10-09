@@ -133,10 +133,12 @@ fn the_member_side_pins_the_primary_and_remove_undoes_it() {
     assert_eq!(mode(&d.path().join(PEERS_FILE)), 0o600);
     assert!(!d.path().join(crate::project_fetch_grants::FETCH_FILE).exists(), "a member grants nothing");
     assert!(!d.path().join("workload-host.json").exists(), "never a controller");
+    assert_eq!(crate::mesh_pairings::primary_for(d.path(), ULID_A).unwrap().as_deref(), Some(node.as_str()), "the member records which primary serves the project");
 
     let r = apply(&dp, "act-2", &payload("remove", "primary", 1, &[ULID_A])).unwrap();
     assert_eq!(r["op"], "remove");
     assert!(peers(d.path()).is_empty());
+    assert_eq!(crate::mesh_pairings::primary_for(d.path(), ULID_A).unwrap(), None);
 
     let ev: Vec<_> = chain.tail(0).into_iter().filter(|e| e.source == CHAIN_SOURCE).collect();
     assert_eq!(ev.len(), 2);

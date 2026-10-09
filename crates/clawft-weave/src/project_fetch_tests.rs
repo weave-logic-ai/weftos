@@ -21,14 +21,25 @@ use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::project_fetch_client::{self as client, BundleMode, FetchChannel, PlaneChannel, RemoteUrl};
+use crate::mesh_names::MeshNames;
+use crate::project_fetch_client::{self as client, BundleMode, FetchChannel, PlaneChannel};
 use crate::project_fetch_grants::FETCH_FILE as GRANTS_FILE;
+use crate::weftos_uri::WeftosUri;
 use crate::project_fetch_policy::FetchPeerPolicy;
 use crate::project_fetch_repos::git;
 use crate::project_fetch_serve::FetchHost;
 use crate::project_install::{InstallRequest, PrimaryRef, ProjectFetcher};
 
 pub(crate) const ULID: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1C";
+/// The member's mesh (the authority its clones are named on).
+pub(crate) const MESH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// The member's mesh names for a fetcher under test.
+pub(crate) fn mesh_names() -> MeshNames {
+    let mut id = [0u8; 32];
+    hex::decode_to_slice(MESH, &mut id).unwrap();
+    MeshNames { mesh: Some(id), aliases: vec![] }
+}
 const OTHER: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1D";
 const T: Duration = Duration::from_secs(30);
 
@@ -210,7 +221,7 @@ async fn a_paired_member_clones_every_repository_and_the_non_git_content_then_pu
     r.peers("pinned");
     r.grant(&[ULID]);
     let plane = r.plane().await.unwrap();
-    let f = MeshFetcher::with_plane(plane.clone(), Some(r.member_chain.clone()));
+    let f = MeshFetcher::with_plane(plane.clone(), Some(r.member_chain.clone())).with_mesh(mesh_names());
     let req = request(&r);
     assert!(f.can_fetch(&req));
     let dest = r.dest();
@@ -220,10 +231,13 @@ async fn a_paired_member_clones_every_repository_and_the_non_git_content_then_pu
     let dirs: Vec<&str> = rep.repos.iter().map(|x| x.dir.as_str()).collect();
     assert_eq!(dirs, vec![".", "tools"]);
     assert!(rep.repos[0].head.is_some());
-    assert_eq!(rep.repos[0].remote.as_deref(), Some(format!("weftos://{}/{ULID}/.", r.host_id).as_str()));
+    // Clones are named on the mesh, not on the node that served them (ADR-114).
+    assert_eq!(rep.repos[0].remote.as_deref(), Some(format!("weftos://{MESH}/projects/{ULID}").as_str()));
+    assert_eq!(rep.repos[1].remote.as_deref(), Some(format!("weftos://{MESH}/projects/{ULID}/repos/tools").as_str()));
     assert_eq!(std::fs::read_to_string(dest.join("README.md")).unwrap(), "# demo\n");
     assert_eq!(g(&dest, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
-    assert_eq!(g(&dest, &["config", "remote.origin.url"]), format!("weftos://{}/{ULID}/.", r.host_id));
+    assert_eq!(g(&dest, &["config", "remote.origin.url"]), format!("weftos://{MESH}/projects/{ULID}"));
+    assert_eq!(WeftosUri::parse(&g(&dest, &["config", "remote.origin.url"])).unwrap().project_repo(), Some((ULID, ".")));
     // The sibling layout: `tools` next to the root checkout.
     assert!(dest.parent().unwrap().join("tools/run.sh").exists());
     // Non-git content arrived; what must stay home stayed home.
@@ -315,7 +329,7 @@ async fn a_revoked_peer_is_stopped_on_the_next_call_and_mid_transfer() {
     r.grant(&[ULID]);
     let plane = r.plane().await.unwrap();
     std::fs::remove_file(r.rt.join("workload-peers.json")).unwrap();
-    let f = MeshFetcher::with_plane(plane, None);
+    let f = MeshFetcher::with_plane(plane, None).with_mesh(mesh_names());
     assert!(f.can_fetch(&request(&r)), "the member's own view still lists the primary");
     let e = f.fetch(&request(&r), &r.dest()).await.unwrap_err();
     assert!(e.contains("unauthorized"), "the primary no longer admits the key at all: {e}");
@@ -353,8 +367,8 @@ async fn paths_outside_the_project_are_refused() {
     assert!(e.contains("not a branch or tag"), "{e}");
     let e = ch.call(json!({"op": "bundle.open", "project": ULID, "dir": ".", "want": ["refs/heads/main"], "have": ["../../x"]})).await.unwrap_err();
     assert!(e.contains("object ids"), "{e}");
-    assert!(RemoteUrl::parse(&format!("weftos://{}/{ULID}/../x", r.host_id)).is_err());
-    assert!(RemoteUrl::parse(&format!("weftos://{}/{ULID}/.weftos", r.host_id)).is_err());
+    assert!(WeftosUri::parse(&format!("weftos://{MESH}/projects/{ULID}/repos/../x")).is_err());
+    assert_eq!(WeftosUri::parse(&format!("weftos://{MESH}/projects/{ULID}/repos/.weftos")).unwrap().project_repo(), None);
 }
 
 #[tokio::test]
@@ -377,13 +391,13 @@ async fn a_workspace_copy_never_serves_and_a_second_project_is_invisible() {
 }
 
 #[test]
-fn urls_and_layout() {
-    let u = RemoteUrl::parse(&format!("weftos://node-1/{ULID}/tools")).unwrap();
-    assert_eq!((u.node.as_str(), u.project.as_str(), u.dir.as_str()), ("node-1", ULID, "tools"));
-    assert_eq!(RemoteUrl::parse(&format!("weftos://node-1/{ULID}")).unwrap().dir, ".");
-    assert_eq!(RemoteUrl::parse(&format!("weftos://node-1/{ULID}/")).unwrap().url(), format!("weftos://node-1/{ULID}/."));
-    for bad in ["https://x/y", "weftos:///x", "weftos://n/not-a-ulid", &format!("weftos://n/{ULID}/a/b"), &format!("weftos://n o/{ULID}")] {
-        assert!(RemoteUrl::parse(bad).is_err(), "{bad}");
+fn names_and_layout() {
+    let u = WeftosUri::parse(&format!("weftos://lab/projects/{ULID}/repos/tools")).unwrap();
+    assert_eq!(u.project_repo(), Some((ULID, "tools")));
+    assert_eq!(WeftosUri::parse(&format!("weftos://lab/projects/{ULID}")).unwrap().project_repo(), Some((ULID, ".")));
+    // The old node-addressed form and anything outside the grammar are not names.
+    for bad in ["https://x/y", "weftos:///x", &format!("weftos://n/{ULID}/."), &format!("weftos://n/{ULID}/tools"), &format!("weftos://n/projects/{ULID}/"), &format!("weftos://n o/projects/{ULID}")] {
+        assert!(WeftosUri::parse(bad).is_err(), "{bad}");
     }
     let t = Path::new("/home/m/Projects/demo");
     assert_eq!(layout(t, true, "."), t);

@@ -207,6 +207,10 @@ pub mod project_install_layout;
 mod project_install_test_support;
 /// Pairing two nodes for project work from the dashboard (ADR-108 P2b).
 pub mod mesh_pair;
+/// What this node paired with, by project (resolves weftos:// project names).
+pub mod mesh_pairings;
+/// `weftos://` names (ADR-114).
+pub mod weftos_uri;
 /// Pending pair requests, reported in the heartbeat (ADR-108 P2b).
 pub mod mesh_pair_requests;
 /// `project-fetch.json`: per-peer fetch grants (ADR-108 P2b writes, P3b enforces).
@@ -296,6 +300,9 @@ pub mod project_fetch_serve;
 /// ADR-108 P3b: the member's channel, URL and chunked download.
 #[cfg(all(feature = "placement", unix))]
 pub mod project_fetch_client;
+/// ADR-114: which weftos:// authorities name this node's own mesh.
+#[cfg(all(feature = "placement", unix))]
+pub mod mesh_names;
 /// ADR-108 P3b: the `mesh` project fetcher.
 #[cfg(all(feature = "placement", unix))]
 pub mod project_fetch_mesh;

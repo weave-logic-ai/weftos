@@ -25,10 +25,12 @@ use clawft_kernel::workload_ctl::{PLANE_CHAIN_SOURCE, PlacementControlPlane};
 use clawft_types::placement::TrustTier;
 use serde_json::{Value, json};
 
-use crate::project_fetch_client::{self as client, BundleMode, PlaneChannel, RemoteUrl};
+use crate::mesh_names::MeshNames;
+use crate::project_fetch_client::{self as client, BundleMode, PlaneChannel};
 use crate::project_fetch_repos::git;
 use crate::project_fetch_serve::EVENT_PROJECT_FETCH;
 use crate::project_install::{FetchReport, FetchedRepo, InstallRequest, ProjectFetcher};
+use crate::weftos_uri::WeftosUri;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 const REFSPECS: [&str; 2] = ["+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"];
@@ -43,6 +45,9 @@ enum PlaneSource {
 pub struct MeshFetcher {
     source: PlaneSource,
     chain: Option<Arc<ChainManager>>,
+    /// The mesh the clones are named on (`origin`); `None` resolves the
+    /// daemon's own at fetch time.
+    names: Option<MeshNames>,
     /// Fetch very large unmarked non-git content instead of warning (D-C).
     pub fetch_large: bool,
 }
@@ -50,13 +55,23 @@ pub struct MeshFetcher {
 impl MeshFetcher {
     /// With an explicit control plane (tests, embedded use).
     pub fn with_plane(plane: Arc<PlacementControlPlane>, chain: Option<Arc<ChainManager>>) -> Self {
-        Self { source: PlaneSource::Fixed(plane), chain, fetch_large: false }
+        Self { source: PlaneSource::Fixed(plane), chain, names: None, fetch_large: false }
     }
 
     /// The daemon's: resolves the control plane per call. With `None` the
     /// chain is the one placement gave the fetch server, once it is built.
     pub fn daemon(chain: Option<Arc<ChainManager>>) -> Self {
-        Self { source: PlaneSource::Daemon, chain, fetch_large: false }
+        Self { source: PlaneSource::Daemon, chain, names: None, fetch_large: false }
+    }
+
+    /// Name clones on this mesh (tests; the daemon uses its own).
+    pub fn with_mesh(mut self, names: MeshNames) -> Self {
+        self.names = Some(names);
+        self
+    }
+
+    fn names(&self) -> MeshNames {
+        self.names.clone().unwrap_or_else(|| MeshNames::local(crate::workload_place_rpc::runtime_dir().as_deref()))
     }
 
     fn chain(&self) -> Option<Arc<ChainManager>> {
@@ -137,6 +152,7 @@ impl MeshFetcher {
             .filter(|(d, _)| crate::project_install::dir_ok(d))
             .collect();
         let has_root = repos.iter().any(|(d, _)| d == ".");
+        let mesh = self.names().authority().ok_or("this node has no mesh id or alias to name the project on")?;
         let mut report = FetchReport { fetcher: "mesh", ..Default::default() };
         for (dir, branch) in &repos {
             let path = layout(dest, has_root, dir);
@@ -144,7 +160,7 @@ impl MeshFetcher {
                 return Err(format!("{} exists and is not empty", path.display()));
             }
             std::fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let url = RemoteUrl { node: ch.node.clone(), project: project.to_owned(), dir: dir.clone() }.url();
+            let url = WeftosUri::for_project_repo(mesh.clone(), project, dir).to_string();
             git(&path, &["init", "--quiet"], None, GIT_TIMEOUT)?;
             git(&path, &["remote", "add", "origin", &url], None, GIT_TIMEOUT)?;
             let refs = client::refs(ch, project, dir).await?;
