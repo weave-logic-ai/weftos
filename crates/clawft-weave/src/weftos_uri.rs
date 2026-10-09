@@ -30,7 +30,10 @@ pub const SCHEME: &str = "weftos://";
 const MAX_AUTHORITY: usize = 253;
 const MAX_LABEL: usize = 63;
 const MAX_SEGMENT: usize = 128;
-const MAX_SEGMENTS: usize = 16;
+/// Segments after the id (ADR-114 §2).
+const MAX_SEGMENTS: usize = 32;
+/// The whole name, in bytes (ADR-114 §2).
+const MAX_TOTAL: usize = 2048;
 
 /// Whose name space the name lives in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,7 +166,7 @@ pub enum UriError {
     Authority,
     #[error("unknown kind")]
     Kind,
-    #[error("a path segment is empty, '.', '..', too long or has a character outside [A-Za-z0-9._~-]")]
+    #[error("a path segment is empty, '.', '..', too long or has a character outside [A-Za-z0-9._~-]; or too many segments or bytes")]
     Segment,
     #[error("query must be rev=sha256:<64 lowercase hex>, then view=abstract|overview|content")]
     Query,
@@ -197,6 +200,9 @@ fn hex64(s: &str) -> bool {
 impl WeftosUri {
     /// Parse strictly; see the module docs for what is refused.
     pub fn parse(input: &str) -> Result<Self, UriError> {
+        if input.len() > MAX_TOTAL {
+            return Err(UriError::Segment);
+        }
         if !input.is_ascii() || input.contains('%') || input.bytes().any(|b| b.is_ascii_control() || b == b' ') {
             return Err(UriError::Characters);
         }
