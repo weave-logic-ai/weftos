@@ -73,10 +73,16 @@ impl ActionHandler for NotImplemented {
 
 /// The handlers of this build.
 pub fn default_handlers() -> HashMap<String, Arc<dyn ActionHandler>> {
-    KINDS
+    let mut m: HashMap<String, Arc<dyn ActionHandler>> = KINDS
         .iter()
         .map(|k| (k.to_string(), Arc::new(NotImplemented(k)) as Arc<dyn ActionHandler>))
-        .collect()
+        .collect();
+    if let Some(env) = crate::project_install_handlers::InstallEnv::from_process() {
+        for h in crate::project_install_handlers::handlers(env) {
+            m.insert(h.kind().to_owned(), h);
+        }
+    }
+    m
 }
 
 /// An action and what became of it (no payload is kept: it may carry secrets).

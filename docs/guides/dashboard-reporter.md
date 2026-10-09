@@ -108,13 +108,38 @@ bearer):
 A final result the dashboard did not accept is re-sent on the next beat without
 running the handler again.
 
-This build does not run anything from an action. `install`, `update`, `remove`
-and `pair` answer `failed` with `{"error": "not implemented in this build (ADR-108
-P3/P4)", "kind": "<kind>"}`, and an unknown kind answers `failed` with
-`{"error": "unknown action kind \"<kind>\"", "kind": "<kind>"}`. The seam for the
-real ones is the `ActionHandler` trait in `crates/clawft-weave/src/dashboard_actions.rs`
+`install`, `update` and `remove` run real handlers (ADR-108 P3a);
+`pair` still answers `failed` with `{"error": "not implemented in this build
+(ADR-108 P3/P4)", "kind": "pair"}`, and an unknown kind answers `failed` with
+`{"error": "unknown action kind \"<kind>\"", "kind": "<kind>"}`. The seam is the
+`ActionHandler` trait in `crates/clawft-weave/src/dashboard_actions.rs`
 (`Dashboard::set_action_handler`). Handlers must not trust `payload`: it is
-whatever the dashboard sent, and it is never logged or kept in the action log.
+whatever the dashboard sent, and it is never logged, kept in the action log or
+echoed in an error.
+
+- **`install`** `{project_ulid, target_path, slug?, sources: [{url, branch?, dir}], primary?}`.
+  The payload is validated first (ULID, path inside your home, `https://`,
+  `ssh://` or `user@host:path` URLs without credentials, at most 8 repositories).
+  The `.` source is cloned into `target_path`, other sources beside it
+  (`<parent>/<dir>`), or under it when there is no `.` source. `target_path` and
+  every destination must be absent or empty; otherwise the action fails and
+  nothing is touched. Clones use your own git credentials (credential helper or
+  ssh agent; git never prompts), with a 15 minute limit per repository. The
+  checkout is then registered with `weft project init --adopt <ULID>
+  [--repo <sibling>]` (the `weft` binary beside `weaver`, else on `PATH`). If
+  any step fails, what the install created is removed. Result: `{"fetcher":
+  "git-remote", "root": "<path>", "repos": [{"dir", "head", "remote"}], "bytes":
+  0, "archived": []}`. The mesh fetcher (P3b) joins the same handler and is
+  preferred when the project's primary is a paired peer.
+- **`update`** `{project_ulid}`: `git pull --ff-only` in each repository of the
+  registered workspace (root, registered extras, and repositories one level
+  below the root). A repository that cannot fast-forward keeps its local work
+  and reports an `error`; the action then fails. Result: `{"project_ulid",
+  "root", "repos": [{"path", "head", "updated", "error"?}]}`.
+- **`remove`** `{project_ulid}`: unregisters the workspace from
+  `~/.weftos/projects`. It never deletes files; the result names `root` and
+  `repos` so you can delete them by hand. A project's own home (not a workspace)
+  is refused.
 
 ```bash
 weaver dashboard actions          # recent actions and their outcomes (local, Read)

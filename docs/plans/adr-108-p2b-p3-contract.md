@@ -112,6 +112,22 @@ with a `--repo` for each sibling. The result is:
  "bytes": 0, "archived": []}
 ```
 
+**Layout.** The `.` source clones into `target_path`. A sibling `dir` clones
+into `<parent of target_path>/<dir>` and is registered with `--repo`. With no
+`.` source every repository clones into `<target_path>/<dir>` and `target_path`
+itself is a plain directory (the workspace root; its repositories are found one
+level below it, so no `--repo` is passed). Every destination, and `target_path`,
+must be absent or an empty directory before anything is written; two sources
+whose destinations coincide are refused. On any failure (fetch or adopt) the
+install removes only what it created: destinations that were absent, the
+contents of empty directories it filled, and parent directories it made. The
+git-remote fetcher runs `git` with an argument vector (no shell),
+`GIT_TERMINAL_PROMPT=0`, `protocol.file.allow=never`, `protocol.ext.allow=never`,
+`core.fsmonitor=false`, a 15 minute limit per repository and a cap on the output
+it keeps. Registration execs the `weft` binary next to `weaver` (then `PATH`)
+in `target_path` with `HOME` and `WEFTOS_MANIFESTS_DIR` set from the daemon's
+own paths.
+
 `update` runs `git pull --ff-only` in each registered repository of that
 project. `remove` unregisters the workspace and **never deletes files**: the
 result names the path so the member deletes it by hand.
