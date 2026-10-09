@@ -179,9 +179,12 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
     if let Some(cfg) = p.serving {
         controllers.extend(cfg.validate()?);
     }
+    // ADR-108 P3b: a paired peer with a fetch grant may also `describe` this
+    // node and call `project.fetch`; nothing else.
+    let policy = crate::project_fetch_policy::FetchPeerPolicy::new(controllers, p.dir.to_path_buf());
     let mut svc = WorkloadHostService::new(p.key.clone(), p.exchange, p.anchors, p.gate)
         .with_route("native", Arc::new(host))
-        .with_controllers(controllers)
+        .with_controllers(policy)
         .with_chain(p.chain.clone())
         .with_facts_source(p.facts);
     svc.set_revocations(p.revocations);

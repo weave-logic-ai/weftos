@@ -78,7 +78,7 @@ impl ProjectFetcher for GitRemoteFetcher {
             // No `.` source: the target is a plain directory holding the clones.
             std::fs::create_dir_all(dest).map_err(|e| format!("cannot create {}: {e}", dest.display()))?;
         }
-        Ok(FetchReport { fetcher: "git-remote", repos, bytes: 0, archived: Vec::new() })
+        Ok(FetchReport { fetcher: "git-remote", repos, ..Default::default() })
     }
 }
 

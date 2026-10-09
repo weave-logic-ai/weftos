@@ -537,6 +537,14 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::licence_checkout_rpc::handle_ext,
     },
+    // ADR-108 P3b: `git-remote-weftos` asks this daemon to fetch from a
+    // project's primary over the signed mesh wire. Contacting a peer is Admin.
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "project.fetch",
+        capability: Capability::Admin,
+        handler: crate::project_fetch_rpc::handle,
+    },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.
     #[cfg(unix)]
@@ -801,6 +809,14 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "workload.cog.checkout.renew",
         capability: Capability::Admin,
         handler: crate::licence_checkout_rpc::handle_ext,
+    },
+    // ADR-108 P3b: `git-remote-weftos` asks this daemon to fetch from a
+    // project's primary over the signed mesh wire. Contacting a peer is Admin.
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "project.fetch",
+        capability: Capability::Admin,
+        handler: crate::project_fetch_rpc::handle,
     },
     // mesh-local/1 (package H): authenticated by the spawn nonce and the
     // project key's proof of possession, not by a token; `Read` is the floor.

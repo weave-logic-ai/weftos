@@ -281,6 +281,27 @@ pub mod cog_ingest_serve;
 /// This node's `workload-host`, served to other controllers (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;
+/// ADR-108 P3b: the fetch gate (peer tier plus grant) and the fetch-peer controller policy.
+#[cfg(all(feature = "placement", unix))]
+pub mod project_fetch_policy;
+/// ADR-108 P3b: the primary's repositories, refs and bundles.
+#[cfg(all(feature = "placement", unix))]
+pub mod project_fetch_repos;
+/// ADR-108 P3b: non-git content (archive list, tar build and checked unpack).
+#[cfg(all(feature = "placement", unix))]
+pub mod project_fetch_tar;
+/// ADR-108 P3b: `project.fetch` served on the primary's `workload-host`.
+#[cfg(all(feature = "placement", unix))]
+pub mod project_fetch_serve;
+/// ADR-108 P3b: the member's channel, URL and chunked download.
+#[cfg(all(feature = "placement", unix))]
+pub mod project_fetch_client;
+/// ADR-108 P3b: the `mesh` project fetcher.
+#[cfg(all(feature = "placement", unix))]
+pub mod project_fetch_mesh;
+/// ADR-108 P3b: local RPC `project.fetch` for `git-remote-weftos`.
+#[cfg(all(feature = "placement", unix))]
+pub mod project_fetch_rpc;
 
 #[cfg(unix)]
 pub mod parent_liveness;

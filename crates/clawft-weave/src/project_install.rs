@@ -117,7 +117,8 @@ fn url_ok(url: &str) -> Result<(), &'static str> {
     Err("url must be https://, ssh:// or user@host:path")
 }
 
-fn dir_ok(dir: &str) -> bool {
+/// `.` or one plain path segment (shared with the mesh fetcher's URL and layout checks).
+pub(crate) fn dir_ok(dir: &str) -> bool {
     dir == "." || (!dir.is_empty() && dir.len() <= 64 && !dir.starts_with('.') && dir.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
 }
 
@@ -196,6 +197,11 @@ pub struct FetchReport {
     pub bytes: u64,
     /// Paths the primary marked for archiving and did not send (owner decision D-C).
     pub archived: Vec<String>,
+    /// What the member should know but which did not fail the fetch: very large
+    /// unmarked non-git content left on the primary (D-C "warn before fetching"),
+    /// symlinks or credential-shaped files not sent. Empty for git-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Puts a project's repositories under `dest` (which does not exist yet or is empty).

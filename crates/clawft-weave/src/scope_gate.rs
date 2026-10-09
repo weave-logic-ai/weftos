@@ -144,6 +144,9 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "dashboard.status",
     "dashboard.actions",
     "dashboard.token.rotate",
+    // ADR-108 P3b: the remote helper fetches a project onto this machine; the
+    // project is not registered here yet, so it is user-level.
+    "project.fetch",
     // Pairing this machine with another node is a machine-level trust act.
     "mesh.pair.request",
     "mesh.pair.list",

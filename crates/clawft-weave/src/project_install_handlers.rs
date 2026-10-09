@@ -84,7 +84,13 @@ impl InstallEnv {
 
 /// The handlers of this module, ready for `default_handlers()`.
 pub fn handlers(env: InstallEnv) -> Vec<Arc<dyn ActionHandler>> {
-    let fetchers: Vec<Arc<dyn ProjectFetcher>> = vec![Arc::new(GitRemoteFetcher::with_runner(env.git.clone()))];
+    #[allow(unused_mut)]
+    let mut fetchers: Vec<Arc<dyn ProjectFetcher>> = vec![Arc::new(GitRemoteFetcher::with_runner(env.git.clone()))];
+    // ADR-108 P3b: the mesh fetcher goes first through `fetch_order`; it says
+    // no until placement is built and the primary is a paired peer. Its chain
+    // is the daemon's, found once placement has it.
+    #[cfg(all(feature = "placement", unix))]
+    fetchers.push(Arc::new(crate::project_fetch_mesh::MeshFetcher::daemon(None)));
     vec![
         Arc::new(InstallHandler::new(env.clone(), fetchers)),
         Arc::new(UpdateHandler { env: env.clone() }),

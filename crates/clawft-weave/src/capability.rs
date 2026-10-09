@@ -92,6 +92,8 @@ pub fn required_capability(method: &str) -> Capability {
         "fleet.location.set" => Capability::Admin,
         // Rotating the node's dashboard credential (locally or on a peer).
         "dashboard.token.rotate" => Capability::Admin,
+        // ADR-108 P3b: fetching a project from its primary contacts a peer.
+        "project.fetch" => Capability::Admin,
         // ADR-108 P2b: asking to pair (or withdrawing the ask) is a trust
         // request this node makes in its own name.
         "mesh.pair.request" | "mesh.pair.cancel" => Capability::Admin,

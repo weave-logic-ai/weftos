@@ -90,6 +90,6 @@ impl ProjectFetcher for FakeFetcher {
         if self.fail_after_writing {
             return Err("boom".into());
         }
-        Ok(FetchReport { fetcher: "git-remote", repos, bytes: 0, archived: vec![] })
+        Ok(FetchReport { fetcher: "git-remote", repos, ..Default::default() })
     }
 }
