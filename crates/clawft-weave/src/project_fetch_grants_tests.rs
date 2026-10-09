@@ -1,102 +1,104 @@
-use std::path::Path;
+//! `project-fetch.json` reader and writer, in a temp dir (never `~/.weftos`).
 
-use clawft_kernel::node_id_from_pubkey;
-use clawft_kernel::workload_ctl::msg::{ControllerPolicy, method};
-use clawft_types::placement::TrustTier;
-use ed25519_dalek::SigningKey;
+use std::os::unix::fs::PermissionsExt;
+
+use serde_json::{Value, json};
 
 use super::*;
 
-const A: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1C";
-const B: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1D";
+const PEER: &str = "0123456789abcdef0123456789abcdef";
+const OTHER: &str = "fedcba9876543210fedcba9876543210";
+const ULID_A: &str = "01K00000000000000000000000";
+const ULID_B: &str = "01K00000000000000000000001";
 
-fn key(n: u8) -> SigningKey {
-    SigningKey::from_bytes(&[n; 32])
-}
-
-fn node(k: &SigningKey) -> String {
-    node_id_from_pubkey(&k.verifying_key().to_bytes())
-}
-
-fn write(dir: &Path, name: &str, text: &str) {
-    std::fs::write(dir.join(name), text).unwrap();
-}
-
-fn peers(dir: &Path, entries: &[(&SigningKey, &str)]) {
-    let list: Vec<String> = entries
-        .iter()
-        .map(|(k, tier)| format!("{{\"addr\":\"127.0.0.1:9471\",\"tier\":\"{tier}\",\"key\":\"{}\"}}", hex::encode(k.verifying_key().to_bytes())))
-        .collect();
-    write(dir, "workload-peers.json", &format!("[{}]", list.join(",")));
-}
-
-fn grant(dir: &Path, k: &SigningKey, projects: &[&str]) {
-    let p: Vec<String> = projects.iter().map(|s| format!("\"{s}\"")).collect();
-    write(dir, GRANTS_FILE, &format!("{{\"version\":1,\"grants\":[{{\"peer_node\":\"{}\",\"projects\":[{}],\"granted_at\":\"2026-10-08T00:00:00Z\",\"source\":\"test\"}}]}}", node(k), p.join(",")));
-}
-
-#[test]
-fn no_file_means_no_grants_and_a_bad_file_denies_everything() {
-    let d = tempfile::tempdir().unwrap();
-    let g = FetchGrants::load(d.path()).unwrap();
-    assert!(!g.allows("n", A) && !g.any_for("n"));
-    write(d.path(), GRANTS_FILE, r#"{"version":1,"grants":[{"peer_node":"n","projects":["not-a-ulid"]}]}"#);
-    assert!(FetchGrants::load(d.path()).is_err());
-    write(d.path(), GRANTS_FILE, r#"{"version":2,"grants":[]}"#);
-    assert!(FetchGrants::load(d.path()).is_err());
-    write(d.path(), GRANTS_FILE, "{not json");
-    assert!(FetchGrants::load(d.path()).is_err());
-    let m = key(9);
-    peers(d.path(), &[(&m, "pinned")]);
-    assert!(authorize(d.path(), &node(&m), A).unwrap_err().contains("unreadable"));
-}
-
-#[test]
-fn authorize_needs_a_keyed_peer_at_paired_or_better_and_a_matching_grant() {
-    let d = tempfile::tempdir().unwrap();
-    let (m, other) = (key(1), key(2));
-    peers(d.path(), &[(&m, "paired")]);
-    grant(d.path(), &m, &[A]);
-    assert_eq!(authorize(d.path(), &node(&m), A).unwrap(), TrustTier::Paired);
-    // Another project's ULID.
-    assert!(authorize(d.path(), &node(&m), B).unwrap_err().contains("no fetch grant"));
-    // A peer that is not listed, even with a grant.
-    grant(d.path(), &other, &[A]);
-    assert!(authorize(d.path(), &node(&other), A).unwrap_err().contains("not a pinned or paired peer"));
-    // Listed but only discovered.
-    peers(d.path(), &[(&m, "discovered")]);
-    grant(d.path(), &m, &[A]);
-    assert!(authorize(d.path(), &node(&m), A).is_err());
-    // Listed without a key: an address is not a node.
-    write(d.path(), "workload-peers.json", r#"[{"addr":"127.0.0.1:9471","tier":"pinned"}]"#);
-    assert!(authorize(d.path(), &node(&m), A).is_err());
-    // Revoked: the grant file is removed.
-    peers(d.path(), &[(&m, "pinned")]);
-    std::fs::remove_file(d.path().join(GRANTS_FILE)).unwrap();
-    assert!(authorize(d.path(), &node(&m), A).unwrap_err().contains("no fetch grant"));
-}
-
-#[test]
-fn the_policy_admits_fetch_peers_for_describe_and_fetch_only() {
-    let d = tempfile::tempdir().unwrap();
-    let (ctl, m, stranger) = (key(3), key(4), key(5));
-    peers(d.path(), &[(&m, "paired")]);
-    grant(d.path(), &m, &[A]);
-    let ctl_pk = ctl.verifying_key().to_bytes();
-    let (m_pk, s_pk) = (m.verifying_key().to_bytes(), stranger.verifying_key().to_bytes());
-    let p = FetchPeerPolicy::new(vec![ctl_pk], d.path().to_path_buf());
-    for meth in [method::DESCRIBE, method::PROJECT_FETCH, method::PLACE, method::DASHBOARD_ROTATE] {
-        assert!(p.allows_method(&ctl_pk, meth), "{meth}: a controller");
-        assert!(!p.allows_method(&s_pk, meth), "{meth}: a stranger");
+fn g(peer: &str, projects: &[&str]) -> Grant {
+    Grant {
+        peer_node: peer.into(),
+        projects: projects.iter().map(|s| (*s).to_owned()).collect(),
+        granted_at: Some("2026-10-08T00:00:00Z".into()),
+        source: Some("dashboard-pair:act-1".into()),
+        peer_ed25519: None,
     }
-    assert!(p.allows_method(&m_pk, method::DESCRIBE));
-    assert!(p.allows_method(&m_pk, method::PROJECT_FETCH));
-    assert!(!p.allows_method(&m_pk, method::PLACE), "a fetch peer never places");
-    assert!(!p.allows_method(&m_pk, method::DASHBOARD_ROTATE));
-    assert!(!p.allows_method(&m_pk, method::STATUS));
-    assert!(!p.allows(&m_pk), "a fetch peer is not a controller");
-    // Remove the grant: describe and fetch close too.
-    std::fs::remove_file(d.path().join(GRANTS_FILE)).unwrap();
-    assert!(!p.allows_method(&m_pk, method::PROJECT_FETCH));
-    assert!(!p.allows_method(&m_pk, method::DESCRIBE));
+}
+
+fn raw(dir: &std::path::Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(dir.join(FETCH_FILE)).unwrap()).unwrap()
+}
+
+#[test]
+fn absent_file_grants_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let gr = Grants::load(d.path()).unwrap();
+    assert!(gr.grants.is_empty());
+    assert!(!gr.is_granted(PEER, ULID_A));
+}
+
+#[test]
+fn grant_writes_0600_and_is_granted_only_for_that_peer_and_project() {
+    let d = tempfile::tempdir().unwrap();
+    let path = grant(d.path(), &g(PEER, &[ULID_A])).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let gr = Grants::load(d.path()).unwrap();
+    assert!(gr.is_granted(PEER, ULID_A));
+    assert!(!gr.is_granted(PEER, ULID_B), "another project");
+    assert!(!gr.is_granted(OTHER, ULID_A), "another peer");
+    assert_eq!(raw(d.path())["version"], 1);
+}
+
+#[test]
+fn re_grant_replaces_rather_than_duplicates() {
+    let d = tempfile::tempdir().unwrap();
+    grant(d.path(), &g(PEER, &[ULID_A])).unwrap();
+    grant(d.path(), &g(PEER, &[ULID_A, ULID_B])).unwrap();
+    let gr = Grants::load(d.path()).unwrap();
+    assert_eq!(gr.for_peer(PEER).len(), 1);
+    assert!(gr.is_granted(PEER, ULID_B));
+}
+
+#[test]
+fn unknown_entries_and_keys_are_preserved() {
+    let d = tempfile::tempdir().unwrap();
+    let hand = json!({
+        "version": 1,
+        "note": "operator wrote this",
+        "grants": [
+            {"peer_node": OTHER, "projects": [ULID_B], "custom": true},
+            "not even an object"
+        ]
+    });
+    crate::dashboard_token::write_atomic(&d.path().join(FETCH_FILE), &hand.to_string()).unwrap();
+    grant(d.path(), &g(PEER, &[ULID_A])).unwrap();
+    let after = raw(d.path());
+    assert_eq!(after["note"], "operator wrote this");
+    assert_eq!(after["grants"].as_array().unwrap().len(), 3);
+    assert_eq!(after["grants"][0]["custom"], true);
+    assert_eq!(after["grants"][1], "not even an object");
+    let gr = Grants::load(d.path()).unwrap();
+    assert!(gr.is_granted(OTHER, ULID_B));
+    assert!(gr.is_granted(PEER, ULID_A));
+
+    assert!(revoke(d.path(), PEER).unwrap());
+    assert!(!revoke(d.path(), PEER).unwrap(), "nothing left to revoke");
+    let after = raw(d.path());
+    assert_eq!(after["grants"].as_array().unwrap().len(), 2);
+    assert!(!Grants::load(d.path()).unwrap().is_granted(PEER, ULID_A));
+}
+
+#[test]
+fn a_loose_file_or_a_wrong_version_is_refused_not_ignored() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join(FETCH_FILE);
+    std::fs::write(&p, json!({"version": 1, "grants": [{"peer_node": PEER, "projects": [ULID_A]}]}).to_string()).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o664)).unwrap();
+    let e = Grants::load(d.path()).unwrap_err();
+    assert!(e.contains("world-writable") || e.contains("group-"), "{e}");
+    assert!(grant(d.path(), &g(PEER, &[ULID_A])).is_err());
+
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(Grants::load(d.path()).unwrap().is_granted(PEER, ULID_A));
+    std::fs::write(&p, json!({"version": 2, "grants": []}).to_string()).unwrap();
+    assert!(Grants::load(d.path()).unwrap_err().contains("version"));
+    std::fs::write(&p, "{").unwrap();
+    assert!(Grants::load(d.path()).is_err());
 }

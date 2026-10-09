@@ -112,6 +112,22 @@ with a `--repo` for each sibling. The result is:
  "bytes": 0, "archived": []}
 ```
 
+**Layout.** The `.` source clones into `target_path`. A sibling `dir` clones
+into `<parent of target_path>/<dir>` and is registered with `--repo`. With no
+`.` source every repository clones into `<target_path>/<dir>` and `target_path`
+itself is a plain directory (the workspace root; its repositories are found one
+level below it, so no `--repo` is passed). Every destination, and `target_path`,
+must be absent or an empty directory before anything is written; two sources
+whose destinations coincide are refused. On any failure (fetch or adopt) the
+install removes only what it created: destinations that were absent, the
+contents of empty directories it filled, and parent directories it made. The
+git-remote fetcher runs `git` with an argument vector (no shell),
+`GIT_TERMINAL_PROMPT=0`, `protocol.file.allow=never`, `protocol.ext.allow=never`,
+`core.fsmonitor=false`, a 15 minute limit per repository and a cap on the output
+it keeps. Registration execs the `weft` binary next to `weaver` (then `PATH`)
+in `target_path` with `HOME` and `WEFTOS_MANIFESTS_DIR` set from the daemon's
+own paths.
+
 `update` runs `git pull --ff-only` in each registered repository of that
 project. `remove` unregisters the workspace and **never deletes files**: the
 result names the path so the member deletes it by hand.
@@ -129,3 +145,25 @@ result names the path so the member deletes it by hand.
 
 The negative tests ADR-108 requires: an unlisted peer, a revoked peer, another
 project's ULID, a path outside the project, and an archived path.
+
+## Changes
+
+- **2026-10-08 (P2b lane).** `mesh_identity` gains `ed25519` (the node's
+  signing key, 64 hex) and the `pair` payload gains `peer_ed25519` (the other
+  side's, required). The node id is `node_id_from_pubkey` of the key the node's
+  `workload-host` signs with (the node key, or the control key in service mode,
+  ADR-106 phase 3), and the key is not derivable from the id, while
+  `workload-peers.json` pins a tier to a key. The receiver verifies that
+  `peer_ed25519` derives `peer_node` and that `fingerprint` is its first 16 hex
+  before writing. The dashboard copies `ed25519` from one node's `mesh_identity`
+  into the other node's `pair` payload as `peer_ed25519` (no field name contains
+  `key`). `mesh_identity.advertise` may be absent when the node has no
+  non-loopback address to offer.
+- **2026-10-08 (P2b lane).** The `pair` result also carries `op` (`add` |
+  `remove`) beside `peer_node`, `fingerprint`, `tier`, `projects`.
+- **2026-10-08 (P2b lane).** A `project-fetch.json` grant may carry
+  `peer_ed25519` (the peer's signing key) so the P3b gate can match the signer
+  of a request, not only the node id it derives. Readers must ignore unknown
+  keys; the writer keeps entries and keys it does not know.
+- **2026-10-08 (P2b lane).** `weaver mesh pair request --with` takes the mesh
+  node id only (a dashboard node name cannot be resolved on the node).

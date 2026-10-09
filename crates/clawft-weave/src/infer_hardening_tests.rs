@@ -171,6 +171,7 @@ async fn wait_for(p: &std::path::Path) -> bool {
 #[tokio::test]
 async fn a_terminal_outcome_stays_down_until_an_explicit_start() {
     use clawft_kernel::workload_runtime::infer::Reconcile;
+    use clawft_kernel::workload_runtime::{InstanceState, WorkloadRuntime};
     for exposed in [false, true] {
         let lab = lab();
         write_cfg(
@@ -185,7 +186,21 @@ async fn a_terminal_outcome_stays_down_until_an_explicit_start() {
             // A give-up means the process is dead: make it so.
             let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
             nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGKILL).unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // Wait until the adapter has seen the exit. A fixed sleep let a
+            // loaded machine reach the final explicit start while the
+            // adapter still believed the server was Running, so the start
+            // was a no-op and the pid file never came back.
+            let h = st.find("hermes").unwrap().handle.lock().await.clone().unwrap();
+            let rt = st.find("hermes").unwrap().rt.clone();
+            let mut gone = false;
+            for _ in 0..400 {
+                if rt.status(&h).await.state == InstanceState::Exited {
+                    gone = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            assert!(gone, "the adapter never noticed the kill");
         }
         std::fs::remove_file(&pid_file).unwrap();
         let r = st.find("hermes").unwrap();

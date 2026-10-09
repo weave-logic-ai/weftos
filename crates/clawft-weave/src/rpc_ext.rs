@@ -472,6 +472,26 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::dashboard_rpc::handle,
     },
+    // ADR-108 P2b: pending pair requests on this node (request and cancel
+    // are trust acts; list shows ids and node ids only).
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "mesh.pair.request",
+        capability: Capability::Admin,
+        handler: crate::mesh_pair_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "mesh.pair.list",
+        capability: Capability::Read,
+        handler: crate::mesh_pair_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "mesh.pair.cancel",
+        capability: Capability::Admin,
+        handler: crate::mesh_pair_rpc::handle,
+    },
     // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
     // handler resolves the project itself (token scope or Admin) and refuses
     // anonymous callers; `Write` is the floor.
@@ -724,6 +744,26 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "dashboard.token.rotate",
         capability: Capability::Admin,
         handler: crate::dashboard_rpc::handle,
+    },
+    // ADR-108 P2b: pending pair requests on this node (request and cancel
+    // are trust acts; list shows ids and node ids only).
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "mesh.pair.request",
+        capability: Capability::Admin,
+        handler: crate::mesh_pair_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "mesh.pair.list",
+        capability: Capability::Read,
+        handler: crate::mesh_pair_rpc::handle,
+    },
+    #[cfg(all(feature = "placement", unix))]
+    ExtRoute {
+        prefix: "mesh.pair.cancel",
+        capability: Capability::Admin,
+        handler: crate::mesh_pair_rpc::handle,
     },
     // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
     // handler resolves the project itself (token scope or Admin) and refuses

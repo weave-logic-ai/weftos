@@ -198,7 +198,22 @@ pub mod dashboard_report;
 pub mod dashboard_rpc;
 pub mod dashboard_token;
 pub mod dashboard_workspaces;
+pub mod project_git;
 pub mod project_install;
+pub mod project_install_git;
+pub mod project_install_handlers;
+pub mod project_install_layout;
+#[cfg(all(test, unix))]
+mod project_install_test_support;
+/// Pairing two nodes for project work from the dashboard (ADR-108 P2b).
+pub mod mesh_pair;
+/// Pending pair requests, reported in the heartbeat (ADR-108 P2b).
+pub mod mesh_pair_requests;
+/// `project-fetch.json`: per-peer fetch grants (ADR-108 P2b writes, P3b enforces).
+pub mod project_fetch_grants;
+/// The daemon's pair source, `mesh.pair.*` RPCs and handler wiring (ADR-108 P2b).
+#[cfg(all(feature = "placement", unix))]
+pub mod mesh_pair_rpc;
 #[cfg(test)]
 pub(crate) mod dashboard_test_support;
 pub mod fleet_labels;
@@ -266,9 +281,9 @@ pub mod cog_ingest_serve;
 /// This node's `workload-host`, served to other controllers (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;
-/// ADR-108 P3b: fetch grants (`project-fetch.json`) and the fetch-peer controller policy.
+/// ADR-108 P3b: the fetch gate (peer tier plus grant) and the fetch-peer controller policy.
 #[cfg(all(feature = "placement", unix))]
-pub mod project_fetch_grants;
+pub mod project_fetch_policy;
 /// ADR-108 P3b: the primary's repositories, refs and bundles.
 #[cfg(all(feature = "placement", unix))]
 pub mod project_fetch_repos;

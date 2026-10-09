@@ -503,7 +503,9 @@ async fn stop_and_reap_take_the_whole_process_group() {
         .unwrap();
     assert!(alive(pid) && alive(gpid));
     m.rt.stop(&h, Duration::from_secs(3)).await.unwrap();
-    assert!(!alive(pid) && !alive(gpid), "stop left a grandchild behind");
+    // The grandchild is reparented to init when the leader dies and is only
+    // gone once init reaps it: wait for that, do not assert the instant.
+    assert!(wait_dead(&[pid, gpid]).await, "stop left a grandchild behind");
 
     // A leader that dies on its own leaves no grandchild after the reap.
     std::fs::remove_file(m.script_dir.join("pid.txt")).unwrap();
@@ -515,15 +517,18 @@ async fn stop_and_reap_take_the_whole_process_group() {
         .parse()
         .unwrap();
     crash(pid);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(m.rt.status(&h).await.state, InstanceState::Exited);
-    for _ in 0..40 {
-        if !alive(gpid) {
+    // The adapter notices the exit on its next status poll, however long a
+    // loaded machine takes to deliver SIGCHLD.
+    let mut state = m.rt.status(&h).await.state;
+    for _ in 0..400 {
+        if state == InstanceState::Exited {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+        state = m.rt.status(&h).await.state;
     }
-    assert!(!alive(gpid), "the reap left a grandchild behind");
+    assert_eq!(state, InstanceState::Exited);
+    assert!(wait_dead(&[gpid]).await, "the reap left a grandchild behind");
 
     // Dropping the adapter with a server running takes the group too.
     std::fs::remove_file(m.script_dir.join("pid.txt")).unwrap();
@@ -535,13 +540,7 @@ async fn stop_and_reap_take_the_whole_process_group() {
         .parse()
         .unwrap();
     drop(m.rt);
-    for _ in 0..40 {
-        if !alive(pid) && !alive(gpid) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(!alive(pid) && !alive(gpid), "drop left processes behind");
+    assert!(wait_dead(&[pid, gpid]).await, "drop left processes behind");
 }
 
 #[tokio::test]

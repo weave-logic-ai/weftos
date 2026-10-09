@@ -22,7 +22,8 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::project_fetch_client::{self as client, BundleMode, FetchChannel, PlaneChannel, RemoteUrl};
-use crate::project_fetch_grants::{FetchPeerPolicy, GRANTS_FILE};
+use crate::project_fetch_grants::FETCH_FILE as GRANTS_FILE;
+use crate::project_fetch_policy::FetchPeerPolicy;
 use crate::project_fetch_repos::git;
 use crate::project_fetch_serve::FetchHost;
 use crate::project_install::{InstallRequest, PrimaryRef, ProjectFetcher};

@@ -37,7 +37,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::project_fetch_grants::authorize;
+use crate::project_fetch_policy::authorize;
 use crate::project_fetch_repos::{self as repos, Bundle, RepoEntry};
 use crate::project_fetch_tar::{self as tarc, Exclusions};
 

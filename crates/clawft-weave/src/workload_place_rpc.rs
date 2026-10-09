@@ -890,6 +890,13 @@ pub fn plane_if_built() -> Option<Arc<PlacementControlPlane>> {
     PLANE.get().cloned()
 }
 
+/// The public half of the key this node's `workload-host` and controller
+/// sign with (the node key, or the control key in service mode): what a
+/// peer pins in its `workload-peers.json` (ADR-108 P2b).
+pub fn local_signing_pubkey() -> Option<[u8; 32]> {
+    BOOT.get().map(|b| b.key.verifying_key().to_bytes())
+}
+
 /// Send node-admin method `m` (`dashboard.status`, `dashboard.token.rotate`)
 /// to the peer `node` over the signed `workload.ctl` wire and return its
 /// result. The peer must be in `workload-peers.json` (rotation needs tier
