@@ -3,6 +3,11 @@
 - **Status**: Proposed (2026-10-09; the owner chose the `weftos://` scheme and asked for this ADR)
 - **Updated**: 2026-10-09. Owner: names are internal mesh addressing and cover companies, projects
   and other business concepts as well as mesh resources; the authority is the mesh, not a node.
+  N1 built on `target-0.8.4`: `crates/clawft-weave/src/weftos_uri.rs` (strict parser, round-trip
+  and reject tables), `mesh_names.rs` (accepts this node's MeshId and local aliases from
+  `<runtime>/mesh-aliases.json`), `mesh_pairings.rs` (the member records which primary serves
+  which projects). The root repository is named by the project itself, because `.` cannot be a
+  segment.
 - **Deciders**: owner
 - **Prior art**: rvm ADR-157, "Capability-Governed `ruv://` Context Namespace" (ruvnet/rvm,
   MIT OR Apache-2.0, Proposed 2026-08-22), and ADR-158, its hosted service. This ADR adopts
@@ -67,7 +72,7 @@ view       = "view=abstract" | "view=overview" | "view=content"
 | Kind | Id | Sub-resources (v1) | Notes |
 |---|---|---|---|
 | `companies` | dashboard company UUID | none | clients, agencies, prospects |
-| `projects` | WeftOS project ULID | `repos/<dir>` | the git remote URL; the resolver finds the primary from pairing records |
+| `projects` | WeftOS project ULID | `repos/<dir>` | git remote URLs: `projects/<ULID>` names the root repository, `projects/<ULID>/repos/<dir>` a sibling; the resolver finds the primary from pairing records |
 | `goals`, `tickets` | dashboard UUID (imported `WEFT-N` stays a label, not an id) | none | board items |
 | `installations` | installation UUID | none | project x host |
 | `members` | member UUID | none | people; never an email address in a name |
@@ -83,7 +88,8 @@ view       = "view=abstract" | "view=overview" | "view=content"
 Examples:
 
 ```text
-weftos://<mesh>/projects/01K6ZQ8N3T4V5W6X7Y8Z9A0B1C/repos/app     # git clone URL
+weftos://<mesh>/projects/01K6ZQ8N3T4V5W6X7Y8Z9A0B1C               # git clone URL, root repository
+weftos://<mesh>/projects/01K6ZQ8N3T4V5W6X7Y8Z9A0B1C/repos/app     # git clone URL, sibling repository
 weftos://<mesh>/companies/7f3c…                                    # a company
 weftos://<mesh>/nodes/<node id>/services/workload-host             # a service on a node
 weftos://<mesh>/cogs/ld2450-spatial?rev=sha256:…                   # a pinned cog
