@@ -198,6 +198,7 @@ pub mod dashboard_report;
 pub mod dashboard_rpc;
 pub mod dashboard_token;
 pub mod dashboard_workspaces;
+pub mod project_install;
 #[cfg(test)]
 pub(crate) mod dashboard_test_support;
 pub mod fleet_labels;
