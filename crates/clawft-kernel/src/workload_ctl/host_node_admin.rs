@@ -29,6 +29,14 @@ pub trait NodeAdmin: Send + Sync {
     /// Run `method` for `requester` (its verified node id). `Err` is the
     /// reason shown to the controller.
     async fn call(&self, method: &str, requester: &str, body: &Value) -> Result<Value, String>;
+
+    /// [`Self::call`] that may also hand back raw bytes, sent to the
+    /// controller as one unsigned frame after the signed response (which
+    /// must carry their SHA-256). Only for bodies that asked for it; the
+    /// default never does.
+    async fn call_raw(&self, method: &str, requester: &str, body: &Value) -> Result<(Value, Option<Vec<u8>>), String> {
+        self.call(method, requester, body).await.map(|v| (v, None))
+    }
 }
 
 impl WorkloadHostService {
@@ -37,7 +45,7 @@ impl WorkloadHostService {
         self.node_admin.set(hook).is_ok()
     }
 
-    pub(super) async fn node_admin_op(&self, req: &CtlRequest) -> Result<Value, Refusal> {
+    pub(super) async fn node_admin_op(&self, req: &CtlRequest) -> Result<(Value, Option<Vec<u8>>), Refusal> {
         let Some(hook) = self.node_admin.get() else {
             return Err(refuse(
                 RefusalCode::UnknownMethod,
@@ -49,7 +57,7 @@ impl WorkloadHostService {
             json!({ "node": self.node_id(), "method": req.method, "requester": req.requester,
                     "decision_id": req.decision_id }),
         );
-        let out = hook.call(&req.method, &req.requester, &req.body).await;
+        let out = hook.call_raw(&req.method, &req.requester, &req.body).await;
         self.record(
             EVENT_NODE_ADMIN_RESULT,
             json!({ "node": self.node_id(), "method": req.method, "requester": req.requester,

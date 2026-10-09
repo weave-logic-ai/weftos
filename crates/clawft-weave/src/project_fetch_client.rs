@@ -1,15 +1,20 @@
-//! The member's side of `project.fetch` (ADR-108 P3b): the `weftos://` URL,
-//! the channel the calls travel on, and the chunked download with checksums.
+//! The member's side of `project.fetch` (ADR-108 P3b): the channel the calls
+//! travel on and the pipelined chunk download with checksums. Repository
+//! names are `weftos://<mesh>/projects/<ULID>[/repos/<dir>]`
+//! ([`crate::weftos_uri`]).
 //!
 //! Two channels carry the same request bodies: [`PlaneChannel`] (inside the
 //! user daemon, straight onto the signed `workload.ctl` wire) and
 //! [`DaemonChannel`] (the `git-remote-weftos` helper, over the daemon's local
-//! RPC socket, which forwards to the primary). A download opens a session,
-//! pulls every chunk in order, checks each chunk's SHA-256 and the whole
-//! file's, and closes the session; a mismatch fails the fetch. Bundles land in
-//! the repository through git itself (`git bundle unbundle` for the helper,
-//! `git fetch <bundle>` for an install), tars through the checked unpack in
-//! [`crate::project_fetch_tar`].
+//! RPC socket, which forwards to the primary). Control calls (`list`, `refs`,
+//! the opens, `close`) go through [`FetchChannel::call`]; the chunk reads go
+//! through a window of [`FetchLink`]s, each a connection kept open for the
+//! whole transfer and each reading every `window`-th chunk, so several chunks
+//! are in flight while the file is written strictly in order. Every chunk's
+//! SHA-256 and the whole file's are checked; a mismatch, a refusal or a lost
+//! link fails the fetch. Bundles land in the repository through git itself
+//! (`git bundle unbundle` for the helper, `git fetch <bundle>` for an install),
+//! tars through the checked unpack in [`crate::project_fetch_tar`].
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,65 +23,105 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine;
-use clawft_kernel::workload_ctl::{PlacementControlPlane, msg::method};
+use clawft_kernel::workload_ctl::{CtlSession, PlacementControlPlane, msg::method};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::project_fetch_repos::{Refs, git, is_oid, ref_ok};
 use crate::project_fetch_tar::{Unpacked, unpack_tar};
 
-/// URL scheme of the remote helper.
-pub const SCHEME: &str = "weftos://";
 /// Local daemon RPC verb the helper calls (forwarded as the node-admin method).
 pub const LOCAL_RPC: &str = "project.fetch";
+/// Largest chunk a member accepts (the server caps at the same value).
+pub const MAX_CHUNK_BYTES: u64 = 2 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// One chunk over a slow link.
+const CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// `weftos://<mesh node id>/<ULID>/<dir>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteUrl {
-    pub node: String,
-    pub project: String,
-    pub dir: String,
+/// How a download runs: chunk size asked of the primary, links in flight,
+/// and whether links keep their connection (the old path opened one per call).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FetchTuning {
+    pub chunk_bytes: u64,
+    pub window: usize,
+    pub reuse: bool,
 }
 
-fn node_ok(n: &str) -> bool {
-    !n.is_empty() && n.len() <= 128 && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
-}
-
-impl RemoteUrl {
-    /// Parse and validate; `dir` defaults to `.`.
-    pub fn parse(url: &str) -> Result<Self, String> {
-        let rest = url.trim().strip_prefix(SCHEME).ok_or("url must start with weftos://")?;
-        let mut it = rest.trim_end_matches('/').splitn(3, '/');
-        let node = it.next().unwrap_or("").to_owned();
-        let project = it.next().unwrap_or("").to_owned();
-        let dir = it.next().filter(|d| !d.is_empty()).unwrap_or(".").to_owned();
-        if !node_ok(&node) {
-            return Err("url: bad node id".into());
-        }
-        clawft_types::project::validate_id(&project).map_err(|_| "url: project must be a ULID".to_string())?;
-        if !crate::project_install::dir_ok(&dir) {
-            return Err("url: dir must be '.' or one plain path segment".into());
-        }
-        Ok(Self { node, project, dir })
-    }
-
-    /// The URL as git keeps it in `remote.origin.url`.
-    pub fn url(&self) -> String {
-        format!("{SCHEME}{}/{}/{}", self.node, self.project, self.dir)
+impl Default for FetchTuning {
+    fn default() -> Self {
+        Self { chunk_bytes: MAX_CHUNK_BYTES, window: 6, reuse: true }
     }
 }
 
-/// Carries one `project.fetch` body to the primary and returns its result.
+/// One connection used for chunk reads, one request at a time.
+#[async_trait]
+pub trait FetchLink: Send {
+    async fn call(&mut self, body: Value) -> Result<Value, String>;
+    /// Whether a `raw: true` chunk comes back as bytes beside the JSON
+    /// (a kept-open mesh session can; a JSON-only path cannot).
+    fn raw_capable(&self) -> bool {
+        false
+    }
+    /// [`Self::call`] with the raw frame, when one was asked for and sent.
+    async fn call_raw(&mut self, body: Value) -> Result<(Value, Option<Vec<u8>>), String> {
+        self.call(body).await.map(|v| (v, None))
+    }
+}
+
+/// Carries `project.fetch` bodies to the primary.
 #[async_trait]
 pub trait FetchChannel: Send + Sync {
+    /// A control call (opens, refs, close).
     async fn call(&self, body: Value) -> Result<Value, String>;
+    /// `n` links for chunk reads.
+    async fn links(&self, n: usize) -> Result<Vec<Box<dyn FetchLink>>, String>;
+    fn tuning(&self) -> FetchTuning {
+        FetchTuning::default()
+    }
 }
 
 /// Inside the daemon: straight onto the signed mesh wire.
 pub struct PlaneChannel {
     pub plane: Arc<PlacementControlPlane>,
     pub node: String,
+    pub tuning: FetchTuning,
+}
+
+impl PlaneChannel {
+    pub fn new(plane: Arc<PlacementControlPlane>, node: String) -> Self {
+        Self { plane, node, tuning: FetchTuning::default() }
+    }
+
+    pub fn with_tuning(mut self, tuning: FetchTuning) -> Self {
+        self.tuning = tuning;
+        self
+    }
+}
+
+/// A kept-open signed session.
+struct SessionLink(CtlSession);
+
+#[async_trait]
+impl FetchLink for SessionLink {
+    async fn call(&mut self, body: Value) -> Result<Value, String> {
+        self.0.call(method::PROJECT_FETCH, body).await.map_err(|e| e.to_string())
+    }
+    fn raw_capable(&self) -> bool {
+        true
+    }
+    async fn call_raw(&mut self, body: Value) -> Result<(Value, Option<Vec<u8>>), String> {
+        self.0.call_raw(method::PROJECT_FETCH, body).await.map_err(|e| e.to_string())
+    }
+}
+
+/// A connection per call (the plane's ordinary node-admin path).
+struct PerCallLink(Arc<PlacementControlPlane>, String);
+
+#[async_trait]
+impl FetchLink for PerCallLink {
+    async fn call(&mut self, body: Value) -> Result<Value, String> {
+        self.0.node_admin(&self.1, method::PROJECT_FETCH, body).await.map_err(|e| e.to_string())
+    }
 }
 
 #[async_trait]
@@ -84,25 +129,42 @@ impl FetchChannel for PlaneChannel {
     async fn call(&self, body: Value) -> Result<Value, String> {
         self.plane.node_admin(&self.node, method::PROJECT_FETCH, body).await.map_err(|e| e.to_string())
     }
+
+    async fn links(&self, n: usize) -> Result<Vec<Box<dyn FetchLink>>, String> {
+        let mut out: Vec<Box<dyn FetchLink>> = Vec::with_capacity(n);
+        for _ in 0..n {
+            if self.tuning.reuse {
+                let s = self.plane.open_session(&self.node).await.map_err(|e| e.to_string())?;
+                out.push(Box::new(SessionLink(s.with_timeout(CHUNK_TIMEOUT))));
+            } else {
+                out.push(Box::new(PerCallLink(self.plane.clone(), self.node.clone())));
+            }
+        }
+        Ok(out)
+    }
+
+    fn tuning(&self) -> FetchTuning {
+        self.tuning
+    }
 }
 
-/// From a helper process: the local daemon forwards to the primary.
+/// From a helper process: the local daemon resolves the repository name to
+/// the project's paired primary and forwards (keeping a session per link
+/// there, see `project_fetch_rpc`).
 pub struct DaemonChannel {
-    pub node: String,
+    /// The repository's `weftos://` name, as git holds it.
+    pub uri: String,
     /// Socket path; `None` is the daemon's default.
     pub socket: Option<PathBuf>,
     client: tokio::sync::Mutex<Option<clawft_rpc::DaemonClient>>,
 }
 
 impl DaemonChannel {
-    pub fn new(node: String, socket: Option<PathBuf>) -> Self {
-        Self { node, socket, client: tokio::sync::Mutex::new(None) }
+    pub fn new(uri: String, socket: Option<PathBuf>) -> Self {
+        Self { uri, socket, client: tokio::sync::Mutex::new(None) }
     }
-}
 
-#[async_trait]
-impl FetchChannel for DaemonChannel {
-    async fn call(&self, body: Value) -> Result<Value, String> {
+    async fn call_once(&self, body: Value) -> Result<Value, String> {
         let mut guard = self.client.lock().await;
         if guard.is_none() {
             let c = match &self.socket {
@@ -111,19 +173,33 @@ impl FetchChannel for DaemonChannel {
             };
             *guard = Some(c.ok_or("the WeftOS user daemon is not running (weaver kernel boot)")?);
         }
-        let req = clawft_rpc::Request::with_params(LOCAL_RPC, json!({ "node": self.node, "body": body }));
-        let resp = match guard.as_mut().unwrap().call(req).await {
+        let req = clawft_rpc::Request::with_params(LOCAL_RPC, json!({ "uri": self.uri, "body": body }));
+        let resp = match guard.as_mut().expect("connected above").call(req).await {
             Ok(r) => r,
             Err(e) => {
                 *guard = None;
                 return Err(format!("daemon: {e}"));
             }
         };
-        if resp.ok {
-            Ok(resp.result.unwrap_or(Value::Null))
-        } else {
-            Err(resp.error.unwrap_or_else(|| "daemon refused".into()))
-        }
+        if resp.ok { Ok(resp.result.unwrap_or(Value::Null)) } else { Err(resp.error.unwrap_or_else(|| "daemon refused".into())) }
+    }
+}
+
+#[async_trait]
+impl FetchLink for DaemonChannel {
+    async fn call(&mut self, body: Value) -> Result<Value, String> {
+        self.call_once(body).await
+    }
+}
+
+#[async_trait]
+impl FetchChannel for DaemonChannel {
+    async fn call(&self, body: Value) -> Result<Value, String> {
+        self.call_once(body).await
+    }
+
+    async fn links(&self, n: usize) -> Result<Vec<Box<dyn FetchLink>>, String> {
+        Ok((0..n).map(|_| Box::new(DaemonChannel::new(self.uri.clone(), self.socket.clone())) as Box<dyn FetchLink>).collect())
     }
 }
 
@@ -131,6 +207,8 @@ impl FetchChannel for DaemonChannel {
 #[derive(Debug, Clone)]
 pub struct Opened {
     pub bytes: u64,
+    /// Signed round trips it took, opens and close included.
+    pub round_trips: u64,
     /// The open result minus the session fields (`files`, `archived`, ...).
     pub meta: Value,
 }
@@ -154,9 +232,11 @@ pub async fn refs(ch: &dyn FetchChannel, project: &str, dir: &str) -> Result<Ref
     Ok(Refs { refs, head })
 }
 
-/// Open a transfer with `open` and stream it to `out`. `None` when the primary
-/// had nothing to send (`empty`).
-pub async fn download(ch: &dyn FetchChannel, open: Value, out: &Path) -> Result<Option<Opened>, String> {
+/// Open a transfer with `open` (the channel's chunk size is added) and stream
+/// it to `out`. `None` when the primary had nothing to send (`empty`).
+pub async fn download(ch: &dyn FetchChannel, mut open: Value, out: &Path) -> Result<Option<Opened>, String> {
+    let tuning = ch.tuning();
+    open["chunk_bytes"] = json!(tuning.chunk_bytes.clamp(1, MAX_CHUNK_BYTES));
     let mut v = ch.call(open).await?;
     if v["empty"] == true {
         return Ok(None);
@@ -164,12 +244,13 @@ pub async fn download(ch: &dyn FetchChannel, open: Value, out: &Path) -> Result<
     let session = v["session"].as_str().filter(|s| s.len() == 32).ok_or("open: no session")?.to_owned();
     let bytes = v["bytes"].as_u64().ok_or("open: no size")?;
     let sha256 = v["sha256"].as_str().ok_or("open: no checksum")?.to_owned();
-    let chunk_bytes = v["chunk_bytes"].as_u64().filter(|c| (1..=200 * 1024).contains(c)).ok_or("open: bad chunk size")?;
+    let chunk_bytes = v["chunk_bytes"].as_u64().filter(|c| (1..=MAX_CHUNK_BYTES).contains(c)).ok_or("open: bad chunk size")?;
     let chunks = v["chunks"].as_u64().ok_or("open: no chunk count")?;
     if chunks != bytes.div_ceil(chunk_bytes) {
         return Err("open: chunk count disagrees with size".into());
     }
-    let result = pull(ch, &session, bytes, chunk_bytes, chunks, &sha256, out).await;
+    let plan = Pull { session: &session, bytes, chunk_bytes, chunks, sha256: &sha256, window: tuning.window };
+    let result = pull(ch, &plan, out).await;
     let _ = ch.call(json!({ "op": "close", "session": session })).await;
     result?;
     if let Some(o) = v.as_object_mut() {
@@ -177,34 +258,89 @@ pub async fn download(ch: &dyn FetchChannel, open: Value, out: &Path) -> Result<
             o.remove(k);
         }
     }
-    Ok(Some(Opened { bytes, meta: v }))
+    Ok(Some(Opened { bytes, round_trips: chunks + 2, meta: v }))
 }
 
-async fn pull(ch: &dyn FetchChannel, session: &str, bytes: u64, chunk_bytes: u64, chunks: u64, sha256: &str, out: &Path) -> Result<(), String> {
-    let mut f = std::io::BufWriter::new(std::fs::File::create(out).map_err(|e| format!("write: {e}"))?);
-    let mut total = Sha256::new();
-    let mut got = 0u64;
-    for i in 0..chunks {
-        let c = ch.call(json!({ "op": "chunk", "session": session, "index": i })).await?;
-        if c["index"].as_u64() != Some(i) {
-            return Err("chunk: answer for another index".into());
-        }
-        let data = base64::engine::general_purpose::STANDARD
+struct Pull<'a> {
+    session: &'a str,
+    bytes: u64,
+    chunk_bytes: u64,
+    chunks: u64,
+    sha256: &'a str,
+    window: usize,
+}
+
+type ChunkResult = Result<(u64, Vec<u8>), String>;
+
+/// Read chunk `index` on `link` and check it: as a raw frame when the link
+/// can carry one (no base64, and the signature covers the hash, not the
+/// bytes), base64 in the JSON otherwise.
+async fn read_chunk(link: &mut dyn FetchLink, session: &str, index: u64, expect: usize) -> ChunkResult {
+    let raw = link.raw_capable();
+    let (c, frame) = link.call_raw(json!({ "op": "chunk", "session": session, "index": index, "raw": raw })).await?;
+    if c["index"].as_u64() != Some(index) {
+        return Err("chunk: answer for another index".into());
+    }
+    let data = match frame {
+        Some(bytes) if raw => bytes,
+        _ => base64::engine::general_purpose::STANDARD
             .decode(c["data"].as_str().ok_or("chunk: no data")?)
-            .map_err(|_| "chunk: bad encoding")?;
-        let expect = (bytes - got).min(chunk_bytes) as usize;
-        if data.len() != expect || hex::encode(Sha256::digest(&data)) != c["sha256"].as_str().unwrap_or("") {
-            return Err(format!("chunk {i}: size or checksum mismatch"));
+            .map_err(|_| "chunk: bad encoding")?,
+    };
+    if data.len() != expect || hex::encode(Sha256::digest(&data)) != c["sha256"].as_str().unwrap_or("") {
+        return Err(format!("chunk {index}: size or checksum mismatch"));
+    }
+    Ok((index, data))
+}
+
+/// Chunks in a window of links, written in order. Link `k` reads chunks
+/// `k, k+w, k+2w, ...` and hands each over a one-slot queue, so at most two
+/// chunks per link are held at once.
+async fn pull(ch: &dyn FetchChannel, p: &Pull<'_>, out: &Path) -> Result<(), String> {
+    let mut f = std::io::BufWriter::new(std::fs::File::create(out).map_err(|e| format!("write: {e}"))?);
+    let w = p.window.clamp(1, 16).min(p.chunks.max(1) as usize);
+    let links = ch.links(w).await?;
+    let expect = |i: u64| (p.bytes - i * p.chunk_bytes).min(p.chunk_bytes) as usize;
+    let mut rxs = Vec::with_capacity(w);
+    let mut tasks = Vec::with_capacity(w);
+    for (k, mut link) in links.into_iter().enumerate() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<ChunkResult>(1);
+        rxs.push(rx);
+        let (session, chunks, sizes): (String, u64, Vec<usize>) =
+            (p.session.to_owned(), p.chunks, (k as u64..p.chunks).step_by(w).map(expect).collect());
+        tasks.push(tokio::spawn(async move {
+            for (i, size) in (k as u64..chunks).step_by(w).zip(sizes) {
+                let r = read_chunk(link.as_mut(), &session, i, size).await;
+                let failed = r.is_err();
+                if tx.send(r).await.is_err() || failed {
+                    break;
+                }
+            }
+        }));
+    }
+    let result = async {
+        let mut total = Sha256::new();
+        let mut got = 0u64;
+        for i in 0..p.chunks {
+            let (index, data) = rxs[(i as usize) % w].recv().await.ok_or("chunk reader stopped")??;
+            if index != i {
+                return Err("chunk: out of order".to_string());
+            }
+            total.update(&data);
+            f.write_all(&data).map_err(|e| format!("write: {e}"))?;
+            got += data.len() as u64;
         }
-        total.update(&data);
-        f.write_all(&data).map_err(|e| format!("write: {e}"))?;
-        got += data.len() as u64;
+        f.flush().map_err(|e| format!("write: {e}"))?;
+        if got != p.bytes || hex::encode(total.finalize()) != p.sha256 {
+            return Err("transfer checksum mismatch".to_string());
+        }
+        Ok(())
     }
-    f.flush().map_err(|e| format!("write: {e}"))?;
-    if got != bytes || hex::encode(total.finalize()) != sha256 {
-        return Err("transfer checksum mismatch".into());
+    .await;
+    for t in tasks {
+        t.abort();
     }
-    Ok(())
+    result
 }
 
 /// How a downloaded bundle enters the local repository.
@@ -238,6 +374,7 @@ pub async fn fetch_bundle(ch: &dyn FetchChannel, project: &str, dir: &str, want:
 pub struct TarReport {
     /// Bytes received on the wire.
     pub bytes: u64,
+    pub round_trips: u64,
     pub unpacked: Unpacked,
     pub archived: Vec<String>,
     pub excluded: u64,
@@ -253,9 +390,14 @@ pub async fn fetch_tar(ch: &dyn FetchChannel, project: &str, dest: &Path) -> Res
     let unpacked = unpack_tar(tmp.path(), dest)?;
     Ok(Some(TarReport {
         bytes: opened.bytes,
+        round_trips: opened.round_trips,
         unpacked,
         archived: opened.meta["archived"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
         excluded: opened.meta["excluded"].as_u64().unwrap_or(0),
         truncated: opened.meta["truncated"].as_bool().unwrap_or(false),
     }))
 }
+
+#[cfg(test)]
+#[path = "project_fetch_speed_tests.rs"]
+mod speed_tests;

@@ -24,7 +24,7 @@
 //! the spooled stream, never anything under `.weftos/`.
 
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -41,9 +41,12 @@ use crate::project_fetch_policy::authorize;
 use crate::project_fetch_repos::{self as repos, Bundle, RepoEntry};
 use crate::project_fetch_tar::{self as tarc, Exclusions};
 
-/// Raw bytes per chunk: 128 KiB is 171 KiB of base64, two thirds of the
-/// 256 KiB signed-payload limit with room for the envelope.
-pub const CHUNK_BYTES: usize = 128 * 1024;
+/// Largest raw chunk: 2 MiB is 2.7 MiB of base64, inside the 4 MiB signed
+/// response limit (`MAX_CTL_RESPONSE_BYTES`) with room for the envelope. The
+/// member asks for a size at open; it is clamped to [`MIN_CHUNK_BYTES`]..=this.
+pub const CHUNK_BYTES: u64 = 2 * 1024 * 1024;
+/// Smallest chunk a member may ask for.
+pub const MIN_CHUNK_BYTES: u64 = 16 * 1024;
 /// Chain kind of a fetch on either node.
 pub const EVENT_PROJECT_FETCH: &str = "project.fetch";
 /// Spool directory under the runtime dir.
@@ -68,6 +71,18 @@ struct Body {
     session: Option<String>,
     #[serde(default)]
     index: Option<u64>,
+    /// Chunk size the member wants (opens only); clamped.
+    #[serde(default)]
+    chunk_bytes: Option<u64>,
+    /// `chunk` only: send the bytes as a raw frame after the signed answer
+    /// (which then carries `size` and `sha256` instead of base64 `data`).
+    #[serde(default)]
+    raw: bool,
+}
+
+/// The chunk size an open gets: what the member asked, within bounds.
+fn chunk_size(b: &Body) -> u64 {
+    b.chunk_bytes.unwrap_or(CHUNK_BYTES).clamp(MIN_CHUNK_BYTES, CHUNK_BYTES)
 }
 
 struct Session {
@@ -76,9 +91,11 @@ struct Session {
     /// Deleted when the session is dropped.
     _file: tempfile::NamedTempFile,
     /// Opened once after the bundle or tar was written (git renames its
-    /// output into place, so the temp file's own handle is stale).
+    /// output into place, so the temp file's own handle is stale). Reads are
+    /// positional, so parallel chunk calls share it.
     reader: std::fs::File,
     bytes: u64,
+    chunk_bytes: u64,
     chunks: u64,
     touched: Instant,
 }
@@ -127,20 +144,27 @@ impl FetchHost {
         }
     }
 
-    /// Answer one `project.fetch` request from the verified node `requester`.
+    /// Answer one `project.fetch` request from the verified node `requester`
+    /// (a `raw` chunk's bytes are returned inside the JSON here).
     pub async fn serve(self: &Arc<Self>, requester: &str, body: &Value) -> Result<Value, String> {
+        self.serve_raw(requester, body).await.map(|(v, _)| v)
+    }
+
+    /// [`Self::serve`] with a `raw` chunk's bytes beside the JSON, for a hook
+    /// that can send them as a frame.
+    pub async fn serve_raw(self: &Arc<Self>, requester: &str, body: &Value) -> Result<(Value, Option<Vec<u8>>), String> {
         let body: Body = serde_json::from_value(body.clone()).map_err(|e| format!("project.fetch: {e}"))?;
         let (me, who) = (self.clone(), requester.to_owned());
         tokio::task::spawn_blocking(move || me.handle(&who, body)).await.map_err(|e| e.to_string())?
     }
 
     /// Blocking half. Opens and refusals are chained here; chunks are not.
-    fn handle(&self, requester: &str, b: Body) -> Result<Value, String> {
+    fn handle(&self, requester: &str, b: Body) -> Result<(Value, Option<Vec<u8>>), String> {
         self.sweep();
         let chained = |ok: Result<Value, String>, project: &str, op: &str, dir: Option<&str>, bytes: u64| {
             self.record(json!({ "requester": requester, "project": project, "op": op, "dir": dir,
                 "ok": ok.is_ok(), "bytes": bytes, "error": ok.as_ref().err() }));
-            ok
+            ok.map(|v| (v, None))
         };
         match b.op.as_str() {
             "chunk" | "close" => self.session_op(requester, &b),
@@ -160,8 +184,8 @@ impl FetchHost {
                 };
                 let out = match op {
                     "refs" => self.refs(&ctx, dir),
-                    "bundle.open" => self.bundle_open(requester, &ctx, dir, &b.want, &b.have),
-                    _ => self.tar_open(requester, &ctx),
+                    "bundle.open" => self.bundle_open(requester, &ctx, dir, &b),
+                    _ => self.tar_open(requester, &ctx, &b),
                 };
                 let bytes = out.as_ref().ok().and_then(|v| v["bytes"].as_u64()).unwrap_or(0);
                 chained(out, &project, op, Some(dir), bytes)
@@ -217,23 +241,23 @@ impl FetchHost {
         Ok(json!({ "dir": dir, "refs": refs, "head": r.head }))
     }
 
-    fn bundle_open(&self, requester: &str, ctx: &Ctx, dir: &str, want: &[String], have: &[String]) -> Result<Value, String> {
+    fn bundle_open(&self, requester: &str, ctx: &Ctx, dir: &str, b: &Body) -> Result<Value, String> {
         let repo = ctx.repo(dir)?;
         let file = self.spool_file()?;
-        match repos::make_bundle(&repo, file.path(), want, have)? {
+        match repos::make_bundle(&repo, file.path(), &b.want, &b.have)? {
             Bundle::Empty => Ok(json!({ "empty": true, "dir": dir })),
-            Bundle::Written { .. } => self.open_session(requester, &ctx.manifest.id, file, json!({ "dir": dir })),
+            Bundle::Written { .. } => self.open_session(requester, &ctx.manifest.id, file, chunk_size(b), json!({ "dir": dir })),
         }
     }
 
-    fn tar_open(&self, requester: &str, ctx: &Ctx) -> Result<Value, String> {
+    fn tar_open(&self, requester: &str, ctx: &Ctx, b: &Body) -> Result<Value, String> {
         let archive = tarc::read_archive(&ctx.manifest.root)?;
         let plan = tarc::plan(&ctx.exclusions(&archive));
         let file = self.spool_file()?;
         tarc::build_tar(&ctx.manifest.root, &plan, file.path())?;
         let extra = json!({ "files": plan.files.len(), "content_bytes": plan.bytes, "archived": plan.archived,
                             "excluded": plan.excluded, "truncated": plan.truncated, "large": plan.is_large() });
-        self.open_session(requester, &ctx.manifest.id, file, extra)
+        self.open_session(requester, &ctx.manifest.id, file, chunk_size(b), extra)
     }
 
     fn spool_file(&self) -> Result<tempfile::NamedTempFile, String> {
@@ -247,50 +271,58 @@ impl FetchHost {
         tempfile::Builder::new().prefix("fetch-").tempfile_in(&dir).map_err(|e| format!("spool: {e}"))
     }
 
-    fn open_session(&self, requester: &str, project: &str, file: tempfile::NamedTempFile, extra: Value) -> Result<Value, String> {
+    fn open_session(&self, requester: &str, project: &str, file: tempfile::NamedTempFile, chunk_bytes: u64, extra: Value) -> Result<Value, String> {
         let (bytes, sha256) = hash_file(file.path())?;
         let reader = std::fs::File::open(file.path()).map_err(|e| format!("spool: {e}"))?;
-        let chunks = bytes.div_ceil(CHUNK_BYTES as u64);
+        let chunks = bytes.div_ceil(chunk_bytes);
         let id = clawft_kernel::workload_ctl::msg::fresh_nonce();
         let mut s = self.sessions.lock().map_err(|_| "sessions poisoned")?;
         if s.len() >= MAX_SESSIONS || s.values().filter(|x| x.requester == requester).count() >= MAX_PER_PEER {
             return Err("too many open transfers; retry later".into());
         }
-        s.insert(id.clone(), Session { requester: requester.into(), project: project.into(), _file: file, reader, bytes, chunks, touched: Instant::now() });
-        let mut v = json!({ "session": id, "bytes": bytes, "sha256": sha256, "chunk_bytes": CHUNK_BYTES, "chunks": chunks });
+        s.insert(id.clone(), Session { requester: requester.into(), project: project.into(), _file: file, reader, bytes, chunk_bytes, chunks, touched: Instant::now() });
+        let mut v = json!({ "session": id, "bytes": bytes, "sha256": sha256, "chunk_bytes": chunk_bytes, "chunks": chunks });
         if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
             o.extend(e.clone());
         }
         Ok(v)
     }
 
-    fn session_op(&self, requester: &str, b: &Body) -> Result<Value, String> {
+    /// `chunk` and `close`. The sessions lock is held only to look the session
+    /// up and re-check the grant; the read itself is positional on a shared
+    /// handle, so a window of parallel chunk calls does not serialise on it.
+    fn session_op(&self, requester: &str, b: &Body) -> Result<(Value, Option<Vec<u8>>), String> {
+        use std::os::unix::fs::FileExt;
         let id = b.session.as_deref().filter(|s| s.len() == 32).ok_or("session is required")?;
-        let mut s = self.sessions.lock().map_err(|_| "sessions poisoned")?;
-        let sess = s.get_mut(id).filter(|x| x.requester == requester).ok_or("no such transfer")?;
-        if b.op == "close" {
-            s.remove(id);
-            return Ok(json!({ "closed": true }));
-        }
-        // The grant is re-read per chunk: a revocation stops the transfer here.
-        if let Err(e) = authorize(&self.runtime_dir, requester, &sess.project) {
-            let project = sess.project.clone();
-            s.remove(id);
-            self.record(json!({ "requester": requester, "project": project, "op": "chunk", "ok": false, "error": e }));
-            return Err(e);
-        }
-        let index = b.index.ok_or("index is required")?;
-        if index >= sess.chunks {
-            return Err("chunk index out of range".into());
-        }
-        let offset = index * CHUNK_BYTES as u64;
-        let len = (sess.bytes - offset).min(CHUNK_BYTES as u64) as usize;
+        let (reader, offset, len, index) = {
+            let mut s = self.sessions.lock().map_err(|_| "sessions poisoned")?;
+            let sess = s.get_mut(id).filter(|x| x.requester == requester).ok_or("no such transfer")?;
+            if b.op == "close" {
+                s.remove(id);
+                return Ok((json!({ "closed": true }), None));
+            }
+            // The grant is re-read per chunk: a revocation stops the transfer here.
+            if let Err(e) = authorize(&self.runtime_dir, requester, &sess.project) {
+                let project = sess.project.clone();
+                s.remove(id);
+                self.record(json!({ "requester": requester, "project": project, "op": "chunk", "ok": false, "error": e }));
+                return Err(e);
+            }
+            let index = b.index.ok_or("index is required")?;
+            if index >= sess.chunks {
+                return Err("chunk index out of range".into());
+            }
+            let offset = index * sess.chunk_bytes;
+            sess.touched = Instant::now();
+            (sess.reader.try_clone().map_err(|e| format!("spool: {e}"))?, offset, (sess.bytes - offset).min(sess.chunk_bytes) as usize, index)
+        };
         let mut buf = vec![0u8; len];
-        sess.reader.seek(SeekFrom::Start(offset)).map_err(|e| format!("spool: {e}"))?;
-        sess.reader.read_exact(&mut buf).map_err(|e| format!("spool: {e}"))?;
-        sess.touched = Instant::now();
-        Ok(json!({ "index": index, "sha256": hex::encode(Sha256::digest(&buf)),
-                   "data": base64::engine::general_purpose::STANDARD.encode(&buf) }))
+        reader.read_exact_at(&mut buf, offset).map_err(|e| format!("spool: {e}"))?;
+        let sha256 = hex::encode(Sha256::digest(&buf));
+        if b.raw {
+            return Ok((json!({ "index": index, "sha256": sha256, "size": len, "raw": true }), Some(buf)));
+        }
+        Ok((json!({ "index": index, "sha256": sha256, "data": base64::engine::general_purpose::STANDARD.encode(&buf) }), None))
     }
 
     fn sweep(&self) {

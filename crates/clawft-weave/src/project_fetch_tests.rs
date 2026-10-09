@@ -21,37 +21,48 @@ use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::project_fetch_client::{self as client, BundleMode, FetchChannel, PlaneChannel, RemoteUrl};
+use crate::mesh_names::MeshNames;
+use crate::project_fetch_client::{self as client, BundleMode, FetchChannel, PlaneChannel};
 use crate::project_fetch_grants::FETCH_FILE as GRANTS_FILE;
+use crate::weftos_uri::WeftosUri;
 use crate::project_fetch_policy::FetchPeerPolicy;
 use crate::project_fetch_repos::git;
 use crate::project_fetch_serve::FetchHost;
 use crate::project_install::{InstallRequest, PrimaryRef, ProjectFetcher};
 
-const ULID: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1C";
+pub(crate) const ULID: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1C";
+/// The member's mesh (the authority its clones are named on).
+pub(crate) const MESH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// The member's mesh names for a fetcher under test.
+pub(crate) fn mesh_names() -> MeshNames {
+    let mut id = [0u8; 32];
+    hex::decode_to_slice(MESH, &mut id).unwrap();
+    MeshNames { mesh: Some(id), aliases: vec![] }
+}
 const OTHER: &str = "01K6ZQ8N3T4V5W6X7Y8Z9A0B1D";
 const T: Duration = Duration::from_secs(30);
 
-fn exchange(id: &str, chain: &Arc<ChainManager>) -> Arc<ArtifactExchange> {
+pub(crate) fn exchange(id: &str, chain: &Arc<ChainManager>) -> Arc<ArtifactExchange> {
     let mut ex = ArtifactExchange::new(id, Arc::new(ArtifactStore::new_memory()), ExchangeConfig::default()).unwrap();
     ex.set_chain_manager(chain.clone());
     Arc::new(ex)
 }
 
-fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
+pub(crate) fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
     Arc::new(WorkloadGate::exempt(0.95, false, "test").with_chain(chain.clone()))
 }
 
-fn w(p: &Path, text: &str) {
+pub(crate) fn w(p: &Path, text: &str) {
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(p, text).unwrap();
 }
 
-fn g(repo: &Path, args: &[&str]) -> String {
+pub(crate) fn g(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&git(repo, args, None, T).unwrap()).trim().to_owned()
 }
 
-fn commit(repo: &Path, msg: &str) -> String {
+pub(crate) fn commit(repo: &Path, msg: &str) -> String {
     g(repo, &["add", "-A"]);
     g(repo, &["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", msg]);
     g(repo, &["rev-parse", "HEAD"])
@@ -63,33 +74,37 @@ struct Admin(Arc<FetchHost>);
 #[async_trait]
 impl NodeAdmin for Admin {
     async fn call(&self, m: &str, requester: &str, body: &Value) -> Result<Value, String> {
+        self.call_raw(m, requester, body).await.map(|(v, _)| v)
+    }
+    async fn call_raw(&self, m: &str, requester: &str, body: &Value) -> Result<(Value, Option<Vec<u8>>), String> {
         if m != method::PROJECT_FETCH {
             return Err(format!("{m} is not served"));
         }
-        self.0.serve(requester, body).await
+        self.0.serve_raw(requester, body).await
     }
 }
 
-struct Rig {
-    tmp: tempfile::TempDir,
+pub(crate) struct Rig {
+    pub(crate) tmp: tempfile::TempDir,
     /// Primary runtime dir (peer + grant files).
-    rt: PathBuf,
-    root: PathBuf,
-    host_id: String,
-    member_key: SigningKey,
-    host_chain: Arc<ChainManager>,
-    member_chain: Arc<ChainManager>,
-    addr: String,
-    conn: Arc<MeshConnector>,
+    pub(crate) rt: PathBuf,
+    pub(crate) root: PathBuf,
+    pub(crate) host_id: String,
+    pub(crate) member_key: SigningKey,
+    pub(crate) host_chain: Arc<ChainManager>,
+    pub(crate) member_chain: Arc<ChainManager>,
+    pub(crate) fetch_host: Arc<FetchHost>,
+    pub(crate) addr: String,
+    pub(crate) conn: Arc<MeshConnector>,
 }
 
 impl Rig {
-    fn peers(&self, tier: &str) {
+    pub(crate) fn peers(&self, tier: &str) {
         let k = hex::encode(self.member_key.verifying_key().to_bytes());
         w(&self.rt.join("workload-peers.json"), &format!("[{{\"addr\":\"127.0.0.1:9471\",\"tier\":\"{tier}\",\"key\":\"{k}\"}}]"));
     }
 
-    fn grant(&self, projects: &[&str]) {
+    pub(crate) fn grant(&self, projects: &[&str]) {
         let member = node_id_from_pubkey(&self.member_key.verifying_key().to_bytes());
         let p: Vec<String> = projects.iter().map(|s| format!("\"{s}\"")).collect();
         w(&self.rt.join(GRANTS_FILE), &format!("{{\"version\":1,\"grants\":[{{\"peer_node\":\"{member}\",\"projects\":[{}]}}]}}", p.join(",")));
@@ -100,7 +115,7 @@ impl Rig {
     }
 
     /// The member's control plane; learning the primary is a signed `describe`.
-    async fn plane(&self) -> Result<Arc<PlacementControlPlane>, String> {
+    pub(crate) async fn plane(&self) -> Result<Arc<PlacementControlPlane>, String> {
         let id = node_id_from_pubkey(&self.member_key.verifying_key().to_bytes());
         let plane = PlacementControlPlane::new(self.member_key.clone(), gate(&self.member_chain), self.member_chain.clone(), exchange(&id, &self.member_chain), TrustAnchors::default(), self.conn.clone());
         plane.add_target(&self.addr, TrustTier::Pinned).await.map_err(|e| e.to_string())?;
@@ -116,10 +131,10 @@ impl Rig {
     }
 
     async fn channel(&self) -> PlaneChannel {
-        PlaneChannel { plane: self.plane().await.unwrap(), node: self.host_id.clone() }
+        PlaneChannel::new(self.plane().await.unwrap(), self.host_id.clone())
     }
 
-    fn dest(&self) -> PathBuf {
+    pub(crate) fn dest(&self) -> PathBuf {
         self.tmp.path().join("member").join("Projects").join("demo")
     }
 }
@@ -127,7 +142,7 @@ impl Rig {
 /// A primary holding one project: a root repository with `README`, an ignored
 /// `data/` tree, a sibling-style sub-repository `tools/`, an archived
 /// `models/`, a `.env`, and a symlink out of the project.
-async fn rig() -> Rig {
+pub(crate) async fn rig() -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let rt = tmp.path().join("primary-rt");
     let manifests = tmp.path().join("primary-manifests");
@@ -180,10 +195,10 @@ async fn rig() -> Rig {
         .with_chain(host_chain.clone());
     let now_s = chrono::Utc::now().timestamp() as u64;
     svc.set_facts(sign_node_facts(&NodeFacts::new(host_id.clone(), now_s, 600, 1), &host_key).unwrap());
-    assert!(svc.set_node_admin(Arc::new(Admin(fetch))));
+    assert!(svc.set_node_admin(Arc::new(Admin(fetch.clone()))));
     let conn = Arc::new(MeshConnector::new(false));
     let addr = conn.register_local("primary", Arc::new(svc));
-    Rig { tmp, rt, root, host_id, member_key, host_chain, member_chain: Arc::new(ChainManager::new(0, 1000)), addr, conn }
+    Rig { tmp, rt, root, host_id, member_key, host_chain, member_chain: Arc::new(ChainManager::new(0, 1000)), fetch_host: fetch, addr, conn }
 }
 
 fn kinds(c: &ChainManager, kind: &str) -> Vec<Value> {
@@ -206,7 +221,7 @@ async fn a_paired_member_clones_every_repository_and_the_non_git_content_then_pu
     r.peers("pinned");
     r.grant(&[ULID]);
     let plane = r.plane().await.unwrap();
-    let f = MeshFetcher::with_plane(plane.clone(), Some(r.member_chain.clone()));
+    let f = MeshFetcher::with_plane(plane.clone(), Some(r.member_chain.clone())).with_mesh(mesh_names());
     let req = request(&r);
     assert!(f.can_fetch(&req));
     let dest = r.dest();
@@ -216,10 +231,13 @@ async fn a_paired_member_clones_every_repository_and_the_non_git_content_then_pu
     let dirs: Vec<&str> = rep.repos.iter().map(|x| x.dir.as_str()).collect();
     assert_eq!(dirs, vec![".", "tools"]);
     assert!(rep.repos[0].head.is_some());
-    assert_eq!(rep.repos[0].remote.as_deref(), Some(format!("weftos://{}/{ULID}/.", r.host_id).as_str()));
+    // Clones are named on the mesh, not on the node that served them (ADR-114).
+    assert_eq!(rep.repos[0].remote.as_deref(), Some(format!("weftos://{MESH}/projects/{ULID}").as_str()));
+    assert_eq!(rep.repos[1].remote.as_deref(), Some(format!("weftos://{MESH}/projects/{ULID}/repos/tools").as_str()));
     assert_eq!(std::fs::read_to_string(dest.join("README.md")).unwrap(), "# demo\n");
     assert_eq!(g(&dest, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
-    assert_eq!(g(&dest, &["config", "remote.origin.url"]), format!("weftos://{}/{ULID}/.", r.host_id));
+    assert_eq!(g(&dest, &["config", "remote.origin.url"]), format!("weftos://{MESH}/projects/{ULID}"));
+    assert_eq!(WeftosUri::parse(&g(&dest, &["config", "remote.origin.url"])).unwrap().project_repo(), Some((ULID, ".")));
     // The sibling layout: `tools` next to the root checkout.
     assert!(dest.parent().unwrap().join("tools/run.sh").exists());
     // Non-git content arrived; what must stay home stayed home.
@@ -247,7 +265,7 @@ async fn a_paired_member_clones_every_repository_and_the_non_git_content_then_pu
     let old = g(&dest, &["rev-parse", "HEAD"]);
     w(&r.root.join("new.txt"), "new\n");
     let new = commit(&r.root, "second");
-    let ch = PlaneChannel { plane, node: r.host_id.clone() };
+    let ch = PlaneChannel::new(plane, r.host_id.clone());
     let gitdir = dest.join(".git");
     let want = vec!["refs/heads/main".to_string()];
     let bytes = client::fetch_bundle(&ch, ULID, ".", &want, std::slice::from_ref(&old), &gitdir, BundleMode::Unbundle).await.unwrap();
@@ -311,7 +329,7 @@ async fn a_revoked_peer_is_stopped_on_the_next_call_and_mid_transfer() {
     r.grant(&[ULID]);
     let plane = r.plane().await.unwrap();
     std::fs::remove_file(r.rt.join("workload-peers.json")).unwrap();
-    let f = MeshFetcher::with_plane(plane, None);
+    let f = MeshFetcher::with_plane(plane, None).with_mesh(mesh_names());
     assert!(f.can_fetch(&request(&r)), "the member's own view still lists the primary");
     let e = f.fetch(&request(&r), &r.dest()).await.unwrap_err();
     assert!(e.contains("unauthorized"), "the primary no longer admits the key at all: {e}");
@@ -349,8 +367,8 @@ async fn paths_outside_the_project_are_refused() {
     assert!(e.contains("not a branch or tag"), "{e}");
     let e = ch.call(json!({"op": "bundle.open", "project": ULID, "dir": ".", "want": ["refs/heads/main"], "have": ["../../x"]})).await.unwrap_err();
     assert!(e.contains("object ids"), "{e}");
-    assert!(RemoteUrl::parse(&format!("weftos://{}/{ULID}/../x", r.host_id)).is_err());
-    assert!(RemoteUrl::parse(&format!("weftos://{}/{ULID}/.weftos", r.host_id)).is_err());
+    assert!(WeftosUri::parse(&format!("weftos://{MESH}/projects/{ULID}/repos/../x")).is_err());
+    assert_eq!(WeftosUri::parse(&format!("weftos://{MESH}/projects/{ULID}/repos/.weftos")).unwrap().project_repo(), None);
 }
 
 #[tokio::test]
@@ -373,13 +391,13 @@ async fn a_workspace_copy_never_serves_and_a_second_project_is_invisible() {
 }
 
 #[test]
-fn urls_and_layout() {
-    let u = RemoteUrl::parse(&format!("weftos://node-1/{ULID}/tools")).unwrap();
-    assert_eq!((u.node.as_str(), u.project.as_str(), u.dir.as_str()), ("node-1", ULID, "tools"));
-    assert_eq!(RemoteUrl::parse(&format!("weftos://node-1/{ULID}")).unwrap().dir, ".");
-    assert_eq!(RemoteUrl::parse(&format!("weftos://node-1/{ULID}/")).unwrap().url(), format!("weftos://node-1/{ULID}/."));
-    for bad in ["https://x/y", "weftos:///x", "weftos://n/not-a-ulid", &format!("weftos://n/{ULID}/a/b"), &format!("weftos://n o/{ULID}")] {
-        assert!(RemoteUrl::parse(bad).is_err(), "{bad}");
+fn names_and_layout() {
+    let u = WeftosUri::parse(&format!("weftos://lab/projects/{ULID}/repos/tools")).unwrap();
+    assert_eq!(u.project_repo(), Some((ULID, "tools")));
+    assert_eq!(WeftosUri::parse(&format!("weftos://lab/projects/{ULID}")).unwrap().project_repo(), Some((ULID, ".")));
+    // The old node-addressed form and anything outside the grammar are not names.
+    for bad in ["https://x/y", "weftos:///x", &format!("weftos://n/{ULID}/."), &format!("weftos://n/{ULID}/tools"), &format!("weftos://n/projects/{ULID}/"), &format!("weftos://n o/projects/{ULID}")] {
+        assert!(WeftosUri::parse(bad).is_err(), "{bad}");
     }
     let t = Path::new("/home/m/Projects/demo");
     assert_eq!(layout(t, true, "."), t);

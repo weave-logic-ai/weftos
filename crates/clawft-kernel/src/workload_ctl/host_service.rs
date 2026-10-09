@@ -416,6 +416,20 @@ impl WorkloadHostService {
         signed: &SignedCtl,
         fetch: Option<&mut PeerSet>,
     ) -> (SignedCtl, bool) {
+        let (resp, authenticated, _) = self.handle_checked_raw(header_method, signed, fetch).await;
+        (resp, authenticated)
+    }
+
+    /// [`Self::handle_checked`], also returning the raw bytes a node-admin
+    /// hook attached to its result (announced as `trailing` in the signed
+    /// response). The transport sends them as one frame right after the
+    /// response; a caller that cannot must not ask for them.
+    pub async fn handle_checked_raw(
+        &self,
+        header_method: &str,
+        signed: &SignedCtl,
+        fetch: Option<&mut PeerSet>,
+    ) -> (SignedCtl, bool, Option<Vec<u8>>) {
         let verified = verify_request(
             signed,
             &self.node_id,
@@ -434,24 +448,27 @@ impl WorkloadHostService {
             }
         });
         let authenticated = verified.is_ok();
-        let (nonce, method_name, outcome) = match verified {
+        let (nonce, method_name, outcome, trailer) = match verified {
             Err(r) => {
                 self.refused(None, "verify", &r);
                 // Unauthenticated nonce, only to bind the refusal.
                 let claimed: Option<CtlRequest> = serde_json::from_str(&signed.payload).ok();
                 let nonce = claimed.map(|c| c.nonce).unwrap_or_default();
-                (nonce, header_method.to_string(), Err(r))
+                (nonce, header_method.to_string(), Err(r), None)
             }
             Ok(req) => {
                 if req.requester != self.node_id {
                     self.last_contact_ms
                         .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
                 }
-                let out = self.dispatch(&req, fetch).await;
+                let (out, trailer) = match self.dispatch_raw(&req, fetch).await {
+                    Ok((v, t)) => (Ok(v), t),
+                    Err(r) => (Err(r), None),
+                };
                 if let Err(r) = &out {
                     self.refused(Some(&req), "handle", r);
                 }
-                (req.nonce, req.method, out)
+                (req.nonce, req.method, out, trailer)
             }
         };
         let resp = CtlResponse {
@@ -463,9 +480,30 @@ impl WorkloadHostService {
                 Ok(result) => CtlOutcome::Ok { result },
                 Err(refusal) => CtlOutcome::Refused { refusal },
             },
+            trailing: trailer.as_ref().map(|t| t.len() as u64),
         }
         .sign(&self.key);
-        (resp, authenticated)
+        (resp, authenticated, trailer)
+    }
+
+    /// A decision id is the chain hash of the controller's decision.
+    fn valid_decision(req: &CtlRequest) -> bool {
+        req.decision_id
+            .as_deref()
+            .is_some_and(|d| crate::workload_pkg::codec::is_lower_hex(d, 64))
+    }
+
+    /// [`Self::dispatch`] keeping a node-admin hook's raw bytes (every other
+    /// method answers JSON only).
+    async fn dispatch_raw(
+        &self,
+        req: &CtlRequest,
+        fetch: Option<&mut PeerSet>,
+    ) -> Result<(Value, Option<Vec<u8>>), Refusal> {
+        if method::is_node_admin(&req.method) && (!method::mutates(&req.method) || Self::valid_decision(req)) {
+            return self.node_admin_op(req).await;
+        }
+        self.dispatch(req, fetch).await.map(|v| (v, None))
     }
 
     async fn dispatch(
@@ -473,12 +511,7 @@ impl WorkloadHostService {
         req: &CtlRequest,
         fetch: Option<&mut PeerSet>,
     ) -> Result<Value, Refusal> {
-        // A decision id is the chain hash of the controller's decision.
-        let valid_id = req
-            .decision_id
-            .as_deref()
-            .is_some_and(|d| crate::workload_pkg::codec::is_lower_hex(d, 64));
-        if method::mutates(&req.method) && !valid_id {
+        if method::mutates(&req.method) && !Self::valid_decision(req) {
             return Err(refuse(
                 RefusalCode::InvalidRequest,
                 "mutations carry a decision id (64 hex chain hash)",
@@ -488,7 +521,7 @@ impl WorkloadHostService {
             method::DESCRIBE => {
                 Ok(json!({ "facts": self.current_facts(), "advertisement": self.advertisement() }))
             }
-            m if method::is_node_admin(m) => self.node_admin_op(req).await,
+            m if method::is_node_admin(m) => self.node_admin_op(req).await.map(|(v, _)| v),
             method::PLACE | method::LOAD => self.place(req, fetch).await,
             method::START | method::STOP | method::UNLOAD | method::STATUS | method::LOGS => {
                 self.instance_op(req).await

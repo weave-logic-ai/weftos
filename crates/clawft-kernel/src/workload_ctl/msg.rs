@@ -34,8 +34,12 @@ pub const RESPONSE_DOMAIN: &[u8] = b"weftos.workload_ctl.response.v1\0";
 pub const MAX_TTL_MS: u64 = 300_000;
 /// Tolerated clock skew for `issued_at_ms`.
 pub const MAX_SKEW_MS: u64 = 30_000;
-/// Largest signed payload.
+/// Largest signed request payload.
 pub const MAX_CTL_BYTES: usize = 256 * 1024;
+/// Largest signed response payload: a bulk read (a `project.fetch` chunk,
+/// base64 in JSON) is answered in one frame; the mesh and IPC layers carry
+/// 16 MiB, so this stays well inside them.
+pub const MAX_CTL_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 /// Most nonces remembered at once (fail closed when full).
 pub const MAX_NONCES: usize = 8192;
 /// Target id a `describe` may use before the caller knows the node id.
@@ -238,6 +242,12 @@ pub struct CtlResponse {
     pub request_nonce: String,
     /// Outcome.
     pub outcome: CtlOutcome,
+    /// Byte count of one raw frame that follows this response on the same
+    /// connection (a bulk read the caller asked for in binary, ADR-108 P3b).
+    /// The frame is not signed; the signed result carries its SHA-256, which
+    /// the caller checks. Absent for every ordinary response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing: Option<u64>,
 }
 
 pub(crate) fn signed_bytes(domain: &[u8], payload: &str) -> Vec<u8> {
@@ -259,7 +269,8 @@ pub(crate) fn sign(domain: &[u8], payload: String, key: &SigningKey) -> SignedCt
 /// Check the envelope signature; returns the signer's raw key.
 pub(crate) fn open(domain: &[u8], s: &SignedCtl) -> Result<[u8; 32], Refusal> {
     let bad = |m: &str| Refusal::new(RefusalCode::Signature, m);
-    if s.payload.len() > MAX_CTL_BYTES {
+    let max = if domain == RESPONSE_DOMAIN { MAX_CTL_RESPONSE_BYTES } else { MAX_CTL_BYTES };
+    if s.payload.len() > max {
         return Err(bad("payload too large"));
     }
     let pk = hex_decode_exact::<32>(&s.public_key).ok_or_else(|| bad("bad public key"))?;

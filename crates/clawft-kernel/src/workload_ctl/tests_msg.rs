@@ -151,6 +151,7 @@ fn response_is_bound_to_request_and_responder() {
         responder: host.clone(),
         request_nonce: r.nonce.clone(),
         outcome: CtlOutcome::Ok { result: json!({}) },
+        trailing: None,
     };
     let s = resp.sign(&host_key);
     let pk = host_key.verifying_key().to_bytes();

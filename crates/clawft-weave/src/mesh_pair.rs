@@ -278,6 +278,10 @@ pub fn apply(deps: &PairDeps, action_id: &str, payload: &Value) -> Result<Value,
     let kind = match p.op {
         Op::Add => {
             peers_add(dir, &key_hex, tier, &p.advertise)?;
+            if !p.we_are_primary() {
+                // The member remembers which primary serves which projects (ADR-114 names).
+                crate::mesh_pairings::upsert(dir, &p.peer_node, "primary", &p.projects, &p.advertise)?;
+            }
             if p.we_are_primary() {
                 project_fetch_grants::grant(
                     dir,
@@ -294,6 +298,7 @@ pub fn apply(deps: &PairDeps, action_id: &str, payload: &Value) -> Result<Value,
         }
         Op::Remove => {
             peers_remove(dir, &key_hex)?;
+            crate::mesh_pairings::remove(dir, &p.peer_node)?;
             project_fetch_grants::revoke(dir, &p.peer_node)?;
             CHAIN_REMOVE
         }

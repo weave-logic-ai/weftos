@@ -55,8 +55,9 @@ project on every operation.
 
 ## How the transfer works
 
-The node-admin channel is one signed request and one signed response, each at
-most 256 KiB. A fetch is therefore a spooled session on the primary:
+The node-admin channel is one signed request and one signed response (a
+request at most 256 KiB, a response at most 4 MiB). A fetch is therefore a
+spooled session on the primary:
 
 - `list` — the project's repositories (`dir`, `head`, `branch`), the size of its
   non-git content, whether that is over the D-C threshold, and the archived
@@ -67,10 +68,32 @@ most 256 KiB. A fetch is therefore a spooled session on the primary:
   ignored). Full history on a clone; only new commits on a later pull. "Nothing
   to send" is an explicit answer, not an empty file.
 - `tar.open` — the non-git content as a tar.
-- `chunk` — 128 KiB pieces, base64, each with its own SHA-256; the open answer
+- `chunk` — pieces of the size the member asked for at open (16 KiB to 2 MiB;
+  an install asks for 2 MiB), each with its own SHA-256; the open answer
   carries the whole file's size and SHA-256 and both are checked by the member.
 - `close` — releases the spool file (15 minute TTL otherwise; at most 4 open
   transfers per peer, 32 per node).
+
+Chunks do not travel one connection per call. The member opens a window of
+signed sessions to the primary (six by default), each a connection kept open
+for the whole transfer, and session `k` reads chunks `k, k+6, k+12, ...`; the
+file is written strictly in order. Every request on a session is still its own
+signed `CtlRequest` with a fresh nonce and expiry, checked by the primary's
+controller policy and replay guard, and every answer is signed and bound to
+its request; the grant is re-read per chunk, so a revocation stops the window
+at its next reads and the transfer fails (nothing is unpacked). A chunk asked
+for with `raw: true` comes back as one unsigned frame after the signed answer,
+which carries the frame's size and SHA-256 (the member checks it): no base64,
+and the signature covers the hash rather than megabytes of payload. The
+`git-remote-weftos` helper gets its chunks base64 over the daemon's local JSON
+socket; the daemon keeps a small pool of sessions per primary and uses raw
+frames on the mesh leg.
+
+Measured over the in-process signed wire (dev profile, 200 MiB of non-git
+content): 1603 round trips at 4.0 MiB/s before, 103 round trips at 11.1 MiB/s
+after; with 10 ms added per answer, 3.2 MiB/s before and 12.0 MiB/s after. What
+remains is per-byte work on both ends (SHA-256 of every chunk and of the whole
+file, the tar build and unpack), not the wire.
 
 Repositories are the project root (`.`), non-hidden directories one level below
 it that have a `.git`, and sibling directories a workspace manifest lists; at
@@ -122,17 +145,43 @@ result's `warnings` names the size and the biggest top-level entries so the
 member can mark them. The `tar.open` operation itself still serves it when asked
 for explicitly.
 
+## Names (ADR-114)
+
+Each clone is left with `origin` on the repository's `weftos://` name:
+
+```text
+weftos://<mesh>/projects/<ULID>            the project's root repository
+weftos://<mesh>/projects/<ULID>/repos/<dir> a sibling repository
+```
+
+`<mesh>` is the mesh's id (64 lowercase hex) or a local alias in lowercase DNS
+form that this node maps to its own mesh (`<runtime>/mesh-aliases.json`, a JSON
+array). A name identifies a thing, not a location: the node that serves it is
+looked up on the member from `mesh-pairings.json`, which the `pair` action
+writes (the primary and the projects the approval named). A name whose
+authority is not this mesh, whose project has no paired primary, or whose path
+is not a repository gets one and the same refusal, `no such name on this mesh`.
+
+The grammar is `weftos://<authority>/<kind>/<id>[/<segment>...][?rev=sha256:<64 hex>[&view=abstract|overview|content]]`
+with kinds companies, projects, goals, tickets, installations, members, nodes,
+hosts, services, cogs, teams, agents, memory, sensors (only project
+repositories resolve today; nodes are `nodes/<node id>[/services/<name>]`).
+Parsing refuses any `%`, non-ASCII, fragments, userinfo, ports, empty,
+trailing, `.` and `..` segments, uppercase in structural tokens, unknown or
+repeated query keys, and reproduces an accepted name byte for byte
+(`crates/clawft-weave/src/weftos_uri.rs`).
+
 ## The remote helper
 
-Each clone is left with `origin = weftos://<primary mesh node id>/<ULID>/<dir>`.
 `git fetch`/`git pull` run `git-remote-weftos` (shipped next to `weaver`; it
 must be on `PATH`), which speaks git's remote-helper protocol with the `fetch`
 capability only: `list` returns the primary's refs and HEAD, `fetch` sends the
 tips of every local ref as `have`, receives a bundle of what is missing and
 `git bundle unbundle`s it. Push is refused: pushes go to the project's normal
-git remote. The helper talks to the local user daemon over its RPC socket
-(`project.fetch`, Admin, which the local socket owner holds) and the daemon
-forwards to the primary; no network code in the helper.
+git remote. The helper only parses the name; it talks to the local user daemon
+over its RPC socket (`project.fetch` with `{uri, body}`, Admin, which the local
+socket owner holds) and the daemon checks the mesh, resolves the primary and
+forwards; no network code in the helper.
 
 Install layout: the `.` repository goes to the target path, a sibling `dir` to
 `<parent of target>/<dir>`; with no `.` repository every `dir` goes under
@@ -156,8 +205,9 @@ the contract's `{fetcher: "mesh", root, repos, bytes, archived, warnings}`.
 
 - Ignored content is collected for the root repository and sub-repositories
   inside the root, not for sibling repositories listed in a manifest.
-- Each chunk is one signed round trip; a multi-gigabyte tree is slow. Mark it or
-  move it to the archive area.
+- A multi-gigabyte tree still costs a SHA-256 pass per chunk on both ends plus
+  the whole-file hash; mark what does not belong in a working copy or move it
+  to the archive area.
 - `git-remote-weftos` has been exercised through its library path (the same
   bundle code the install uses); a clone through a live daemon end to end is the
   first thing to do on real nodes.
