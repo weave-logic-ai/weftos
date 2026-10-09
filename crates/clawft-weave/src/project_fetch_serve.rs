@@ -116,6 +116,11 @@ impl FetchHost {
         self
     }
 
+    /// The chain this server records on (the daemon's, once placement is built).
+    pub fn chain(&self) -> Option<Arc<ChainManager>> {
+        self.chain.clone()
+    }
+
     fn record(&self, payload: Value) {
         if let Some(c) = &self.chain {
             c.append(HOST_CHAIN_SOURCE, EVENT_PROJECT_FETCH, Some(payload));

@@ -39,13 +39,37 @@ pub struct InstallEnv {
     /// The `weft` binary; `None` looks next to the running binary, then `PATH`.
     pub weft: Option<PathBuf>,
     pub git: GitRunner,
+    /// Where `pair-requests.json` lives (the daemon's runtime dir, next to the
+    /// trust files): an install that names a primary no fetcher can reach
+    /// records a pair request there (ADR-108 P2b). `None` records nothing.
+    pub pair_requests_dir: Option<PathBuf>,
 }
 
 impl InstallEnv {
     /// The running user's home and manifest store; `None` without a home.
     pub fn from_process() -> Option<Self> {
         let home = clawft_types::runtime_paths::home_dir()?;
-        Some(Self { manifests_dir: crate::user_daemon::manifests_dir(&home), home, weft: None, git: GitRunner::default() })
+        Some(Self {
+            manifests_dir: crate::user_daemon::manifests_dir(&home),
+            home,
+            weft: None,
+            git: GitRunner::default(),
+            pair_requests_dir: Some(crate::protocol::runtime_dir()),
+        })
+    }
+
+    /// No fetcher could serve `req`: when it names a primary, ask to pair with
+    /// it so the next attempt can go over the mesh, and say so in the error.
+    fn no_fetcher(&self, req: &InstallRequest) -> String {
+        let base = "no fetcher can serve this request on this node".to_owned();
+        let (Some(primary), Some(dir)) = (&req.primary, &self.pair_requests_dir) else { return base };
+        match crate::mesh_pair_requests::record(dir, &primary.node_id, std::slice::from_ref(&req.project_ulid)) {
+            Ok(r) => format!(
+                "{base}; pair request {} recorded for primary {} (approve it in the dashboard, then retry the install)",
+                r.request_id, primary.node_id
+            ),
+            Err(e) => format!("{base}; could not record a pair request for primary {}: {e}", primary.node_id),
+        }
     }
 
     fn weft_bin(&self) -> Result<PathBuf, String> {
@@ -60,7 +84,13 @@ impl InstallEnv {
 
 /// The handlers of this module, ready for `default_handlers()`.
 pub fn handlers(env: InstallEnv) -> Vec<Arc<dyn ActionHandler>> {
-    let fetchers: Vec<Arc<dyn ProjectFetcher>> = vec![Arc::new(GitRemoteFetcher::with_runner(env.git.clone()))];
+    #[allow(unused_mut)]
+    let mut fetchers: Vec<Arc<dyn ProjectFetcher>> = vec![Arc::new(GitRemoteFetcher::with_runner(env.git.clone()))];
+    // ADR-108 P3b: the mesh fetcher goes first through `fetch_order`; it says
+    // no until placement is built and the primary is a paired peer. Its chain
+    // is the daemon's, found once placement has it.
+    #[cfg(all(feature = "placement", unix))]
+    fetchers.push(Arc::new(crate::project_fetch_mesh::MeshFetcher::daemon(None)));
     vec![
         Arc::new(InstallHandler::new(env.clone(), fetchers)),
         Arc::new(UpdateHandler { env: env.clone() }),
@@ -85,7 +115,7 @@ impl InstallHandler {
         let target = req.validate(&self.env.home).map_err(|e| e.to_string())?;
         let placements = plan(&req, &target)?;
         check_free(&placements, &target)?;
-        let fetcher = fetch_order(&self.fetchers, &req).ok_or("no fetcher can serve this request on this node")?.clone();
+        let fetcher = fetch_order(&self.fetchers, &req).ok_or_else(|| self.env.no_fetcher(&req))?.clone();
         let weft = self.env.weft_bin()?;
         let rollback = Rollback::snapshot(&placements, &target);
         let done = async {

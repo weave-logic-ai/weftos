@@ -24,7 +24,15 @@ fn fx(weft_exit: i32) -> Fx {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
     let weft = fake_weft(&bin, weft_exit);
-    let env = InstallEnv { manifests_dir: home.join(".weftos/projects"), home: home.clone(), weft: Some(weft), git: test_runner() };
+    let run = t.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let env = InstallEnv {
+        manifests_dir: home.join(".weftos/projects"),
+        home: home.clone(),
+        weft: Some(weft),
+        git: test_runner(),
+        pair_requests_dir: Some(run),
+    };
     Fx { _t: t, home, bin, env }
 }
 
@@ -145,6 +153,32 @@ async fn no_usable_fetcher_fails_cleanly() {
     let out = mesh_only.handle(&action("install", install_payload("~/p", TWO()))).await;
     assert_eq!(out.status, "failed");
     assert!(out.result["error"].as_str().unwrap().contains("no fetcher"));
+    let run = f.env.pair_requests_dir.as_ref().unwrap();
+    assert!(crate::mesh_pair_requests::list(run).unwrap().is_empty(), "no primary named: nothing to pair with");
+}
+
+#[tokio::test]
+async fn no_usable_fetcher_with_a_primary_records_a_pair_request() {
+    let f = fx(0);
+    let primary = "0123456789abcdef0123456789abcdef";
+    let mesh_only = InstallHandler::new(f.env.clone(), vec![]);
+    let mut payload = install_payload("~/p", TWO());
+    payload["primary"] = json!({ "node_id": primary });
+    let out = mesh_only.handle(&action("install", payload.clone())).await;
+    assert_eq!(out.status, "failed");
+    let err = out.result["error"].as_str().unwrap();
+    assert!(err.contains("no fetcher") && err.contains("pair request") && err.contains(primary), "{err}");
+    let run = f.env.pair_requests_dir.as_ref().unwrap();
+    let reqs = crate::mesh_pair_requests::list(run).unwrap();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].with_node, primary);
+    assert_eq!(reqs[0].projects, vec![ULID.to_owned()]);
+    assert!(err.contains(&reqs[0].request_id));
+    assert!(!f.home.join("p").exists(), "nothing fetched");
+
+    // A retry before approval does not pile up requests.
+    mesh_only.handle(&action("install", payload)).await;
+    assert_eq!(crate::mesh_pair_requests::list(run).unwrap().len(), 1);
 }
 
 #[tokio::test]

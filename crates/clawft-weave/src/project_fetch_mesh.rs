@@ -53,9 +53,17 @@ impl MeshFetcher {
         Self { source: PlaneSource::Fixed(plane), chain, fetch_large: false }
     }
 
-    /// The daemon's: resolves the control plane per call.
+    /// The daemon's: resolves the control plane per call. With `None` the
+    /// chain is the one placement gave the fetch server, once it is built.
     pub fn daemon(chain: Option<Arc<ChainManager>>) -> Self {
         Self { source: PlaneSource::Daemon, chain, fetch_large: false }
+    }
+
+    fn chain(&self) -> Option<Arc<ChainManager>> {
+        self.chain.clone().or_else(|| match self.source {
+            PlaneSource::Daemon => crate::project_fetch_serve::global().and_then(|h| h.chain()),
+            PlaneSource::Fixed(_) => None,
+        })
     }
 
     fn plane(&self) -> Option<Arc<PlacementControlPlane>> {
@@ -71,7 +79,7 @@ impl MeshFetcher {
     }
 
     fn record(&self, payload: Value) {
-        if let Some(c) = &self.chain {
+        if let Some(c) = self.chain() {
             c.append(PLANE_CHAIN_SOURCE, EVENT_PROJECT_FETCH, Some(payload));
         }
     }
