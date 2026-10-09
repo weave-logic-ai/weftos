@@ -10,6 +10,38 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 > overwritten on the next docs build. To change a release entry, edit
 > `CHANGELOG.md` and re-run the script.
 
+## v0.8.4-rc.1
+
+*2026-10-09*
+
+Release candidate for 0.8.4, for testing on photo-gallery, the owner's Mac and aepod-xpc.
+
+### Added
+- Install projects locally from the dashboard (ADR-108 P3a): the `install` action clones from
+  the project's own git remotes and registers the workspace; `update` fast-forwards; `remove`
+  unregisters and never deletes files.
+- Pairing from the dashboard (ADR-108 P2b): `report.mesh_identity` and `report.pair_requests`,
+  `weaver mesh pair request|list|cancel`, and the `pair` action, which checks the peer's Ed25519
+  key against its node id before writing trust files and fetch grants.
+- Mesh install (ADR-108 P3b): `project.fetch` on the primary (default deny: a paired peer plus
+  a per-project grant, re-checked per chunk), chunked git bundles for clone and incremental
+  pull, the `git-remote-weftos` helper (fetch only, Unix), and a tar stream of non-git content
+  that never sends `.weftos/`, secrets, symlinks or archived paths. Transfers reuse one signed
+  session, keep six chunks in flight and send 2 MiB raw chunks.
+- `weftos://` names (ADR-114 N1): a strict parser with the mesh id as authority; git remotes
+  are `weftos://<mesh>/projects/<ULID>[/repos/<dir>]`.
+
+### Changed
+- The mesh listener defaults to loopback (`127.0.0.1:9489`); set `listen_addr` to serve peers.
+- The project supervisor is split into modules under 500 lines.
+
+### Fixed
+- Timing-dependent tests now wait on conditions instead of fixed sleeps.
+- The Windows build (the helper is Unix-only), the docs site's npm audit findings, and MDX
+  escaping in the generated release notes.
+
+---
+
 ## v0.8.3
 
 *2026-10-06*
