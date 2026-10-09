@@ -73,10 +73,12 @@ impl ActionHandler for NotImplemented {
 
 /// The handlers of this build.
 pub fn default_handlers() -> HashMap<String, Arc<dyn ActionHandler>> {
-    KINDS
+    let mut h: HashMap<String, Arc<dyn ActionHandler>> = KINDS
         .iter()
         .map(|k| (k.to_string(), Arc::new(NotImplemented(k)) as Arc<dyn ActionHandler>))
-        .collect()
+        .collect();
+    h.insert(crate::mesh_pair::KIND.to_owned(), Arc::new(crate::mesh_pair::PairHandler::global()));
+    h
 }
 
 /// An action and what became of it (no payload is kept: it may carry secrets).

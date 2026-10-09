@@ -60,7 +60,14 @@ async fn each_known_kind_is_acknowledged_running_then_failed_not_implemented() {
         assert_eq!(st.len(), 2, "{id}: {st:?}");
         assert_eq!(st[0], json!({"status": "running"}));
         assert_eq!(st[1]["status"], "failed");
-        assert_eq!(st[1]["result"]["error"], "not implemented in this build (ADR-108 P3/P4)");
+        // `pair` has a real handler (ADR-108 P2b); without the placement
+        // control plane it fails just as clearly.
+        let want = if *kind == "pair" {
+            "pairing is not initialised on this node (no placement control plane)"
+        } else {
+            "not implemented in this build (ADR-108 P3/P4)"
+        };
+        assert_eq!(st[1]["result"]["error"], want);
         assert_eq!(st[1]["result"]["kind"], *kind);
         let seen = fake.requests(&res(&id));
         assert_eq!(seen[0].authorization.as_deref(), Some(format!("Bearer {tok}").as_str()));

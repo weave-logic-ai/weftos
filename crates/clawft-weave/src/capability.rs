@@ -92,6 +92,9 @@ pub fn required_capability(method: &str) -> Capability {
         "fleet.location.set" => Capability::Admin,
         // Rotating the node's dashboard credential (locally or on a peer).
         "dashboard.token.rotate" => Capability::Admin,
+        // ADR-108 P2b: asking to pair (or withdrawing the ask) is a trust
+        // request this node makes in its own name.
+        "mesh.pair.request" | "mesh.pair.cancel" => Capability::Admin,
         // ADR-106 phase 3: an operator hash approval is a trust change, and a
         // checkout spends the Seed's licence and transfer budget.
         "workload.cog.checkout.approve" => Capability::Admin,
@@ -221,7 +224,9 @@ pub fn required_capability(method: &str) -> Capability {
         // peer needs Admin inside the handler (it contacts that peer).
         | "dashboard.status"
         // Recent dashboard actions and their outcomes (no payloads); local only.
-        | "dashboard.actions" => Capability::Read,
+        | "dashboard.actions"
+        // Pending pair requests (ids, node ids, project ULIDs; no key material).
+        | "mesh.pair.list" => Capability::Read,
 
         // An unclassified `dashboard.*` verb is a mutation, never anonymous Read.
         m if m.starts_with("dashboard.") && m != "dashboard.status" && m != "dashboard.actions" => Capability::Admin,

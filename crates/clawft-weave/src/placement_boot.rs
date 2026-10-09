@@ -114,6 +114,13 @@ pub async fn start(
         tracing::info!(controller = %s.pubkey_hex(), "service mode: placement and the licence steward sign with the control key");
     }
     crate::workload_place_rpc::init_with_mesh_id(s.key.clone(), runtime_dir.to_path_buf(), s.mesh_node_id.clone());
+    // ADR-108 P2b: the dashboard's `pair` action writes the trust files next
+    // to the placement policy and chains on the daemon's chain.
+    crate::mesh_pair::init(crate::mesh_pair::PairDeps {
+        runtime_dir: runtime_dir.to_path_buf(),
+        chain: kernel.read().await.chain_manager().cloned(),
+        self_node: Some(clawft_kernel::node_id_from_pubkey(&s.key.verifying_key().to_bytes())),
+    });
     // The licence runtime (the grant store and checkout policy: local state)
     // exists from boot in both modes, so placement, built whenever its first
     // call comes, always holds the node's real store. Only the exchange, the
