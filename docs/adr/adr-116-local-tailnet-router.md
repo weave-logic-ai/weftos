@@ -1,6 +1,7 @@
 # ADR-116: A tailnet router on every dev machine: one HTTPS front door, projects by path
 
 - **Status**: Proposed (2026-10-10; the owner called it critical for running projects side by side)
+- **Implementation**: R1 built on branch `wt/router` (2026-10-09): router in the user daemon (`[router]` in `weave.toml`, off by default), routes from `compose/ports.yaml`, conflict refusal, WebSocket proxying, `/_weftos/` index with process-compose state, `weaver route list|reload|serve --plan|--apply`. Guide: `docs/guides/tailnet-router.md`. Cutover on the owner's Mac is pending (the lead does it with the owner).
 - **Deciders**: owner
 - **Builds on**: ADR-098 (per-project process-compose; `compose/{manifest,ports}.yaml`; the
   machine overlay it deferred), ADR-108 (workspaces registered with the user daemon; the

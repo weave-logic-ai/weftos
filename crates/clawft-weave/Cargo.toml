@@ -98,6 +98,12 @@ weftos-cog-repo = { path = "../weftos-cog-repo", default-features = false }
 rand = { workspace = true }
 # The dashboard reporter (heartbeat + token rotation) is a plain HTTPS client.
 reqwest = { workspace = true }
+# ADR-116: the tailnet router is a hyper reverse proxy (streams bodies and
+# proxies WebSocket upgrades without a websocket crate). Same hyper 1.x that
+# axum and reqwest already pull in.
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 sha2 = { workspace = true }
 # `weaver update` extracts release archives itself (regular files only, no links).
 flate2 = "1"

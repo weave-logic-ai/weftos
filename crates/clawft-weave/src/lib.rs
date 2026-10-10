@@ -198,6 +198,15 @@ pub mod dashboard_report;
 pub mod dashboard_rpc;
 pub mod dashboard_token;
 pub mod dashboard_workspaces;
+// ADR-116 R1: the tailnet router inside the user daemon.
+pub mod router_cfg;
+pub mod router_index;
+pub mod router_proxy;
+pub mod router_routes;
+pub mod router_rpc;
+pub mod router_serve;
+pub mod router_sources;
+pub mod router_state;
 pub mod project_git;
 pub mod project_install;
 pub mod project_install_git;

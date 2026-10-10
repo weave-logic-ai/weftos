@@ -77,6 +77,9 @@ enum Commands {
     /// Dashboard reporter: status and token rotation (locally or on a peer).
     Dashboard(commands::dashboard_cmd::DashboardArgs),
 
+    /// Tailnet router: routes, reload, and the Tailscale Serve front door (ADR-116).
+    Route(commands::route_cmd::RouteArgs),
+
     /// Chain management (status, events, checkpoints).
     Chain(commands::chain_cmd::ChainArgs),
 
@@ -197,6 +200,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Cluster(args) => commands::cluster_cmd::run(args).await?,
         Commands::Fleet(args) => commands::fleet_cmd::run(args).await?,
         Commands::Dashboard(args) => commands::dashboard_cmd::run(args).await?,
+        Commands::Route(args) => commands::route_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,
         Commands::Resource(args) => commands::resource_cmd::run(args).await?,

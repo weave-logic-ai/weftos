@@ -1205,6 +1205,12 @@ pub async fn run(
     {
         crate::dashboard_rpc::start(&kernel, &home, dashboard_gateway).await;
     }
+    // ADR-116 R1: the tailnet router (`[router]` in weave.toml; off by default).
+    if crate::user_daemon::is_active()
+        && let Some(home) = clawft_types::runtime_paths::home_dir()
+    {
+        crate::router_state::start(&home).await;
+    }
     // ADR-103 P3-U: start the service link now that the router and gate exist.
     #[cfg(all(unix, feature = "mesh"))]
     let mesh_handle = match mesh_link {
