@@ -110,7 +110,15 @@ pub fn render_list(v: &Value) -> String {
 
 /// The route table a `route.list` document carries (routes only).
 pub fn table_from_list(v: &Value) -> Result<(RouteTable, SocketAddr), String> {
-    let routes: Vec<Route> = serde_json::from_value(v["routes"].clone()).map_err(|e| format!("route.list: {e}"))?;
+    // `route.list` reports live health (`{state, status}`) where the route model
+    // keeps the declared health *path*; the plan needs neither, so drop it.
+    let mut raw = v["routes"].clone();
+    if let Some(items) = raw.as_array_mut() {
+        for r in items.iter_mut().filter_map(Value::as_object_mut) {
+            r.remove("health");
+        }
+    }
+    let routes: Vec<Route> = serde_json::from_value(raw).map_err(|e| format!("route.list: {e}"))?;
     let listen: SocketAddr = v["listen"].as_str().unwrap_or("").parse().map_err(|e| format!("route.list listen: {e}"))?;
     Ok((RouteTable { routes, ..Default::default() }, listen))
 }
@@ -184,6 +192,22 @@ pub async fn run(args: RouteArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_from_a_live_route_list_ignores_reported_health() {
+        // What the daemon actually returns: health is a status object, not a path.
+        let v = json!({
+            "enabled": true, "listen": "127.0.0.1:18000", "generation": 1,
+            "routes": [{"prefix": "/shastaos", "project": "shasta", "port": 18120, "default": true,
+                        "upstream": "http://127.0.0.1:18120", "health": {"state": "ok", "status": 200}}]
+        });
+        let (table, listen) = table_from_list(&v).expect("a live route.list parses");
+        assert_eq!(listen.to_string(), "127.0.0.1:18000");
+        assert_eq!(table.routes.len(), 1);
+        assert_eq!(table.routes[0].prefix, "/shastaos");
+        assert!(table.routes[0].default);
+        assert_eq!(table.routes[0].health, None);
+    }
 
     #[test]
     fn list_renders_off_routes_default_marker_and_refusals() {
