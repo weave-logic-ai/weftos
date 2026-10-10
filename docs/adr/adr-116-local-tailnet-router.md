@@ -119,8 +119,8 @@ has a route.
 | R3 | `report.routes` on the dashboard; desired `route.*` parameters applied through a node action | the dashboard shows each machine's URLs for a project and can add a route that the node applies |
 | R4 | Optional start-on-demand: the router asks the project's process-compose to start a stopped process before proxying | a request to a stopped app starts it and is served once its readiness probe passes |
 
-## Open questions for the owner
+## Owner decisions (2026-10-10)
 
-1. **Prefix naming:** project slug (`/shastaos/`) as the default, overridable per route. Agreed?
-2. **Shasta's root:** keep Shasta on `/` as the transitional default until its `basePath` is
-   `/shastaos`, then move the root to the index?
+1. The project slug is the default prefix (`/<slug>/`), overridable per route.
+2. Shasta keeps the root (`default: true`) during testing; the root moves to the router index
+   once Shasta's `basePath` is `/shastaos`.
