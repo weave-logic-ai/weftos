@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.2] - 2026-10-10
+
+### Fixed
+- The update notice compares pre-releases per semver. On 0.8.4-rc.1 it offered v0.8.3 as
+  newer, because `0.8.4-rc.1` parsed as `0.8.1`.
+
 ## [0.8.4-rc.1] - 2026-10-09
 
 Release candidate for 0.8.4, for testing on photo-gallery, the owner's Mac and aepod-xpc.
