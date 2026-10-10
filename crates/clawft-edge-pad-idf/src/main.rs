@@ -32,6 +32,7 @@ mod display;
 mod drivers;
 mod mesh;
 mod net;
+mod selftest;
 mod wifi_secrets;
 
 use std::thread;
@@ -172,7 +173,15 @@ fn main() -> anyhow::Result<()> {
     // its own, independent of the network.
     let mut surface = surface;
     let mut compositor = Compositor::new();
-    mesh::boot_screen(&mut compositor, &mut surface, "display up -- starting wifi...");
+    mesh::boot_screen(&mut compositor, &mut surface, "display up -- selftest...");
+
+    // Bench display self-test (~17 s): colour bars, full fields, border +
+    // grid, corner text, sweep. Each phase is logged so a camera capture
+    // lines up with serial. Failure is logged, not fatal.
+    if let Err(e) = selftest::run_display_cycle(&mut surface) {
+        error!("[edge-pad-idf] display selftest failed: {e:?}");
+    }
+    mesh::boot_screen(&mut compositor, &mut surface, "selftest done -- starting wifi...");
 
     // ── Step 10a: WiFi. ─────────────────────────────────────────────
     let _wifi = match net::connect_wifi(peripherals.modem, sysloop, nvs) {

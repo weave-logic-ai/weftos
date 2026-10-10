@@ -23,10 +23,14 @@
 
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 use embedded_graphics::pixelcolor::raw::RawU16;
 use embedded_graphics::pixelcolor::{Rgb565, Rgb888};
 use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::Rectangle;
+use log::warn;
 
 use esp_idf_sys as sys;
 use weftos_leaf_display::LeafSurface;
@@ -49,18 +53,44 @@ pub enum DisplayError {
     DrawBitmap(sys::esp_err_t),
 }
 
-/// Wrapper around an `esp_lcd_panel_handle_t` + the framebuffer ptr.
+/// Wrapper around an `esp_lcd_panel_handle_t` + two framebuffers.
 ///
-/// The framebuffer lives in PSRAM and is owned by the IDF driver
+/// Both framebuffers live in PSRAM and are owned by the IDF driver
 /// (allocated inside `esp_lcd_new_rgb_panel` when `flags.fb_in_psram`
-/// is set). We get a borrow to it via
-/// `esp_lcd_rgb_panel_get_frame_buffer`, which the LeafSurface impl
-/// uses for direct pixel writes (the fast path).
+/// is set, `num_fbs: 2`). The compositor draws into `fbs[back]`;
+/// `present` hands that buffer to `esp_lcd_panel_draw_bitmap`, which
+/// for a driver-owned buffer is a *flip* (the RGB driver switches the
+/// GDMA source at the next frame boundary, `CONFIG_LCD_RGB_RESTART_IN_VSYNC`)
+/// plus the PSRAM cache writeback, then waits for VSYNC before the
+/// caller may draw into the other buffer. The first hardware flash
+/// drew into the single scanned buffer with no sync and the sweep
+/// test tore visibly on camera (2026-10-10).
 pub struct DpiDisplay {
     panel: sys::esp_lcd_panel_handle_t,
-    fb: *mut u16,
+    fbs: [*mut u16; 2],
+    back: usize,
     width: u32,
     height: u32,
+    vsync_available: bool,
+}
+
+/// VSYNC counter bumped from the LCD ISR; `present` waits on it.
+static VSYNC_COUNT: AtomicU32 = AtomicU32::new(0);
+static VSYNC_SEEN: AtomicBool = AtomicBool::new(false);
+
+/// IRAM-resident VSYNC callback. With `CONFIG_LCD_RGB_ISR_IRAM_SAFE` the
+/// driver refuses a callback outside IRAM, hence the explicit section.
+/// Does one relaxed atomic add and nothing else.
+#[link_section = ".iram1.lcd_vsync_cb"]
+#[inline(never)]
+unsafe extern "C" fn lcd_vsync_cb(
+    _panel: sys::esp_lcd_panel_handle_t,
+    _edata: *const sys::esp_lcd_rgb_panel_event_data_t,
+    _user_ctx: *mut c_void,
+) -> bool {
+    VSYNC_COUNT.fetch_add(1, Ordering::Relaxed);
+    VSYNC_SEEN.store(true, Ordering::Relaxed);
+    false
 }
 
 // SAFETY: the panel handle is opaque and the IDF driver is internally
@@ -121,7 +151,7 @@ impl DpiDisplay {
             timings,
             data_width: 16,
             bits_per_pixel: 16,
-            num_fbs: 1, // single FB initially; double-buffer is a later optimisation
+            num_fbs: 2, // double-buffered; see the struct doc for why
             // 10-line bounce buffer — Espressif's recommended starting
             // size for 800-wide panels. At 16 bpp this is 800 * 10 * 2 =
             // 16 000 bytes in internal SRAM. Session-learnings doc.
@@ -162,30 +192,55 @@ impl DpiDisplay {
             return Err(DisplayError::Init(err));
         }
 
-        // Grab the framebuffer pointer. We hold this for the program
-        // lifetime; the IDF driver owns the allocation.
-        let mut fb: *mut c_void = ptr::null_mut();
-        let err = unsafe { sys::esp_lcd_rgb_panel_get_frame_buffer(panel, 1, &mut fb) };
-        if err != sys::ESP_OK {
+        // Grab both framebuffer pointers. We hold them for the program
+        // lifetime; the IDF driver owns the allocations.
+        let mut fb0: *mut c_void = ptr::null_mut();
+        let mut fb1: *mut c_void = ptr::null_mut();
+        let err = unsafe { sys::esp_lcd_rgb_panel_get_frame_buffer(panel, 2, &mut fb0, &mut fb1) };
+        if err != sys::ESP_OK || fb0.is_null() || fb1.is_null() {
             return Err(DisplayError::GetFb(err));
         }
 
-        Ok(Self {
-            panel,
-            fb: fb as *mut u16,
-            width: board::SCREEN_WIDTH as u32,
-            height: board::SCREEN_HEIGHT as u32,
-        })
+        // VSYNC callback so `present` can wait for the flip to land. If
+        // the driver refuses it (callback not in IRAM on this toolchain)
+        // fall back to a timed wait rather than failing bring-up.
+        let callbacks = sys::esp_lcd_rgb_panel_event_callbacks_t {
+            on_vsync: Some(lcd_vsync_cb),
+            on_bounce_empty: None,
+            on_bounce_frame_finish: None,
+        };
+        let err = unsafe { sys::esp_lcd_rgb_panel_register_event_callbacks(panel, &callbacks, ptr::null_mut()) };
+        let vsync_available = err == sys::ESP_OK;
+        if !vsync_available {
+            warn!("[display] esp_lcd_rgb_panel_register_event_callbacks returned {err}; present() will use a timed wait");
+        }
+
+        let width = board::SCREEN_WIDTH as u32;
+        let height = board::SCREEN_HEIGHT as u32;
+        let mut this = Self { panel, fbs: [fb0 as *mut u16, fb1 as *mut u16], back: 1, width, height, vsync_available };
+        // Both buffers start black so a flip never shows allocator junk.
+        for i in 0..2 {
+            this.back = i;
+            this.frame().clear(Rgb888::BLACK)?;
+            this.flip()?;
+        }
+        this.back = 1;
+        Ok(this)
     }
 
-    /// Address of the framebuffer (diagnostic).
+    /// Address of the first framebuffer (diagnostic).
     pub fn framebuffer_addr(&self) -> usize {
-        self.fb as usize
+        self.fbs[0] as usize
     }
 
-    /// Force a full-screen refresh — uploads the entire framebuffer
-    /// via the IDF driver. Used by `LeafSurface::present`.
-    fn flush_full(&mut self) -> Result<(), DisplayError> {
+    /// Hand the back buffer to the driver (cache writeback + GDMA source
+    /// switch at the next frame boundary), then wait until the panel has
+    /// started scanning it before the caller may touch the other buffer.
+    /// Two VSYNCs bound the wait: one for the switch to take effect, one
+    /// so the previous front buffer is no longer being read. That caps
+    /// `present` at ~30 Hz on this 60 Hz panel, which the UI never
+    /// approaches.
+    fn flip(&mut self) -> Result<(), DisplayError> {
         let err = unsafe {
             sys::esp_lcd_panel_draw_bitmap(
                 self.panel,
@@ -193,12 +248,27 @@ impl DpiDisplay {
                 0,
                 self.width as i32,
                 self.height as i32,
-                self.fb as *const c_void,
+                self.fbs[self.back] as *const c_void,
             )
         };
         if err != sys::ESP_OK {
             return Err(DisplayError::DrawBitmap(err));
         }
+        if self.vsync_available && VSYNC_SEEN.load(Ordering::Relaxed) {
+            let start = VSYNC_COUNT.load(Ordering::Relaxed);
+            let deadline = Instant::now() + Duration::from_millis(100);
+            while VSYNC_COUNT.load(Ordering::Relaxed).wrapping_sub(start) < 2 {
+                if Instant::now() > deadline {
+                    warn!("[display] no VSYNC within 100 ms; continuing");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        } else {
+            // Callback unavailable (or not fired yet): two frame periods.
+            std::thread::sleep(Duration::from_millis(34));
+        }
+        self.back ^= 1;
         Ok(())
     }
 }
@@ -249,6 +319,28 @@ impl DrawTarget for DpiFrame<'_> {
         }
         Ok(())
     }
+
+    /// Row-wise fill. `clear` and every solid rectangle go through here;
+    /// the per-pixel default was the whole cost of a full repaint, which
+    /// double buffering now needs on every frame.
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let Some(bottom_right) = area.bottom_right() else { return Ok(()) };
+        let x0 = area.top_left.x.clamp(0, self.width as i32) as u32;
+        let y0 = area.top_left.y.clamp(0, self.height as i32) as u32;
+        let x1 = (bottom_right.x + 1).clamp(0, self.width as i32) as u32;
+        let y1 = (bottom_right.y + 1).clamp(0, self.height as i32) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            return Ok(());
+        }
+        let rgb565 = Rgb565::new(color.r() >> 3, color.g() >> 2, color.b() >> 3);
+        let pixel: u16 = RawU16::from(rgb565).into_inner();
+        for y in y0..y1 {
+            // SAFETY: x0..x1 and y are inside the width*height buffer.
+            let row = unsafe { core::slice::from_raw_parts_mut(self.fb.add((y * self.width + x0) as usize), (x1 - x0) as usize) };
+            row.fill(pixel);
+        }
+        Ok(())
+    }
 }
 
 impl LeafSurface for DpiDisplay {
@@ -265,9 +357,11 @@ impl LeafSurface for DpiDisplay {
         }
     }
 
+    /// The back buffer. Callers repaint it fully: after a flip it holds
+    /// the frame from two presents ago, not the one on screen.
     fn frame(&mut self) -> DpiFrame<'_> {
         DpiFrame {
-            fb: self.fb,
+            fb: self.fbs[self.back],
             width: self.width,
             height: self.height,
             _marker: core::marker::PhantomData,
@@ -275,7 +369,7 @@ impl LeafSurface for DpiDisplay {
     }
 
     fn present(&mut self) -> Result<(), DisplayError> {
-        self.flush_full()
+        self.flip()
     }
 }
 

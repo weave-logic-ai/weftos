@@ -310,28 +310,24 @@ pub fn run(mut surface: DpiDisplay, mut compositor: Compositor, nvs: EspDefaultN
         Ok(leaf) => leaf,
         Err(e) => {
             warn!("[mesh] certified identity/journal unavailable: {e}; mesh disabled");
-            boot_screen(&mut compositor, &mut surface, "leaf identity unavailable");
             // Keep draining the touch channel: it is a 64-slot bounded
             // channel and the GT911 thread blocks on `send` once it
             // fills, so an unprovisioned image used to wedge touch
-            // after ~0.6 s of dragging. Log each event and echo the
-            // last pointer position on the panel so bench bring-up can
-            // verify touch without a parent.
+            // after ~0.6 s of dragging. Drive the bench touch-target
+            // screen from the events and log each one, so touch can be
+            // verified end to end without a parent.
+            let mut targets = crate::selftest::TouchTargets::new();
+            // FONT_10X20 from x=120 leaves room for 68 characters.
+            let header = "clawft-edge-pad-idf :: unprovisioned leaf (no identity)";
+            if let Err(e) = targets.draw(&mut surface, header) { warn!("[mesh] touch screen draw failed: {e:?}"); }
             loop {
-                let mut last = None;
+                let mut dirty = false;
                 while let Ok(event) = touch_rx.try_recv() {
                     info!("[mesh] touch (offline): {event:?}");
-                    last = Some(event);
+                    dirty |= targets.feed(event);
                 }
-                if let Some(event) = last {
-                    // Coordinates are Q24.8 display pixels.
-                    let line = match event {
-                        InputEvent::PointerDown { x, y, .. } => format!("touch down  x={} y={}", x >> 8, y >> 8),
-                        InputEvent::PointerMove { x, y, .. } => format!("touch move  x={} y={}", x >> 8, y >> 8),
-                        InputEvent::PointerUp { x, y, .. } => format!("touch up    x={} y={}", x >> 8, y >> 8),
-                        _ => format!("{event:?}"),
-                    };
-                    boot_screen(&mut compositor, &mut surface, &format!("leaf identity unavailable -- {line}"));
+                if dirty {
+                    if let Err(e) = targets.draw(&mut surface, header) { warn!("[mesh] touch screen draw failed: {e:?}"); }
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
