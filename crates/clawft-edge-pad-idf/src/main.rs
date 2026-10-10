@@ -32,6 +32,7 @@ mod display;
 mod drivers;
 mod mesh;
 mod net;
+mod scene;
 mod selftest;
 mod wifi_secrets;
 
@@ -46,7 +47,7 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition};
 use log::{error, info};
 
-use weftos_leaf_display::Compositor;
+use scene::LeafScene;
 
 fn main() -> anyhow::Result<()> {
     // ESP-IDF boilerplate — must run first.
@@ -172,7 +173,7 @@ fn main() -> anyhow::Result<()> {
     // time; a panel that shows text here proves the display path on
     // its own, independent of the network.
     let mut surface = surface;
-    let mut compositor = Compositor::new();
+    let mut compositor = LeafScene::new();
     mesh::boot_screen(&mut compositor, &mut surface, "display up -- selftest...");
 
     // Bench display self-test (~17 s): colour bars, full fields, border +
@@ -181,6 +182,8 @@ fn main() -> anyhow::Result<()> {
     if let Err(e) = selftest::run_display_cycle(&mut surface) {
         error!("[edge-pad-idf] display selftest failed: {e:?}");
     }
+    mesh::boot_screen(&mut compositor, &mut surface, "selftest done -- partial-update bench...");
+    compositor.bench_partial_updates(&mut surface, 3);
     mesh::boot_screen(&mut compositor, &mut surface, "selftest done -- starting wifi...");
 
     // ── Step 10a: WiFi. ─────────────────────────────────────────────

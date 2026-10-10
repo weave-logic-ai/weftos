@@ -34,7 +34,9 @@ clawft-edge-pad-idf/
 └── src/
     ├── main.rs               # entry, boot order, task spawn
     ├── board.rs              # pin map + timings (port from edge-pad)
-    ├── display.rs            # esp_lcd_panel_rgb wrapper + LeafSurface impl
+    ├── display.rs            # esp_lcd_panel_rgb wrapper + SceneSurface impl (2 FBs)
+    ├── scene.rs              # SceneStore owner: boot screen, scene/raster pushes
+    ├── selftest.rs           # boot display self-test + touch-target screen
     ├── drivers/
     │   ├── mod.rs
     │   ├── pca9557.rs        # blocking sync port
@@ -120,10 +122,36 @@ read in 256 KiB chunks. Serial console is 115200.
 | `src/net.rs`               | `src/net.rs`                   | esp-radio→esp-idf-svc |
 | `src/wifi_secrets.rs.example` | `src/wifi_secrets.rs.example` | identical template |
 
+## Display path (2026-10-10)
+
+- Rendering is the vector-first leaf display: `weftos-leaf-scene`
+  (`SceneStore`, wire envelopes, damage) + `weftos-leaf-renderer`
+  (`render_damage` over the `SceneSurface` implemented by `display.rs`).
+  `src/scene.rs` owns the store, draws the boot screen, applies
+  `SceneEnvelope`s from `weaver leaf scene …`, and translates the older
+  raster `LeafPush` (`weaver leaf push text|clear|image`) into scene
+  nodes so that path still renders. The deprecated
+  `weftos-leaf-display` compositor is no longer a dependency.
+- Two PSRAM framebuffers; `present`/`end_frame` flip at the bounce-buffer
+  frame boundary (`on_bounce_frame_finish`, IRAM callback). Partial
+  repaints copy only the previous frame's damage rects front→back
+  (age-2 damage). Measured on the panel: full-frame repaint 15.7 fps,
+  partial updates 30.7 fps = the refresh rate (15 MHz pclk, 928×525
+  clocks per frame ≈ 31 Hz).
+- Boot self-test (`src/selftest.rs`, ~20 s, each phase logged): colour
+  bars, full fields, 1-px border + grid, corner text, sweep, partial-
+  update bench. While unprovisioned the panel shows a touch-target screen
+  (five circles + drag bar, green on hit; events on serial).
+
 ## Status
 
-- Build-verify scope only (no flash this cycle).
-- WiFi credentials placeholder: copy `wifi_secrets.rs.example` →
-  `wifi_secrets.rs` and fill before flashing.
-- Mesh target IP `192.168.1.73` matches the bare-metal port; update
-  in `mesh.rs` for your daemon.
+- Flashed and camera-verified on the CrowPanel DIS08070H (see the
+  frames under `/Users/mathewbeane/dev/edgepad-backups/frames/` on the
+  bring-up Mac; serial logs alongside). GT911 answers at 0x5D on that
+  unit.
+- WiFi credentials: copy `wifi_secrets.rs.example` → `wifi_secrets.rs`
+  and fill before building; the file is gitignored.
+- Mesh: certified-leaf discovery (UDP broadcast :9490) + WLF1; the image
+  needs `WEFTOS_LEAF_SEED_FILE` / `WEFTOS_LEAF_CERT_FILE` at build time
+  (`weaver leaf provision`, `weaver mesh identity [--user] --out` for the
+  pins). An unprovisioned image stays offline on the touch-target screen.

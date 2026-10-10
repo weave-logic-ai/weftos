@@ -16,7 +16,6 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::Text;
 use log::info;
-use weftos_leaf_display::LeafSurface;
 use weftos_leaf_scene::InputEvent;
 
 use crate::board::{SCREEN_HEIGHT, SCREEN_WIDTH};
@@ -117,6 +116,7 @@ fn corner_text(surface: &mut DpiDisplay) -> R {
 /// double-buffered, so the back buffer is two frames stale) and
 /// `present` waits for VSYNC, so the logged rate is the real flip rate.
 fn sweep(surface: &mut DpiDisplay, secs: u64) -> R {
+    let _ = crate::display::take_flip_stats();
     let start = Instant::now();
     let mut frames = 0u32;
     while start.elapsed() < Duration::from_secs(secs) {
@@ -128,7 +128,13 @@ fn sweep(surface: &mut DpiDisplay, secs: u64) -> R {
         surface.present()?;
         frames += 1;
     }
-    info!("[selftest] sweep: {frames} frames in {secs} s ({:.1} fps)", frames as f32 / secs as f32);
+    let (flips, wait_us) = crate::display::take_flip_stats();
+    let (ff, vs) = crate::display::isr_counters();
+    info!(
+        "[selftest] sweep: {frames} frames in {secs} s ({:.1} fps); {flips} flips, mean flip wait {:.1} ms; isr counters frame_finish={ff} vsync={vs}",
+        frames as f32 / secs as f32,
+        wait_us as f32 / 1000.0
+    );
     Ok(())
 }
 

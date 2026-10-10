@@ -41,7 +41,7 @@ serde_json = "1"
 
 # ── Graphics ─────────────────────────────────────────────────────────
 # Same versions as clawft-edge-pad. embedded-graphics is std-compatible
-# (it uses core APIs); compositor (in weftos-leaf-display) renders into
+# (it uses core APIs); the renderer (weftos-leaf-renderer) draws into
 # any DrawTarget<Color = Rgb888>.
 embedded-graphics = "0.8"
 embedded-graphics-core = "0.4"
@@ -54,7 +54,7 @@ embedded-graphics-core = "0.4"
 # their public API is identical, and keeping them no_std maximises
 # what we share with the bare-metal sibling crate.
 weftos-leaf-types = { path = "../weftos-leaf-types" }
-weftos-leaf-display = { path = "../weftos-leaf-display" }
+weftos-leaf-renderer = { path = "../weftos-leaf-renderer" }
 weftos-leaf-scene = { path = "../weftos-leaf-scene" }
 
 # ── Crypto for Actor identity ────────────────────────────────────────
