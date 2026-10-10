@@ -79,6 +79,12 @@ pub struct IdentityArgs {
     /// Print JSON (`report.mesh_identity` shape) instead of text.
     #[arg(long)]
     pub json: bool,
+    /// The user key (`~/.weftos/user.key`, else the migrated chain key)
+    /// instead of the node key: its key id is the `user:<id>` scope and
+    /// `--out` writes the raw public key that `weaver leaf enroll
+    /// --parent-pubkey` pins.
+    #[arg(long)]
+    pub user: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -277,20 +283,29 @@ async fn serve(a: ServeArgs) -> Result<()> {
 /// file only to derive the public key; nothing about the daemon changes
 /// and the seed never reaches `w` or `--out`.
 fn identity(w: &mut dyn Write, a: &IdentityArgs) -> Result<()> {
-    let paths = crate::protocol::runtime_paths();
-    let key_path = paths.node_key();
-    let bytes = std::fs::read(&key_path).with_context(|| {
-        format!(
-            "no node key at {} — point WEFTOS_RUNTIME_DIR at the daemon's runtime dir (`weaver kernel status` prints it)",
-            key_path.display()
-        )
-    })?;
-    if bytes.len() != 32 {
-        bail!("node.key at {} is malformed (expected 32 bytes, got {})", key_path.display(), bytes.len());
-    }
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&bytes);
-    let pk = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+    let (pk, key_path, label) = if a.user {
+        let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine the home directory"))?;
+        let (key, source) = crate::user_key::resolve_user_key(&home, false)
+            .map_err(|e| anyhow!("user key: {e}"))?;
+        let path = match source {
+            crate::user_key::KeySource::UserKey(p) | crate::user_key::KeySource::ChainKey(p) | crate::user_key::KeySource::Generated(p) => p,
+        };
+        (key.verifying_key().to_bytes(), path, "user")
+    } else {
+        let key_path = crate::protocol::runtime_paths().node_key();
+        let bytes = std::fs::read(&key_path).with_context(|| {
+            format!(
+                "no node key at {} — point WEFTOS_RUNTIME_DIR at the daemon's runtime dir (`weaver kernel status` prints it)",
+                key_path.display()
+            )
+        })?;
+        if bytes.len() != 32 {
+            bail!("node.key at {} is malformed (expected 32 bytes, got {})", key_path.display(), bytes.len());
+        }
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&bytes);
+        (ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key().to_bytes(), key_path, "node")
+    };
     let id = crate::mesh_pair::MeshIdentity::from_pubkey(&pk, None);
     if let Some(out) = &a.out {
         let mut opts = std::fs::OpenOptions::new();
@@ -302,12 +317,16 @@ fn identity(w: &mut dyn Write, a: &IdentityArgs) -> Result<()> {
     if a.json {
         writeln!(w, "{}", serde_json::to_string_pretty(&id)?)?;
     } else {
-        writeln!(w, "node:        {}", id.node)?;
+        writeln!(w, "{label} id:     {}", id.node)?;
+        if a.user {
+            writeln!(w, "scope:       user:{}", id.node)?;
+        }
         writeln!(w, "fingerprint: {}", id.fingerprint)?;
         writeln!(w, "ed25519:     {}", id.ed25519)?;
         writeln!(w, "key file:    {} (public half only)", key_path.display())?;
         if let Some(out) = &a.out {
-            writeln!(w, "raw pubkey:  {} (32 bytes, for `weaver leaf provision --mesh-pubkey`)", out.display())?;
+            let hint = if a.user { "weaver leaf enroll --parent-pubkey" } else { "weaver leaf provision --mesh-pubkey" };
+            writeln!(w, "raw pubkey:  {} (32 bytes, for `{hint}`)", out.display())?;
         }
     }
     Ok(())
