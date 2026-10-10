@@ -1,6 +1,6 @@
 # ADR-117: Display endpoints: any app can target a leaf display with live objects bound to mesh data
 
-- **Status**: Proposed (2026-10-10; the owner asked for the edge pad to be "a plain end point we can send any app we want at", driven "like vectors or objects on the screen, so it is less like a monitor and more like an interface with sensors")
+- **Status**: Proposed (2026-10-10; the owner asked for the edge pad to be "a plain end point we can send any app we want at", driven "like vectors or objects on the screen, so it is less like a monitor and more like an interface with sensors", with pixel frames "for showing images or video only")
 - **Deciders**: owner
 - **Builds on**: `docs/design/vector-leaf-display.md` (retained scene graph, `SceneOp`,
   `InputRegion`, tweens, `DisplayId`; Proposed), the scene crates on `target-0.8.4`
@@ -88,12 +88,21 @@ Other apps and agents can react to the pad the same way they react to any sensor
 - **Revocation:** revoking a grant ends the session on the next op; the leaf clears that
   session's objects and bindings.
 
-### 6. Frames are the fallback
+### 6. Pixels only for images and video
 
-Apps that cannot speak scenes, such as an unchanged egui app, send **damage frames**: changed
-regions as images, with the same session, grant and arbitration rules. They get raw touch
-coordinates as pointer events. An adapter can later translate egui's shapes into scene ops, so
-egui apps move up to objects without being rewritten.
+Pixels are never a way to mirror an app's UI (owner, 2026-10-10). They appear only as
+**media objects** inside a scene: an `Image` or `Video` node with a position, size and id,
+like any other object.
+- **Images:** a still image is sent once (raw, or QOI/PNG when the renderer supports it) and
+  kept by the leaf until replaced.
+- **Video:** a stream of frames into one media node, at a bounded rate and size, such as a
+  camera preview or clip. It is clipped to the node's rectangle and never covers the system
+  strip.
+- **Touch:** touch on a media node reports the node id and the point within it.
+
+Every UI, including existing egui apps, reaches a display as objects. egui apps get there
+through an **egui-to-scene adapter** that translates egui's shapes and text into scene ops and
+maps object events back to egui input. There is no full-screen frame-mirroring mode.
 
 ### 7. Client library
 
@@ -135,7 +144,7 @@ sources.
 | D2 | Display grants and arbitration, with the firmware system strip | a second app queues behind the first; a swipe switches between them; revoking a grant clears that session |
 | D3 | Bindings with transforms and staleness; the leaf's own sensor readings | a gauge bound to a sensor stays live with the app stopped, and shows stale when the source stops |
 | D4 | Command center v1 (Mac window and pad) | the owner sees project activity, kicks off a lane and records a note from the pad |
-| D5 | Damage-frame fallback; an egui-to-scene adapter | an unchanged egui app shows on the pad; the cog manager runs through the adapter |
+| D5 | Media objects (images, bounded-rate video); the egui-to-scene adapter | a camera preview plays in a media node beside live objects; the cog manager runs on the pad through the adapter, with no pixel mirroring |
 
 ## Open questions for the owner
 
