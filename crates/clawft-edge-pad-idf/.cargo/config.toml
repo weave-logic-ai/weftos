@@ -15,11 +15,13 @@ target = "xtensa-esp32s3-espidf"
 
 [target.xtensa-esp32s3-espidf]
 linker = "ldproxy"
-# espflash 3.x: `cargo run` flashes + opens the monitor.
-runner = "espflash flash --monitor"
+# `cargo run` flashes + opens the monitor. The partition table is applied
+# here, at flash time: the IDF default table's 1 MiB `factory` slot is too
+# small for the ~1.29 MiB image, and esp-idf-sys cannot take a crate-root
+# CONFIG_PARTITION_TABLE_CUSTOM_FILENAME (it resolves relative to the
+# generated project under target/). See partitions.csv + README "Flashing".
+runner = "espflash flash --monitor --partition-table partitions.csv"
 rustflags = [
-    # When the IDF picks up a custom partition table at the project
-    # root (`partitions.csv`), embuild handles it.
     "--cfg",
     "espidf_time64",
 ]

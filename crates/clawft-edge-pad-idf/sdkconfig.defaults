@@ -32,15 +32,23 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_IGNORE_NOTFOUND=n
-# Keep instructions + rodata in flash, NOT PSRAM. Two reasons:
-# 1. PSRAM bus contention. The session-learnings doc flags this as the
-#    cause of "blocks shifting / blinking" when the GDMA framebuffer
-#    read shares PSRAM bandwidth with CPU code/data fetches. Keep PSRAM
-#    for the framebuffer only.
-# 2. Performance. PSRAM is 80 MHz Octal vs flash QSPI; instruction
-#    fetch from PSRAM is *slower* per fetch on this MCU.
-CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
-CONFIG_SPIRAM_RODATA=n
+# PSRAM XIP (instructions + rodata fetched through the PSRAM cache).
+# These were `n` ("keep PSRAM for the framebuffer only" — the bus-
+# contention argument from the bare-metal port). On hardware,
+# 2026-10-10, that boot-looped: `TG1WDT_SYS_RST` (interrupt watchdog,
+# saved PC in IRAM) the moment the WiFi driver task started. WiFi start
+# writes NVS/PHY data to flash, the flash write disables the cache, and
+# the IRAM-safe bounce-buffer ISR then reads the PSRAM framebuffer.
+# ESP-IDF v5.3.2 docs/en/api-reference/peripherals/lcd/rgb_lcd.rst:156-160
+# says so for bounce-buffer mode ("the LCD CAN NOT work if we disable
+# the cache ... via e.g. OTA or NVS write") and recommends exactly these
+# two options, which keep the external-memory cache enabled across SPI1
+# flash writes. The contention argument belongs to the DMA-reads-PSRAM
+# mode; here the GDMA reads SRAM bounce buffers, so PSRAM traffic is
+# CPU-side only. Matches FluidTouch's PlatformIO flags
+# (CONFIG_SPIRAM_FETCH_INSTRUCTIONS=1, CONFIG_SPIRAM_RODATA=1).
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
 CONFIG_SPIRAM_USE_MALLOC=y
 # Caller-data heap policy: malloc() default returns internal SRAM. Only
 # explicit MALLOC_CAP_SPIRAM allocations (the framebuffer in
@@ -72,8 +80,13 @@ CONFIG_GDMA_ISR_IRAM_SAFE=y
 # ── FreeRTOS / tasks ─────────────────────────────────────────────────
 # 4 KiB system event task — our WiFi + mesh code does small ops on it.
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
-# 8 KiB main task — boot path + esp_lcd init are stack-heavy.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# 32 KiB main task. It was 8 KiB ("boot path + esp_lcd init are
+# stack-heavy"), but `mesh::run` lives on this task and keeps an 8 KiB
+# RX frame array on its stack plus ed25519 signing, CBOR and serde_json
+# work; the touch pthread overflowed its 4 KiB on first hardware boot
+# (2026-10-10), so the main task is sized ahead of the same failure.
+# Internal SRAM has ~277 KiB free at boot; 32 KiB here is cheap.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
 
 # ── Heap ─────────────────────────────────────────────────────────────
 CONFIG_HEAP_POISONING_COMPREHENSIVE=n
@@ -92,3 +105,14 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # ── Compiler ─────────────────────────────────────────────────────────
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# ── Partition table ──────────────────────────────────────────────────
+# NOT set here on purpose. The IDF default single-app table caps
+# `factory` at 1 MiB and the release image is ~1.29 MiB, so the default
+# table is unflashable ("Reduce the size of the binary or increase the
+# size of the app partition"). CONFIG_PARTITION_TABLE_CUSTOM_FILENAME
+# cannot fix it from this crate: esp-idf-sys resolves it relative to the
+# generated CMake project under target/.../out, not the crate root. The
+# table is applied at flash time instead — `partitions.csv` at the crate
+# root via `espflash --partition-table` (see .cargo/config.toml runner
+# and README "Flashing"). Found on first hardware flash, 2026-10-10.

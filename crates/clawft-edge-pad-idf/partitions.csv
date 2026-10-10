@@ -1,0 +1,15 @@
+# CrowPanel DIS08070H (ESP32-S3-WROOM-1 N4R8, 4 MB flash) — single-app layout.
+#
+# The IDF default table (`partitions_singleapp.csv`) caps `factory` at 1 MiB;
+# the release image is ~1.29 MiB (WiFi + esp_lcd + leaf protocol), so the
+# default table cannot be flashed. 4 MB leaves no room for OTA slots, so this
+# stays single-app (no OTA) and gives `factory` 3 MiB with the remaining
+# ~960 KiB unassigned for a future data partition.
+#
+# `nvs` keeps the IDF default 24 KiB: WiFi calibration state plus the
+# certified-leaf journal (`weft_leaf` namespace, 4096-byte bound).
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xf000,   0x1000,
+factory,    app,  factory, 0x10000,  0x300000,

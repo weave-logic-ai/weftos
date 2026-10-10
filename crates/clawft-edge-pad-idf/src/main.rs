@@ -32,6 +32,8 @@ mod display;
 mod drivers;
 mod mesh;
 mod net;
+mod scene;
+mod selftest;
 mod wifi_secrets;
 
 use std::thread;
@@ -45,7 +47,7 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition};
 use log::{error, info};
 
-use weftos_leaf_display::Compositor;
+use scene::LeafScene;
 
 fn main() -> anyhow::Result<()> {
     // ESP-IDF boilerplate — must run first.
@@ -165,6 +167,25 @@ fn main() -> anyhow::Result<()> {
     std::mem::forget(backlight); // leak so it stays HIGH for the program lifetime
     info!("[edge-pad-idf] backlight ON (GPIO 2 high) — DPI quiet");
 
+    // Draw the boot screen BEFORE WiFi. `connect_wifi` blocks until
+    // association succeeds or fails (tens of seconds against a wrong
+    // AP), and the first hardware flash sat on a black panel the whole
+    // time; a panel that shows text here proves the display path on
+    // its own, independent of the network.
+    let mut surface = surface;
+    let mut compositor = LeafScene::new();
+    mesh::boot_screen(&mut compositor, &mut surface, "display up -- selftest...");
+
+    // Bench display self-test (~17 s): colour bars, full fields, border +
+    // grid, corner text, sweep. Each phase is logged so a camera capture
+    // lines up with serial. Failure is logged, not fatal.
+    if let Err(e) = selftest::run_display_cycle(&mut surface) {
+        error!("[edge-pad-idf] display selftest failed: {e:?}");
+    }
+    mesh::boot_screen(&mut compositor, &mut surface, "selftest done -- partial-update bench...");
+    compositor.bench_partial_updates(&mut surface, 3);
+    mesh::boot_screen(&mut compositor, &mut surface, "selftest done -- starting wifi...");
+
     // ── Step 10a: WiFi. ─────────────────────────────────────────────
     let _wifi = match net::connect_wifi(peripherals.modem, sysloop, nvs) {
         Ok(w) => Some(w),
@@ -185,16 +206,19 @@ fn main() -> anyhow::Result<()> {
     // durable NVS journal is full; the mesh owner persists each event
     // before any network send.
     let (touch_tx, touch_rx) = std::sync::mpsc::sync_channel(64);
+    // 8 KiB, not 4: on hardware (2026-10-10) 4 KiB overflowed as soon as
+    // the thread started ("A stack overflow in task pthread" straight
+    // after WiFi came up) — the GT911 I²C driver plus the IDF log/format
+    // path needs more than that.
     thread::Builder::new()
         .name("touch".into())
-        .stack_size(4096)
+        .stack_size(8192)
         .spawn(move || touch_loop(i2c, touch_tx))?;
 
     // ── Step 10c: mesh client on the main thread. ──────────────────
     //
     // Owns the display stack (surface + compositor); blocks forever
     // running the subscribe + receive + render loop.
-    let compositor = Compositor::new();
     mesh::run(surface, compositor, leaf_nvs, touch_rx)
 }
 

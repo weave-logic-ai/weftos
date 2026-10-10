@@ -20,7 +20,8 @@ use std::time::Duration;
 
 use log::{info, warn};
 
-use weftos_leaf_display::{Compositor, LeafPush};
+use weftos_leaf_types::LeafPush;
+use crate::scene::LeafScene;
 use ed25519_dalek::SigningKey;
 use esp_idf_svc::nvs::EspDefaultNvs;
 use weftos_leaf_types::push_topic;
@@ -302,16 +303,35 @@ fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Run the mesh client forever on the calling thread. Owns the display
-/// stack (surface + compositor). The bare-metal port spawned this as
+/// stack (surface + retained scene). The bare-metal port spawned this as
 /// an embassy task; the IDF port runs it on a FreeRTOS-backed std
 /// thread the caller dedicates.
-pub fn run(mut surface: DpiDisplay, mut compositor: Compositor, nvs: EspDefaultNvs, touch_rx: Receiver<InputEvent>) -> ! {
+pub fn run(mut surface: DpiDisplay, mut compositor: LeafScene, nvs: EspDefaultNvs, touch_rx: Receiver<InputEvent>) -> ! {
     let mut leaf = match LeafLink::load(nvs) {
         Ok(leaf) => leaf,
         Err(e) => {
             warn!("[mesh] certified identity/journal unavailable: {e}; mesh disabled");
-            boot_screen(&mut compositor, &mut surface, "leaf identity unavailable");
-            loop { std::thread::sleep(Duration::from_secs(30)); }
+            // Keep draining the touch channel: it is a 64-slot bounded
+            // channel and the GT911 thread blocks on `send` once it
+            // fills, so an unprovisioned image used to wedge touch
+            // after ~0.6 s of dragging. Drive the bench touch-target
+            // screen from the events and log each one, so touch can be
+            // verified end to end without a parent.
+            let mut targets = crate::selftest::TouchTargets::new();
+            // FONT_10X20 from x=120 leaves room for 68 characters.
+            let header = "clawft-edge-pad-idf :: unprovisioned leaf (no identity)";
+            if let Err(e) = targets.draw(&mut surface, header) { warn!("[mesh] touch screen draw failed: {e:?}"); }
+            loop {
+                let mut dirty = false;
+                while let Ok(event) = touch_rx.try_recv() {
+                    info!("[mesh] touch (offline): {event:?}");
+                    dirty |= targets.feed(event);
+                }
+                if dirty {
+                    if let Err(e) = targets.draw(&mut surface, header) { warn!("[mesh] touch screen draw failed: {e:?}"); }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     };
     let id = leaf.cert.leaf_id();
@@ -415,37 +435,26 @@ pub fn run(mut surface: DpiDisplay, mut compositor: Compositor, nvs: EspDefaultN
     }
 }
 
-fn apply_push(bytes: &[u8], compositor: &mut Compositor, surface: &mut DpiDisplay) {
+fn apply_push(bytes: &[u8], scene: &mut LeafScene, surface: &mut DpiDisplay) {
     let Some(cbor) = extract_leaf_push_cbor(bytes) else { return };
-    match weftos_leaf_types::decode::<LeafPush>(&cbor) {
-        Ok(push) => {
-            compositor.apply(push);
-            if let Err(e) = compositor.compose(surface) { warn!("[mesh] compose failed: {e:?}"); }
+    // Vector scene envelopes first (`weaver leaf scene …`); the older
+    // raster `LeafPush` (`weaver leaf push …`) goes through the shim so
+    // text/clear/image pushes keep rendering as they did.
+    match weftos_leaf_scene::codec::decode_scene_envelope(&cbor) {
+        Ok(env) => scene.apply_envelope(surface, &env),
+        Err(weftos_leaf_scene::codec::CodecError::VersionMismatch { found, expected }) => {
+            warn!("[mesh] scene wire version mismatch (found {found}, expected {expected}) — dropped");
         }
-        Err(e) => warn!("[mesh] LeafPush CBOR decode failed: {e}"),
+        Err(_) => match weftos_leaf_types::decode::<LeafPush>(&cbor) {
+            Ok(push) => scene.apply_raster(surface, push),
+            Err(e) => warn!("[mesh] CBOR is neither SceneEnvelope nor LeafPush: {e}"),
+        },
     }
 }
 
-/// Draw a single status line via the compositor — used for the boot
-/// screen and connection-state messages. Identical to the bare-metal port.
-fn boot_screen(comp: &mut Compositor, surface: &mut DpiDisplay, msg: &str) {
-    use weftos_leaf_types::{DisplayClear, DisplayText, LayerSlot};
-    comp.apply(LeafPush::DisplayClear(DisplayClear { z: LayerSlot::Text }));
-    comp.apply(LeafPush::DisplayText(DisplayText {
-        z: LayerSlot::Text,
-        text: String::from("clawft-edge-pad-idf :: mesh terminal"),
-        x: 40,
-        y: 50,
-        color: [255, 255, 255],
-        clear_first: false,
-    }));
-    comp.apply(LeafPush::DisplayText(DisplayText {
-        z: LayerSlot::Text,
-        text: String::from(msg),
-        x: 40,
-        y: 90,
-        color: [0, 255, 255],
-        clear_first: false,
-    }));
-    let _ = comp.compose(surface);
+/// Two-line status screen — used for the boot screen and connection-state
+/// messages. `main` also calls it before WiFi so the panel proves itself
+/// offline.
+pub(crate) fn boot_screen(scene: &mut LeafScene, surface: &mut DpiDisplay, msg: &str) {
+    scene.boot_screen(surface, msg);
 }
