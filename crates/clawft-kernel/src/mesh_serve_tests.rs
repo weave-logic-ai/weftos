@@ -695,3 +695,50 @@ fn an_older_relay_reserialising_strips_scope_fields() {
     let back = MeshIpcEnvelope::from_bytes(&relayed).unwrap();
     assert!(back.dest_scope.is_none());
 }
+
+#[tokio::test]
+async fn leaf_listeners_bind_where_leaf_listen_addr_says_not_on_the_main_ip() {
+    let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap(); }
+    let tcp_port = {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    let (rt, _) = runtime("srv");
+    let machine = SigningKey::from_bytes(&[61; 32]);
+    rt.set_leaf_ingress(Arc::new(crate::mesh_leaf::LeafIngress::open(dir.path(), machine).unwrap())).ok().unwrap();
+    let spec = crate::mesh_leaf_bind::LeafBindSpec::parse(&format!("127.0.0.1:{tcp_port}"), false).unwrap();
+    assert!(rt.set_leaf_bind_spec(spec));
+    let (main, task) = listen(&rt, None).await;
+    let bound = loop {
+        if let Some(b) = rt.leaf_bound() { break b.clone(); }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(bound.tcp.to_string(), format!("127.0.0.1:{tcp_port}"));
+    assert_eq!(bound.discovery.to_string(), format!("127.0.0.1:{}", tcp_port - 1));
+    let main_port: u16 = main.rsplit(':').next().unwrap().parse().unwrap();
+    assert_ne!(bound.tcp.port(), main_port + 2, "explicit port replaces the derived one");
+    assert!(tokio::net::TcpStream::connect(bound.tcp).await.is_ok());
+    // The discovery socket is held by the listener, so a UDP rebind fails.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(std::net::UdpSocket::bind(bound.discovery).is_err());
+    task.abort();
+}
+
+#[tokio::test]
+async fn leaf_listeners_without_a_spec_follow_the_main_listener() {
+    let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap(); }
+    let (rt, _) = runtime("srv");
+    let machine = SigningKey::from_bytes(&[62; 32]);
+    rt.set_leaf_ingress(Arc::new(crate::mesh_leaf::LeafIngress::open(dir.path(), machine).unwrap())).ok().unwrap();
+    let (main, task) = listen(&rt, None).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let main_port: u16 = main.rsplit(':').next().unwrap().parse().unwrap();
+    // main+2 can be taken on a busy machine; when it bound, it is the old derivation exactly.
+    if let Some(b) = rt.leaf_bound() {
+        assert_eq!(b.tcp.to_string(), format!("127.0.0.1:{}", main_port + 2));
+        assert_eq!(b.discovery.to_string(), format!("127.0.0.1:{}", main_port + 1));
+    }
+    task.abort();
+}

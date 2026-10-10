@@ -83,6 +83,33 @@ Leaf push is **not** a side door. The host path is:
 helpers). Governance and chain witnessing live on the kernel / weave
 side of `ipc.publish`, not in the leaf firmware crate.
 
+### Binding the certified-leaf listeners separately
+
+Certified (WLF1) leaves connect to a dedicated TCP listener at the main
+listener's port + 2, with UDP discovery at port + 1, both on the main
+listener's IP. On a machine whose mesh stays on `127.0.0.1:9489`, a leaf on
+the LAN can never reach them. `[kernel.mesh] leaf_listen_addr` moves just
+those two sockets. The main listener, its Noise setting and the admission
+policy do not change, and leaves are admitted by the same certificate and
+signature checks wherever the sockets bind.
+
+```toml
+# A Mac whose mesh stays on loopback while an ESP32 display on the LAN
+# enrols as a leaf. 192.0.2.10 is this Mac's LAN address.
+[kernel.mesh]
+enabled = true
+listen_addr = "127.0.0.1:9489"      # main mesh: loopback only
+leaf_listen_addr = "192.0.2.10"     # leaf TCP 192.0.2.10:9491, discovery udp 192.0.2.10:9490
+# leaf_listen_addr = "192.0.2.10:9600"   # explicit: TCP 9600, discovery udp 9599
+```
+
+A wildcard (`0.0.0.0`, `::`) is refused at boot unless
+`leaf_listen_any = true` is also set. `weaver kernel status` prints
+`Leaf bind:  tcp <addr> / discovery udp <addr>` once the listeners are up.
+Discovery advertises the leaf bind IP (for a wildcard, the interface that
+answers the asking leaf). This key applies to the in-daemon mesh
+(`[kernel.mesh]`); the machine mesh service reads its own `mesh.toml`.
+
 ## 4. Payloads — `LeafPush`
 
 `#[non_exhaustive]` enum — new variants are additive, old leaves ignore

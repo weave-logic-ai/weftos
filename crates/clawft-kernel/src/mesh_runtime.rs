@@ -186,6 +186,10 @@ pub struct MeshAuthentication {
 pub struct MeshRuntime {
     /// Installed ADR-103 leaf certificate and replay gate.
     leaf_ingress: std::sync::OnceLock<Arc<crate::mesh_leaf::LeafIngress>>,
+    /// Configured leaf bind (absent: derived from the main listener).
+    leaf_bind_spec: std::sync::OnceLock<crate::mesh_leaf_bind::LeafBindSpec>,
+    /// Where the leaf listeners actually bound, once they have.
+    leaf_bound: std::sync::OnceLock<crate::mesh_leaf_bind::LeafBind>,
     authentication: std::sync::OnceLock<MeshAuthentication>,
     /// Local node identifier.
     node_id: String,
@@ -242,6 +246,25 @@ impl MeshRuntime {
     pub fn leaf_ingress(&self) -> Option<&Arc<crate::mesh_leaf::LeafIngress>> {
         self.leaf_ingress.get()
     }
+
+    /// Install the configured leaf bind before the listener starts.
+    pub fn set_leaf_bind_spec(&self, spec: crate::mesh_leaf_bind::LeafBindSpec) -> bool {
+        self.leaf_bind_spec.set(spec).is_ok()
+    }
+
+    pub fn leaf_bind_spec(&self) -> Option<&crate::mesh_leaf_bind::LeafBindSpec> {
+        self.leaf_bind_spec.get()
+    }
+
+    /// Where the certified-leaf TCP and discovery sockets are bound, or
+    /// `None` when no leaf listener is running.
+    pub fn leaf_bound(&self) -> Option<&crate::mesh_leaf_bind::LeafBind> {
+        self.leaf_bound.get()
+    }
+
+    pub(crate) fn note_leaf_bound(&self, bound: crate::mesh_leaf_bind::LeafBind) {
+        let _ = self.leaf_bound.set(bound);
+    }
     pub fn set_authentication(&self, auth: MeshAuthentication) -> bool {
         self.authentication.set(auth).is_ok()
     }
@@ -284,6 +307,8 @@ impl MeshRuntime {
     pub fn new(node_id: String) -> Self {
         Self {
             leaf_ingress: std::sync::OnceLock::new(),
+            leaf_bind_spec: std::sync::OnceLock::new(),
+            leaf_bound: std::sync::OnceLock::new(),
             authentication: std::sync::OnceLock::new(),
             node_id,
             peers: DashMap::new(),
@@ -310,6 +335,8 @@ impl MeshRuntime {
     pub fn with_discovery(node_id: String, kademlia_id: [u8; 32]) -> Self {
         Self {
             leaf_ingress: std::sync::OnceLock::new(),
+            leaf_bind_spec: std::sync::OnceLock::new(),
+            leaf_bound: std::sync::OnceLock::new(),
             authentication: std::sync::OnceLock::new(),
             node_id,
             peers: DashMap::new(),

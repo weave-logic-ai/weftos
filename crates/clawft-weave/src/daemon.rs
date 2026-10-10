@@ -6057,6 +6057,12 @@ async fn dispatch(
                 },
                 handshake: Some(crate::handshake_rpc::current_handshake(&k)),
                 shared_services: crate::project_profile::shared_services_health(),
+                #[cfg(feature = "mesh")]
+                leaf_listeners: k.a2a_router().mesh_runtime().and_then(|rt| rt.leaf_bound()).map(|b| {
+                    crate::protocol::LeafListeners { tcp: b.tcp.to_string(), discovery: b.discovery.to_string() }
+                }),
+                #[cfg(not(feature = "mesh"))]
+                leaf_listeners: None,
             };
             Response::success(serde_json::to_value(result).unwrap())
         }

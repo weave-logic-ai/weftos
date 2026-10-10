@@ -256,12 +256,11 @@ impl LeafIngress {
         Some(ParentAdvertisement::sign(&self.machine_key, enrolled.cert.parent_scope, endpoint, now.saturating_add(30), nonce))
     }
 
-    /// UDP discovery on the mesh listener's address and port + 1. Requests
+    /// UDP discovery on `bind` (the leaf bind address; main port + 1 unless
+    /// configured), advertising `leaf_port`. Requests
     /// carry `WLD1 | leaf id (32 ASCII hex) | nonce (16)`. The response is a
     /// machine-signed CBOR advertisement bound to that nonce and enrollment.
-    pub async fn serve_discovery(&self, mesh_addr: std::net::SocketAddr, leaf_addr: std::net::SocketAddr) -> Result<(), LeafError> {
-        let port = mesh_addr.port().checked_add(1).ok_or_else(|| LeafError::Artifact("mesh port has no discovery successor".into()))?;
-        let bind = std::net::SocketAddr::new(mesh_addr.ip(), port);
+    pub async fn serve_discovery(&self, bind: std::net::SocketAddr, leaf_port: u16) -> Result<(), LeafError> {
         let sock = tokio::net::UdpSocket::bind(bind).await?;
         let mut request = [0u8; 64];
         loop {
@@ -269,12 +268,12 @@ impl LeafIngress {
             if n != 52 || &request[..4] != DISCOVERY_MAGIC { continue; }
             let Ok(id) = std::str::from_utf8(&request[4..36]) else { continue };
             let mut nonce = [0u8; 16]; nonce.copy_from_slice(&request[36..52]);
-            let ip = if mesh_addr.ip().is_unspecified() {
-                let probe = std::net::UdpSocket::bind(std::net::SocketAddr::new(mesh_addr.ip(), 0))?;
+            let ip = if bind.ip().is_unspecified() {
+                let probe = std::net::UdpSocket::bind(std::net::SocketAddr::new(bind.ip(), 0))?;
                 if probe.connect(peer).is_err() { continue; }
                 match probe.local_addr() { Ok(a) => a.ip(), Err(_) => continue }
-            } else { mesh_addr.ip() };
-            let endpoint = std::net::SocketAddr::new(ip, leaf_addr.port()).to_string();
+            } else { bind.ip() };
+            let endpoint = std::net::SocketAddr::new(ip, leaf_port).to_string();
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             if let Some(ad) = self.advertisement(id, endpoint, now, nonce)
                 && let Ok(bytes) = weftos_leaf_types::encode(&ad)
