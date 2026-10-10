@@ -70,6 +70,17 @@ pub struct TrustArgs {
     pub replace: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct IdentityArgs {
+    /// Also write the raw 32-byte Ed25519 public key here (for
+    /// `weaver leaf provision --mesh-pubkey`). Refuses to overwrite.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Print JSON (`report.mesh_identity` shape) instead of text.
+    #[arg(long)]
+    pub json: bool,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum MeshCmd {
     /// Run the machine mesh service in the foreground (never as root).
@@ -95,6 +106,11 @@ pub enum MeshCmd {
     },
     /// Pin the service's machine key after verifying its fingerprint out of band.
     Trust(TrustArgs),
+    /// Print this node's mesh identity — node id, fingerprint and Ed25519
+    /// public key — from `<runtime>/node.key`. Read-only; the private key is
+    /// never printed. `--out` also writes the raw 32-byte public key, which
+    /// is what `weaver leaf provision --mesh-pubkey` pins.
+    Identity(IdentityArgs),
     /// Mesh nonce for the Seed licence mesh id (ADR-106); runs locally.
     Nonce {
         #[command(subcommand)]
@@ -236,6 +252,7 @@ pub async fn execute(cmd: MeshCmd, w: &mut dyn Write) -> Result<()> {
             journal_verify(w, &conn, accept_truncate, seq, floor).await
         }
         MeshCmd::Trust(t) => trust(w, t).await,
+        MeshCmd::Identity(a) => identity(w, &a),
         MeshCmd::Nonce { cmd } => super::mesh_nonce::run(cmd, w),
         #[cfg(feature = "placement")]
         MeshCmd::Pair { cmd } => super::mesh_pair_cmd::run(cmd, w).await,
@@ -253,6 +270,47 @@ async fn serve(a: ServeArgs) -> Result<()> {
         cfg.validate()?;
     }
     clawft_mesh_service::run(cfg).await.map_err(|e| anyhow!(e))
+}
+
+/// `weaver mesh identity`: the public half of `<runtime>/node.key`, in the
+/// `report.mesh_identity` shape the heartbeat already sends. Reads the key
+/// file only to derive the public key; nothing about the daemon changes
+/// and the seed never reaches `w` or `--out`.
+fn identity(w: &mut dyn Write, a: &IdentityArgs) -> Result<()> {
+    let paths = crate::protocol::runtime_paths();
+    let key_path = paths.node_key();
+    let bytes = std::fs::read(&key_path).with_context(|| {
+        format!(
+            "no node key at {} — point WEFTOS_RUNTIME_DIR at the daemon's runtime dir (`weaver kernel status` prints it)",
+            key_path.display()
+        )
+    })?;
+    if bytes.len() != 32 {
+        bail!("node.key at {} is malformed (expected 32 bytes, got {})", key_path.display(), bytes.len());
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&bytes);
+    let pk = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+    let id = crate::mesh_pair::MeshIdentity::from_pubkey(&pk, None);
+    if let Some(out) = &a.out {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        let mut f = opts.open(out).with_context(|| format!("create {}", out.display()))?;
+        f.write_all(&pk)?;
+        f.sync_all()?;
+    }
+    if a.json {
+        writeln!(w, "{}", serde_json::to_string_pretty(&id)?)?;
+    } else {
+        writeln!(w, "node:        {}", id.node)?;
+        writeln!(w, "fingerprint: {}", id.fingerprint)?;
+        writeln!(w, "ed25519:     {}", id.ed25519)?;
+        writeln!(w, "key file:    {} (public half only)", key_path.display())?;
+        if let Some(out) = &a.out {
+            writeln!(w, "raw pubkey:  {} (32 bytes, for `weaver leaf provision --mesh-pubkey`)", out.display())?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn socket_of(c: &ConnArgs) -> PathBuf {
