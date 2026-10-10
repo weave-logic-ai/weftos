@@ -56,6 +56,18 @@ pub struct KernelStatusResult {
     /// parent (ADR-103 Phase 2 F). Absent on every other profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_services: Option<SharedServicesHealth>,
+    /// Where the certified-leaf TCP and discovery sockets are bound; absent
+    /// when no leaf listener is running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_listeners: Option<LeafListeners>,
+}
+
+/// Bound addresses of the certified-leaf listeners (separate from the main
+/// mesh listener when `kernel.mesh.leaf_listen_addr` is set).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeafListeners {
+    pub tcp: String,
+    pub discovery: String,
 }
 
 /// `parent` when the user daemon answered last time, `down` otherwise. There
