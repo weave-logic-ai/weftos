@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.3] - 2026-10-10
+
+### Added
+- Tailnet router (ADR-116 R1): one HTTPS front door per dev machine. Tailscale Serve keeps
+  `:443` and forwards to a router in the user daemon (`[router]` in `weave.toml`, off by
+  default, `127.0.0.1:18000`). Projects declare `routes:` in `compose/ports.yaml`; conflicts
+  are refused; WebSocket upgrades are proxied; `/_weftos/` lists routes with health and each
+  project's process-compose state. `weaver route list|reload|serve --plan|--apply`.
+
 ## [0.8.4-rc.2] - 2026-10-10
 
 ### Fixed
