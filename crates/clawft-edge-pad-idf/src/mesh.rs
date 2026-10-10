@@ -428,7 +428,8 @@ fn apply_push(bytes: &[u8], compositor: &mut Compositor, surface: &mut DpiDispla
 
 /// Draw a single status line via the compositor — used for the boot
 /// screen and connection-state messages. Identical to the bare-metal port.
-fn boot_screen(comp: &mut Compositor, surface: &mut DpiDisplay, msg: &str) {
+/// `main` also calls it once before WiFi so the panel proves itself offline.
+pub(crate) fn boot_screen(comp: &mut Compositor, surface: &mut DpiDisplay, msg: &str) {
     use weftos_leaf_types::{DisplayClear, DisplayText, LayerSlot};
     comp.apply(LeafPush::DisplayClear(DisplayClear { z: LayerSlot::Text }));
     comp.apply(LeafPush::DisplayText(DisplayText {

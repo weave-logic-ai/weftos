@@ -65,11 +65,41 @@ First build will auto-download and compile ESP-IDF v5.3.x (~10-15 min,
 ~3 GB on disk under `target/`). Subsequent builds reuse the cached
 IDF tree.
 
-To flash + monitor (do NOT do this during this porting cycle — the
-spec is build-verify only):
+## Flashing
+
+The release image is ~1.29 MiB. ESP-IDF's default single-app partition
+table gives `factory` only 1 MiB, so the default table is **not
+flashable** — the first hardware flash (2026-10-10) failed on exactly
+this. `partitions.csv` at the crate root (nvs 24 KiB, phy 4 KiB,
+factory 3 MiB, single-app / no OTA on the 4 MB module) is applied at
+flash time; the app reads the table from flash at 0x8000, nothing is
+compiled in. (`CONFIG_PARTITION_TABLE_CUSTOM_FILENAME` does not work
+from this crate: esp-idf-sys resolves it relative to the generated
+project under `target/`, not the crate root.)
+
+With a USB-attached host toolchain (`cargo run` uses the runner in
+`.cargo/config.toml`, which already passes the table):
 ```sh
 cargo run --release
 ```
+
+From a build container without USB access (how the Mac bring-up ran —
+`espressif/idf-rust` image, device on the host), produce a merged image
+in the container and write it with host `esptool`:
+```sh
+# in the container, crate dir
+OUT=target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-*/out/build
+espflash save-image --chip esp32s3 --flash-size 4mb --merge \
+  --bootloader $OUT/bootloader/bootloader.bin \
+  --partition-table partitions.csv \
+  target/xtensa-esp32s3-espidf/release/clawft-edge-pad-idf edgepad-merged.bin
+# on the host (CrowPanel CH340 enumerates as /dev/cu.usbserial-*)
+esptool --port /dev/cu.usbserial-XX --baud 460800 write-flash 0x0 edgepad-merged.bin
+esptool --port /dev/cu.usbserial-XX read-flash 0 0x400000 backup.bin   # before the first write
+```
+The CH340 drops bytes under sustained transfer; if `write-flash` or
+`read-flash` fails with "Invalid head of packet", retry at 230400 or
+read in 256 KiB chunks. Serial console is 115200.
 
 ## Cross-reference to `clawft-edge-pad`
 
