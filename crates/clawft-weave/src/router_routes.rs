@@ -8,13 +8,18 @@
 //! claims:
 //!   - { port: 18110, use: process-compose-http }
 //! routes:
-//!   - { prefix: /shastaos, port: 18120, health: /api/health, default: true }
+//!   - { prefix: /shastaos, port: 18120, health: /api/health, default: true,
+//!       allow: [alice@example.com] }
 //! ```
 //!
-//! The prefix defaults to `/<project>`. The table is built in registration
-//! order; a prefix or port already taken by an earlier project, a second
-//! `default: true`, or an invalid declaration is **refused and reported**,
-//! never resolved silently.
+//! The prefix defaults to `/<project>`. `allow` (R2) restricts a route to the
+//! listed tailnet logins. Routes also come from a dashboard overlay
+//! (`~/.weftos/routes/<ULID>.yaml`, R3, see [`crate::router_overlay`]); those
+//! carry `source: dashboard` and are admitted after every repository route,
+//! so the repository wins on the same prefix. The table is built in
+//! registration order; a prefix or port already taken by an earlier project,
+//! a second `default: true`, or an invalid declaration is **refused and
+//! reported**, never resolved silently.
 
 use std::path::{Path, PathBuf};
 
@@ -24,10 +29,14 @@ use serde::{Deserialize, Serialize};
 pub const RESERVED_PREFIXES: &[&str] = &["/", "/api", "/console", "/_weftos"];
 /// The `use:` of the claim that names a project's process-compose HTTP port.
 pub const PC_HTTP_USE: &str = "process-compose-http";
-/// Most routes read from one `ports.yaml`.
+/// Most routes read from one `ports.yaml` (and from one overlay).
 pub const MAX_ROUTES_PER_PROJECT: usize = 32;
 /// Lowest port a route may point at (no privileged ports behind the tailnet).
 pub const MIN_PORT: u64 = 1024;
+/// Most logins on one route's `allow` list.
+pub const MAX_ALLOW: usize = 64;
+/// Longest accepted login.
+pub const MAX_LOGIN_LEN: usize = 254;
 
 #[derive(Debug, Deserialize)]
 struct PortsFile {
@@ -47,19 +56,33 @@ struct Claim {
     use_: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct RouteDecl {
+/// One `routes:` entry as written (the same shape in `ports.yaml` and in an overlay).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct RouteDecl {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    pub port: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<String>,
     #[serde(default)]
-    prefix: Option<String>,
-    port: u64,
-    #[serde(default)]
-    health: Option<String>,
-    #[serde(default)]
-    default: bool,
+    pub default: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+}
+
+/// Where a route was declared.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    /// The project's own `compose/ports.yaml`.
+    #[default]
+    Repo,
+    /// A dashboard overlay (`~/.weftos/routes/<ULID>.yaml`).
+    Dashboard,
 }
 
 /// One accepted route.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Route {
     /// Project slug the route belongs to.
     pub project: String,
@@ -71,24 +94,52 @@ pub struct Route {
     pub health: Option<String>,
     /// Also serves unmatched paths at `/` (ADR-116 §3, transitional).
     pub default: bool,
+    /// Tailnet logins allowed through (lower-cased); empty is open to the tailnet.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub source: Source,
+}
+
+impl Route {
+    /// Whether an allowlist applies.
+    pub fn restricted(&self) -> bool {
+        !self.allow.is_empty()
+    }
 }
 
 /// A declaration the table did not accept, and why.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Refused {
     pub project: String,
     pub prefix: String,
     pub port: u16,
     pub reason: String,
+    #[serde(default)]
+    pub source: Source,
+}
+
+/// One `claims:` entry with a valid port and a `use`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortClaim {
+    pub port: u16,
+    #[serde(rename = "use")]
+    pub use_: String,
 }
 
 /// A project as the router sees it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectInfo {
     pub slug: String,
     pub root: PathBuf,
     /// The `process-compose-http` claim, if any.
     pub pc_http: Option<u16>,
+    /// The registered project's ULID, when the candidate is a manifest root.
+    #[serde(default)]
+    pub ulid: Option<String>,
+    /// Every port claim with a `use` (the services report maps them to processes).
+    #[serde(default)]
+    pub claims: Vec<PortClaim>,
 }
 
 /// Routes parsed from one project's `ports.yaml`, before table admission.
@@ -97,6 +148,14 @@ pub struct ProjectRoutes {
     pub info: ProjectInfo,
     pub routes: Vec<Route>,
     pub refused: Vec<Refused>,
+}
+
+impl ProjectRoutes {
+    /// A project with no `ports.yaml` (overlay routes only).
+    pub fn empty(fallback_slug: &str, root: &Path) -> Self {
+        let slug = slugify(fallback_slug).unwrap_or_else(|| "project".to_owned());
+        Self { info: ProjectInfo { slug, root: root.to_path_buf(), ..Default::default() }, routes: Vec::new(), refused: Vec::new() }
+    }
 }
 
 /// The admitted route table.
@@ -154,120 +213,161 @@ pub fn normalize_prefix(raw: &str) -> Result<String, String> {
     Ok(p.to_owned())
 }
 
-fn valid_health(h: &str) -> bool {
+/// Is `h` a health path the index may GET?
+pub fn valid_health(h: &str) -> bool {
     h.starts_with('/') && h.len() <= 200 && h.chars().all(|c| c.is_ascii_graphic())
 }
 
-fn port_of(n: u64, what: &str) -> Result<u16, String> {
+/// A route port: 1024..=65535.
+pub fn port_of(n: u64, what: &str) -> Result<u16, String> {
     if !(MIN_PORT..=65535).contains(&n) {
         return Err(format!("{what} port {n} is outside {MIN_PORT}..=65535"));
     }
     Ok(n as u16)
 }
 
+/// Is `s` a tailnet login (`local@domain`, as Tailscale reports it)? Lenient on
+/// purpose: `alice@example.com` and `alice@github` are both logins.
+pub fn valid_login(s: &str) -> bool {
+    let Some((local, domain)) = s.split_once('@') else { return false };
+    !local.is_empty()
+        && !domain.is_empty()
+        && s.len() <= MAX_LOGIN_LEN
+        && !domain.contains('@')
+        && s.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '<' | '>' | '"' | ','))
+}
+
+/// Validate an `allow` list: at most [`MAX_ALLOW`] logins, each login-shaped,
+/// lower-cased and deduplicated (matching is case-insensitive).
+pub fn normalize_allow(raw: &[String]) -> Result<Vec<String>, String> {
+    if raw.len() > MAX_ALLOW {
+        return Err(format!("allow lists more than {MAX_ALLOW} logins"));
+    }
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    for a in raw {
+        let a = a.trim();
+        if !valid_login(a) {
+            return Err(format!("allow entry {a:?} is not a login (user@domain)"));
+        }
+        let l = a.to_ascii_lowercase();
+        if !out.contains(&l) {
+            out.push(l);
+        }
+    }
+    Ok(out)
+}
+
+/// Validate one declaration for project `slug`; a bad one becomes a [`Refused`].
+pub fn admit_decl(d: RouteDecl, slug: &str, source: Source) -> Result<Route, Refused> {
+    let raw_prefix = d.prefix.clone().unwrap_or_else(|| format!("/{slug}"));
+    let port = d.port.min(u64::from(u16::MAX)) as u16;
+    let outcome = (|| {
+        let prefix = normalize_prefix(&raw_prefix)?;
+        let port = port_of(d.port, "route")?;
+        if let Some(h) = &d.health
+            && !valid_health(h)
+        {
+            return Err(format!("health {h:?} must be a path"));
+        }
+        let allow = normalize_allow(&d.allow)?;
+        Ok(Route { project: slug.to_owned(), prefix, port, health: d.health.clone(), default: d.default, allow, source })
+    })();
+    outcome.map_err(|reason| Refused { project: slug.to_owned(), prefix: raw_prefix, port, reason, source })
+}
+
 /// Parse one project's `ports.yaml`. `fallback_slug` (the manifest name) is
 /// used when the file has no `project:`. A file-level error refuses every
 /// route of that project; a bad route refuses only itself.
 pub fn parse_ports_yaml(text: &str, fallback_slug: &str, root: &Path) -> ProjectRoutes {
-    let fallback = slugify(fallback_slug).unwrap_or_else(|| "project".to_owned());
+    let mut out = ProjectRoutes::empty(fallback_slug, root);
+    let fallback = out.info.slug.clone();
+    let refuse = |out: &mut ProjectRoutes, reason: String| {
+        out.refused.push(Refused { project: fallback.clone(), prefix: "-".into(), port: 0, reason, source: Source::Repo });
+    };
     let file: PortsFile = match serde_yaml::from_str(text) {
         Ok(f) => f,
         Err(e) => {
-            let info = ProjectInfo { slug: fallback.clone(), root: root.to_path_buf(), pc_http: None };
-            let refused = vec![Refused { project: fallback, prefix: "-".into(), port: 0, reason: format!("compose/ports.yaml: {e}") }];
-            return ProjectRoutes { info, routes: Vec::new(), refused };
+            refuse(&mut out, format!("compose/ports.yaml: {e}"));
+            return out;
         }
     };
-    let slug = match file.project.as_deref().map(str::trim) {
-        Some(p) if valid_slug(p) => p.to_owned(),
+    match file.project.as_deref().map(str::trim) {
+        Some(p) if valid_slug(p) => out.info.slug = p.to_owned(),
         Some(p) => {
-            let info = ProjectInfo { slug: fallback.clone(), root: root.to_path_buf(), pc_http: None };
-            let reason = format!("compose/ports.yaml: project {p:?} is not a slug ([a-z0-9-])");
-            return ProjectRoutes { info, routes: Vec::new(), refused: vec![Refused { project: fallback, prefix: "-".into(), port: 0, reason }] };
+            refuse(&mut out, format!("compose/ports.yaml: project {p:?} is not a slug ([a-z0-9-])"));
+            return out;
         }
-        None => fallback,
-    };
-    let pc_http = file
+        None => {}
+    }
+    out.info.claims = file
         .claims
         .iter()
-        .find(|c| c.use_.as_deref() == Some(PC_HTTP_USE))
-        .and_then(|c| c.port)
-        .and_then(|p| port_of(p, "process-compose-http").ok());
-    let info = ProjectInfo { slug: slug.clone(), root: root.to_path_buf(), pc_http };
-    let mut routes = Vec::new();
-    let mut refused = Vec::new();
+        .filter_map(|c| Some(PortClaim { port: port_of(c.port?, "claim").ok()?, use_: c.use_.as_deref()?.trim().to_owned() }))
+        .filter(|c| !c.use_.is_empty() && c.use_.len() <= 64)
+        .take(MAX_ROUTES_PER_PROJECT)
+        .collect();
+    out.info.pc_http = out.info.claims.iter().find(|c| c.use_ == PC_HTTP_USE).map(|c| c.port);
+    let slug = out.info.slug.clone();
     if file.routes.len() > MAX_ROUTES_PER_PROJECT {
-        refused.push(Refused { project: slug.clone(), prefix: "-".into(), port: 0, reason: format!("more than {MAX_ROUTES_PER_PROJECT} routes") });
+        out.refused.push(Refused { project: slug.clone(), prefix: "-".into(), port: 0, reason: format!("more than {MAX_ROUTES_PER_PROJECT} routes"), source: Source::Repo });
     }
     for d in file.routes.into_iter().take(MAX_ROUTES_PER_PROJECT) {
-        let raw_prefix = d.prefix.clone().unwrap_or_else(|| format!("/{slug}"));
-        let port = d.port.min(u64::from(u16::MAX)) as u16;
-        let outcome = (|| {
-            let prefix = normalize_prefix(&raw_prefix)?;
-            let port = port_of(d.port, "route")?;
-            if let Some(h) = &d.health
-                && !valid_health(h)
-            {
-                return Err(format!("health {h:?} must be a path"));
-            }
-            Ok(Route { project: slug.clone(), prefix, port, health: d.health.clone(), default: d.default })
-        })();
-        match outcome {
-            Ok(r) => routes.push(r),
-            Err(reason) => refused.push(Refused { project: slug.clone(), prefix: raw_prefix, port, reason }),
+        match admit_decl(d, &slug, Source::Repo) {
+            Ok(r) => out.routes.push(r),
+            Err(x) => out.refused.push(x),
         }
     }
-    ProjectRoutes { info, routes, refused }
+    out
 }
 
 impl RouteTable {
-    /// Admit projects in registration order. A prefix taken earlier, a port
-    /// taken by an earlier *other* project, or a second default is refused.
+    /// Admit projects in registration order: every repository route first,
+    /// then every overlay route, so the repository wins on the same prefix. A
+    /// prefix taken earlier, a port taken by an earlier *other* project, or a
+    /// second default is refused.
     pub fn build(projects: Vec<ProjectRoutes>) -> Self {
         let mut t = RouteTable::default();
-        let mut default_holder: Option<String> = None;
+        let (mut repo, mut dash) = (Vec::new(), Vec::new());
         for p in projects {
             t.refused.extend(p.refused);
             for r in p.routes {
-                if let Some(prev) = t.routes.iter().find(|x| x.prefix == r.prefix) {
-                    t.refused.push(Refused {
-                        project: r.project.clone(),
-                        prefix: r.prefix.clone(),
-                        port: r.port,
-                        reason: format!("prefix {} is already routed by project {}", r.prefix, prev.project),
-                    });
-                    continue;
-                }
-                if let Some(prev) = t.routes.iter().find(|x| x.port == r.port && x.project != r.project) {
-                    t.refused.push(Refused {
-                        project: r.project.clone(),
-                        prefix: r.prefix.clone(),
-                        port: r.port,
-                        reason: format!("port {} is already routed by project {} ({})", r.port, prev.project, prev.prefix),
-                    });
-                    continue;
-                }
-                let mut r = r;
-                if r.default {
-                    match &default_holder {
-                        Some(h) => {
-                            t.refused.push(Refused {
-                                project: r.project.clone(),
-                                prefix: r.prefix.clone(),
-                                port: r.port,
-                                reason: format!("default route is already held by project {h}; this route is admitted without default"),
-                            });
-                            r.default = false;
-                        }
-                        None => default_holder = Some(r.project.clone()),
-                    }
-                }
-                t.routes.push(r);
+                if r.source == Source::Dashboard { dash.push(r) } else { repo.push(r) }
             }
             t.projects.push(p.info);
         }
+        let mut default_holder: Option<String> = None;
+        for r in repo.into_iter().chain(dash) {
+            t.admit(r, &mut default_holder);
+        }
         t.routes.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()).then_with(|| a.prefix.cmp(&b.prefix)));
         t
+    }
+
+    fn admit(&mut self, mut r: Route, default_holder: &mut Option<String>) {
+        let refuse = |r: &Route, reason: String| Refused { project: r.project.clone(), prefix: r.prefix.clone(), port: r.port, reason, source: r.source };
+        if let Some(prev) = self.routes.iter().find(|x| x.prefix == r.prefix) {
+            let reason = if prev.project == r.project && prev.source == Source::Repo && r.source == Source::Dashboard {
+                format!("prefix {} is declared in project {}'s compose/ports.yaml; the repository wins", r.prefix, prev.project)
+            } else {
+                format!("prefix {} is already routed by project {}", r.prefix, prev.project)
+            };
+            self.refused.push(refuse(&r, reason));
+            return;
+        }
+        if let Some(prev) = self.routes.iter().find(|x| x.port == r.port && x.project != r.project) {
+            self.refused.push(refuse(&r, format!("port {} is already routed by project {} ({})", r.port, prev.project, prev.prefix)));
+            return;
+        }
+        if r.default {
+            match default_holder {
+                Some(h) => {
+                    self.refused.push(refuse(&r, format!("default route is already held by project {h}; this route is admitted without default")));
+                    r.default = false;
+                }
+                None => *default_holder = Some(r.project.clone()),
+            }
+        }
+        self.routes.push(r);
     }
 
     /// The route whose prefix is the longest match for `path` (query ignored),

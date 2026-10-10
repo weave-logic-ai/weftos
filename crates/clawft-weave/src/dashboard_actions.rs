@@ -1,6 +1,6 @@
 //! Dashboard actions (ADR-108 P2): work the dashboard queues for this node and
 //! hands over in the heartbeat answer, `{ok, actions: [{id, kind, payload,
-//! created_at}]}`. Kinds: `install`, `update`, `remove`, `pair`.
+//! created_at}]}`. Kinds: `install`, `update`, `remove`, `pair`, `route`.
 //!
 //! The reporter keeps a bounded in-memory queue, acknowledges each action with
 //! `POST /api/nodes/actions/{id}/result` (`{status, result}`, node token as the
@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 pub const MAX_QUEUE: usize = 64;
 /// Most actions (and outcomes) remembered for `dashboard.actions`.
 pub const MAX_LOG: usize = 128;
-/// Kinds the dashboard defines (ADR-108).
-pub const KINDS: [&str; 4] = ["install", "update", "remove", "pair"];
+/// Kinds the dashboard defines (ADR-108; `route` is ADR-116 R3).
+pub const KINDS: [&str; 5] = ["install", "update", "remove", "pair", "route"];
 
 /// An action as the dashboard sends it.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -83,6 +83,7 @@ pub fn default_handlers() -> HashMap<String, Arc<dyn ActionHandler>> {
         }
     }
     m.insert(crate::mesh_pair::KIND.to_owned(), Arc::new(crate::mesh_pair::PairHandler::global()));
+    m.insert(crate::router_action::KIND.to_owned(), Arc::new(crate::router_action::RouteHandler::from_process()));
     m
 }
 

@@ -58,6 +58,7 @@ async fn upstream_handler(mut req: Request<Incoming>) -> Result<Response<Body>, 
         "method": req.method().as_str(),
         "host": h("host"), "xfh": h("x-forwarded-host"), "xfp": h("x-forwarded-proto"), "xfpre": h("x-forwarded-prefix"),
         "xff": h("x-forwarded-for"), "connection": h("connection"),
+        "login": h("tailscale-user-login"), "name": h("tailscale-user-name"), "forged": h("tailscale-forged"),
     });
     let body = req.into_body().collect().await?.to_bytes();
     echo["body_len"] = serde_json::json!(body.len());
@@ -103,7 +104,7 @@ async fn rig(yaml: impl FnOnce(u16) -> String) -> Rig {
     std::fs::create_dir_all(proj.join("compose")).unwrap();
     std::fs::write(proj.join(PORTS_FILE), yaml(up)).unwrap();
     let cfg = RouterConfig { enabled: true, listen: "127.0.0.1:0".into(), poll_secs: 1, health_timeout_ms: 500 };
-    let source = DirsSource(vec![Candidate { name: "app".into(), dir: proj }]);
+    let source = DirsSource::new(vec![Candidate { name: "app".into(), dir: proj, ulid: None }]);
     let h = start_with(cfg, Box::new(source), Duration::from_millis(50)).await.unwrap();
     Rig { h, dir, up }
 }
@@ -239,6 +240,72 @@ async fn the_index_lists_routes_health_and_process_compose_state() {
     let (status, _, html) = send(r.h.bound, get("/_weftos/")).await;
     assert_eq!(status, 200);
     assert!(html.contains("href=\"/app/\"") && html.contains("1/1 running") && html.contains("routes.json"), "{html}");
+}
+
+fn restricted(up: u16) -> String {
+    format!("{}  - {{ prefix: /app/admin, port: {up}, allow: [alice@example.com, bob@example.com] }}\n", basic(up))
+}
+
+fn with_login(path: &str, login: Option<&str>) -> Request<Empty<Bytes>> {
+    let mut req = get(path);
+    if let Some(l) = login {
+        req.headers_mut().insert("tailscale-user-login", l.parse().unwrap());
+    }
+    req
+}
+
+#[tokio::test]
+async fn an_allow_list_admits_listed_logins_case_insensitively_and_forwards_the_identity() {
+    let r = rig(restricted).await;
+    let (status, _, body) = send(r.h.bound, with_login("/app/admin/x", Some("Alice@Example.COM"))).await;
+    assert_eq!(status, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["login"], "Alice@Example.COM", "the login goes upstream as Serve sent it");
+    let (status, _, _) = send(r.h.bound, with_login("/app/admin", Some("bob@example.com"))).await;
+    assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn a_login_not_listed_and_a_missing_login_get_the_same_403_naming_the_route() {
+    let r = rig(restricted).await;
+    let (status, headers, denied) = send(r.h.bound, with_login("/app/admin/x", Some("mallory@example.com"))).await;
+    assert_eq!(status, 403);
+    assert!(headers.get("content-type").unwrap().to_str().unwrap().starts_with("text/html"));
+    assert!(denied.contains("<code>/app/admin/</code>") && denied.contains("<strong>app</strong>"), "{denied}");
+    assert!(!denied.contains("alice") && !denied.contains("bob") && !denied.contains("mallory"), "the list and the caller stay out of the page: {denied}");
+    let (status, _, missing) = send(r.h.bound, with_login("/app/admin/x", None)).await;
+    assert_eq!(status, 403, "a tagged device (no login header) is refused");
+    assert_eq!(missing, denied, "one uniform page");
+    let (status, _, empty) = send(r.h.bound, with_login("/app/admin/x", Some("  "))).await;
+    assert_eq!((status, empty == denied), (StatusCode::FORBIDDEN, true));
+    // A prefix match on a longer open route is not shadowed: `/app/administrator` is `/app`.
+    let (status, _, _) = send(r.h.bound, with_login("/app/administrator", None)).await;
+    assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn a_route_without_allow_stays_open_and_forged_tailscale_headers_are_stripped() {
+    let r = rig(restricted).await;
+    let (status, _, body) = send(r.h.bound, with_login("/app/page", None)).await;
+    assert_eq!(status, 200);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["login"], "");
+    let mut req = with_login("/app/page", Some("carol@example.com"));
+    req.headers_mut().insert("tailscale-user-name", "Carol".parse().unwrap());
+    req.headers_mut().insert("tailscale-forged", "1".parse().unwrap());
+    req.headers_mut().insert("Tailscale-Other-Thing", "2".parse().unwrap());
+    let (status, _, body) = send(r.h.bound, req).await;
+    assert_eq!(status, 200);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["login"], "carol@example.com");
+    assert_eq!(v["name"], "Carol");
+    assert_eq!(v["forged"], "", "a Tailscale-* header Serve does not set is dropped");
+    let (_, _, idx) = send(r.h.bound, get("/_weftos/routes.json")).await;
+    let v: serde_json::Value = serde_json::from_str(&idx).unwrap();
+    let admin = v["routes"].as_array().unwrap().iter().find(|x| x["prefix"] == "/app/admin").cloned().unwrap();
+    assert_eq!(admin["restricted"], true);
+    assert!(admin.get("allow").is_none() && !idx.contains("alice"), "the index never lists logins: {idx}");
+    let (_, _, html) = send(r.h.bound, get("/_weftos/")).await;
+    assert!(html.contains("(restricted)"), "{html}");
 }
 
 #[tokio::test]
