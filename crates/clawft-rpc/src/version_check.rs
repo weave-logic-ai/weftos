@@ -95,14 +95,59 @@ fn fetch_latest_from(url: &str) -> Option<String> {
     Some(tag.strip_prefix('v').unwrap_or(tag).to_string())
 }
 
-/// Compare two semver-ish version strings.
-/// Returns true if `latest` is newer than `current`.
+/// Compare two semver-ish version strings (`MAJOR.MINOR.PATCH[-PRE][+BUILD]`).
+/// Returns true if `latest` is newer than `current`. A pre-release sorts before
+/// its release (`0.8.4-rc.1` < `0.8.4`) and after the previous release
+/// (`0.8.3` < `0.8.4-rc.1`); pre-release identifiers compare per semver
+/// (numeric parts numerically, `rc.2` < `rc.10`). Unparseable input is never newer.
 fn is_newer(current: &str, latest: &str) -> bool {
-    let parse =
-        |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse::<u32>().ok()).collect() };
-    let c = parse(current);
-    let l = parse(latest);
-    l > c
+    match (parse_version(current), parse_version(latest)) {
+        (Some(c), Some(l)) => cmp_version(&l, &c) == std::cmp::Ordering::Greater,
+        _ => false,
+    }
+}
+
+type Version<'a> = ([u64; 3], Option<Vec<&'a str>>);
+
+fn parse_version(v: &str) -> Option<Version<'_>> {
+    let v = v.trim().trim_start_matches('v');
+    let v = v.split('+').next()?;
+    let (core, pre) = match v.split_once('-') {
+        Some((c, p)) => (c, Some(p.split('.').collect::<Vec<_>>())),
+        None => (v, None),
+    };
+    let mut nums = [0u64; 3];
+    let mut parts = core.split('.');
+    for n in &mut nums {
+        *n = parts.next()?.parse().ok()?;
+    }
+    if parts.next().is_some() || pre.as_ref().is_some_and(|p| p.iter().any(|s| s.is_empty())) {
+        return None;
+    }
+    Some((nums, pre))
+}
+
+fn cmp_version(a: &Version<'_>, b: &Version<'_>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    a.0.cmp(&b.0).then_with(|| match (&a.1, &b.1) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(x), Some(y)) => {
+            for (p, q) in x.iter().zip(y.iter()) {
+                let o = match (p.parse::<u64>(), q.parse::<u64>()) {
+                    (Ok(m), Ok(n)) => m.cmp(&n),
+                    (Ok(_), Err(_)) => Ordering::Less,
+                    (Err(_), Ok(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => p.cmp(q),
+                };
+                if o != Ordering::Equal {
+                    return o;
+                }
+            }
+            x.len().cmp(&y.len())
+        }
+    })
 }
 
 /// Print an update notice to stderr if a newer version is available.
@@ -167,6 +212,22 @@ mod tests {
         assert!(!is_newer("0.5.5", "0.5.5"));
         assert!(!is_newer("0.5.5", "0.5.4"));
         assert!(!is_newer("1.0.0", "0.9.9"));
+    }
+
+    #[test]
+    fn prereleases_order_per_semver() {
+        assert!(!is_newer("0.8.4-rc.1", "0.8.3"), "a release candidate is newer than the previous release");
+        assert!(is_newer("0.8.3", "0.8.4-rc.1"));
+        assert!(is_newer("0.8.4-rc.1", "0.8.4"));
+        assert!(!is_newer("0.8.4", "0.8.4-rc.1"));
+        assert!(is_newer("0.8.4-rc.2", "0.8.4-rc.10"));
+        assert!(is_newer("0.8.4-rc.1", "0.8.4-rc.1.1"));
+        assert!(!is_newer("0.8.4-rc.1", "0.8.4-rc.1"));
+        assert!(!is_newer("0.8.4-rc.1+abc", "0.8.4-rc.1"));
+        assert!(is_newer("0.8.4-alpha", "0.8.4-rc.1"));
+        assert!(!is_newer("0.8.3", "garbage"));
+        assert!(!is_newer("0.8.3", "0.8"));
+        assert!(!is_newer("0.8.3", "0.8.4-"));
     }
 
     #[test]
