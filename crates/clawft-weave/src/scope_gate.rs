@@ -120,6 +120,8 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     // Fleet manager: the gateway forwards this read-only snapshot on a
     // user-level daemon, so it must work outside a project.
     "fleet.snapshot",
+    // ADR-116: the tailnet router index is a read of machine-level state.
+    "route.list",
 ];
 
 /// User-level operations: callable outside a project, but only by a caller
@@ -144,6 +146,8 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "dashboard.status",
     "dashboard.actions",
     "dashboard.token.rotate",
+    // ADR-116: re-reading every project's compose/ports.yaml belongs to the machine.
+    "route.reload",
     // ADR-108 P3b: the remote helper fetches a project onto this machine; the
     // project is not registered here yet, so it is user-level.
     "project.fetch",

@@ -472,6 +472,18 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::dashboard_rpc::handle,
     },
+    // ADR-116: the tailnet router. Both are local reads of the owner's own
+    // compose/ports.yaml files (the poller re-reads them anyway).
+    ExtRoute {
+        prefix: "route.list",
+        capability: Capability::Read,
+        handler: crate::router_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "route.reload",
+        capability: Capability::Read,
+        handler: crate::router_rpc::handle,
+    },
     // ADR-108 P2b: pending pair requests on this node (request and cancel
     // are trust acts; list shows ids and node ids only).
     #[cfg(all(feature = "placement", unix))]
@@ -744,6 +756,18 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "dashboard.token.rotate",
         capability: Capability::Admin,
         handler: crate::dashboard_rpc::handle,
+    },
+    // ADR-116: the tailnet router. Both are local reads of the owner's own
+    // compose/ports.yaml files (the poller re-reads them anyway).
+    ExtRoute {
+        prefix: "route.list",
+        capability: Capability::Read,
+        handler: crate::router_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "route.reload",
+        capability: Capability::Read,
+        handler: crate::router_rpc::handle,
     },
     // ADR-108 P2b: pending pair requests on this node (request and cancel
     // are trust acts; list shows ids and node ids only).

@@ -5,3 +5,7 @@ claims:
   - { port: 18091, use: process-compose-mcp-sse }
   - { port: 4000, use: weft-docs, notes: "fumadocs; avoid :3000 (Forge Next)" }
   - { port: 8081, use: weft-serve, notes: "scripts/build.sh serve alt" }
+# Tailnet router (ADR-116): paths this repo serves behind the machine's :443.
+# Prefix defaults to /<project>; the prefix is kept on the upstream request.
+routes:
+  - { prefix: /weftos-docs, port: 4000, health: / }
