@@ -112,6 +112,27 @@ carries `report.routes`; the key is left out when it is off.
   manifest root.
 - At most 32 items and 16 refusals, longest prefix first.
 
+## Services (ADR-116 R3 add-on)
+
+Every beat also carries `report.services` when at least one registered project
+claims a `process-compose-http` port in its `compose/ports.yaml`; the key is
+left out otherwise.
+
+```json
+"services": [{"project": "shasta", "project_ulid": "<ULID or null>", "pc_port": 18110,
+              "state": "ok",
+              "processes": [{"name": "shasta-field", "status": "Running", "ports": [18120], "restarts": 0}]}]
+```
+
+- The source is the project's own process-compose HTTP API (`GET /processes`
+  on the claimed port, 1.5 s limit), the same read `/_weftos/` does. A port
+  that does not answer gives `state: "unreachable"` and no processes.
+- Only `name`, `status` and `restarts` are copied per process; commands and
+  environment variables never are. `ports` lists the project's claims whose
+  `use` names the process (`{ port: 18120, use: shasta-field }`; case and `_`
+  versus `-` do not matter), else it is empty.
+- At most 16 projects and 32 processes per project.
+
 ## Actions (ADR-108 P2)
 
 The dashboard's answer to a heartbeat may carry work for this node:

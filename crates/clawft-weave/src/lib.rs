@@ -209,6 +209,7 @@ pub mod router_sources;
 pub mod router_state;
 // ADR-116 R2/R3: dashboard overlays, the `route` action and `report.routes`.
 pub mod dashboard_routes;
+pub mod dashboard_services;
 pub mod router_action;
 pub mod router_overlay;
 pub mod project_git;

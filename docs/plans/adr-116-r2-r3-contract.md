@@ -46,6 +46,12 @@ Every heartbeat carries `report.routes` (omitted when the router is off):
 - **`served`:** true when Tailscale Serve's `:443` points at the router.
 - **`restricted`:** says whether an allowlist is set. The list itself is not reported.
 - **Bounds:** at most 32 items and 16 refusals.
+- **`report.services`** (add-on, omitted when there is nothing to report): per registered
+  project with a `process-compose-http` claim, `{"project", "project_ulid": "<ULID or null>",
+  "pc_port", "state": "ok" | "unreachable", "processes": [{"name", "status", "ports": [..],
+  "restarts"}]}`, read from that project's process-compose `GET /processes` (name, status and
+  restart count only; never commands or environment). `ports` are the project's `claims` whose
+  `use` names the process, else empty. At most 16 projects and 32 processes per project.
 
 ## 3. Editing routes from the dashboard (R3, dashboard to node)
 

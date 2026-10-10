@@ -16,6 +16,7 @@ fn routes_parse_with_defaults_and_the_pc_http_claim() {
     assert!(p.refused.is_empty(), "{:?}", p.refused);
     assert_eq!(p.info.slug, "shastaos");
     assert_eq!(p.info.pc_http, Some(18110));
+    assert_eq!(p.info.claims, vec![PortClaim { port: 18110, use_: "process-compose-http".into() }, PortClaim { port: 18120, use_: "shasta-field".into() }]);
     assert_eq!(
         p.routes[0],
         Route { project: "shastaos".into(), prefix: "/shastaos".into(), port: 18120, health: Some("/api/health".into()), default: true, ..Default::default() }

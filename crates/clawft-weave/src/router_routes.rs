@@ -119,6 +119,14 @@ pub struct Refused {
     pub source: Source,
 }
 
+/// One `claims:` entry with a valid port and a `use`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortClaim {
+    pub port: u16,
+    #[serde(rename = "use")]
+    pub use_: String,
+}
+
 /// A project as the router sees it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectInfo {
@@ -129,6 +137,9 @@ pub struct ProjectInfo {
     /// The registered project's ULID, when the candidate is a manifest root.
     #[serde(default)]
     pub ulid: Option<String>,
+    /// Every port claim with a `use` (the services report maps them to processes).
+    #[serde(default)]
+    pub claims: Vec<PortClaim>,
 }
 
 /// Routes parsed from one project's `ports.yaml`, before table admission.
@@ -143,7 +154,7 @@ impl ProjectRoutes {
     /// A project with no `ports.yaml` (overlay routes only).
     pub fn empty(fallback_slug: &str, root: &Path) -> Self {
         let slug = slugify(fallback_slug).unwrap_or_else(|| "project".to_owned());
-        Self { info: ProjectInfo { slug, root: root.to_path_buf(), pc_http: None, ulid: None }, routes: Vec::new(), refused: Vec::new() }
+        Self { info: ProjectInfo { slug, root: root.to_path_buf(), ..Default::default() }, routes: Vec::new(), refused: Vec::new() }
     }
 }
 
@@ -288,12 +299,14 @@ pub fn parse_ports_yaml(text: &str, fallback_slug: &str, root: &Path) -> Project
         }
         None => {}
     }
-    out.info.pc_http = file
+    out.info.claims = file
         .claims
         .iter()
-        .find(|c| c.use_.as_deref() == Some(PC_HTTP_USE))
-        .and_then(|c| c.port)
-        .and_then(|p| port_of(p, "process-compose-http").ok());
+        .filter_map(|c| Some(PortClaim { port: port_of(c.port?, "claim").ok()?, use_: c.use_.as_deref()?.trim().to_owned() }))
+        .filter(|c| !c.use_.is_empty() && c.use_.len() <= 64)
+        .take(MAX_ROUTES_PER_PROJECT)
+        .collect();
+    out.info.pc_http = out.info.claims.iter().find(|c| c.use_ == PC_HTTP_USE).map(|c| c.port);
     let slug = out.info.slug.clone();
     if file.routes.len() > MAX_ROUTES_PER_PROJECT {
         out.refused.push(Refused { project: slug.clone(), prefix: "-".into(), port: 0, reason: format!("more than {MAX_ROUTES_PER_PROJECT} routes"), source: Source::Repo });

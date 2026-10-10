@@ -193,6 +193,7 @@ async fn start_with(kernel: &KernelRef, cfg: DashboardConfig, home: &std::path::
     #[cfg(all(feature = "placement", unix))]
     d.set_pair_source(Arc::new(pair_source));
     d.set_route_source(Arc::new(crate::dashboard_routes::RouterRoutes::daemon()));
+    d.set_service_source(Arc::new(crate::dashboard_services::ProjectServices::daemon(home)));
     if !dashboard_report::install_global(d.clone()) {
         return;
     }
