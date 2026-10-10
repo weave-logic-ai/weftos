@@ -201,10 +201,10 @@ mod tests {
 
     const SHASTA_ROOT: &str = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"machine.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18120"}}}}}"#;
     const FUNNEL_ON: &str = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"machine.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18120"}}}},"AllowFunnel":{"machine.example.ts.net:443":true}}"#;
-    const ROUTER_ALREADY: &str = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"machine.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18100"}}}}}"#;
+    const ROUTER_ALREADY: &str = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"machine.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18000"}}}}}"#;
 
     fn router() -> SocketAddr {
-        "127.0.0.1:18100".parse().unwrap()
+        "127.0.0.1:18000".parse().unwrap()
     }
     fn table(routes: Vec<Route>) -> RouteTable {
         RouteTable { routes, ..Default::default() }
@@ -245,7 +245,7 @@ mod tests {
     fn a_default_route_covers_the_root_and_the_plan_is_one_serve_command() {
         let s = parse_status(SHASTA_ROOT).unwrap();
         let p = plan(&s, &table(vec![route("/shastaos", 18120, true)]), router()).unwrap();
-        assert_eq!(p.steps, vec![vec!["serve", "--bg", "--https=443", "http://127.0.0.1:18100"]]);
+        assert_eq!(p.steps, vec![vec!["serve", "--bg", "--https=443", "http://127.0.0.1:18000"]]);
         assert!(p.notes[0].contains("covered by project shastaos"), "{:?}", p.notes);
     }
 
@@ -272,7 +272,7 @@ mod tests {
         let t = table(vec![route("/shastaos", 18120, true), Route { project: "weftos".into(), prefix: "/docs".into(), port: 4000, health: None, default: false }]);
         let p = plan(&s, &t, router()).unwrap();
         assert_eq!(p.steps[0], vec!["serve", "--bg", "--https=443", "--set-path=/docs", "off"]);
-        assert_eq!(p.steps[1][3], "http://127.0.0.1:18100");
+        assert_eq!(p.steps[1][3], "http://127.0.0.1:18000");
         let json = r#"{"Web":{"m.example.ts.net:443":{"Handlers":{"/":{"Path":"/srv/www"}}}}}"#;
         let e = plan(&parse_status(json).unwrap(), &t, router()).unwrap_err();
         assert!(e.contains("not a loopback proxy"), "{e}");

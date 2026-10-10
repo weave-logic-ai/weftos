@@ -3,7 +3,7 @@
 //! ```toml
 //! [router]
 //! enabled = true                  # off by default
-//! listen = "127.0.0.1:18100"      # loopback only; Tailscale Serve fronts it on :443
+//! listen = "127.0.0.1:18000"      # loopback only; Tailscale Serve fronts it on :443
 //! poll_secs = 5                   # how often each project's compose/ports.yaml mtime is checked
 //! health_timeout_ms = 1500        # per upstream health / process-compose probe
 //! ```
@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Default bind address (ADR-116 §1).
-pub const DEFAULT_LISTEN: &str = "127.0.0.1:18100";
+pub const DEFAULT_LISTEN: &str = "127.0.0.1:18000";
 /// Bounds on `poll_secs`.
 pub const MIN_POLL_SECS: u64 = 1;
 /// See [`MIN_POLL_SECS`].
@@ -126,10 +126,10 @@ mod tests {
 
     #[test]
     fn enabled_section_must_bind_loopback() {
-        let c = RouterConfig::from_config(&json!({"router": {"enabled": true, "listen": "0.0.0.0:18100"}})).unwrap();
+        let c = RouterConfig::from_config(&json!({"router": {"enabled": true, "listen": "0.0.0.0:18000"}})).unwrap();
         let e = c.validate().unwrap_err();
         assert!(e.contains("loopback"), "{e}");
-        let ok = RouterConfig::from_config(&json!({"router": {"enabled": true, "listen": "[::1]:18100"}})).unwrap();
+        let ok = RouterConfig::from_config(&json!({"router": {"enabled": true, "listen": "[::1]:18000"}})).unwrap();
         ok.validate().unwrap();
     }
 

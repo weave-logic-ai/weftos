@@ -156,6 +156,7 @@ Each **project** runs **one** process-compose instance.
 | Forge (`forge-krause-automation`) | `:18080` | `:18081` |
 | WeftOS | `:18090` | `:18091` |
 | 1v1sion (`1v1sion.com`) | `:18100` | `:18101` |
+| WeftOS tailnet router (ADR-116) | `:18000` | — |
 
 Those ports are claimed in `compose/ports.yaml`. Do not reuse Forge's
 18080/18081 here. Kernel HTTP `:8080` is the product daemon, not PC.

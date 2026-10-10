@@ -39,7 +39,7 @@ are not available. Path prefixes (or extra HTTPS ports) are the options.
 
 - Tailscale Serve on each machine terminates TLS on `:443` with the machine's `*.ts.net`
   certificate and proxies **everything** to the local WeftOS router on loopback
-  (`http://127.0.0.1:18100`). It is tailnet-only. The router refuses to configure Funnel, and
+  (`http://127.0.0.1:18000`). It is tailnet-only. The router refuses to configure Funnel, and
   refuses to start if Funnel is on for that port.
 - The router runs inside the **user daemon**, so there is one per machine and it shares the
   daemon's project index (ADR-108). It binds loopback only.
@@ -115,7 +115,7 @@ has a route.
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| R1 | Router in the user daemon on `127.0.0.1:18100`; routes from `compose/ports.yaml`; conflict refusal; WebSocket proxying; `/_weftos/` index with process-compose state; `weaver route list|reload|serve --plan|--apply` | on this Mac, `https://bigmac-the-max.tail23f8f7.ts.net/shastaos/` serves Shasta through the router, and `/_weftos/` lists it as healthy |
+| R1 | Router in the user daemon on `127.0.0.1:18000`; routes from `compose/ports.yaml`; conflict refusal; WebSocket proxying; `/_weftos/` index with process-compose state; `weaver route list|reload|serve --plan|--apply` | on this Mac, `https://bigmac-the-max.tail23f8f7.ts.net/shastaos/` serves Shasta through the router, and `/_weftos/` lists it as healthy |
 | R2 | Per-route tailnet-login allowlist (Tailscale identity headers from Serve, checked against the project's members) | a login not on the list gets 403 on that prefix only |
 | R3 | `report.routes` on the dashboard; desired `route.*` parameters applied through a node action | the dashboard shows each machine's URLs for a project and can add a route that the node applies |
 | R4 | Optional start-on-demand: the router asks the project's process-compose to start a stopped process before proxying | a request to a stopped app starts it and is served once its readiness probe passes |

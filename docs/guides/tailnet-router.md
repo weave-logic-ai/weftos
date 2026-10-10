@@ -21,12 +21,12 @@ In `~/.weftos/weave.toml` (user daemon, `weaver kernel start --profile user`):
 ```toml
 [router]
 enabled = true                  # off by default
-# listen = "127.0.0.1:18100"    # loopback only
+# listen = "127.0.0.1:18000"    # loopback only
 # poll_secs = 5                 # how often each project's compose/ports.yaml mtime is checked
 # health_timeout_ms = 1500      # per health / process-compose probe
 ```
 
-Restart the daemon. `weaver route list` shows `tailnet router on 127.0.0.1:18100`
+Restart the daemon. `weaver route list` shows `tailnet router on 127.0.0.1:18000`
 once it is up. An invalid section is logged and the daemon keeps running
 without the router.
 
@@ -98,7 +98,7 @@ port it should be on.
 weaver route list [--json]        # routes, refused declarations, health, process-compose state
 weaver route reload               # re-read every project's compose/ports.yaml now
 weaver route serve --plan         # the Tailscale Serve change needed (:443 → the router)
-weaver route serve --apply        # run it: tailscale serve --bg --https=443 http://127.0.0.1:18100
+weaver route serve --apply        # run it: tailscale serve --bg --https=443 http://127.0.0.1:18000
 ```
 
 `serve` reads `tailscale serve status --json` and refuses, changing nothing,

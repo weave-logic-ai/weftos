@@ -189,7 +189,7 @@ mod tests {
     fn list_renders_off_routes_default_marker_and_refusals() {
         assert!(render_list(&json!({"enabled": false})).contains("off"));
         let v = json!({
-            "enabled": true, "listen": "127.0.0.1:18100", "generation": 2, "reloaded_at": "t",
+            "enabled": true, "listen": "127.0.0.1:18000", "generation": 2, "reloaded_at": "t",
             "routes": [{"prefix": "/shastaos", "project": "shastaos", "port": 18120, "default": true,
                         "upstream": "http://127.0.0.1:18120", "health": {"state": "ok"}}],
             "projects": [{"slug": "shastaos", "process_compose": {"state": "ok", "running": 3, "total": 4}}],
@@ -201,16 +201,16 @@ mod tests {
 
     #[test]
     fn list_document_round_trips_to_a_table() {
-        let v = json!({"listen": "127.0.0.1:18100", "routes": [
+        let v = json!({"listen": "127.0.0.1:18000", "routes": [
             {"prefix": "/a", "project": "a", "port": 3000, "default": false, "health": null, "upstream": "x", "extra": 1}]});
         let (t, addr) = table_from_list(&v).unwrap();
         assert_eq!(t.routes[0].prefix, "/a");
-        assert_eq!(addr.port(), 18100);
+        assert_eq!(addr.port(), 18000);
     }
 
     #[test]
     fn plan_renders_noop_and_steps() {
-        let router: SocketAddr = "127.0.0.1:18100".parse().unwrap();
+        let router: SocketAddr = "127.0.0.1:18000".parse().unwrap();
         let noop = router_serve::ServePlan { steps: vec![], notes: vec!["n".into()] };
         assert!(render_plan(&noop, "tailscale", router).contains("already configured"));
         let p = router_serve::ServePlan { steps: vec![vec!["serve".into(), "--bg".into()]], notes: vec![] };
