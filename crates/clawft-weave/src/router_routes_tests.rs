@@ -16,7 +16,10 @@ fn routes_parse_with_defaults_and_the_pc_http_claim() {
     assert!(p.refused.is_empty(), "{:?}", p.refused);
     assert_eq!(p.info.slug, "shastaos");
     assert_eq!(p.info.pc_http, Some(18110));
-    assert_eq!(p.routes[0], Route { project: "shastaos".into(), prefix: "/shastaos".into(), port: 18120, health: Some("/api/health".into()), default: true });
+    assert_eq!(
+        p.routes[0],
+        Route { project: "shastaos".into(), prefix: "/shastaos".into(), port: 18120, health: Some("/api/health".into()), default: true, ..Default::default() }
+    );
     assert_eq!(p.routes[1].prefix, "/shastaos/api", "trailing slash dropped");
 }
 
@@ -71,10 +74,40 @@ fn a_broken_file_or_bad_project_name_refuses_the_whole_project() {
 
 fn pr(slug: &str, routes: &[(&str, u16, bool)]) -> ProjectRoutes {
     ProjectRoutes {
-        info: ProjectInfo { slug: slug.into(), root: Path::new("/p").join(slug), pc_http: None },
-        routes: routes.iter().map(|(p, port, d)| Route { project: slug.into(), prefix: (*p).into(), port: *port, health: None, default: *d }).collect(),
+        info: ProjectInfo { slug: slug.into(), root: Path::new("/p").join(slug), ..Default::default() },
+        routes: routes.iter().map(|(p, port, d)| Route { project: slug.into(), prefix: (*p).into(), port: *port, default: *d, ..Default::default() }).collect(),
         refused: Vec::new(),
     }
+}
+
+#[test]
+fn allow_lists_are_validated_lower_cased_deduplicated_and_capped() {
+    let p = parse("project: x\nroutes:\n  - { prefix: /x, port: 3000, allow: [Alice@Example.com, bob@github, alice@example.com] }\n", "x");
+    assert!(p.refused.is_empty(), "{:?}", p.refused);
+    assert_eq!(p.routes[0].allow, ["alice@example.com", "bob@github"]);
+    assert!(p.routes[0].restricted());
+    let p = parse("project: x\nroutes:\n  - { prefix: /x, port: 3000, allow: [\"not a login\"] }\n  - { prefix: /y, port: 3001, allow: [\"@nobody\"] }\n", "x");
+    assert!(p.routes.is_empty());
+    assert!(p.refused.iter().all(|r| r.reason.contains("not a login")), "{:?}", p.refused);
+    let many: Vec<String> = (0..=MAX_ALLOW).map(|i| format!("u{i}@example.com")).collect();
+    let e = normalize_allow(&many).unwrap_err();
+    assert!(e.contains("more than 64"), "{e}");
+    assert!(valid_login("a@b") && !valid_login("ab") && !valid_login("a@") && !valid_login("a@b@c") && !valid_login("a b@c"));
+}
+
+#[test]
+fn overlay_routes_are_admitted_after_every_repository_route() {
+    let mut a = pr("a", &[("/a", 3000, false)]);
+    a.routes.push(Route { project: "a".into(), prefix: "/a".into(), port: 3005, source: Source::Dashboard, ..Default::default() });
+    a.routes.push(Route { project: "a".into(), prefix: "/b".into(), port: 3006, source: Source::Dashboard, ..Default::default() });
+    // Registered later, but its repository route still beats a's overlay on /b.
+    let b = pr("b", &[("/b", 3001, false)]);
+    let t = RouteTable::build(vec![a, b]);
+    assert_eq!(t.routes.iter().map(|r| (r.prefix.as_str(), r.port)).collect::<Vec<_>>(), [("/a", 3000), ("/b", 3001)]);
+    assert_eq!(t.refused.len(), 2, "{:?}", t.refused);
+    assert!(t.refused[0].reason.contains("compose/ports.yaml; the repository wins"), "{}", t.refused[0].reason);
+    assert_eq!(t.refused[0].source, Source::Dashboard);
+    assert_eq!(t.refused[1].reason, "prefix /b is already routed by project b");
 }
 
 #[test]
@@ -124,7 +157,7 @@ fn this_repos_own_ports_file_declares_the_docs_route() {
     assert!(p.refused.is_empty(), "{:?}", p.refused);
     assert_eq!(p.info.slug, "weftos");
     assert_eq!(p.info.pc_http, Some(18090));
-    assert_eq!(p.routes, vec![Route { project: "weftos".into(), prefix: "/weftos-docs".into(), port: 4000, health: Some("/".into()), default: false }]);
+    assert_eq!(p.routes, vec![Route { project: "weftos".into(), prefix: "/weftos-docs".into(), port: 4000, health: Some("/".into()), ..Default::default() }]);
 }
 
 #[test]

@@ -210,7 +210,7 @@ mod tests {
         RouteTable { routes, ..Default::default() }
     }
     fn route(prefix: &str, port: u16, default: bool) -> Route {
-        Route { project: "shastaos".into(), prefix: prefix.into(), port, health: None, default }
+        Route { project: "shastaos".into(), prefix: prefix.into(), port, default, ..Default::default() }
     }
 
     #[test]
@@ -269,7 +269,7 @@ mod tests {
     fn covered_sub_paths_are_cleared_first_and_non_proxy_handlers_refuse() {
         let json = r#"{"Web":{"m.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18120"},"/docs":{"Proxy":"http://127.0.0.1:4000"}}}}}"#;
         let s = parse_status(json).unwrap();
-        let t = table(vec![route("/shastaos", 18120, true), Route { project: "weftos".into(), prefix: "/docs".into(), port: 4000, health: None, default: false }]);
+        let t = table(vec![route("/shastaos", 18120, true), Route { project: "weftos".into(), prefix: "/docs".into(), port: 4000, ..Default::default() }]);
         let p = plan(&s, &t, router()).unwrap();
         assert_eq!(p.steps[0], vec!["serve", "--bg", "--https=443", "--set-path=/docs", "off"]);
         assert_eq!(p.steps[1][3], "http://127.0.0.1:18000");

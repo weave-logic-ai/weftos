@@ -2,6 +2,7 @@
 
 - **Status**: Proposed (2026-10-10; the owner called it critical for running projects side by side)
 - **Implementation**: R1 built on branch `wt/router` (2026-10-09): router in the user daemon (`[router]` in `weave.toml`, off by default), routes from `compose/ports.yaml`, conflict refusal, WebSocket proxying, `/_weftos/` index with process-compose state, `weaver route list|reload|serve --plan|--apply`. Guide: `docs/guides/tailnet-router.md`. Cutover on the owner's Mac is pending (the lead does it with the owner).
+- **R2 + R3 (node side)**: built on branch `wt/router-r2r3` (2026-10-10) against `docs/plans/adr-116-r2-r3-contract.md`: per-route `allow` lists checked against `Tailscale-User-Login` (uniform 403, tagged devices refused, other `Tailscale-*` headers stripped, login and name forwarded), `report.routes` in the heartbeat (`base_url` from `tailscale status`, `served` from `tailscale serve status`, `restricted` and `source` per route, 32/16 bounds), and the `route` node action writing `~/.weftos/routes/<ULID>.yaml` overlays that the repository always beats on a prefix. The dashboard half of R3 (migration allowing `kind = 'route'`, the UI) is the dashboard lane's.
 - **Deciders**: owner
 - **Builds on**: ADR-098 (per-project process-compose; `compose/{manifest,ports}.yaml`; the
   machine overlay it deferred), ADR-108 (workspaces registered with the user daemon; the

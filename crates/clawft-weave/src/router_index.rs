@@ -91,6 +91,11 @@ pub async fn snapshot(h: &RouterHandle) -> Value {
         .zip(health)
         .map(|(r, hv)| {
             let mut v = serde_json::to_value(r).unwrap_or_default();
+            // The allow list never leaves the daemon; only whether one is set.
+            if let Some(o) = v.as_object_mut() {
+                o.remove("allow");
+            }
+            v["restricted"] = json!(r.restricted());
             v["upstream"] = json!(format!("http://127.0.0.1:{}", r.port));
             v["health"] = hv;
             v
@@ -115,7 +120,7 @@ pub async fn snapshot(h: &RouterHandle) -> Value {
 }
 
 /// Run the probes concurrently (each has its own deadline), results in order.
-async fn join_all<F>(it: impl Iterator<Item = F>) -> Vec<Value>
+pub(crate) async fn join_all<F>(it: impl Iterator<Item = F>) -> Vec<Value>
 where
     F: std::future::Future<Output = Value> + Send + 'static,
 {
@@ -158,11 +163,20 @@ pub fn render_html(s: &Value) -> String {
     for r in s["routes"].as_array().cloned().unwrap_or_default() {
         let prefix = r["prefix"].as_str().unwrap_or("/");
         let project = r["project"].as_str().unwrap_or("-");
-        let default = if r["default"] == true { " <span class=\"muted\">(also serves /)</span>" } else { "" };
+        let mut tags = String::new();
+        if r["default"] == true {
+            tags += " <span class=\"muted\">(also serves /)</span>";
+        }
+        if r["restricted"] == true {
+            tags += " <span class=\"muted\">(restricted)</span>";
+        }
+        if r["source"] == "dashboard" {
+            tags += " <span class=\"muted\">(dashboard)</span>";
+        }
         out += &format!(
             "<tr><td><a href=\"{p}/\"><code>{p}/</code></a>{d}</td><td>{proj}</td><td><code>{up}</code></td><td>{h}</td><td>{pc}</td></tr>",
             p = esc(prefix),
-            d = default,
+            d = tags,
             proj = esc(project),
             up = esc(r["upstream"].as_str().unwrap_or("")),
             h = health_cell(&r["health"]),

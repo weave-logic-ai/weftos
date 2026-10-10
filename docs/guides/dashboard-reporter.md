@@ -86,6 +86,32 @@ so the dashboard can show where a project is checked out on each machine.
   A repository git cannot read (not installed, `safe.directory`, timeout) is left
   out of `git`.
 
+## Routes (ADR-116 R3)
+
+While the tailnet router is on (`[router] enabled = true`), every beat also
+carries `report.routes`; the key is left out when it is off.
+
+```json
+"routes": {"base_url": "https://machine.example.ts.net", "served": true,
+  "items": [{"prefix": "/shastaos", "project": "shastaos", "project_ulid": "<ULID or null>",
+             "port": 18120, "default": true, "healthy": true, "restricted": false, "source": "repo"}],
+  "refused": [{"project": "other", "prefix": "/shastaos", "port": 5000,
+               "reason": "prefix /shastaos is already routed by project shastaos", "source": "dashboard"}]}
+```
+
+- `base_url` is `https://` + `Self.DNSName` from `tailscale status --json`
+  (trailing dot stripped); it is absent when Tailscale is unavailable. `served`
+  is true when `tailscale serve status --json` shows `:443` proxying `/` to the
+  router. Both run without a shell, with a 20 s limit, and are cached for two
+  minutes.
+- `healthy` is the route's health probe: `true` (2xx/3xx), `false`, or `null`
+  when the route declares no `health` path. `restricted` says whether an
+  `allow` list is set; the list itself never leaves the node. `source` is
+  `repo` (the project's `compose/ports.yaml`) or `dashboard` (an overlay).
+  `project_ulid` is null for a workspace repository directory that is not a
+  manifest root.
+- At most 32 items and 16 refusals, longest prefix first.
+
 ## Actions (ADR-108 P2)
 
 The dashboard's answer to a heartbeat may carry work for this node:
@@ -94,7 +120,7 @@ The dashboard's answer to a heartbeat may carry work for this node:
 {"ok": true, "actions": [{"id": "<id>", "kind": "install", "payload": {}, "created_at": "..."}]}
 ```
 
-Kinds are `install`, `update`, `remove` and `pair`. An answer without `actions`
+Kinds are `install`, `update`, `remove`, `pair` and `route`. An answer without `actions`
 (or with a malformed one) is fine. The reporter keeps at most 64 queued actions
 and 128 recorded ones in memory (a restart forgets them; the dashboard repeats an
 action until it has a final result). Ids are limited to `[A-Za-z0-9_-]{1,64}`; any
@@ -139,6 +165,21 @@ echoed in an error.
   `~/.weftos/projects`. It never deletes files; the result names `root` and
   `repos` so you can delete them by hand. A project's own home (not a workspace)
   is refused.
+- **`route`** (ADR-116 R3) `{op: "set" | "remove", project_ulid, prefix, port?,
+  health?, default?, allow?}`: adds, replaces or removes a tailnet-router route
+  for a project registered on this node. The route is written to the project's
+  overlay, `~/.weftos/routes/<ULID>.yaml` (0600, atomic; other entries kept),
+  never to a repository file; the router is reloaded and the result says what
+  it now serves: `{"op", "prefix", "applied": true|false, "reason"?}`.
+  Validation is the router's own (prefix `/seg[/seg]` of `[a-z0-9-]`, port
+  1024 to 65535, `health` a path, `allow` login-shaped and at most 64, no
+  unknown fields) and an unregistered ULID is refused; those fail without
+  writing anything. `applied: false` with a `reason` means the overlay was
+  written but the router does not serve it: the prefix is declared in the
+  project's own `compose/ports.yaml` (the repository wins), it is taken by
+  another project, or the router is off on this node. `remove` of a prefix that
+  is not an overlay route fails. See
+  [Dashboard-managed routes](tailnet-router.md#dashboard-managed-routes).
 
 ```bash
 weaver dashboard actions          # recent actions and their outcomes (local, Read)
