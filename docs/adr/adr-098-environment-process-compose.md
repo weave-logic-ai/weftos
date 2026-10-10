@@ -1,6 +1,8 @@
 # ADR-098: Per-project process-compose; environment pane is planned only
 
 - **Status**: Draft (Proposed)
+- **Updated**: 2026-10-10. ADR-116 builds the query-and-route half of the deferred overlay
+  (many process-compose instances plus one pane, no YAML merge); §2 is amended by it.
 - **Date**: 2026-08-16
 - **Deciders**: Pending (platform / ops)
 - **Depends-On**: ADR-096 (MetaHarness), ADR-070 (MCP registry ownership)
