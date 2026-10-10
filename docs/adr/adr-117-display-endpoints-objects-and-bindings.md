@@ -34,7 +34,7 @@ Every leaf with a screen advertises one service per display:
 `weftos://<mesh>/nodes/<leaf node id>/services/display` (the `/display-<n>` form is used for
 multi-display leaves, `DisplayId`). The service reports:
 - size;
-- capabilities: the renderer's `CapabilityMask`, plus frame support;
+- capabilities: the renderer's `CapabilityMask`, plus media support (image formats, video size and rate);
 - input kinds: touch, and buttons later;
 - the session currently holding the screen.
 
