@@ -72,6 +72,10 @@ async fn handle_request(req: Request<Incoming>, h: Arc<RouterHandle>, peer: Sock
     }
     let table = h.table();
     let Some(route) = table.matches(&path).cloned() else {
+        // No project holds the root: `/` is the machine's index (ADR-116 §3).
+        if path == "/" {
+            return Ok(redirect_to_index());
+        }
         return Ok(html_response(
             StatusCode::NOT_FOUND,
             "No route",
@@ -89,6 +93,13 @@ async fn handle_request(req: Request<Incoming>, h: Arc<RouterHandle>, peer: Sock
             Ok(bad_gateway(&route, &e))
         }
     }
+}
+
+/// `302 /_weftos/` for `/` when no route (and no default route) answers it.
+fn redirect_to_index() -> Response<BoxBody> {
+    let mut resp = html_response(StatusCode::FOUND, "Routes", "<p><a href=\"/_weftos/\">Routes on this machine</a></p>");
+    resp.headers_mut().insert(hyper::header::LOCATION, hyper::header::HeaderValue::from_static("/_weftos/"));
+    resp
 }
 
 /// Is the caller's `Tailscale-User-Login` on `allow` (exact, case-insensitive)?

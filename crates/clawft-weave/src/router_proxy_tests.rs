@@ -176,6 +176,9 @@ async fn unmatched_paths_are_404_unless_a_default_route_holds_the_root() {
     let (status, _, body) = send(r.h.bound, get("/elsewhere")).await;
     assert_eq!(status, 404);
     assert!(body.contains("No project routes") && body.contains("/_weftos/"), "{body}");
+    let (status, headers, _) = send(r.h.bound, get("/")).await;
+    assert_eq!(status, 302, "with no default route, / goes to the index");
+    assert_eq!(headers.get("location").and_then(|v| v.to_str().ok()), Some("/_weftos/"));
     r.write(&format!("project: app\nroutes:\n  - {{ prefix: /app, port: {}, default: true }}\n", r.up));
     r.h.reload();
     let (status, _, body) = send(r.h.bound, get("/")).await;
