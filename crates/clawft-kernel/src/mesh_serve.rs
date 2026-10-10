@@ -107,21 +107,25 @@ pub async fn serve_listener_with(
     // concurrent connections.
     let mut conns = tokio::task::JoinSet::new();
     if let Some(ingress) = runtime.leaf_ingress().cloned()
-        && let Ok(mesh_addr) = bind.parse::<std::net::SocketAddr>()
-        && let Some(port) = mesh_addr.port().checked_add(2) {
-            let leaf_addr = std::net::SocketAddr::new(mesh_addr.ip(), port);
-            match crate::mesh_tcp::TcpTransport.listen(&leaf_addr.to_string()).await {
-                Ok(leaf_listener) => {
-                    let leaf_rt = Arc::clone(&runtime);
-                    conns.spawn(async move { serve_signed_leaf_listener(leaf_rt, leaf_listener, limits).await });
-                    conns.spawn(async move {
-                        if let Err(e) = ingress.serve_discovery(mesh_addr, leaf_addr).await {
-                            tracing::error!(error = %e, "leaf discovery stopped");
-                        }
-                    });
-                    tracing::info!(addr = %leaf_addr, "dedicated certified leaf listener started");
-                }
-                Err(e) => tracing::error!(addr = %leaf_addr, error = %e, "certified leaf listener unavailable; no leaf discovery started"),
+        && let Ok(mesh_addr) = bind.parse::<std::net::SocketAddr>() {
+            match crate::mesh_leaf_bind::LeafBindSpec::resolve(runtime.leaf_bind_spec(), mesh_addr) {
+                Err(e) => tracing::error!(error = %e, "certified leaf listener unavailable; no leaf discovery started"),
+                Ok(plan) => match crate::mesh_tcp::TcpTransport.listen(&plan.tcp.to_string()).await {
+                    Ok(leaf_listener) => {
+                        let tcp = leaf_listener.local_addr().unwrap_or(plan.tcp);
+                        let discovery = plan.discovery;
+                        runtime.note_leaf_bound(crate::mesh_leaf_bind::LeafBind { tcp, discovery });
+                        let leaf_rt = Arc::clone(&runtime);
+                        conns.spawn(async move { serve_signed_leaf_listener(leaf_rt, leaf_listener, limits).await });
+                        conns.spawn(async move {
+                            if let Err(e) = ingress.serve_discovery(discovery, tcp.port()).await {
+                                tracing::error!(error = %e, "leaf discovery stopped");
+                            }
+                        });
+                        tracing::info!(addr = %tcp, discovery = %discovery, "dedicated certified leaf listener started");
+                    }
+                    Err(e) => tracing::error!(addr = %plan.tcp, error = %e, "certified leaf listener unavailable; no leaf discovery started"),
+                },
             }
     }
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));

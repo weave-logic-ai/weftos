@@ -608,6 +608,12 @@ impl<P: Platform> Kernel<P> {
                 runtime.set_local_router(Arc::clone(&a2a_router));
 
                 let runtime = Arc::new(runtime);
+                // A bad or wildcard-without-opt-in leaf bind aborts boot.
+                if let Some(addr) = mesh_config.leaf_listen_addr.as_deref() {
+                    let spec = crate::mesh_leaf_bind::LeafBindSpec::parse(addr, mesh_config.leaf_listen_any)
+                        .map_err(|e| KernelError::Boot(format!("kernel.mesh: {e}")))?;
+                    runtime.set_leaf_bind_spec(spec);
+                }
                 // ADR-103 leaf admission is opt-in until a service-owned
                 // registry exists. An ephemeral node key cannot sign durable
                 // acknowledgments, so only a persisted node key may serve it.
@@ -2978,6 +2984,26 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains(&addr), "error should name the address: {msg}");
         assert!(msg.contains("another kernel"), "error should name the cause: {msg}");
+    }
+
+    /// A wildcard leaf bind without `leaf_listen_any` fails boot, naming the key.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn boot_refuses_wildcard_leaf_bind_without_opt_in() {
+        use clawft_types::config::MeshConfig;
+
+        let mut kconfig = test_kernel_config();
+        kconfig.mesh = Some(MeshConfig {
+            enabled: true,
+            listen_addr: "127.0.0.1:0".into(),
+            leaf_listen_addr: Some("0.0.0.0".into()),
+            ..MeshConfig::default()
+        });
+        let err = Kernel::boot(test_config(), kconfig, Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("wildcard leaf bind must be refused");
+        assert!(err.to_string().contains("leaf_listen_any"), "{err}");
     }
 
     /// P3-U: a symlinked or loose `~/.weftos/user.key` is refused as the chain

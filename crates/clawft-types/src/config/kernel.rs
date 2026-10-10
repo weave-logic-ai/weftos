@@ -994,6 +994,23 @@ pub struct MeshConfig {
     /// `/var/run/weftos/mesh.sock`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_socket: Option<String>,
+
+    /// Where the certified-leaf listeners (WLF1 TCP, and the leaf
+    /// discovery UDP socket) bind, kept apart from `listen_addr` so a
+    /// machine can accept leaves on its LAN while the main mesh listener
+    /// stays on loopback. An IP (`192.0.2.10`) uses `<ip>:<main port + 2>`
+    /// for the leaf TCP listener and `<ip>:<main port + 1>` for discovery;
+    /// `ip:port` (`192.0.2.10:9600`) sets the leaf TCP port, with discovery
+    /// at that port minus one. Absent keeps the old behaviour: the main
+    /// listener's IP. A wildcard (`0.0.0.0`, `::`) needs
+    /// `leaf_listen_any = true`. Binding wider never changes who is
+    /// admitted: every leaf still needs its certificate and signatures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_listen_addr: Option<String>,
+
+    /// Opt-in that allows a wildcard `leaf_listen_addr`. Default: false.
+    #[serde(default)]
+    pub leaf_listen_any: bool,
 }
 
 /// How the daemon relates to the machine mesh service (`kernel.mesh.service`).
@@ -1069,6 +1086,8 @@ impl Default for MeshConfig {
             first_frame_timeout_secs: default_mesh_first_frame_timeout_secs(),
             service: MeshServicePolicy::default(),
             service_socket: None,
+            leaf_listen_addr: None,
+            leaf_listen_any: false,
         }
     }
 }
@@ -1771,6 +1790,21 @@ mod tests {
         assert_eq!(none.listen_addr, "127.0.0.1:9489", "an absent key is loopback");
         let set: super::MeshConfig = serde_json::from_str(r#"{"listen": "0.0.0.0:9489"}"#).unwrap();
         assert_eq!(set.listen_addr, "0.0.0.0:9489", "explicit config is unchanged");
+    }
+
+    #[test]
+    fn leaf_listen_addr_is_optional_and_parses() {
+        let none: super::MeshConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(none.leaf_listen_addr, None);
+        assert!(!none.leaf_listen_any);
+        let ip: super::MeshConfig = serde_json::from_str(r#"{"leaf_listen_addr": "192.0.2.10"}"#).unwrap();
+        assert_eq!(ip.leaf_listen_addr.as_deref(), Some("192.0.2.10"));
+        let both: super::MeshConfig =
+            serde_json::from_str(r#"{"leaf_listen_addr": "192.0.2.10:9600", "leaf_listen_any": true}"#).unwrap();
+        assert_eq!(both.leaf_listen_addr.as_deref(), Some("192.0.2.10:9600"));
+        assert!(both.leaf_listen_any);
+        let toml_cfg: super::MeshConfig = toml::from_str("leaf_listen_addr = \"192.0.2.10\"").unwrap();
+        assert_eq!(toml_cfg.leaf_listen_addr.as_deref(), Some("192.0.2.10"));
     }
 
     #[test]

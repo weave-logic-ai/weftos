@@ -86,14 +86,22 @@ pub fn render_list(v: &Value) -> String {
     if routes.is_empty() {
         out += "  no routes: add `routes:` to a registered project's compose/ports.yaml\n";
     } else {
-        out += &format!("  {:<22} {:<16} {:<24} {:<28} {}\n", "PREFIX", "PROJECT", "UPSTREAM", "HEALTH", "PROCESS-COMPOSE");
+        out += &format!(
+            "  {:<22} {:<16} {:<10} {:<10} {:<24} {:<28} {}\n",
+            "PREFIX", "PROJECT", "SOURCE", "RESTRICTED", "UPSTREAM", "HEALTH", "PROCESS-COMPOSE"
+        );
     }
     let projects = v["projects"].as_array().cloned().unwrap_or_default();
     for r in &routes {
         let project = cell(r, "project");
         let pc = projects.iter().find(|p| p["slug"] == project).map(|p| pc_text(&p["process_compose"])).unwrap_or_default();
         let prefix = format!("{}/{}", cell(r, "prefix"), if r["default"] == true { " *" } else { "" });
-        out += &format!("  {:<22} {:<16} {:<24} {:<28} {}\n", prefix, project, cell(r, "upstream"), health_text(&r["health"]), pc);
+        let source = r["source"].as_str().unwrap_or("repo");
+        let restricted = if r["restricted"] == true { "yes" } else { "no" };
+        out += &format!(
+            "  {:<22} {:<16} {:<10} {:<10} {:<24} {:<28} {}\n",
+            prefix, project, source, restricted, cell(r, "upstream"), health_text(&r["health"]), pc
+        );
     }
     if routes.iter().any(|r| r["default"] == true) {
         out += "  * also serves / (transitional default route)\n";
@@ -102,7 +110,8 @@ pub fn render_list(v: &Value) -> String {
     if !refused.is_empty() {
         out += "refused:\n";
         for x in refused {
-            out += &format!("  {:<16} {:<22} :{:<6} {}\n", cell(&x, "project"), cell(&x, "prefix"), x["port"], cell(&x, "reason"));
+            let source = x["source"].as_str().unwrap_or("repo");
+            out += &format!("  {:<16} {:<22} {:<10} :{:<6} {}\n", cell(&x, "project"), cell(&x, "prefix"), source, x["port"], cell(&x, "reason"));
         }
     }
     out
@@ -221,6 +230,16 @@ mod tests {
         });
         let t = render_list(&v);
         assert!(t.contains("/shastaos/ *") && t.contains("3/4 running") && t.contains("refused:") && t.contains("already routed"), "{t}");
+        assert!(t.contains("SOURCE") && t.contains("RESTRICTED"), "{t}");
+        let line = t.lines().find(|l| l.contains("/shastaos/ *")).unwrap();
+        assert!(line.contains(" repo ") && line.contains(" no "), "{line}");
+        let v = json!({
+            "enabled": true, "listen": "127.0.0.1:18000", "generation": 2, "reloaded_at": "t",
+            "routes": [{"prefix": "/admin", "project": "shastaos", "port": 18121, "default": false, "source": "dashboard", "restricted": true,
+                        "upstream": "http://127.0.0.1:18121", "health": {"state": "ok"}}],
+        });
+        let line = render_list(&v).lines().find(|l| l.contains("/admin/")).unwrap().to_owned();
+        assert!(line.contains(" dashboard ") && line.contains(" yes "), "{line}");
     }
 
     #[test]

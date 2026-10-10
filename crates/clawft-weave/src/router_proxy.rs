@@ -3,7 +3,13 @@
 //! `X-Forwarded-Prefix` set, bodies streamed in both directions, and
 //! WebSocket (any `Upgrade`) tunnelled with `copy_bidirectional` once the
 //! upstream answers 101. One upstream TCP connection per request; no pooling,
-//! no HTML rewriting, no authentication of its own (Tailscale fronts it).
+//! no HTML rewriting.
+//!
+//! Identity (ADR-116 R2): Tailscale Serve names the caller in
+//! `Tailscale-User-Login` (user-owned devices; tagged devices send none). A
+//! route with an `allow` list serves only listed logins and answers everyone
+//! else with one uniform 403. Every other incoming `Tailscale-*` header is
+//! stripped before proxying; the ones Serve sets go upstream unchanged.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -28,6 +34,11 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 pub const PROBE_BODY_LIMIT: usize = 256 * 1024;
 
 const HOP_BY_HOP: &[&str] = &["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding"];
+
+/// The header Tailscale Serve sets to the caller's login (`user@domain`).
+pub const LOGIN_HEADER: &str = "tailscale-user-login";
+/// Headers Tailscale Serve sets itself; every other `Tailscale-*` is stripped.
+pub const SERVE_HEADERS: &[&str] = &[LOGIN_HEADER, "tailscale-user-name", "tailscale-user-profile-pic", "tailscale-headers-info"];
 
 /// Accept connections until the listener is dropped.
 pub async fn accept_loop(listener: TcpListener, handle: Arc<RouterHandle>) {
@@ -61,12 +72,20 @@ async fn handle_request(req: Request<Incoming>, h: Arc<RouterHandle>, peer: Sock
     }
     let table = h.table();
     let Some(route) = table.matches(&path).cloned() else {
+        // No project holds the root: `/` is the machine's index (ADR-116 §3).
+        if path == "/" {
+            return Ok(redirect_to_index());
+        }
         return Ok(html_response(
             StatusCode::NOT_FOUND,
             "No route",
             &format!("<p>No project routes <code>{}</code>.</p><p><a href=\"/_weftos/\">Routes on this machine</a></p>", esc(&path)),
         ));
     };
+    if route.restricted() && !login_allowed(&route.allow, req.headers()) {
+        tracing::debug!(project = %route.project, prefix = %route.prefix, "login not on the route's allow list");
+        return Ok(forbidden(&route));
+    }
     match proxy(req, &route, peer).await {
         Ok(resp) => Ok(resp),
         Err(e) => {
@@ -74,6 +93,47 @@ async fn handle_request(req: Request<Incoming>, h: Arc<RouterHandle>, peer: Sock
             Ok(bad_gateway(&route, &e))
         }
     }
+}
+
+/// `302 /_weftos/` for `/` when no route (and no default route) answers it.
+fn redirect_to_index() -> Response<BoxBody> {
+    let mut resp = html_response(StatusCode::FOUND, "Routes", "<p><a href=\"/_weftos/\">Routes on this machine</a></p>");
+    resp.headers_mut().insert(hyper::header::LOCATION, hyper::header::HeaderValue::from_static("/_weftos/"));
+    resp
+}
+
+/// Is the caller's `Tailscale-User-Login` on `allow` (exact, case-insensitive)?
+/// No header (a tagged device, or no Serve in front) is never allowed.
+pub fn login_allowed(allow: &[String], headers: &hyper::HeaderMap) -> bool {
+    let Some(login) = headers.get(LOGIN_HEADER).and_then(|v| v.to_str().ok()) else { return false };
+    let login = login.trim().to_ascii_lowercase();
+    !login.is_empty() && allow.contains(&login)
+}
+
+/// Drop every incoming `Tailscale-*` header that Serve does not set itself.
+fn strip_tailscale_headers(headers: &mut hyper::HeaderMap) {
+    let names: Vec<HeaderName> = headers
+        .keys()
+        .filter(|k| k.as_str().starts_with("tailscale-") && !SERVE_HEADERS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    for n in names {
+        headers.remove(n);
+    }
+}
+
+/// The 403 page: one text whether the login is missing or not listed, naming
+/// the route and never the list.
+pub fn forbidden(route: &Route) -> Response<BoxBody> {
+    let body = format!(
+        "<p>Project <strong>{p}</strong> at <code>{pre}/</code> is restricted to listed tailnet logins, \
+         and this request's login is not on the list.</p>\
+         <p>Ask the project's owner to add your login. Requests from tagged devices carry no login and are refused here. \
+         <a href=\"/_weftos/\">Routes on this machine</a></p>",
+        p = esc(&route.project),
+        pre = esc(&route.prefix)
+    );
+    html_response(StatusCode::FORBIDDEN, "Not allowed", &body)
 }
 
 /// The 502 page: names the project and the loopback port it should be on.
@@ -143,6 +203,7 @@ async fn proxy(mut req: Request<Incoming>, route: &Route, peer: SocketAddr) -> R
     {
         let headers = req.headers_mut();
         strip_hop_by_hop(headers, upgrade);
+        strip_tailscale_headers(headers);
         if upgrade {
             set(headers, "connection", "upgrade");
         }

@@ -692,6 +692,9 @@ fn print_daemon_status(result: &protocol::KernelStatusResult, pid: Option<u32>) 
     if let Some(h) = &result.handshake {
         print_handshake_summary(h);
     }
+    if let Some(l) = &result.leaf_listeners {
+        println!("Leaf bind:  tcp {} / discovery udp {}", l.tcp, l.discovery);
+    }
 
     // Show cluster info if available (via separate RPC call)
     // This is best-effort; errors are silently ignored.

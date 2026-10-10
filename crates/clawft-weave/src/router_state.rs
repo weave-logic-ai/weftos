@@ -116,7 +116,10 @@ pub async fn start(home: &Path) {
         return;
     }
     let poll = Duration::from_secs(cfg.poll_secs);
-    let source = crate::router_sources::ManifestSource { manifests_dir: crate::user_daemon::manifests_dir(home) };
+    let source = crate::router_sources::ManifestSource {
+        manifests_dir: crate::user_daemon::manifests_dir(home),
+        overlays_dir: crate::router_overlay::overlays_dir(home),
+    };
     match start_with(cfg, Box::new(source), poll).await {
         Ok(h) => {
             let t = h.table();

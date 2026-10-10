@@ -23,6 +23,8 @@ use serde_json::{Map, Value, json};
 
 use crate::dashboard_actions::{ActionBook, ActionHandler};
 use crate::dashboard_cfg::{self, DashboardConfig};
+use crate::dashboard_routes::RouteReportSource;
+use crate::dashboard_services::ServiceSource;
 use crate::dashboard_workspaces::{self, WorkspaceSource};
 use crate::mesh_pair::PairSource;
 use crate::mesh_pair_requests;
@@ -150,6 +152,11 @@ pub struct Dashboard {
     /// `report.mesh_identity` and `report.pair_requests` source (ADR-108 P2b);
     /// unset leaves both keys out.
     pair: OnceLock<Arc<dyn PairSource>>,
+    /// `report.routes` source (ADR-116 R3); unset, or a source answering
+    /// `None` (router off), leaves the key out.
+    routes: OnceLock<Arc<dyn RouteReportSource>>,
+    /// `report.services` source (ADR-116 R3 add-on); unset or empty leaves the key out.
+    services: OnceLock<Arc<dyn ServiceSource>>,
     /// Dashboard actions: queue and log (ADR-108 P2).
     pub(crate) book: Mutex<ActionBook>,
     pub(crate) handlers: Mutex<std::collections::HashMap<String, Arc<dyn ActionHandler>>>,
@@ -214,6 +221,8 @@ impl Dashboard {
             children,
             workspaces,
             pair: OnceLock::new(),
+            routes: OnceLock::new(),
+            services: OnceLock::new(),
             book: Mutex::new(ActionBook::default()),
             handlers: Mutex::new(crate::dashboard_actions::default_handlers()),
         }))
@@ -227,6 +236,16 @@ impl Dashboard {
     /// Report `mesh_identity` and `pair_requests` from `src` (first call wins).
     pub fn set_pair_source(&self, src: Arc<dyn PairSource>) -> bool {
         self.pair.set(src).is_ok()
+    }
+
+    /// Report `routes` from `src` (first call wins).
+    pub fn set_route_source(&self, src: Arc<dyn RouteReportSource>) -> bool {
+        self.routes.set(src).is_ok()
+    }
+
+    /// Report `services` from `src` (first call wins).
+    pub fn set_service_source(&self, src: Arc<dyn ServiceSource>) -> bool {
+        self.services.set(src).is_ok()
     }
 
     pub(crate) fn with_state(&self, f: impl FnOnce(&mut DashState)) {
@@ -281,6 +300,18 @@ impl Dashboard {
             observed.insert(ulid, Value::Object(o));
         }
         let mut report = json!({ "host": self.cfg.installation_id, "weaver_version": version, "observed": observed });
+        // Routes go in before workspaces, whose size trimming measures the whole report.
+        if let Some(src) = self.routes.get()
+            && let Some(routes) = src.routes().await
+        {
+            report["routes"] = routes;
+        }
+        if let Some(src) = self.services.get() {
+            let services = src.services().await;
+            if !services.is_empty() {
+                report["services"] = json!(services);
+            }
+        }
         if let (true, Some(src)) = (self.cfg.report_workspaces, &self.workspaces) {
             dashboard_workspaces::attach(&mut report, src.workspaces().await);
         }

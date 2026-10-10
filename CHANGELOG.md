@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.4 cut.
 
+## [0.8.4-rc.4] - 2026-10-10
+
+### Added
+- Router allowlists (ADR-116 R2): a route's `allow` list admits only those Tailscale logins;
+  everyone else, including tagged devices, gets one identical 403. Incoming `Tailscale-*`
+  headers other than Serve's are stripped; the caller's login and name reach the app.
+- Routes on the dashboard (ADR-116 R3): heartbeats carry `report.routes` (the machine's HTTPS
+  base URL, whether Serve points at the router, each route's health and source); the `route`
+  action adds or removes dashboard-managed routes in `~/.weftos/routes/<ULID>.yaml`, and routes
+  declared in the repository win.
+- `report.services`: each project's process-compose processes (name, status, ports, restarts;
+  never commands or environment) for the dashboard's project overview.
+
+### Fixed
+- `weaver route serve --plan` failed against a running daemon (`invalid type: map`).
+
 ## [0.8.4-rc.3] - 2026-10-10
 
 ### Added
