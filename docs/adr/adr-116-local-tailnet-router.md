@@ -17,13 +17,13 @@ WeftOS `:18090`, Forge `:18080`, Shasta `:18110`, with apps such as Shasta's fie
 `:18120`. Ports are claimed per repo in `compose/ports.yaml`. Reaching one from a phone or
 another machine means knowing its port, and only one app can sit behind the machine's
 Tailscale HTTPS name. Today that is Shasta:
-`https://bigmac-the-max.tail23f8f7.ts.net/` is Tailscale Serve proxying `/` to `:18120`.
+`https://mac.example.ts.net/` is Tailscale Serve proxying `/` to `:18120`.
 
 The owner wants one front door per machine that serves anything on it over the tailnet, by
 project:
 
 ```text
-https://bigmac-the-max.tail23f8f7.ts.net/shastaos/    → Shasta on this Mac
+https://mac.example.ts.net/shastaos/    → Shasta on this Mac
 https://<machine>.<tailnet>.ts.net/<project>/         → that project on that machine
 ```
 
@@ -115,7 +115,7 @@ has a route.
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| R1 | Router in the user daemon on `127.0.0.1:18000`; routes from `compose/ports.yaml`; conflict refusal; WebSocket proxying; `/_weftos/` index with process-compose state; `weaver route list|reload|serve --plan|--apply` | on this Mac, `https://bigmac-the-max.tail23f8f7.ts.net/shastaos/` serves Shasta through the router, and `/_weftos/` lists it as healthy |
+| R1 | Router in the user daemon on `127.0.0.1:18000`; routes from `compose/ports.yaml`; conflict refusal; WebSocket proxying; `/_weftos/` index with process-compose state; `weaver route list|reload|serve --plan|--apply` | on this Mac, `https://mac.example.ts.net/shastaos/` serves Shasta through the router, and `/_weftos/` lists it as healthy |
 | R2 | Per-route tailnet-login allowlist (Tailscale identity headers from Serve, checked against the project's members) | a login not on the list gets 403 on that prefix only |
 | R3 | `report.routes` on the dashboard; desired `route.*` parameters applied through a node action | the dashboard shows each machine's URLs for a project and can add a route that the node applies |
 | R4 | Optional start-on-demand: the router asks the project's process-compose to start a stopped process before proxying | a request to a stopped app starts it and is served once its readiness probe passes |
