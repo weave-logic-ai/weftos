@@ -311,7 +311,30 @@ pub fn run(mut surface: DpiDisplay, mut compositor: Compositor, nvs: EspDefaultN
         Err(e) => {
             warn!("[mesh] certified identity/journal unavailable: {e}; mesh disabled");
             boot_screen(&mut compositor, &mut surface, "leaf identity unavailable");
-            loop { std::thread::sleep(Duration::from_secs(30)); }
+            // Keep draining the touch channel: it is a 64-slot bounded
+            // channel and the GT911 thread blocks on `send` once it
+            // fills, so an unprovisioned image used to wedge touch
+            // after ~0.6 s of dragging. Log each event and echo the
+            // last pointer position on the panel so bench bring-up can
+            // verify touch without a parent.
+            loop {
+                let mut last = None;
+                while let Ok(event) = touch_rx.try_recv() {
+                    info!("[mesh] touch (offline): {event:?}");
+                    last = Some(event);
+                }
+                if let Some(event) = last {
+                    // Coordinates are Q24.8 display pixels.
+                    let line = match event {
+                        InputEvent::PointerDown { x, y, .. } => format!("touch down  x={} y={}", x >> 8, y >> 8),
+                        InputEvent::PointerMove { x, y, .. } => format!("touch move  x={} y={}", x >> 8, y >> 8),
+                        InputEvent::PointerUp { x, y, .. } => format!("touch up    x={} y={}", x >> 8, y >> 8),
+                        _ => format!("{event:?}"),
+                    };
+                    boot_screen(&mut compositor, &mut surface, &format!("leaf identity unavailable -- {line}"));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     };
     let id = leaf.cert.leaf_id();
